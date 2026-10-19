@@ -118,6 +118,7 @@ pub struct ChartDocument {
     refresh_policy: RefreshPolicy,
     _refresh_subscriptions: Vec<Subscription>,
     _refresh_timer: Option<Task<()>>,
+    is_active_tab: bool,
 
     // Pending state from time-range panel changes
     pending_time_window: Option<(i64, i64)>,
@@ -301,6 +302,7 @@ impl ChartDocument {
             refresh_policy: default_refresh,
             _refresh_subscriptions: vec![refresh_policy_sub],
             _refresh_timer: None,
+            is_active_tab: true,
             pending_time_window: None,
             pending_chart_reexecute: false,
             applied_display_window: None,
@@ -528,6 +530,7 @@ impl ChartDocument {
             refresh_policy: default_refresh,
             _refresh_subscriptions: vec![refresh_policy_sub],
             _refresh_timer: None,
+            is_active_tab: true,
             pending_time_window: None,
             pending_chart_reexecute: false,
             applied_display_window: None,
@@ -912,6 +915,9 @@ impl ChartDocument {
                         {
                             return;
                         }
+                        if !doc.auto_refresh_tick_allowed(cx) {
+                            return;
+                        }
                         doc.mark_pending_reexecute(cx);
                     });
                 });
@@ -919,7 +925,19 @@ impl ChartDocument {
         }));
     }
 
-    pub fn set_active_tab(&mut self, _active: bool) {}
+    pub fn set_active_tab(&mut self, active: bool) {
+        self.is_active_tab = active;
+    }
+
+    fn auto_refresh_tick_allowed(&self, cx: &App) -> bool {
+        let settings = self.app_state.read(cx).general_settings();
+
+        if settings.auto_refresh_pause_on_error && self.state == DocumentState::Error {
+            return false;
+        }
+
+        !settings.auto_refresh_only_if_visible || self.is_active_tab
+    }
 
     /// Open the Metric rail and initialize the picker with a pre-populated
     /// `(namespace, metric_name)`.
@@ -3852,5 +3870,86 @@ mod tests {
             document.update(cx, |document, cx| document.set_embedded(true, cx));
         });
         assert!(panels(window).is_empty());
+    }
+
+    fn chart_document_for_refresh(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        Entity<AppStateEntity>,
+        Entity<ChartDocument>,
+        gpui::VisualTestContext,
+    ) {
+        crate::keyboard_test_support::init_keyboard_runtime(cx);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        });
+        let document_app_state = app_state.clone();
+        let window = cx.add_window(move |window, cx| {
+            ChartDocument::new(None, String::new(), document_app_state, window, cx)
+        });
+        let document = window.root(cx).expect("chart document window");
+        let visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        (app_state, document, visual)
+    }
+
+    fn set_refresh_settings(
+        app_state: &Entity<AppStateEntity>,
+        only_if_visible: bool,
+        pause_on_error: bool,
+        cx: &mut gpui::VisualTestContext,
+    ) {
+        cx.update(|_, cx| {
+            app_state.update(cx, |state, _| {
+                let mut settings = state.general_settings().clone();
+                settings.auto_refresh_only_if_visible = only_if_visible;
+                settings.auto_refresh_pause_on_error = pause_on_error;
+                state.update_general_settings(settings);
+            });
+        });
+    }
+
+    fn tick_allowed(document: &Entity<ChartDocument>, cx: &mut gpui::VisualTestContext) -> bool {
+        cx.update(|_, cx| document.read(cx).auto_refresh_tick_allowed(cx))
+    }
+
+    #[gpui::test]
+    fn hidden_chart_skips_auto_refresh_only_when_visible_only_is_enabled(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (app_state, document, mut window) = chart_document_for_refresh(cx);
+        window.update(|_, cx| document.update(cx, |doc, _| doc.set_active_tab(false)));
+
+        set_refresh_settings(&app_state, true, false, &mut window);
+        assert!(!tick_allowed(&document, &mut window));
+
+        set_refresh_settings(&app_state, false, false, &mut window);
+        assert!(tick_allowed(&document, &mut window));
+
+        set_refresh_settings(&app_state, true, false, &mut window);
+        window.update(|_, cx| document.update(cx, |doc, _| doc.set_active_tab(true)));
+        assert!(tick_allowed(&document, &mut window));
+    }
+
+    #[gpui::test]
+    fn failed_chart_skips_auto_refresh_only_when_pause_on_error_is_enabled(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (app_state, document, mut window) = chart_document_for_refresh(cx);
+        window.update(|_, cx| document.update(cx, |doc, _| doc.state = DocumentState::Error));
+
+        set_refresh_settings(&app_state, false, true, &mut window);
+        assert!(!tick_allowed(&document, &mut window));
+
+        set_refresh_settings(&app_state, false, false, &mut window);
+        assert!(tick_allowed(&document, &mut window));
+
+        set_refresh_settings(&app_state, false, true, &mut window);
+        window.update(|_, cx| document.update(cx, |doc, _| doc.state = DocumentState::Clean));
+        assert!(tick_allowed(&document, &mut window));
     }
 }

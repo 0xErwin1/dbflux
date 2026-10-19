@@ -90,7 +90,7 @@ impl DashboardDocument {
             // set_active_tab
             {
                 let e = entity.clone();
-                Box::new(move |active, cx| e.update(cx, |d, _| d.set_active_tab(active)))
+                Box::new(move |active, cx| e.update(cx, |d, cx| d.set_active_tab(active, cx)))
             },
             // set_refresh_policy
             {
