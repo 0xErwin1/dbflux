@@ -58,10 +58,25 @@ jobs:
           if [ "$LAST" = "$CURRENT" ]; then
             echo "No new commits on main since last nightly ($LAST) — skipping."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "main advanced $LAST -> $CURRENT — building."
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          # Prose and the site do not reach the binary (see the scope rule in
+          # tests.yml, which this mirrors), so a range made only of them would
+          # publish the same five builds again. The skipped commits are not
+          # lost: the tag stays put, so the next nightly's changelog still
+          # covers them. A failed diff builds, so a broken check costs a build
+          # rather than a missed nightly.
+          if ! changed="$(git diff --name-only "$LAST" "$CURRENT")"; then
+            echo "::warning::cannot diff $LAST..$CURRENT; building"
+          elif ! printf '%s\n' "$changed" | grep -qvE '^(web/|.*\.md$|\.github/workflows/web\.yml$)'; then
+            echo "main advanced $LAST -> $CURRENT with prose and site changes only — skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "main advanced $LAST -> $CURRENT — building."
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
 
   compute-version:
     name: Compute nightly version

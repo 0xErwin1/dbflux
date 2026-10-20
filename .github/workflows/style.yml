@@ -8,20 +8,24 @@ name: Style
 # never starts, so its required status checks stay "Pending" forever and the
 # pull request is unmergeable (see GitHub's "Troubleshooting required status
 # checks"). A job skipped by a conditional reports "Success", so the workflow
-# now always triggers and the jobs decide whether the Rust checks apply. The
-# `push` trigger keeps its paths-ignore: a push run has no required checks to
-# satisfy, so skipping it entirely still saves the compute.
+# now always triggers and the jobs decide whether the Rust checks apply.
 #
 # Markdown is safe to skip because no crate pulls it into the build: there is
 # no `include_str!` of a .md file, no `#[doc = include_str!]`, and no `readme`
 # key in any manifest. Re-check that before assuming it still holds.
 on:
+  # Push and schedule runs exist for the Clippy cache and for main as merged;
+  # see the trigger notes in tests.yml, which apply here unchanged.
   push:
     branches: [main, dev]
-    paths-ignore:
-      - '**/*.md'
-      - 'web/**'
-      - '.github/workflows/web.yml'
+    paths:
+      - 'Cargo.lock'
+      - '**/Cargo.toml'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - '.github/workflows/style.yml'
+  schedule:
+    - cron: '41 4 * * 1'
   pull_request:
     branches: [main, dev]
   workflow_dispatch:
@@ -69,8 +73,9 @@ jobs:
           # rather than silently disabling the checks that gate this branch.
           rust=true
 
-          # Everything that is not a pull request must run the Rust checks: a push
-          # or a manual run has no pull request to scope against.
+          # Everything that is not a pull request must run the Rust checks: a
+          # push, a scheduled or a manual run has no pull request to scope
+          # against.
           if [ "$EVENT_NAME" = "pull_request" ]; then
             if changed=$(git diff --name-only "$BASE_SHA" HEAD) && [ -n "$changed" ]; then
               # The rule the path filter used to apply, in one place: the Rust
@@ -193,9 +198,9 @@ jobs:
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
         with:
-          # Shared with the cross-platform check in tests.yml: both run the
-          # same feature set against the same target dir on the same runner.
-          shared-key: ci-check-${{ matrix.os }}
+          # Deliberately not shared with the cross-platform job in tests.yml;
+          # see the note on its cache key.
+          shared-key: ci-clippy-${{ matrix.os }}
           cache-targets: true
           cache-on-failure: true
           # A cache saved from a pull request or a tag is scoped to that ref:

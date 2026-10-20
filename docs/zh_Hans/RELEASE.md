@@ -316,7 +316,7 @@ AUR 的 `PKGBUILD` 位于**外部 AUR 仓库**，而非本仓库。它仅在稳�
 
 `nightly` 标签会被强制推送，发布内容在每次运行时被替换。只有官方仓库（`0xErwin1/dbflux`）会执行该定时任务。
 
-**当 `main` 没有推进时跳过。** 定时运行会先将当前 `main` HEAD 与上一个 nightly 所基于的提交（`git rev-parse nightly^`，即被固定提交的第一个父提交）进行比较。若两者相同，则整次运行直接跳过：不重新构建、不移动标签、不会对发布造成无意义变动。这避免了用一个新的、不可复现的哈希重新发布一份完全相同的构建，从而不必要地破坏 Nix 的固定引用。手动触发的 `workflow_dispatch` 运行始终会构建，即使没有新提交。
+**当 `main` 没有推进时跳过。** 定时运行会先将当前 `main` HEAD 与上一个 nightly 所基于的提交（`git rev-parse nightly^`，即被固定提交的第一个父提交）进行比较。若两者相同，则整次运行直接跳过：不重新构建、不移动标签、不会对发布造成无意义变动。这避免了用一个新的、不可复现的哈希重新发布一份完全相同的构建，从而不必要地破坏 Nix 的固定引用。若自上一个 nightly 以来改动的所有路径（`git diff nightly^..HEAD`）都只是文档或站点内容（`web/`、`*.md`、`.github/workflows/web.yml`），也会跳过：标签不会移动，因此下一个 nightly 的变更日志仍会涵盖这些提交。手动触发的 `workflow_dispatch` 运行始终会构建，即使没有新提交。
 
 ### Nix nightly 包
 
@@ -434,7 +434,7 @@ cargo test --workspace
 
 `scripts/lint.py` 只覆盖 `crates/` 下的第一方 crate，从不对 `vendor/` 下的第三方 crate 执行 lint 或重新格式化。
 
-这些快速套件不涵盖驱动实时集成测试：各驱动专属的套件分别基于容器、本地文件或需要凭据的 Redshift 集群，记录在 [tests/driver-live/README.md](../../tests/driver-live/README.md)。在为 rc 或 stable 打标签之前请先运行它们。CI 在发布时不运行任何套件：`release.yml` 在不调用 `tests.yml` 或 `style.yml` 的情况下构建并发布，依赖已在拉取请求和 `main` 上运行过的检查。包括 nightly 在内，没有任何发布渠道以测试为门槛（`nightly.yml` 直接调用 `build.yml`）。
+这些快速套件不涵盖驱动实时集成测试：各驱动专属的套件分别基于容器、本地文件或需要凭据的 Redshift 集群，记录在 [tests/driver-live/README.md](../../tests/driver-live/README.md)。在为 rc 或 stable 打标签之前请先运行它们。CI 在发布时不运行任何套件：`release.yml` 在不调用 `tests.yml` 或 `style.yml` 的情况下构建并发布，依赖已在拉取请求上运行过的检查。`main` 不会重新运行全部检查：`tests.yml` 和 `style.yml` 仅在 Rust 工具链或依赖清单变化时于推送到 `main` 时运行，另外每周会对 `main` 定时运行一次。包括 nightly 在内，没有任何发布渠道以测试为门槛（`nightly.yml` 直接调用 `build.yml`）。
 
 ## 相关文件
 

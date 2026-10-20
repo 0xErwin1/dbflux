@@ -335,7 +335,7 @@ The AUR `PKGBUILD` lives in an **external AUR repository**, not in this repo. It
 
 The nightly tag is force-pushed and the release is replaced on every run. Only the canonical repository (`0xErwin1/dbflux`) runs the schedule.
 
-**Skip when `main` has not advanced.** A scheduled run first compares the current `main` HEAD against the commit the last nightly was built from (`git rev-parse nightly^`, the pin commit's first parent). If they match, the run skips entirely: no rebuild, no tag move, no release churn. This avoids republishing an identical build under a fresh, non-reproducible hash that would needlessly break Nix pins. A manual `workflow_dispatch` run always builds, even with no new commits.
+**Skip when `main` has not advanced.** A scheduled run first compares the current `main` HEAD against the commit the last nightly was built from (`git rev-parse nightly^`, the pin commit's first parent). If they match, the run skips entirely: no rebuild, no tag move, no release churn. This avoids republishing an identical build under a fresh, non-reproducible hash that would needlessly break Nix pins. It also skips when every path changed since the last nightly (`git diff nightly^..HEAD`) is prose or site content (`web/`, `*.md`, `.github/workflows/web.yml`): the tag does not move, so the next nightly's changelog still covers those commits. A manual `workflow_dispatch` run always builds, even with no new commits.
 
 ### Nix nightly package
 
@@ -453,7 +453,7 @@ cargo test --workspace
 
 `scripts/lint.py` covers only the first-party crates under `crates/` and never lints or reformats the vendored crates under `vendor/`.
 
-These fast suites do not cover the driver live integration tests: driver-specific suites backed by containers, local files, or a credential-gated Redshift cluster, documented in [tests/driver-live/README.md](../tests/driver-live/README.md). Run them before tagging an rc or stable. CI does not run any suite at release time: `release.yml` builds and publishes without calling `tests.yml` or `style.yml`, and relies on the checks that already ran on the pull requests and on `main`. No release channel is test-gated, nightly included (`nightly.yml` calls `build.yml` directly).
+These fast suites do not cover the driver live integration tests: driver-specific suites backed by containers, local files, or a credential-gated Redshift cluster, documented in [tests/driver-live/README.md](../tests/driver-live/README.md). Run them before tagging an rc or stable. CI does not run any suite at release time: `release.yml` builds and publishes without calling `tests.yml` or `style.yml`, and relies on the checks that already ran on the pull requests. `main` itself does not rerun every check: `tests.yml` and `style.yml` run on a push to `main` only when the Rust toolchain or dependency manifests change, plus a weekly scheduled run against `main`. No release channel is test-gated, nightly included (`nightly.yml` calls `build.yml` directly).
 
 ## Related
 
