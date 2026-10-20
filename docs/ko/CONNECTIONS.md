@@ -37,6 +37,10 @@ MongoDB, DynamoDB, Redis, InfluxDB, CloudWatch Logs, Amazon S3가 포함됩니�
 사용합니다. 대부분의 관계형 드라이버는 단일 연결 문자열도 받습니다.
 [폼 모드 vs. 직접 URI](#폼-모드-vs-직접-uri)를 참고하세요.
 
+메인 탭 끝의 **안전** 섹션에는 **읽기 전용** 토글이 있습니다. 켜면 DBFlux는 해당
+연결에서 데이터 그리드, 비주얼 쿼리 빌더, 스키마 비교로 하는 변경을 차단합니다.
+쿼리 편집기에 입력한 문은 그대로 실행됩니다.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">
   <img src="../images/connections/driver-picker-light.webp" alt="관계형, 문서, 키-값, 시계열, 오브젝트 스토리지로 드라이버를 묶어 보여 주는 연결 관리자의 드라이버 선택기">

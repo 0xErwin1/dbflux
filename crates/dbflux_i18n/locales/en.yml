@@ -423,6 +423,8 @@ connection_manager:
     mcp: MCP
   field:
     show_all_databases: "Show all databases"
+    read_only_help: "Blocks changes from the data grid, the query builder and schema diff. Statements typed in the query editor still run."
+    read_only: "Read-only"
     name: Name
     ssl_mode: SSL mode
     ca_certificate: CA certificate
@@ -431,6 +433,7 @@ connection_manager:
   section:
     transport: TRANSPORT
     navigator: "NAVIGATOR"
+    safety: "SAFETY"
   banner:
     correct_following: Please correct the following
     testing_connection: "Testing connection…"

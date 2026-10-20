@@ -40,6 +40,11 @@ the fields that driver actually needs. File-backed drivers such as SQLite use a
 file-path form. Most relational drivers also accept a single connection string;
 see [Form mode vs. direct URI](#form-mode-vs-direct-uri).
 
+The **Safety** section at the end of the Main tab holds the **Read-only**
+toggle. When it is on, DBFlux blocks changes made from the data grid, the visual
+query builder and schema diff on that connection. Statements typed in the query
+editor still run.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/connections/driver-picker-dark.webp">
   <img src="images/connections/driver-picker-light.webp" alt="The Connection Manager driver picker, with drivers grouped as relational, document, key-value, time series and object storage">

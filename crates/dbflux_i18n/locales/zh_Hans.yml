@@ -423,6 +423,8 @@ connection_manager:
     mcp: MCP
   field:
     show_all_databases: "显示所有数据库"
+    read_only_help: "阻止通过数据网格、查询构建器和模式对比进行的更改。在查询编辑器中输入的语句仍会执行。"
+    read_only: "只读"
     name: 名称
     ssl_mode: SSL 模式
     ca_certificate: CA 证书
@@ -431,6 +433,7 @@ connection_manager:
   section:
     transport: 传输
     navigator: "导航器"
+    safety: "安全"
   banner:
     correct_following: 请更正以下内容
     testing_connection: 正在测试连接…

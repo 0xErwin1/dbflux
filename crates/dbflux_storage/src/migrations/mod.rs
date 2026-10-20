@@ -188,6 +188,7 @@ impl MigrationRegistry {
         registry.register(mod_043_connection_profile_show_all_databases::MigrationImpl);
         registry.register(mod_044_ssh_tunnel_config_host::MigrationImpl);
         registry.register(mod_045_general_settings_table_alias::MigrationImpl);
+        registry.register(mod_046_connection_profile_read_only::MigrationImpl);
         registry
     }
 
@@ -423,6 +424,7 @@ mod mod_042_connection_profile_navigator_view;
 mod mod_043_connection_profile_show_all_databases;
 mod mod_044_ssh_tunnel_config_host;
 mod mod_045_general_settings_table_alias;
+mod mod_046_connection_profile_read_only;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1080,6 +1082,41 @@ mod tests {
     }
 
     #[test]
+    fn test_046_existing_profiles_load_as_not_read_only() {
+        let temp_dir = temp_dir("046_connection_profile_read_only");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        let registry = MigrationRegistry::new();
+        registry.run_all(&conn).expect("create schema");
+        conn.execute_batch(
+            "ALTER TABLE cfg_connection_profiles DROP COLUMN read_only;
+             DELETE FROM sys_migrations WHERE name = '046_connection_profile_read_only';
+             INSERT INTO cfg_connection_profiles (id, name) VALUES ('legacy', 'Legacy');",
+        )
+        .expect("restore pre-046 schema with an existing profile");
+
+        registry.run_all(&conn).expect("upgrade profile schema");
+        let read_only: i64 = conn
+            .query_row(
+                "SELECT read_only FROM cfg_connection_profiles WHERE id = 'legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read the migrated flag");
+        assert_eq!(read_only, 0, "existing profiles must load as not read-only");
+
+        registry
+            .run_all(&conn)
+            .expect("rerun profile schema upgrade");
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
     fn test_migration_name_order_invariant() {
         let temp_dir = temp_dir("name_order");
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -1138,6 +1175,7 @@ mod tests {
             "043_connection_profile_show_all_databases",
             "044_ssh_tunnel_config_host",
             "045_general_settings_table_alias",
+            "046_connection_profile_read_only",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();
