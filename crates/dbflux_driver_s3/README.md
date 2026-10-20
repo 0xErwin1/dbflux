@@ -12,7 +12,7 @@ AWS S3 and S3-compatible object-storage driver for DBFlux, built on the [`aws-sd
 
 ## Features
 
-- Object-storage driver classified as `DatabaseCategory::ObjectStorage`, connecting to AWS S3 and to S3-compatible endpoints (Cloudflare R2, MinIO) via either an AWS profile/SSO `AuthProfileRef` or static access-key credentials, with endpoint override and path-style addressing.
+- Object-storage driver classified as `DatabaseCategory::ObjectStorage`, connecting to AWS S3 and to S3-compatible endpoints (Cloudflare R2, MinIO) via either an AWS profile/SSO `AuthProfileRef` or static access-key credentials (mutually exclusive: a connection with both a profile and an Access Key ID is rejected on save and on connect), with endpoint override and path-style addressing.
 - Bucket browsing: a dedicated buckets table (name, region, object count, size, versioning, created) with search, refresh, and bucket creation; the sidebar lists buckets flat, one level deep. The selected bucket's details strip also shows its default encryption (SSE-S3, SSE-KMS, or None) and its public-access blocking (Blocked, Partial, or Open) when the endpoint reports them.
 - Paginated per-level object navigation by default (AWS-console style, using the driver-returned continuation token), with an optional tree-mode toggle for non-paginated full expansion.
 - Split tree/preview layout in the object browser: object rows show key, size, storage class, and last-modified; directory rows show child object counts.
@@ -29,6 +29,7 @@ AWS S3 and S3-compatible object-storage driver for DBFlux, built on the [`aws-sd
 
 ## Limitations
 
+- A profile and static access keys are mutually exclusive. Connections saved before this rule with both set fail to connect until one of them is cleared.
 - No multipart upload and no dedicated Transfers panel — uploads always go through a single streaming `put_object` call, regardless of file size.
 - No embedded PDF viewer; PDF and other non-image/text objects only offer metadata, download, and open-externally.
 - No lifecycle rule or ACL management, and no S3 Select.
