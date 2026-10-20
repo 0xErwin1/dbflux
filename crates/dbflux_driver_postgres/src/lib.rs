@@ -13,6 +13,7 @@ pub mod driver;
 mod facets;
 pub mod instance_catalog;
 mod table_views;
+mod tls;
 mod vector;
 
 pub use driver::{METADATA, POSTGRES_FORM, PostgresDriver};
