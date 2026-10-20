@@ -291,7 +291,9 @@ Requiere el permiso `VIEW SERVER STATE`.
   y debe usar la extensión `.pem`, `.crt` o `.der` (tiberius con rustls).
   Las URL `sqlserver://` no tienen parámetro de certificado de CA; las cadenas
   de conexión ADO y JDBC aceptan en su lugar la clave
-  `TrustServerCertificateCA=<ruta>` de tiberius.
+  `TrustServerCertificateCA=<ruta>` de tiberius. No la combines con
+  `TrustServerCertificate=true`: tiberius entra en pánico cuando ambos
+  ajustes de confianza están presentes.
 - A través de un túnel SSH el driver se conecta a `127.0.0.1`, por lo que ese
   es el nombre de servidor que se verifica en el modo `required`: un
   certificado de CA privada emitido para el hostname real falla la

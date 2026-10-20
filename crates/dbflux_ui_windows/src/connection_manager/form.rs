@@ -309,9 +309,21 @@ impl ConnectionManagerWindow {
                 | DbConfig::MySQL { ssl_mode, .. }
                 | DbConfig::MongoDB { ssl_mode, .. }
                 | DbConfig::Redis { ssl_mode, .. }
-                | DbConfig::SqlServer { ssl_mode, .. }
                 | DbConfig::Redshift { ssl_mode, .. } => {
                     *ssl_mode = Some(selected);
+                }
+                DbConfig::SqlServer {
+                    ssl_mode,
+                    trust_server_certificate,
+                    ..
+                } => {
+                    *ssl_mode = Some(selected.clone());
+                    // `collect_form_values` does not carry the selected mode, so
+                    // the driver's `build_config` fell back to its "on" default
+                    // and set `trust_server_certificate: true`. Derive trust from
+                    // the user's selection exactly as the driver does: only
+                    // `required` validates the chain.
+                    *trust_server_certificate = !matches!(selected.as_str(), "required");
                 }
                 _ => {}
             }
@@ -3100,6 +3112,197 @@ mod tests {
             bindings.post_disconnect,
             hook_ids(&ids, &["alpha", "gamma"])
         );
+    }
+}
+
+/// SQL Server SSL mode tests. A separate module with explicit imports:
+/// combining `use super::*` with `#[gpui::test]` sends the gpui_macros
+/// expansion into unbounded recursion (see `ssh_config_host_tests`).
+#[cfg(test)]
+mod sqlserver_ssl_tests {
+    use crate::connection_manager::ConnectionManagerWindow;
+    use dbflux_core::{ConnectionProfile, DbConfig};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, TestAppContext, WindowHandle, WindowOptions};
+
+    fn init_test_runtime(cx: &mut TestAppContext) -> Entity<ToastHost> {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host: host.clone() });
+            host
+        })
+    }
+
+    fn test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("test storage runtime"),
+                )
+                .expect("test app state")
+            })
+        })
+    }
+
+    fn open_sqlserver_form_window(
+        app_state: Entity<AppStateEntity>,
+        cx: &mut TestAppContext,
+    ) -> WindowHandle<ConnectionManagerWindow> {
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx))
+                })
+            })
+            .expect("connection manager window opens");
+        window
+            .update(cx, |manager, window, cx| {
+                manager.select_driver("mssql", window, cx);
+                for (field, value) in [("host", "db.corp"), ("port", "1433"), ("user", "sa")] {
+                    manager
+                        .form
+                        .driver_inputs
+                        .get(field)
+                        .unwrap_or_else(|| panic!("mssql form has a `{field}` input"))
+                        .update(cx, |input, cx| input.set_value(value, window, cx));
+                }
+            })
+            .expect("mssql form initializes");
+        window
+    }
+
+    fn build_sqlserver_config(
+        window: &WindowHandle<ConnectionManagerWindow>,
+        ssl_mode: &str,
+        ca_path: Option<&str>,
+        cx: &mut TestAppContext,
+    ) -> DbConfig {
+        window
+            .update(cx, |manager, window, cx| {
+                manager.form.selected_ssl_mode = ssl_mode.to_string();
+                if let Some(ca_path) = ca_path {
+                    manager.form.ssl_ca_cert_input.update(cx, |input, cx| {
+                        input.set_value(ca_path, window, cx);
+                    });
+                }
+                manager
+                    .build_config(cx)
+                    .expect("the SQL Server config builds")
+            })
+            .expect("read the built config")
+    }
+
+    /// Selecting `required` for SQL Server with a CA path must save a config
+    /// that validates the certificate chain (S2): the mode is carried and
+    /// `trust_server_certificate` is derived from it exactly as the driver
+    /// does, because `collect_form_values` does not carry the selected mode.
+    #[gpui::test]
+    fn sqlserver_required_mode_builds_a_chain_validating_config_with_the_ca_path(
+        cx: &mut TestAppContext,
+    ) {
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let window = open_sqlserver_form_window(app_state, cx);
+
+        let config = build_sqlserver_config(&window, "required", Some("/etc/ssl/corp-ca.pem"), cx);
+
+        match config {
+            DbConfig::SqlServer {
+                ssl_mode,
+                trust_server_certificate,
+                ssl_root_cert_path,
+                ..
+            } => {
+                assert_eq!(ssl_mode.as_deref(), Some("required"));
+                assert!(
+                    !trust_server_certificate,
+                    "`required` must validate the chain, not call trust_cert()"
+                );
+                assert_eq!(ssl_root_cert_path.as_deref(), Some("/etc/ssl/corp-ca.pem"));
+            }
+            _ => panic!("expected SqlServer config"),
+        }
+    }
+
+    /// The reverse of the `required` case: `on` keeps the driver's
+    /// trust-cert behavior (encrypted, self-signed certs accepted).
+    #[gpui::test]
+    fn sqlserver_on_mode_builds_a_trusting_config(cx: &mut TestAppContext) {
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let window = open_sqlserver_form_window(app_state, cx);
+
+        let config = build_sqlserver_config(&window, "on", None, cx);
+
+        match config {
+            DbConfig::SqlServer {
+                ssl_mode,
+                trust_server_certificate,
+                ssl_root_cert_path,
+                ..
+            } => {
+                assert_eq!(ssl_mode.as_deref(), Some("on"));
+                assert!(
+                    trust_server_certificate,
+                    "`on` accepts self-signed certs via trust_cert()"
+                );
+                assert_eq!(ssl_root_cert_path, None);
+            }
+            _ => panic!("expected SqlServer config"),
+        }
+    }
+
+    /// Editing a saved SQL Server profile must restore its saved mode, not
+    /// silently reset it to the driver's first declared mode (`off`).
+    #[gpui::test]
+    fn editing_a_saved_sqlserver_profile_restores_its_ssl_mode(cx: &mut TestAppContext) {
+        let mut config = DbConfig::default_sqlserver();
+        if let DbConfig::SqlServer { ssl_mode, .. } = &mut config {
+            *ssl_mode = Some("required".to_string());
+        }
+        let profile = ConnectionProfile::new("mssql required", config);
+
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| {
+                        ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx)
+                    })
+                })
+            })
+            .expect("connection manager edit window opens");
+
+        let selected_mode = window
+            .update(cx, |manager, _window, _cx| {
+                manager.form.selected_ssl_mode.clone()
+            })
+            .expect("read the rehydrated SSL mode");
+        assert_eq!(selected_mode, "required");
+
+        let rebuilt = window
+            .update(cx, |manager, _window, cx| {
+                manager.build_config(cx).map(|config| match config {
+                    DbConfig::SqlServer {
+                        ssl_mode,
+                        trust_server_certificate,
+                        ssl_root_cert_path,
+                        ..
+                    } => (ssl_mode, trust_server_certificate, ssl_root_cert_path),
+                    _ => panic!("expected SqlServer config"),
+                })
+            })
+            .expect("rebuild the edited config");
+        let (ssl_mode, trust_server_certificate, ssl_root_cert_path) =
+            rebuilt.expect("the edited profile rebuilds its config");
+        assert_eq!(ssl_mode.as_deref(), Some("required"));
+        assert!(!trust_server_certificate);
+        assert_eq!(ssl_root_cert_path, None);
     }
 }
 /// Tests of the SSH config host picker on the Access tab (#837, T5). A

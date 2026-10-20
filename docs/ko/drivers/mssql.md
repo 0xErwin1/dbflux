@@ -130,7 +130,7 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
 - **제약 조건.** `CHECK` / `UNIQUE` / `FOREIGN KEY` 제약 조건 추가는 기본적으로 기존의 모든 행을 검증합니다(짧게 Sch-M을 겁니다). 스캔 없이 제약 조건을 추가하려면 `WITH NOCHECK`를 사용하고, 나중에 여유가 될 때 `WITH CHECK CHECK CONSTRAINT`로 검증하세요 — Postgres의 `NOT VALID` + `VALIDATE CONSTRAINT`와 같은 패턴입니다.
 ## 제한 사항
 
-- `required` 모드의 CA 인증서는 시스템 신뢰 저장소를 확장하지 않고 대체하며, 정확히 하나의 인증서만 포함해야 하고 `.pem`, `.crt` 또는 `.der` 확장자를 사용해야 합니다(rustls를 사용하는 tiberius). `sqlserver://` URL에는 CA 인증서 파라미터가 없으며, ADO 및 JDBC 연결 문자열은 대신 tiberius의 `TrustServerCertificateCA=<경로>` 키를 허용합니다.
+- `required` 모드의 CA 인증서는 시스템 신뢰 저장소를 확장하지 않고 대체하며, 정확히 하나의 인증서만 포함해야 하고 `.pem`, `.crt` 또는 `.der` 확장자를 사용해야 합니다(rustls를 사용하는 tiberius). `sqlserver://` URL에는 CA 인증서 파라미터가 없으며, ADO 및 JDBC 연결 문자열은 대신 tiberius의 `TrustServerCertificateCA=<경로>` 키를 허용합니다. 이 키를 `TrustServerCertificate=true`와 함께 사용하지 마십시오. 두 신뢰 설정이 모두 설정되면 tiberius가 패닉합니다.
 - SSH 터널을 경유하면 드라이버가 `127.0.0.1`에 연결하므로 `required` 모드에서 검증되는 서버 이름도 그 값입니다: 실제 호스트 이름으로 발급된 사설 CA 인증서는 호스트 이름 검증에 실패합니다.
 - 충실한 `CREATE TABLE` 생성(스키마 diff)은 재현할 수 없는 생성 의미론을 가진 테이블을 평탄화하는 대신 거부합니다: 계산 열, 사용자 정의/CLR(및 별칭) 열 타입, sparse 열, `FILESTREAM`, `ROWGUIDCOL`, 메모리 최적화 테이블, system-versioned temporal 테이블, nonclustered 기본 키, row/page 압축, 기본 파일 그룹이 아닌 테이블. 인덱스(기본 키 제외), 외래 키, CHECK/UNIQUE 제약 조건은 `CREATE TABLE`로 전달되지 않으므로 별도로 적용해야 합니다.
 - 생성된 기본 키 제약 조건 이름은 서버가 정합니다: 원래 제약 조건 이름은 캡처되지 않아 `PK_…`가 소스와 다릅니다.

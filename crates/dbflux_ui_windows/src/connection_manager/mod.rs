@@ -109,7 +109,8 @@ fn ssl_mode_from_config(config: &DbConfig) -> Option<String> {
         DbConfig::Postgres { ssl_mode, .. }
         | DbConfig::MySQL { ssl_mode, .. }
         | DbConfig::MongoDB { ssl_mode, .. }
-        | DbConfig::Redis { ssl_mode, .. } => ssl_mode.clone(),
+        | DbConfig::Redis { ssl_mode, .. }
+        | DbConfig::SqlServer { ssl_mode, .. } => ssl_mode.clone(),
         _ => None,
     }
 }

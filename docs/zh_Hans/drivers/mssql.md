@@ -129,7 +129,7 @@ Microsoft SQL Server 关系型数据库。
 
 ## 限制
 
-- `required` 模式的 CA 证书会替换而非扩展系统信任库，必须恰好包含一个证书，且必须使用 `.pem`、`.crt` 或 `.der` 扩展名（使用 rustls 的 tiberius）。`sqlserver://` URL 没有 CA 证书参数；ADO 与 JDBC 连接字符串则可改用 tiberius 的 `TrustServerCertificateCA=<路径>` 键。
+- `required` 模式的 CA 证书会替换而非扩展系统信任库，必须恰好包含一个证书，且必须使用 `.pem`、`.crt` 或 `.der` 扩展名（使用 rustls 的 tiberius）。`sqlserver://` URL 没有 CA 证书参数；ADO 与 JDBC 连接字符串则可改用 tiberius 的 `TrustServerCertificateCA=<路径>` 键。请勿将它与 `TrustServerCertificate=true` 组合使用——两个信任设置同时存在时 tiberius 会 panic。
 - 经 SSH 隧道时驱动程序连接的是 `127.0.0.1`，因此 `required` 模式下校验的服务器名也是它：为真实主机名签发的私有 CA 证书会在主机名校验时失败。
 - 忠实的 `CREATE TABLE` 生成（schema diff）对于无法重现其创建语义的表会选择拒绝而不是扁平化：计算列、用户自定义/CLR（及别名）列类型、稀疏列、`FILESTREAM`、`ROWGUIDCOL`、内存优化表、系统版本 temporal 表、非聚集主键、行/页压缩，以及位于非默认文件组上的表。索引（主键除外）、外键和 CHECK/UNIQUE 约束不会随 `CREATE TABLE` 一起传递；需要单独应用。
 - 生成的主键约束名由服务器命名：不会捕获原始约束名，因此 `PK_…` 与源不同。
