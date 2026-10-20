@@ -425,6 +425,7 @@ mod tests {
             environment: None,
             navigator_view: "advanced".to_string(),
             show_all_databases: true,
+            read_only: false,
         })
         .expect("insert connection");
     }

@@ -1575,9 +1575,10 @@ pub struct ConnectionProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_governance: Option<ConnectionMcpGovernance>,
 
-    /// When `true`, mutation operations (UPDATE / DELETE) are forbidden for this
-    /// profile regardless of actor context. Settable in Connection Manager.
-    /// Defaults to `false`.
+    /// When `true`, the mutation policy resolves to read-only with
+    /// `ReadOnlyReason::ProfileSetting`, which blocks data-grid edits, visual
+    /// query builder mutations and schema-diff apply. The SQL editor and MCP do
+    /// not consult it. Settable in Connection Manager. Defaults to `false`.
     #[serde(default)]
     pub read_only_flag: bool,
 
