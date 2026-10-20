@@ -622,8 +622,10 @@ impl DetachedProcessHandle {
 
     /// Terminates the detached hook and its entire process tree.
     pub fn terminate(&mut self) -> Result<(), String> {
-        let containment = self.containment.take();
-        terminate_child(&mut self.child, containment.as_ref()).map_err(|error| format!("{error:?}"))
+        terminate_child(&mut self.child, self.containment.as_ref())
+            .map_err(|error| format!("{error:?}"))?;
+        self.containment.take();
+        Ok(())
     }
 }
 

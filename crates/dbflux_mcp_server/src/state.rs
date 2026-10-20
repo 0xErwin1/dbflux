@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{Mutex, RwLock};
 
 #[cfg(feature = "mysql")]
@@ -8,8 +9,8 @@ use dbflux_core::DbKind;
 use dbflux_core::auth::DynAuthProvider;
 use dbflux_core::{
     AccessKind, AuthProfileManager, ConnectionMcpGovernance, ConnectionMcpPolicyBinding,
-    ConnectionProfile, DbDriver, DriverKey, FormValues, GovernanceSettings, KeyringSecretStore,
-    ProfileManager, RpcServiceKind, SecretManager, ServiceConfig, ValueRef,
+    ConnectionProfile, DbDriver, DetachedProcessHandle, DriverKey, FormValues, GovernanceSettings,
+    KeyringSecretStore, ProfileManager, RpcServiceKind, SecretManager, ServiceConfig, ValueRef,
 };
 use dbflux_ipc::{AUTH_PROVIDER_RPC_API_CONTRACT, RpcAuthProvider};
 use dbflux_mcp::{
@@ -24,6 +25,93 @@ use dbflux_storage::sqlite as storage_sqlite;
 use crate::connection_cache::ConnectionCache;
 use crate::error_messages;
 
+/// Shared ownership for an MCP detached hook process. The supervisor and the
+/// connection teardown path both need to act on the same child handle.
+pub struct SharedDetachedProcess {
+    pub(crate) handle: StdMutex<DetachedProcessHandle>,
+    pub(crate) finished: AtomicBool,
+    pub(crate) terminated: AtomicBool,
+}
+
+#[derive(Default)]
+pub struct DetachedProcessRegistry {
+    processes: StdMutex<HashMap<String, Vec<Arc<SharedDetachedProcess>>>>,
+}
+
+impl DetachedProcessRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn register(&self, connection_id: &str, processes: Vec<Arc<SharedDetachedProcess>>) {
+        if processes.is_empty() {
+            return;
+        }
+
+        let mut registered = match self.processes.lock() {
+            Ok(registered) => registered,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        registered
+            .entry(connection_id.to_string())
+            .or_default()
+            .extend(processes);
+    }
+
+    pub(crate) fn take(&self, connection_id: &str) -> Vec<Arc<SharedDetachedProcess>> {
+        let mut registered = match self.processes.lock() {
+            Ok(registered) => registered,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        registered.remove(connection_id).unwrap_or_default()
+    }
+
+    pub(crate) fn take_variants(
+        &self,
+        profile_id: &str,
+    ) -> Vec<(String, Vec<Arc<SharedDetachedProcess>>)> {
+        let mut registered = match self.processes.lock() {
+            Ok(registered) => registered,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let prefix = format!("{profile_id}:");
+        let mut keys: Vec<String> = registered
+            .keys()
+            .filter(|key| *key == profile_id || key.starts_with(&prefix))
+            .cloned()
+            .collect();
+        keys.sort_unstable();
+        keys.into_iter()
+            .filter_map(|key| registered.remove(&key).map(|processes| (key, processes)))
+            .collect()
+    }
+
+    pub(crate) fn connection_ids(&self) -> Vec<String> {
+        let registered = match self.processes.lock() {
+            Ok(registered) => registered,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        registered
+            .keys()
+            .map(|key| {
+                key.split_once(':')
+                    .map_or(key.as_str(), |(profile_id, _)| profile_id)
+            })
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+impl SharedDetachedProcess {
+    pub(crate) fn new(handle: DetachedProcessHandle) -> Self {
+        Self {
+            handle: StdMutex::new(handle),
+            finished: AtomicBool::new(false),
+            terminated: AtomicBool::new(false),
+        }
+    }
+}
+
 /// All state loaded at startup that the server needs to handle requests.
 /// This struct is Clone-able and uses Arc internally for shared state.
 #[derive(Clone)]
@@ -36,7 +124,8 @@ pub struct ServerState {
     pub auth_provider_registry: Arc<HashMap<String, Arc<dyn DynAuthProvider>>>,
     pub driver_settings: Arc<HashMap<DriverKey, FormValues>>,
     pub connection_cache: Arc<RwLock<ConnectionCache>>,
-    pub connection_setup_lock: Arc<Mutex<()>>,
+    pub connection_setup_lock: Arc<Mutex<HashMap<String, std::sync::Weak<Mutex<()>>>>>,
+    pub detached_processes: Arc<DetachedProcessRegistry>,
     pub secret_manager: Arc<SecretManager>,
     pub mcp_enabled_by_default: bool,
 }
@@ -76,7 +165,8 @@ impl ServerState {
             auth_provider_registry: Arc::new(auth_provider_registry),
             driver_settings,
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
-            connection_setup_lock: Arc::new(Mutex::new(())),
+            connection_setup_lock: Arc::new(Mutex::new(HashMap::new())),
+            detached_processes: Arc::new(DetachedProcessRegistry::new()),
             secret_manager,
             mcp_enabled_by_default: governance_settings.mcp_enabled_by_default,
         };
