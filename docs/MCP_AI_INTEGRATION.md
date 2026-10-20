@@ -118,7 +118,7 @@ All six layers run inside the server process on every `tools/call` request. None
 | Scripts | `create_script` | write | Save a new script to the scripts directory |
 | Scripts | `update_script` | write | Overwrite an existing saved script |
 | Scripts | `delete_script` | admin | Permanently remove a script |
-| Scripts | `execute_script` | computed | Execute a saved script against a connection. Classification is derived from the script body |
+| Scripts | `execute_script` | computed | Execute a saved database-query script against a connection. Classification is derived from the script body. Lua, Python and Bash scripts are rejected (see below) |
 | Approval | `request_execution` | admin | Queue a call for approval by a person. Once approved, call the tool itself with the same arguments to run it once |
 | Approval | `list_pending_executions` | read | View all executions awaiting approval |
 | Approval | `get_pending_execution` | read | Retrieve details of a specific pending execution. A rejected one returns `status: "rejected"` and the reason the person gave |
@@ -197,6 +197,14 @@ SQL Server, Turso, external IPC drivers, DynamoDB, CloudWatch and InfluxDB canno
 The database stops data modification in the session, except on temporary tables, which a read-only transaction in PostgreSQL and MySQL may still change, and it does not stop functions with external effects, such as PostgreSQL `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend` and advisory locks, or MySQL `GET_LOCK` and user-defined functions. For a read-only MCP client, least-privilege database credentials remain the real boundary.
 
 The editor's auto-refresh uses the same enforcement. On a connection whose driver cannot enforce read-only, auto-refresh switches back to Manual.
+
+### Scripts that `execute_script` cannot run
+
+`execute_script` only runs scripts written in a database query language. A saved Lua, Python or Bash script is listed by `list_scripts` and readable with `get_script`, but `execute_script` refuses it with "Script language not supported for execution (only database queries)" and nothing runs. Run those scripts from the DBFlux editor instead.
+
+### Editor safety settings do not apply
+
+The dangerous-query settings (**Confirm dangerous queries**, **Require WHERE for DELETE/UPDATE** and **Always require preview**) belong to the DBFlux editor. The MCP server does not read them, at the General level, as a per-driver override or as a per-connection override. An MCP call is gated only by the policies and the approval flow described above: to make destructive statements wait for a person, set the policy's decision for `destructive` (or `admin_destructive`) to Ask or Deny.
 
 ## 6. Built-in Policies and Roles
 
