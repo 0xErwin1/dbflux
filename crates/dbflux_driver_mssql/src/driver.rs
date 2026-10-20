@@ -706,6 +706,10 @@ impl DbDriver for MssqlDriver {
             .cloned()
             .unwrap_or_else(|| "on".to_string());
         let trust_server_certificate = !matches!(ssl_mode_value.as_str(), "required");
+        let ssl_root_cert_path = values
+            .get("ssl_root_cert_path")
+            .filter(|s| !s.trim().is_empty())
+            .cloned();
 
         Ok(DbConfig::SqlServer {
             use_uri: false,
@@ -717,7 +721,7 @@ impl DbDriver for MssqlDriver {
             instance,
             ssl_mode: Some(ssl_mode_value),
             trust_server_certificate,
-            ssl_root_cert_path: None,
+            ssl_root_cert_path,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         })
@@ -914,6 +918,7 @@ struct ExtractedMssqlConfig {
     instance: Option<String>,
     ssl_mode: String,
     trust_server_certificate: bool,
+    ssl_root_cert_path: Option<String>,
     ssh_tunnel: Option<SshTunnelConfig>,
 }
 
@@ -929,6 +934,7 @@ fn extract_mssql_config(config: &DbConfig) -> Result<ExtractedMssqlConfig, DbErr
             instance,
             ssl_mode,
             trust_server_certificate,
+            ssl_root_cert_path,
             ssh_tunnel,
             ..
         } => Ok(ExtractedMssqlConfig {
@@ -941,6 +947,7 @@ fn extract_mssql_config(config: &DbConfig) -> Result<ExtractedMssqlConfig, DbErr
             instance: instance.clone(),
             ssl_mode: ssl_mode.clone().unwrap_or_else(|| "on".to_string()),
             trust_server_certificate: *trust_server_certificate,
+            ssl_root_cert_path: ssl_root_cert_path.clone(),
             ssh_tunnel: ssh_tunnel.clone(),
         }),
         _ => Err(DbError::InvalidProfile(
@@ -981,8 +988,12 @@ fn build_tiberius_config(params: &MssqlConnectParams) -> Config {
     config.authentication(AuthMethod::sql_server(params.user, params.password));
     config.encryption(encryption_for(params.ssl_mode));
 
+    // tiberius panics when both trust_cert and trust_cert_ca are set, so the
+    // CA only applies when the mode validates the chain.
     if params.trust_server_certificate {
         config.trust_cert();
+    } else if let Some(path) = params.ssl_root_cert_path {
+        config.trust_cert_ca(path);
     }
 
     // The manual-field connection form has no field for it, so our identity
@@ -1009,6 +1020,7 @@ struct MssqlConnectParams<'a> {
     instance: Option<&'a str>,
     ssl_mode: &'a str,
     trust_server_certificate: bool,
+    ssl_root_cert_path: Option<&'a str>,
 }
 
 fn build_runtime() -> Result<Runtime, DbError> {
@@ -1181,6 +1193,7 @@ impl MssqlDriver {
             instance: config.instance.as_deref(),
             ssl_mode: &config.ssl_mode,
             trust_server_certificate: config.trust_server_certificate,
+            ssl_root_cert_path: config.ssl_root_cert_path.as_deref(),
         });
 
         let established = establish_mssql_session(tiberius_config, &config.host, config.port)?;
@@ -1227,6 +1240,7 @@ impl MssqlDriver {
             instance: None,
             ssl_mode: &config.ssl_mode,
             trust_server_certificate: config.trust_server_certificate,
+            ssl_root_cert_path: config.ssl_root_cert_path.as_deref(),
         });
 
         // The reconnect config points at the same 127.0.0.1:<local_port> that
@@ -5577,6 +5591,108 @@ mod tests {
         let (mode, trust) = extract_ssl(build_form_values_for_ssl(None));
         assert_eq!(mode, "on");
         assert!(trust);
+    }
+
+    fn extract_root_cert(values: FormValues) -> Option<String> {
+        match MssqlDriver.build_config(&values).expect("config") {
+            DbConfig::SqlServer {
+                ssl_root_cert_path, ..
+            } => ssl_root_cert_path,
+            _ => panic!("expected SqlServer config"),
+        }
+    }
+
+    #[test]
+    fn form_ssl_root_cert_path_is_carried_into_config() {
+        let mut values = build_form_values_for_ssl(Some("required"));
+        values.insert(
+            "ssl_root_cert_path".to_string(),
+            "/etc/ssl/corp-ca.pem".to_string(),
+        );
+        assert_eq!(
+            extract_root_cert(values).as_deref(),
+            Some("/etc/ssl/corp-ca.pem")
+        );
+    }
+
+    #[test]
+    fn form_ssl_root_cert_path_blank_is_none() {
+        let mut values = build_form_values_for_ssl(Some("required"));
+        values.insert("ssl_root_cert_path".to_string(), "  ".to_string());
+        assert_eq!(extract_root_cert(values), None);
+    }
+
+    fn tiberius_debug(
+        ssl_mode: &str,
+        trust_server_certificate: bool,
+        ssl_root_cert_path: Option<&str>,
+    ) -> String {
+        format!(
+            "{:?}",
+            build_tiberius_config(&MssqlConnectParams {
+                host: "localhost",
+                port: 1433,
+                user: "sa",
+                password: "",
+                database: None,
+                instance: None,
+                ssl_mode,
+                trust_server_certificate,
+                ssl_root_cert_path,
+            })
+        )
+    }
+
+    #[test]
+    fn tiberius_off_mode_never_uses_ca() {
+        let debug = tiberius_debug("off", true, Some("/etc/ssl/corp-ca.pem"));
+        assert!(debug.contains("trust: TrustAll"), "{debug}");
+    }
+
+    #[test]
+    fn uri_mode_config_drops_root_cert_path() {
+        let mut values = FormValues::new();
+        values.insert("use_uri".into(), "true".into());
+        values.insert(
+            "uri".into(),
+            "sqlserver://sa@h:1433/db?encrypt=required".into(),
+        );
+        values.insert("ssl_root_cert_path".into(), "/etc/ssl/corp-ca.pem".into());
+        assert_eq!(extract_root_cert(values), None);
+    }
+
+    #[test]
+    fn extracted_config_carries_root_cert_path() {
+        let mut values = build_form_values_for_ssl(Some("required"));
+        values.insert("ssl_root_cert_path".into(), "/etc/ssl/corp-ca.pem".into());
+        let config = MssqlDriver.build_config(&values).expect("config");
+        let extracted = extract_mssql_config(&config).expect("extract");
+        assert_eq!(
+            extracted.ssl_root_cert_path.as_deref(),
+            Some("/etc/ssl/corp-ca.pem")
+        );
+        assert!(!extracted.trust_server_certificate);
+    }
+
+    #[test]
+    fn tiberius_on_mode_trusts_any_cert_even_with_ca() {
+        let debug = tiberius_debug("on", true, Some("/etc/ssl/corp-ca.pem"));
+        assert!(debug.contains("trust: TrustAll"), "{debug}");
+    }
+
+    #[test]
+    fn tiberius_required_without_ca_validates_against_system_roots() {
+        let debug = tiberius_debug("required", false, None);
+        assert!(debug.contains("trust: Default"), "{debug}");
+    }
+
+    #[test]
+    fn tiberius_required_with_ca_trusts_the_given_ca() {
+        let debug = tiberius_debug("required", false, Some("/etc/ssl/corp-ca.pem"));
+        assert!(
+            debug.contains("trust: CaCertificateLocation(\"/etc/ssl/corp-ca.pem\")"),
+            "{debug}"
+        );
     }
 
     #[test]

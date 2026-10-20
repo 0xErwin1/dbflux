@@ -366,6 +366,11 @@ impl ConnectionManagerWindow {
                 *ssl_client_cert_path = ssl_client_cert;
                 *ssl_client_key_path = ssl_client_key;
             }
+            DbConfig::SqlServer {
+                ssl_root_cert_path, ..
+            } => {
+                *ssl_root_cert_path = ssl_root_cert;
+            }
             _ => {}
         }
 

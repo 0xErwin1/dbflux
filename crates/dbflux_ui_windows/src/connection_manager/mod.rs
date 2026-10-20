@@ -1183,6 +1183,13 @@ impl ConnectionManagerWindow {
                     ssl_client_cert_path.clone().unwrap_or_default(),
                     ssl_client_key_path.clone().unwrap_or_default(),
                 ),
+                DbConfig::SqlServer {
+                    ssl_root_cert_path, ..
+                } => (
+                    ssl_root_cert_path.clone().unwrap_or_default(),
+                    String::new(),
+                    String::new(),
+                ),
                 _ => (String::new(), String::new(), String::new()),
             };
 
