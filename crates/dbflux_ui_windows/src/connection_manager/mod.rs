@@ -109,7 +109,8 @@ fn ssl_mode_from_config(config: &DbConfig) -> Option<String> {
         DbConfig::Postgres { ssl_mode, .. }
         | DbConfig::MySQL { ssl_mode, .. }
         | DbConfig::MongoDB { ssl_mode, .. }
-        | DbConfig::Redis { ssl_mode, .. } => ssl_mode.clone(),
+        | DbConfig::Redis { ssl_mode, .. }
+        | DbConfig::SqlServer { ssl_mode, .. } => ssl_mode.clone(),
         _ => None,
     }
 }
@@ -1187,6 +1188,13 @@ impl ConnectionManagerWindow {
                     ssl_root_cert_path.clone().unwrap_or_default(),
                     ssl_client_cert_path.clone().unwrap_or_default(),
                     ssl_client_key_path.clone().unwrap_or_default(),
+                ),
+                DbConfig::SqlServer {
+                    ssl_root_cert_path, ..
+                } => (
+                    ssl_root_cert_path.clone().unwrap_or_default(),
+                    String::new(),
+                    String::new(),
                 ),
                 _ => (String::new(), String::new(), String::new()),
             };
