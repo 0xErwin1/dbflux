@@ -30,8 +30,13 @@ Driver de Microsoft SQL Server para DBFlux, construido sobre el cliente TDS
   - `on` — encriptado, acepta certificados autofirmados. Ideal para SQL Server
     local/de desarrollo con su certificado autogenerado.
   - `required` — encriptado, valida la cadena del certificado. Úsalo contra
-    servidores con un certificado firmado por una CA real (Azure SQL, etc.). En
-    modo URI, `?trust=true|false` sobrescribe explícitamente el valor derivado
+    servidores con un certificado firmado por una CA real (Azure SQL, etc.).
+    Seleccionar `required` muestra la ruta de **CA certificate**; cuando se
+    define, la cadena se valida contra esa CA (`trust_cert_ca` de tiberius),
+    por lo que los servidores firmados por una CA privada o corporativa
+    conectan sin confiar en cualquier certificado. Si se deja vacía, se usa
+    el almacén de confianza del sistema. El modo `on` ignora la ruta.
+  En modo URI, `?trust=true|false` sobrescribe explícitamente el valor derivado
     si necesitas una combinación inusual (p. ej.
     `?encrypt=required&trust=true`).
 - Soporte opcional de instancias con nombre de SQL Server (`SQLEXPRESS`,
@@ -274,6 +279,18 @@ Requiere el permiso `VIEW SERVER STATE`.
 
 ## Limitaciones
 
+- El certificado de CA del modo `required` reemplaza el almacén de confianza
+  del sistema en lugar de ampliarlo, debe contener exactamente un certificado
+  y debe usar la extensión `.pem`, `.crt` o `.der` (tiberius con rustls).
+  Las URL `sqlserver://` no tienen parámetro de certificado de CA; las cadenas
+  de conexión ADO y JDBC aceptan en su lugar la clave
+  `TrustServerCertificateCA=<ruta>` de tiberius. No la combines con
+  `TrustServerCertificate=true`: tiberius entra en pánico cuando ambos
+  ajustes de confianza están presentes.
+- A través de un túnel SSH el driver se conecta a `127.0.0.1`, por lo que ese
+  es el nombre de servidor que se verifica en el modo `required`: un
+  certificado de CA privada emitido para el hostname real falla la
+  verificación del hostname.
 - La generación fiel de `CREATE TABLE` (schema diff) se niega, en vez de
   aplanar, las tablas cuya semántica de creación no puede reproducir: columnas
   calculadas, tipos de columna definidos por el usuario/CLR (y alias), columnas

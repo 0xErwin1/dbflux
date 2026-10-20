@@ -29,7 +29,12 @@ Microsoft SQL Server driver for DBFlux, built on the
   - `on` — encrypted, accepts self-signed certs. Best for local/dev
     SQL Server with its auto-generated cert.
   - `required` — encrypted, validates the cert chain. Use against
-    servers with a real CA-signed cert (Azure SQL, etc.).
+    servers with a real CA-signed cert (Azure SQL, etc.). Selecting
+    `required` reveals the **CA certificate** path; when set, the chain
+    is validated against that CA (tiberius `trust_cert_ca`), so servers
+    signed by a private or corporate CA connect without trusting every
+    certificate. Left empty, the system trust store is used. The `on`
+    mode ignores the path.
   In URI mode, `?trust=true|false` explicitly overrides the derived
   value if you need an unusual combination (e.g. `?encrypt=required&trust=true`).
 - Optional SQL Server named instances (`SQLEXPRESS`, `MSSQLSERVER2019`,
@@ -249,6 +254,16 @@ Requires the `VIEW SERVER STATE` permission.
 
 ## Limitations
 
+- The `required` mode's CA certificate replaces the system trust store
+  rather than extending it, must hold exactly one certificate, and must
+  use a `.pem`, `.crt` or `.der` extension (tiberius with rustls).
+  `sqlserver://` URLs have no CA certificate parameter; ADO and JDBC
+  connection strings accept tiberius's `TrustServerCertificateCA=<path>`
+  key instead. Do not combine it with `TrustServerCertificate=true` —
+  tiberius panics when both trust settings are set.
+- Through an SSH tunnel the driver connects to `127.0.0.1`, so that is the
+  server name verified in `required` mode: a private-CA certificate issued
+  for the real hostname fails hostname verification.
 - Faithful `CREATE TABLE` generation (schema diff) refuses, rather than
   flattening, tables whose creation semantics it cannot reproduce: computed
   columns, user-defined/CLR (and alias) column types, sparse columns,
