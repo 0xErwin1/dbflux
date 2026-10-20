@@ -127,6 +127,9 @@ fn terminate_shared_detached_process(shared: &Arc<SharedDetachedProcess>) -> Res
     if shared.terminated.load(Ordering::SeqCst) {
         return Ok(());
     }
+    if shared.finished.load(Ordering::SeqCst) {
+        return Ok(());
+    }
 
     handle.terminate()?;
     shared.terminated.store(true, Ordering::SeqCst);
@@ -318,7 +321,14 @@ fn supervise_detached_hook_process(
             break;
         }
 
-        let wait_result = lock_detached_process(&shared).child.try_wait();
+        let wait_result = {
+            let mut handle = lock_detached_process(&shared);
+            let wait_result = handle.child.try_wait();
+            if matches!(&wait_result, Ok(Some(_))) {
+                shared.finished.store(true, Ordering::SeqCst);
+            }
+            wait_result
+        };
         match wait_result {
             Ok(Some(status)) => {
                 if !status.success() {
@@ -327,7 +337,6 @@ fn supervise_detached_hook_process(
                         description
                     ));
                 }
-                shared.finished.store(true, Ordering::SeqCst);
                 if !ready_reported.load(Ordering::SeqCst)
                     && let Some(signal) = ready_signal.as_deref()
                     && !ready_reported.swap(true, Ordering::SeqCst)
@@ -569,19 +578,18 @@ async fn wait_for_pre_connect_detached_hooks(
     Ok(())
 }
 
-async fn run_connection_hook_phase(
+async fn validate_connection_hook_phase(
     state: &ServerState,
     profile: &dbflux_core::ConnectionProfile,
-    connection_id: &str,
     phase: HookPhase,
-) -> Result<(), String> {
+) -> Result<Vec<dbflux_core::ConnectionHook>, String> {
     let configured_hooks = profile
         .hooks
         .as_ref()
         .map(|hooks| hooks.phase_hooks(phase))
         .unwrap_or_default();
     if configured_hooks.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     if let Some((index, _)) = configured_hooks
@@ -612,36 +620,63 @@ async fn run_connection_hook_phase(
         ));
     }
 
-    let hooks = configured_hooks.to_vec();
-    let configured_indices: Vec<usize> = configured_hooks
+    Ok(configured_hooks.to_vec())
+}
+
+fn configured_hook_indices(hooks: &[dbflux_core::ConnectionHook]) -> Vec<usize> {
+    hooks
         .iter()
         .enumerate()
         .filter(|(_, hook)| hook.enabled)
         .map(|(index, _)| index)
-        .collect();
+        .collect()
+}
 
-    let mut context = HookContext::from_profile(profile);
-    context.phase = Some(phase);
+fn detached_hook_indices(hooks: &[dbflux_core::ConnectionHook]) -> Vec<usize> {
+    hooks
+        .iter()
+        .enumerate()
+        .filter(|(_, hook)| hook.enabled && hook.is_detached())
+        .map(|(index, _)| index)
+        .collect()
+}
+
+struct HookPhaseExecutionMetadata {
+    phase: HookPhase,
+    configured_indices: Vec<usize>,
+    detached_indices: Vec<usize>,
+    endpoint: (Option<String>, Option<u16>),
+}
+
+fn pre_connect_probe_endpoint(
+    profile: &dbflux_core::ConnectionProfile,
+    context: &HookContext,
+) -> (Option<String>, Option<u16>) {
+    if profile.uses_pipeline() || profile.config.has_ssh_tunnel() {
+        (None, None)
+    } else {
+        (context.host.clone(), context.port)
+    }
+}
+
+async fn execute_connection_hook_phase(
+    state: &ServerState,
+    connection_id: &str,
+    hooks: Vec<dbflux_core::ConnectionHook>,
+    context: HookContext,
+    phase: HookPhase,
+) -> Result<(HookPhaseOutcome, Vec<DetachedProcessHandle>), String> {
     let cancel_token = CancelToken::new();
     let (detached, receiver) = dbflux_core::detached_process_channel();
     let executor = McpHookExecutor { detached };
-    let hook_phase = phase;
-    let hook_context = context.clone();
     let outcome = tokio::task::spawn_blocking(move || {
-        HookRunner::run_phase(
-            hook_phase,
-            &hooks,
-            &hook_context,
-            &cancel_token,
-            None,
-            &executor,
-        )
+        HookRunner::run_phase(phase, &hooks, &context, &cancel_token, None, &executor)
     })
     .await;
 
     let detached_handles: Vec<_> = receiver.try_iter().collect();
-    let outcome = match outcome {
-        Ok(outcome) => outcome,
+    match outcome {
+        Ok(outcome) => Ok((outcome, detached_handles)),
         Err(error) => {
             let mut cleanup_errors = Vec::new();
             let mut failed_processes = Vec::new();
@@ -659,29 +694,30 @@ async fn run_connection_hook_phase(
             if !cleanup_errors.is_empty() {
                 message.push_str(&format!("; {}", cleanup_errors.join("; ")));
             }
-            return Err(message);
+            Err(message)
         }
-    };
-    let detached_hook_indices: Vec<usize> = configured_hooks
-        .iter()
-        .enumerate()
-        .filter(|(_, hook)| hook.enabled && hook.is_detached())
-        .map(|(index, _)| index)
-        .collect();
-    let mut detached_processes = Vec::new();
-    for (position, handle) in detached_handles.into_iter().enumerate() {
-        let hook_index = detached_hook_indices
-            .get(position)
-            .copied()
-            .unwrap_or(position);
+    }
+}
+
+async fn start_detached_hook_processes(
+    state: &ServerState,
+    profile: &dbflux_core::ConnectionProfile,
+    connection_id: &str,
+    phase: HookPhase,
+    handles: Vec<DetachedProcessHandle>,
+    hook_indices: &[usize],
+) -> Result<Vec<DetachedHookProcess>, String> {
+    let mut processes = Vec::new();
+    for (position, handle) in handles.into_iter().enumerate() {
+        let hook_index = hook_indices.get(position).copied().unwrap_or(position);
         match start_detached_hook_process(handle) {
-            Ok(process) => detached_processes.push(process),
+            Ok(process) => processes.push(process),
             Err(error) => {
                 state.detached_processes.register(
                     connection_id,
-                    detached_processes
+                    processes
                         .iter()
-                        .map(|process| Arc::clone(&process.shared))
+                        .map(|process: &DetachedHookProcess| Arc::clone(&process.shared))
                         .collect(),
                 );
                 let cleanup_errors = terminate_detached_processes(state, connection_id);
@@ -700,24 +736,68 @@ async fn run_connection_hook_phase(
     }
     state.detached_processes.register(
         connection_id,
-        detached_processes
+        processes
             .iter()
             .map(|process| Arc::clone(&process.shared))
             .collect(),
     );
+    Ok(processes)
+}
 
+async fn wait_for_pre_connect_if_needed(
+    state: &ServerState,
+    profile: &dbflux_core::ConnectionProfile,
+    connection_id: &str,
+    phase: HookPhase,
+    processes: &mut [DetachedHookProcess],
+    hook_indices: &[usize],
+    endpoint: (Option<String>, Option<u16>),
+) -> Result<(), String> {
+    if phase == HookPhase::PreConnect && !processes.is_empty() {
+        wait_for_pre_connect_detached_hooks(
+            state,
+            profile,
+            connection_id,
+            processes,
+            hook_indices,
+            endpoint.0,
+            endpoint.1,
+        )
+        .await
+    } else {
+        Ok(())
+    }
+}
+
+async fn finish_connection_hook_phase(
+    state: &ServerState,
+    profile: &dbflux_core::ConnectionProfile,
+    connection_id: &str,
+    outcome: HookPhaseOutcome,
+    metadata: &HookPhaseExecutionMetadata,
+    processes: &mut [DetachedHookProcess],
+) -> Result<(), String> {
+    let phase = metadata.phase;
     let executions = match &outcome {
         HookPhaseOutcome::Success { executions }
         | HookPhaseOutcome::Aborted { executions, .. }
         | HookPhaseOutcome::CompletedWithWarnings { executions, .. } => executions,
     };
-    record_hook_executions(state, profile, phase, executions, &configured_indices).await;
+    record_hook_executions(
+        state,
+        profile,
+        phase,
+        executions,
+        &metadata.configured_indices,
+    )
+    .await;
 
-    match outcome {
+    let warnings = match outcome {
         HookPhaseOutcome::Aborted { executions, .. } => {
             let cleanup_errors = terminate_detached_processes(state, connection_id);
             let executed_index = executions.len().saturating_sub(1);
-            let hook_index = configured_indices
+            let hook_index = metadata
+                .configured_indices
                 .get(executed_index)
                 .copied()
                 .unwrap_or(executed_index)
@@ -726,52 +806,76 @@ async fn run_connection_hook_phase(
             if !cleanup_errors.is_empty() {
                 error.push_str(&format!("; {}", cleanup_errors.join("; ")));
             }
-            Err(error)
+            return Err(error);
         }
-        HookPhaseOutcome::CompletedWithWarnings { warnings, .. } => {
-            for _ in warnings {
-                log::warn!(
-                    "MCP connection hook for profile '{}' completed with a warning during {}",
-                    profile.name,
-                    phase.label().to_ascii_lowercase()
-                );
-            }
-            if phase == HookPhase::PreConnect
-                && !detached_processes.is_empty()
-                && let Err(error) = wait_for_pre_connect_detached_hooks(
-                    state,
-                    profile,
-                    connection_id,
-                    &mut detached_processes,
-                    &detached_hook_indices,
-                    context.host.clone(),
-                    context.port,
-                )
-                .await
-            {
-                return Err(error);
-            }
-            Ok(())
-        }
-        HookPhaseOutcome::Success { .. } => {
-            if phase == HookPhase::PreConnect
-                && !detached_processes.is_empty()
-                && let Err(error) = wait_for_pre_connect_detached_hooks(
-                    state,
-                    profile,
-                    connection_id,
-                    &mut detached_processes,
-                    &detached_hook_indices,
-                    context.host.clone(),
-                    context.port,
-                )
-                .await
-            {
-                return Err(error);
-            }
-            Ok(())
-        }
+        HookPhaseOutcome::CompletedWithWarnings { warnings, .. } => warnings,
+        HookPhaseOutcome::Success { .. } => Vec::new(),
+    };
+
+    for _ in warnings {
+        log::warn!(
+            "MCP connection hook for profile '{}' completed with a warning during {}",
+            profile.name,
+            phase.label().to_ascii_lowercase()
+        );
     }
+
+    wait_for_pre_connect_if_needed(
+        state,
+        profile,
+        connection_id,
+        phase,
+        processes,
+        &metadata.detached_indices,
+        metadata.endpoint.clone(),
+    )
+    .await
+}
+
+async fn run_connection_hook_phase(
+    state: &ServerState,
+    profile: &dbflux_core::ConnectionProfile,
+    connection_id: &str,
+    phase: HookPhase,
+) -> Result<(), String> {
+    let hooks = validate_connection_hook_phase(state, profile, phase).await?;
+    if hooks.is_empty() {
+        return Ok(());
+    }
+
+    let configured_indices = configured_hook_indices(&hooks);
+    let detached_indices = detached_hook_indices(&hooks);
+
+    let mut context = HookContext::from_profile(profile);
+    context.phase = Some(phase);
+    let endpoint = pre_connect_probe_endpoint(profile, &context);
+    let metadata = HookPhaseExecutionMetadata {
+        phase,
+        configured_indices,
+        detached_indices,
+        endpoint,
+    };
+    let (outcome, detached_handles) =
+        execute_connection_hook_phase(state, connection_id, hooks, context, phase).await?;
+    let mut processes = start_detached_hook_processes(
+        state,
+        profile,
+        connection_id,
+        phase,
+        detached_handles,
+        &metadata.detached_indices,
+    )
+    .await?;
+
+    finish_connection_hook_phase(
+        state,
+        profile,
+        connection_id,
+        outcome,
+        &metadata,
+        &mut processes,
+    )
+    .await
 }
 
 async fn record_hook_execution_failure(
@@ -2476,6 +2580,121 @@ mod tests {
             !trace.exists(),
             "invalid detached hooks must be rejected before spawning"
         );
+    }
+
+    #[test]
+    fn pre_connect_endpoint_probe_is_limited_to_direct_profiles() {
+        let direct = ConnectionProfile::new("direct", DbConfig::default_postgres());
+        let direct_context = HookContext::from_profile(&direct);
+        assert_eq!(
+            pre_connect_probe_endpoint(&direct, &direct_context),
+            (direct_context.host.clone(), direct_context.port)
+        );
+
+        let pipeline = pipeline_profile_with_hooks(ConnectionHooks::default());
+        let pipeline_context = HookContext::from_profile(&pipeline);
+        assert_eq!(
+            pre_connect_probe_endpoint(&pipeline, &pipeline_context),
+            (None, None)
+        );
+
+        let mut ssh = direct.clone();
+        ssh.config.assign_ssh_tunnel(
+            Some(dbflux_core::SshTunnelConfig {
+                host: "bastion.example".to_string(),
+                port: 22,
+                user: "dbflux".to_string(),
+                auth_method: Default::default(),
+                ssh_config_host: None,
+            }),
+            None,
+        );
+        let ssh_context = HookContext::from_profile(&ssh);
+        assert_eq!(pre_connect_probe_endpoint(&ssh, &ssh_context), (None, None));
+    }
+
+    #[tokio::test]
+    async fn detached_pre_connect_pipeline_skips_original_endpoint_probe() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let trace = temp_dir.path().join("hook-events.log");
+        let driver =
+            RecordingDriver::new(FakeDriver::new(DbKind::Postgres)).with_event_trace(trace.clone());
+        let driver_handle = Arc::new(driver) as Arc<dyn DbDriver>;
+        let mut hook = process_hook(&trace, "pre_connect", false);
+        hook.execution_mode = dbflux_core::HookExecutionMode::Detached;
+        hook.ready_signal = Some("HOOK_READY".to_string());
+        hook.env.insert(
+            "DBFLUX_MCP_HOOK_TEST_READY_SIGNAL".to_string(),
+            "HOOK_READY".to_string(),
+        );
+        hook.env.insert(
+            "DBFLUX_MCP_HOOK_TEST_SLEEP_MS".to_string(),
+            "10000".to_string(),
+        );
+        let mut hooks = ConnectionHooks::default();
+        hooks.pre_connect.push(hook);
+        let mut profile = pipeline_profile_with_hooks(hooks);
+        profile
+            .value_refs
+            .insert("host".to_string(), ValueRef::literal("127.0.0.1"));
+        if let DbConfig::Postgres { host, .. } = &mut profile.config {
+            *host = "invalid host".to_string();
+        }
+        let connection_id = profile.id.to_string();
+        let state = test_state_with_driver("postgres", driver_handle, profile);
+        let connection = McpConnectionFactory::new(state.clone())
+            .connect(&connection_id, None)
+            .await
+            .expect("pipeline connect should not probe the unresolved profile endpoint");
+        state
+            .connection_cache
+            .write()
+            .await
+            .insert(connection_id.clone(), connection);
+        DbFluxServer::disconnect_impl(state, &connection_id)
+            .await
+            .expect("disconnect should stop the detached hook");
+
+        let events = std::fs::read_to_string(trace).expect("hook and driver events");
+        assert!(events.lines().any(|event| event == "pre_connect"));
+        assert!(events.lines().any(|event| event == "driver"));
+        assert!(!events.lines().any(|event| event == "complete"));
+    }
+
+    #[tokio::test]
+    async fn detached_process_termination_skips_a_reaped_child() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let trace = temp_dir.path().join("hook-events.log");
+        let profile = ConnectionProfile::new("detached-exit", DbConfig::default_postgres());
+        let mut context = HookContext::from_profile(&profile);
+        context.phase = Some(HookPhase::PreConnect);
+        let mut hook = process_hook(&trace, "pre_connect", false);
+        hook.execution_mode = dbflux_core::HookExecutionMode::Detached;
+        hook.env.insert(
+            "DBFLUX_MCP_HOOK_TEST_SLEEP_MS".to_string(),
+            "50".to_string(),
+        );
+
+        let (sender, receiver) = dbflux_core::detached_process_channel();
+        let cancel_token = CancelToken::new();
+        ProcessExecutor
+            .execute_hook(&hook, &context, &cancel_token, None, None, Some(&sender))
+            .expect("detached hook should spawn");
+        let handle = receiver.try_iter().next().expect("detached process handle");
+        let process = start_detached_hook_process(handle).expect("start process supervisor");
+        let shared = Arc::clone(&process.shared);
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !shared.finished.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("supervisor should reap the hook process");
+
+        assert!(!shared.terminated.load(Ordering::SeqCst));
+        terminate_shared_detached_process(&shared).expect("reaped process is already stopped");
+        assert!(!shared.terminated.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
