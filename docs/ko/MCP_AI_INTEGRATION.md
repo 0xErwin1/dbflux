@@ -118,7 +118,7 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 | 스크립트 | `create_script` | write | 새 스크립트를 스크립트 디렉터리에 저장합니다 |
 | 스크립트 | `update_script` | write | 기존 저장 스크립트를 덮어씁니다 |
 | 스크립트 | `delete_script` | admin | 스크립트를 영구적으로 제거합니다 |
-| 스크립트 | `execute_script` | computed | 연결에 대해 저장된 스크립트를 실행합니다. 분류는 스크립트 본문에서 도출됩니다 |
+| 스크립트 | `execute_script` | computed | 연결에 대해 저장된 데이터베이스 쿼리 스크립트를 실행합니다. 분류는 스크립트 본문에서 도출됩니다. Lua, Python, Bash 스크립트는 거부됩니다(아래 참조) |
 | 승인 | `request_execution` | admin | 사람의 승인을 받도록 호출을 큐에 넣습니다. 승인되면 같은 인수로 해당 도구를 직접 호출해 한 번 실행합니다 |
 | 승인 | `list_pending_executions` | read | 승인 대기 중인 모든 실행을 봅니다 |
 | 승인 | `get_pending_execution` | read | 특정 대기 중 실행의 세부 정보를 가져옵니다 |
@@ -195,6 +195,14 @@ SQL Server, Turso, 외부 IPC 드라이버, DynamoDB, CloudWatch, InfluxDB는 �
 데이터베이스는 세션 안의 데이터 수정을 막지만, PostgreSQL과 MySQL의 읽기 전용 트랜잭션에서도 변경할 수 있는 임시 테이블은 예외이며, 외부 효과가 있는 함수는 막지 않습니다. 예를 들어 PostgreSQL의 `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend`, advisory lock, 그리고 MySQL의 `GET_LOCK`과 사용자 정의 함수가 그렇습니다. 읽기 전용 MCP 클라이언트의 경우 최소 권한 데이터베이스 자격 증명이 여전히 실제 경계입니다.
 
 편집기의 자동 새로고침도 같은 강제를 사용합니다. 드라이버가 읽기 전용을 강제할 수 없는 연결에서는 자동 새로고침이 Manual로 돌아갑니다.
+
+### `execute_script`가 실행할 수 없는 스크립트
+
+`execute_script`는 데이터베이스 쿼리 언어로 작성된 스크립트만 실행합니다. 저장된 Lua, Python, Bash 스크립트는 `list_scripts`에 표시되고 `get_script`로 읽을 수 있지만, `execute_script`는 "Script language not supported for execution (only database queries)" 오류로 거부하며 아무것도 실행되지 않습니다. 이러한 스크립트는 DBFlux 편집기에서 실행하세요.
+
+### 편집기 안전 설정은 적용되지 않습니다
+
+위험 쿼리 설정(**Confirm dangerous queries**, **Require WHERE for DELETE/UPDATE**, **Always require preview**)은 DBFlux 편집기에 속합니다. MCP 서버는 General 수준, 드라이버별 재정의, 연결별 재정의 어디에서도 이 설정을 읽지 않습니다. MCP 호출은 위에서 설명한 정책과 승인 흐름으로만 통제됩니다. 파괴적인 문장이 사람의 승인을 기다리게 하려면 정책에서 `destructive`(또는 `admin_destructive`)의 결정을 Ask 또는 Deny로 설정하세요.
 
 ## 6. 내장 정책과 역할
 

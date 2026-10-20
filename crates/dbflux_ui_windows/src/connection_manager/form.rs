@@ -264,6 +264,18 @@ impl ConnectionManagerWindow {
 
         self.validate_hook_bindings(cx);
 
+        // Drivers reject combinations the per-field checks cannot see (for
+        // example mutually exclusive credential sources); surface their
+        // message instead of failing the later config build silently.
+        if self.validation_errors.is_empty()
+            && let Some(driver) = self.form.selected_driver.clone()
+        {
+            let values = self.collect_form_values(driver.form_definition(), cx);
+            if let Err(error) = driver.build_config(&values) {
+                self.validation_errors.push(error.to_string());
+            }
+        }
+
         self.validation_errors.is_empty()
     }
 
@@ -1103,7 +1115,7 @@ mod tests {
     use dbflux_core::LogErr;
     use dbflux_core::secrecy::{ExposeSecret, SecretString};
     use dbflux_core::{
-        ConnectionHook, ConnectionHooks, ConnectionProfile, DbConfig, HookExecutionMode,
+        ConnectionHook, ConnectionHooks, ConnectionProfile, DbConfig, DbDriver, HookExecutionMode,
         HookFailureMode, HookKind, SecretStore,
     };
     use dbflux_storage::bootstrap::StorageRuntime;
@@ -1806,6 +1818,135 @@ mod tests {
     fn normalize_aws_credentials_error_is_case_insensitive() {
         let result = normalize_aws_credentials_error("dev", "NO CREDENTIALS");
         assert!(result.contains("~/.aws/credentials"));
+    }
+
+    const DRIVER_BUILD_ERROR: &str = "Profile and Access Key ID cannot both be set";
+
+    /// Wraps a registered driver and rejects every form in `build_config`, so
+    /// the window's handling of a driver-side config error is exercised.
+    struct RejectingBuildDriver(Arc<dyn DbDriver>);
+
+    impl DbDriver for RejectingBuildDriver {
+        fn kind(&self) -> dbflux_core::DbKind {
+            self.0.kind()
+        }
+
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            self.0.metadata()
+        }
+
+        fn form_definition(&self) -> &dbflux_core::DriverFormDef {
+            self.0.form_definition()
+        }
+
+        fn driver_key(&self) -> dbflux_core::DriverKey {
+            self.0.driver_key()
+        }
+
+        fn build_config(
+            &self,
+            _values: &dbflux_core::FormValues,
+        ) -> Result<DbConfig, dbflux_core::DbError> {
+            Err(dbflux_core::DbError::InvalidProfile(
+                DRIVER_BUILD_ERROR.to_string(),
+            ))
+        }
+
+        fn extract_values(&self, config: &DbConfig) -> dbflux_core::FormValues {
+            self.0.extract_values(config)
+        }
+
+        fn connect_with_secrets(
+            &self,
+            profile: &ConnectionProfile,
+            password: Option<&SecretString>,
+            ssh_secret: Option<&SecretString>,
+        ) -> Result<Box<dyn dbflux_core::Connection>, dbflux_core::DbError> {
+            self.0.connect_with_secrets(profile, password, ssh_secret)
+        }
+
+        fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), dbflux_core::DbError> {
+            self.0.test_connection(profile)
+        }
+    }
+
+    fn open_rejecting_driver_window(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<AppStateEntity>,
+        WindowHandle<ConnectionManagerWindow>,
+    ) {
+        let app_state = test_app_state(cx, SecretStoreFixture::new(PasswordSaveOutcome::Success));
+        let window = open_new_profile_window(app_state.clone(), cx);
+        window
+            .update(cx, |manager, _window, _cx| {
+                let inner = manager
+                    .form
+                    .selected_driver
+                    .clone()
+                    .expect("SQLite driver selected");
+                manager.form.selected_driver = Some(Arc::new(RejectingBuildDriver(inner)));
+            })
+            .expect("swap in the rejecting driver");
+        (app_state, window)
+    }
+
+    fn shows_driver_build_error(manager: &ConnectionManagerWindow) -> bool {
+        manager
+            .validation_errors
+            .iter()
+            .chain(manager.test_error.iter())
+            .any(|message| message.contains(DRIVER_BUILD_ERROR))
+    }
+
+    #[::core::prelude::v1::test]
+    fn save_shows_the_driver_build_config_error() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let (app_state, window) = open_rejecting_driver_window(&mut cx);
+
+        let shown = window
+            .update(&mut cx, |manager, window, cx| {
+                manager.save_profile(window, cx);
+                shows_driver_build_error(manager)
+            })
+            .expect("save leaves the form window available");
+
+        assert!(
+            shown,
+            "the driver's build_config error is visible after save"
+        );
+        assert!(
+            cx.update(|cx| app_state.read(cx).profiles().is_empty()),
+            "a rejected profile is not committed"
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn test_connection_shows_the_driver_build_config_error() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let (_app_state, window) = open_rejecting_driver_window(&mut cx);
+
+        let shown = window
+            .update(&mut cx, |manager, window, cx| {
+                manager.test_connection(window, cx);
+                shows_driver_build_error(manager)
+            })
+            .expect("test connection leaves the form window available");
+
+        assert!(
+            shown,
+            "the driver's build_config error is visible after test connection"
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
     }
 
     #[derive(Clone, Copy)]
