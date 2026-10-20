@@ -367,6 +367,7 @@ pub fn save_profiles(
                 .map(|environment| environment.as_str().to_string()),
             navigator_view: profile.navigator_view.as_str().to_string(),
             show_all_databases: profile.show_all_databases,
+            read_only: profile.read_only_flag,
         };
 
         repo.upsert(&dto)?;
@@ -1747,7 +1748,7 @@ fn load_profiles(
                 value_refs: value_refs_map,
                 access_kind,
                 mcp_governance,
-                read_only_flag: false,
+                read_only_flag: dto.read_only,
                 environment: dto
                     .environment
                     .as_deref()
@@ -2414,6 +2415,29 @@ mod tests {
         );
         assert!(!find(simple.id).show_all_databases);
         assert!(find(unset.id).show_all_databases);
+    }
+
+    #[test]
+    fn profile_read_only_flag_round_trips_and_defaults_to_writable() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut locked = ConnectionProfile::new("locked", DbConfig::default_postgres());
+        locked.read_only_flag = true;
+        let writable = ConnectionProfile::new("writable", DbConfig::default_postgres());
+
+        save_profiles(&runtime, &[locked.clone(), writable.clone()])
+            .expect("save profiles with read-only flag");
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let find = |id| {
+            loaded
+                .iter()
+                .find(|candidate| candidate.id == id)
+                .expect("reloaded profile")
+        };
+
+        assert!(find(locked.id).read_only_flag);
+        assert!(!find(writable.id).read_only_flag);
     }
 
     #[test]

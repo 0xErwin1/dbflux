@@ -1674,17 +1674,21 @@ impl ConnectionManager {
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
     ) {
-        // Keep per-database connections and proxy tunnel from the old entry.
-        let (prev_db_connections, prev_proxy_tunnel) = self
-            .connections
-            .get_mut(&profile_id)
-            .map(|old| {
-                (
-                    std::mem::take(&mut old.database_connections),
-                    old.proxy_tunnel.take(),
-                )
-            })
-            .unwrap_or_default();
+        // Keep per-database connections, proxy tunnel and the mutation policy
+        // resolved at connect time from the old entry: switching databases
+        // does not change who connected or how the profile is configured.
+        let (prev_db_connections, prev_proxy_tunnel, prev_mutation_policy, prev_read_only_reason) =
+            self.connections
+                .get_mut(&profile_id)
+                .map(|old| {
+                    (
+                        std::mem::take(&mut old.database_connections),
+                        old.proxy_tunnel.take(),
+                        old.mutation_policy,
+                        old.read_only_reason,
+                    )
+                })
+                .unwrap_or_default();
 
         // The whole context is replaced: drop the cached database list, hand
         // out a fresh session generation, and fence any in-flight
@@ -1715,8 +1719,8 @@ impl ConnectionManager {
                 profile: original_profile,
                 connection,
                 schema,
-                mutation_policy: MutationPolicy::default(),
-                read_only_reason: None,
+                mutation_policy: prev_mutation_policy,
+                read_only_reason: prev_read_only_reason,
                 database_schemas: HashMap::new(),
                 table_details: HashMap::new(),
                 collection_children: HashMap::new(),
@@ -4819,6 +4823,60 @@ mod tests {
         fn dialect(&self) -> &dyn crate::SqlDialect {
             self.inner.dialect()
         }
+    }
+
+    #[test]
+    fn read_only_profile_stays_read_only_after_connect_and_database_switch() {
+        let mut profile = ConnectionProfile::new("locked", DbConfig::default_postgres());
+        profile.read_only_flag = true;
+        let profile_id = profile.id;
+
+        let mut manager = ConnectionManager::new(HashMap::new());
+        manager.add_connection(
+            profile.clone(),
+            Arc::new(TestConnection::new(
+                DbKind::Postgres,
+                SchemaLoadingStrategy::LazyPerDatabase,
+            )),
+            None,
+            None,
+            false,
+            WritePrivilege::Writable,
+        );
+
+        let policy = |manager: &ConnectionManager| {
+            let connected = manager
+                .connections
+                .get(&profile_id)
+                .expect("profile is connected");
+            (connected.mutation_policy, connected.read_only_reason)
+        };
+        assert_eq!(
+            policy(&manager),
+            (
+                MutationPolicy::ReadOnly,
+                Some(ReadOnlyReason::ProfileSetting)
+            ),
+            "connecting a read-only profile resolves to ReadOnly"
+        );
+
+        manager.apply_switch_database(
+            profile_id,
+            profile,
+            Arc::new(TestConnection::new(
+                DbKind::Postgres,
+                SchemaLoadingStrategy::LazyPerDatabase,
+            )),
+            None,
+        );
+        assert_eq!(
+            policy(&manager),
+            (
+                MutationPolicy::ReadOnly,
+                Some(ReadOnlyReason::ProfileSetting)
+            ),
+            "switching databases keeps the profile read-only"
+        );
     }
 
     #[test]

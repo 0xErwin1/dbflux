@@ -428,6 +428,7 @@ impl ConnectionManagerWindow {
         profile.environment = self.form.environment;
         profile.navigator_view = self.form.navigator_view;
         profile.show_all_databases = self.form.show_all_databases;
+        profile.read_only_flag = self.form.read_only;
         profile.proxy_profile_id = self.access.selected_proxy_id;
         profile.auth_profile_id = self.auth_profile.selected_auth_profile_id;
         profile.value_refs = self.collect_value_refs(cx);
@@ -2540,6 +2541,76 @@ mod tests {
         cx.simulate_keystrokes(window.into(), "left");
         assert_eq!(ssl_mode(&mut cx), before, "Left picks it back");
 
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// The read-only toggle is a ring stop: Enter flips it, the saved profile
+    /// carries it, and editing a read-only profile shows it switched on.
+    #[::core::prelude::v1::test]
+    fn the_form_ring_toggles_read_only_and_the_profile_keeps_it() {
+        let mut cx = TestAppContext::single();
+        use super::super::MainExtraStop;
+
+        let window = open_postgres_form(&mut cx);
+
+        let read_only_stop = window
+            .update(&mut cx, |manager, _, _| {
+                manager
+                    .main_extra_stops()
+                    .iter()
+                    .position(|stop| matches!(stop, MainExtraStop::ReadOnly))
+                    .map(|index| FormFocus::MainExtra(index as u8))
+            })
+            .expect("window is open")
+            .expect("every driver offers the read-only toggle");
+
+        window
+            .update(&mut cx, |manager, _, _| manager.form_focus = read_only_stop)
+            .expect("window is open");
+        cx.simulate_keystrokes(window.into(), "enter");
+
+        let profile = window
+            .update(&mut cx, |manager, _, cx| manager.build_profile(cx))
+            .expect("window is open")
+            .expect("the form builds a profile");
+        assert!(profile.read_only_flag, "Enter switches read-only on");
+
+        let app_state = window
+            .update(&mut cx, |manager, _, _| manager.app_state.clone())
+            .expect("window is open");
+        let edit_window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| {
+                        ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx)
+                    })
+                })
+            })
+            .expect("connection manager edit window opens");
+        let restored = edit_window
+            .update(&mut cx, |manager, _, cx| {
+                manager
+                    .build_profile(cx)
+                    .map(|profile| profile.read_only_flag)
+            })
+            .expect("edit window is open");
+        assert_eq!(restored, Some(true), "editing keeps the profile read-only");
+
+        cx.simulate_keystrokes(window.into(), "enter");
+        let toggled_back = window
+            .update(&mut cx, |manager, _, cx| {
+                manager
+                    .build_profile(cx)
+                    .map(|profile| profile.read_only_flag)
+            })
+            .expect("window is open");
+        assert_eq!(toggled_back, Some(false), "Enter switches read-only off");
+
+        edit_window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
         window
             .update(&mut cx, |_, window, _| window.remove_window())
             .log_err();

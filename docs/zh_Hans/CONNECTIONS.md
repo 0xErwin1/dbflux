@@ -22,6 +22,8 @@
 
 每个驱动都有自己的连接表单。表单是动态的：只显示该驱动真正需要的字段。以文件为基础的驱动（如 SQLite）使用文件路径表单。大多数关系型驱动也接受单个连接字符串，参见[表单模式与直接填写 URI](#表单模式与直接填写-uri)。
 
+主选项卡末尾的 **安全** 部分包含 **只读** 开关。开启后，DBFlux 会阻止在该连接上通过数据网格、可视化查询构建器和模式对比进行的更改。在查询编辑器中输入的语句仍会执行。
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">
   <img src="../images/connections/driver-picker-light.webp" alt="连接管理器的驱动选择器，驱动按关系型、文档、键值、时序与对象存储分组">

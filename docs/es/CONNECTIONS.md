@@ -42,6 +42,11 @@ respaldados por archivo, como SQLite, usan un formulario de ruta de archivo. La
 mayoría de los drivers relacionales también aceptan una única cadena de
 conexión; ver [Modo formulario vs. URI directa](#modo-formulario-vs-uri-directa).
 
+La sección **Seguridad** al final de la pestaña Main contiene el interruptor
+**Solo lectura**. Cuando está activado, DBFlux bloquea los cambios hechos desde la
+grilla de datos, el constructor visual de consultas y la comparación de esquemas en
+esa conexión. Las sentencias escritas en el editor de consultas se siguen ejecutando.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">
   <img src="../images/connections/driver-picker-light.webp" alt="El selector de drivers del Connection Manager, con los drivers agrupados en relacionales, de documentos, clave-valor, series temporales y almacenamiento de objetos">

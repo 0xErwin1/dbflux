@@ -306,6 +306,7 @@ pub(crate) const CONNECTION_MANAGER: SurfaceRegistry = SurfaceRegistry {
             "cm-show-all-databases",
             KeyboardPath::Command(Command::Execute),
         ),
+        ("cm-read-only", KeyboardPath::Command(Command::Execute)),
         (
             "segmented-enter-as-*",
             KeyboardPath::Command(Command::FocusRight),

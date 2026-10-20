@@ -2680,6 +2680,9 @@ impl ConnectionManagerWindow {
             MainExtraStop::ShowAllDatabases => {
                 self.form.show_all_databases = !self.form.show_all_databases;
             }
+            MainExtraStop::ReadOnly => {
+                self.form.read_only = !self.form.read_only;
+            }
             MainExtraStop::SslCert(slot) => {
                 let current = self.ssl_cert_input(slot).read(cx).value().to_string();
                 let current = (!current.trim().is_empty()).then_some(current);
@@ -2737,7 +2740,9 @@ impl ConnectionManagerWindow {
                 }
                 true
             }
-            MainExtraStop::SslCert(_) | MainExtraStop::ShowAllDatabases => false,
+            MainExtraStop::SslCert(_)
+            | MainExtraStop::ShowAllDatabases
+            | MainExtraStop::ReadOnly => false,
             MainExtraStop::NavigatorView => {
                 use dbflux_core::NavigatorView::{Advanced, Compact, Simple};
                 self.form.navigator_view = match (self.form.navigator_view, forward) {
@@ -2779,6 +2784,13 @@ impl ConnectionManagerWindow {
             // the driver has one.
             Some(MainExtraStop::NavigatorView) => {
                 main_tab.sections.len() + 2 + usize::from(driver.metadata().ssl_modes.is_some())
+            }
+            // The safety section is the last one of the tab.
+            Some(MainExtraStop::ReadOnly) => {
+                main_tab.sections.len()
+                    + 2
+                    + usize::from(driver.metadata().ssl_modes.is_some())
+                    + usize::from(Self::shows_navigator_view(driver.as_ref()))
             }
             Some(_) => main_tab.sections.len() + 2,
             None => 0,

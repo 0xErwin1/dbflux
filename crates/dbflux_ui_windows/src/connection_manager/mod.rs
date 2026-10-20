@@ -263,6 +263,7 @@ pub(super) enum MainExtraStop {
     SslCert(SslCertSlot),
     NavigatorView,
     ShowAllDatabases,
+    ReadOnly,
 }
 
 /// Identifies which SSL certificate slot a file picker writes into.
@@ -311,6 +312,8 @@ struct FormState {
     /// Whether the sidebar lists every database, or only the one in the
     /// Database field; saved on the profile.
     show_all_databases: bool,
+    /// Whether mutations are blocked for the connection; saved on the profile.
+    read_only: bool,
     form_save_password: bool,
     form_save_ssh_secret: bool,
     input_name: Entity<InputState>,
@@ -975,6 +978,7 @@ impl ConnectionManagerWindow {
                 environment_cursor: None,
                 navigator_view: dbflux_core::NavigatorView::Advanced,
                 show_all_databases: true,
+                read_only: false,
                 form_save_password: true,
                 form_save_ssh_secret: true,
                 input_name,
@@ -1128,6 +1132,7 @@ impl ConnectionManagerWindow {
         instance.form.environment = profile.environment();
         instance.form.navigator_view = profile.navigator_view;
         instance.form.show_all_databases = profile.show_all_databases;
+        instance.form.read_only = profile.read_only_flag;
         instance.view = View::EditForm;
 
         if let Some(driver) = &driver {
@@ -2000,6 +2005,8 @@ impl ConnectionManagerWindow {
             stops.push(MainExtraStop::NavigatorView);
         }
 
+        stops.push(MainExtraStop::ReadOnly);
+
         stops
     }
 
@@ -2030,6 +2037,11 @@ impl ConnectionManagerWindow {
     /// The ring stop of the "Show all databases" checkbox.
     fn main_extra_focus_for_show_all_databases(&self) -> Option<FormFocus> {
         self.main_extra_focus_where(|stop| matches!(stop, MainExtraStop::ShowAllDatabases))
+    }
+
+    /// The ring stop of the read-only checkbox.
+    fn main_extra_focus_for_read_only(&self) -> Option<FormFocus> {
+        self.main_extra_focus_where(|stop| matches!(stop, MainExtraStop::ReadOnly))
     }
 
     /// The ring stop of the navigator view control.
