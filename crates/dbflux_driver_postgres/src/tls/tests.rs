@@ -148,6 +148,54 @@ fn form_invalid_root_certificate_is_reported_by_path() {
 }
 
 #[test]
+fn form_root_certificate_bundle_adds_every_pem_block() {
+    let scratch = Scratch::new("form_bundle");
+    let root = scratch.write("ca.pem", &format!("{TEST_CA_PEM}{TEST_CA_PEM}"));
+
+    let certs = super::load_root_certificates(&root).expect("bundle should parse");
+    assert_eq!(
+        certs.len(),
+        2,
+        "both PEM blocks must be added to the trust store"
+    );
+
+    let message = connect_error(&form_profile("verify-full", Some(root), None, None));
+    assert!(
+        message.contains("Connection refused"),
+        "a CA bundle should build the connector and fail only on the socket: {message}"
+    );
+}
+
+#[test]
+fn form_root_certificate_bundle_with_a_malformed_block_is_rejected() {
+    let scratch = Scratch::new("form_bundle_bad");
+    let root = scratch.write(
+        "ca.pem",
+        &format!("{TEST_CA_PEM}-----BEGIN CERTIFICATE-----\nZm9v\n-----END CERTIFICATE-----\n"),
+    );
+
+    let message = connect_error(&form_profile("verify-full", Some(root.clone()), None, None));
+
+    assert!(
+        message.contains("Invalid TLS root certificate") && message.contains(&root),
+        "one malformed block must reject the whole bundle: {message}"
+    );
+}
+
+#[test]
+fn form_empty_root_certificate_file_is_rejected() {
+    let scratch = Scratch::new("form_bundle_empty");
+    let root = scratch.write("ca.pem", "");
+
+    let message = connect_error(&form_profile("verify-ca", Some(root.clone()), None, None));
+
+    assert!(
+        message.contains("Invalid TLS root certificate") && message.contains(&root),
+        "an empty bundle must be rejected naming the file: {message}"
+    );
+}
+
+#[test]
 fn form_valid_certificates_reach_the_network() {
     let scratch = Scratch::new("form_valid");
     let root = scratch.write("ca.pem", TEST_CA_PEM);

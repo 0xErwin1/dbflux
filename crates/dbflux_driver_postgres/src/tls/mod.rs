@@ -58,7 +58,9 @@ pub(crate) fn build_tls_connector(
     if verification.chain
         && let Some(path) = files.root_cert_path.as_deref()
     {
-        builder.add_root_certificate(load_root_certificate(path)?);
+        for certificate in load_root_certificates(path)? {
+            builder.add_root_certificate(certificate);
+        }
     }
 
     if let Some(identity) = load_client_identity(files)? {
@@ -70,16 +72,24 @@ pub(crate) fn build_tls_connector(
         .map_err(|e| DbError::ConnectionFailed(format!("TLS setup failed: {e}").into()))
 }
 
-fn load_root_certificate(path: &str) -> Result<Certificate, DbError> {
+fn load_root_certificates(path: &str) -> Result<Vec<Certificate>, DbError> {
     let pem = std::fs::read(path).map_err(|e| {
         DbError::ConnectionFailed(
             format!("Failed to read TLS root certificate '{path}': {e}").into(),
         )
     })?;
 
-    Certificate::from_pem(&pem).map_err(|e| {
+    let certs = Certificate::stack_from_pem(&pem).map_err(|e| {
         DbError::ConnectionFailed(format!("Invalid TLS root certificate '{path}': {e}").into())
-    })
+    })?;
+
+    if certs.is_empty() {
+        return Err(DbError::ConnectionFailed(
+            format!("Invalid TLS root certificate '{path}': no PEM certificates found").into(),
+        ));
+    }
+
+    Ok(certs)
 }
 
 /// Error messages name the files only; key contents never appear in them.
