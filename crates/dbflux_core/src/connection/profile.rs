@@ -67,12 +67,12 @@ pub enum InfluxVersion {
 
 /// Returns `true` when the given SSL mode id string requires a root CA certificate.
 ///
-/// Covers all known cert-requiring ids across every driver (Postgres, MySQL, MongoDB, Redis).
-/// The UI uses this to decide whether to reveal the CA certificate path input.
+/// Covers all known cert-requiring ids across every driver (Postgres, MySQL, MongoDB, Redis,
+/// SQL Server). The UI uses this to decide whether to reveal the CA certificate path input.
 pub fn ssl_mode_id_requires_root_cert(id: &str) -> bool {
     matches!(
         id,
-        "verify-ca" | "verify-full" | "VERIFY_CA" | "VERIFY_IDENTITY" | "verify"
+        "verify-ca" | "verify-full" | "VERIFY_CA" | "VERIFY_IDENTITY" | "verify" | "required"
     )
 }
 
@@ -2424,6 +2424,44 @@ mod tests {
         assert!(!ssl_mode_requires_root_cert(SslMode::Require));
         assert!(ssl_mode_requires_root_cert(SslMode::VerifyCa));
         assert!(ssl_mode_requires_root_cert(SslMode::VerifyFull));
+    }
+
+    #[test]
+    fn ssl_mode_id_requires_root_cert_shows_picker_for_sqlserver_required() {
+        assert!(ssl_mode_id_requires_root_cert("required"));
+    }
+
+    #[test]
+    fn ssl_mode_id_requires_root_cert_keeps_other_driver_modes() {
+        for id in [
+            "verify-ca",
+            "verify-full",
+            "VERIFY_CA",
+            "VERIFY_IDENTITY",
+            "verify",
+        ] {
+            assert!(
+                ssl_mode_id_requires_root_cert(id),
+                "{id} must show the picker"
+            );
+        }
+        for id in [
+            "disable",
+            "allow",
+            "prefer",
+            "require",
+            "DISABLED",
+            "PREFERRED",
+            "REQUIRED",
+            "off",
+            "on",
+            "",
+        ] {
+            assert!(
+                !ssl_mode_id_requires_root_cert(id),
+                "{id} must hide the picker"
+            );
+        }
     }
 
     #[test]
