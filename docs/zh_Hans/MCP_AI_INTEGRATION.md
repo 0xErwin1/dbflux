@@ -118,7 +118,7 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | 脚本 | `create_script` | write | 将新脚本保存到脚本目录 |
 | 脚本 | `update_script` | write | 覆盖已有的已保存脚本 |
 | 脚本 | `delete_script` | admin | 永久删除脚本 |
-| 脚本 | `execute_script` | computed | 对某个连接执行已保存的脚本。执行类别由脚本内容推导 |
+| 脚本 | `execute_script` | computed | 对某个连接执行已保存的数据库查询脚本。执行类别由脚本内容推导。Lua、Python 和 Bash 脚本会被拒绝（见下文） |
 | 审批 | `request_execution` | admin | 把一次调用排队等待人工审批。批准后，以相同参数调用该工具本身即可执行一次 |
 | 审批 | `list_pending_executions` | read | 查看所有等待审批的执行 |
 | 审批 | `get_pending_execution` | read | 获取某个待审批执行的详情。被驳回的执行返回 `status: "rejected"` 以及审批人给出的原因 |
@@ -197,6 +197,14 @@ SQL Server、Turso、外部 IPC 驱动程序、DynamoDB、CloudWatch 和 InfluxD
 数据库阻止的是会话中的数据修改，但临时表除外，PostgreSQL 和 MySQL 的只读事务仍可修改它们；数据库也不会阻止具有外部影响的函数，例如 PostgreSQL 的 `dblink_exec`、`COPY ... TO PROGRAM`、`lo_export`、`pg_terminate_backend` 和咨询锁（advisory lock），或 MySQL 的 `GET_LOCK` 和用户定义函数。对于只读的 MCP 客户端，最小权限的数据库凭据仍然是真正的边界。
 
 编辑器的自动刷新使用相同的强制机制。在驱动程序无法强制只读的连接上，自动刷新会切换回 Manual。
+
+### `execute_script` 无法运行的脚本
+
+`execute_script` 只运行以数据库查询语言编写的脚本。已保存的 Lua、Python 或 Bash 脚本会出现在 `list_scripts` 中，也可以通过 `get_script` 读取，但 `execute_script` 会以 "Script language not supported for execution (only database queries)" 拒绝它，不会执行任何内容。请在 DBFlux 编辑器中运行这些脚本。
+
+### 编辑器安全设置不适用
+
+危险查询设置（**Confirm dangerous queries**、**Require WHERE for DELETE/UPDATE** 和 **Always require preview**）属于 DBFlux 编辑器。MCP 服务器不会读取它们，无论是 General 级别、按驱动程序的覆盖还是按连接的覆盖。MCP 调用只受上文所述的策略和审批流程控制：若要让破坏性语句等待人工审批，请将策略中 `destructive`（或 `admin_destructive`）的决定设为 Ask 或 Deny。
 
 ## 6. 内置策略与角色
 
