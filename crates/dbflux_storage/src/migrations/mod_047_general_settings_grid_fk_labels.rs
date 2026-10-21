@@ -1,4 +1,4 @@
-//! Migration 046: Add `grid_fk_labels` column to `cfg_general_settings`.
+//! Migration 047: Add `grid_fk_labels` column to `cfg_general_settings`.
 //!
 //! Persists the per-user opt-in for resolving foreign-key cells to the
 //! referenced row's label in the data grid. The column defaults to 0, so
@@ -12,7 +12,7 @@ pub(crate) struct MigrationImpl;
 
 impl Migration for MigrationImpl {
     fn name(&self) -> &str {
-        "046_general_settings_grid_fk_labels"
+        "047_general_settings_grid_fk_labels"
     }
 
     fn run(&self, tx: &Transaction) -> Result<(), MigrationError> {

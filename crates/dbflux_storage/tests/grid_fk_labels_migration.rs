@@ -47,9 +47,9 @@ fn grid_fk_labels_migration_upgrades_pre_column_schema_preserving_settings() -> 
 
     connection
         .execute_batch("ALTER TABLE cfg_general_settings DROP COLUMN grid_fk_labels;")
-        .expect("SQLite must support dropping the added column for the pre-046 fixture");
+        .expect("SQLite must support dropping the added column for the pre-047 fixture");
     connection.execute(
-        "DELETE FROM sys_migrations WHERE name = '046_general_settings_grid_fk_labels'",
+        "DELETE FROM sys_migrations WHERE name = '047_general_settings_grid_fk_labels'",
         [],
     )?;
     connection.execute(
@@ -59,7 +59,7 @@ fn grid_fk_labels_migration_upgrades_pre_column_schema_preserving_settings() -> 
 
     registry
         .run_all(&connection)
-        .expect("migration 046 must upgrade populated settings");
+        .expect("migration 047 must upgrade populated settings");
     let (theme, history_entries, grid_fk_labels): (String, i64, i64) = connection.query_row(
         "SELECT theme, max_history_entries, grid_fk_labels FROM cfg_general_settings WHERE id = 1",
         [],
@@ -73,11 +73,11 @@ fn grid_fk_labels_migration_upgrades_pre_column_schema_preserving_settings() -> 
         .run_all(&connection)
         .expect("rerunning the registry must be idempotent");
     let applied: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM sys_migrations WHERE name = '046_general_settings_grid_fk_labels'",
+        "SELECT COUNT(*) FROM sys_migrations WHERE name = '047_general_settings_grid_fk_labels'",
         [],
         |row| row.get(0),
     )?;
-    assert_eq!(applied, 1, "migration 046 must remain recorded once");
+    assert_eq!(applied, 1, "migration 047 must remain recorded once");
 
     Ok(())
 }
