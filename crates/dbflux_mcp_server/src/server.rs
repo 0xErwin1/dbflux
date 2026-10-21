@@ -24,6 +24,8 @@ use crate::{
     state::{ServerState, SharedDetachedProcess},
 };
 
+const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+
 async fn profile_connection_setup_lock(
     state: &ServerState,
     profile_id: &str,
@@ -667,10 +669,18 @@ async fn execute_connection_hook_phase(
     phase: HookPhase,
 ) -> Result<(HookPhaseOutcome, Vec<DetachedProcessHandle>), String> {
     let cancel_token = CancelToken::new();
+    let shutdown_cancel_token = state.detached_processes.shutdown_cancel_token();
     let (detached, receiver) = dbflux_core::detached_process_channel();
     let executor = McpHookExecutor { detached };
     let outcome = tokio::task::spawn_blocking(move || {
-        HookRunner::run_phase(phase, &hooks, &context, &cancel_token, None, &executor)
+        HookRunner::run_phase(
+            phase,
+            &hooks,
+            &context,
+            &cancel_token,
+            Some(&shutdown_cancel_token),
+            &executor,
+        )
     })
     .await;
 
@@ -1845,6 +1855,14 @@ impl DbFluxServer {
     }
 
     pub(crate) async fn disconnect_all(state: ServerState) -> Result<(), String> {
+        Self::disconnect_all_with_timeout(state, SHUTDOWN_DRAIN_TIMEOUT).await
+    }
+
+    async fn disconnect_all_with_timeout(
+        state: ServerState,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
         let mut connection_ids = {
             let cache = state.connection_cache.read().await;
             cache.connection_ids()
@@ -1855,9 +1873,39 @@ impl DbFluxServer {
 
         let mut errors = Vec::new();
         for connection_id in connection_ids {
-            if let Err(error) = Self::disconnect_impl(state.clone(), &connection_id).await {
-                errors.push(format!("{connection_id}: {error}"));
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                state.detached_processes.cancel_running_hooks();
+                errors.push(format!(
+                    "{connection_id}: shutdown drain exceeded {}ms",
+                    timeout.as_millis()
+                ));
+                errors.extend(terminate_detached_process_variants(&state, &connection_id));
+                continue;
             }
+
+            match tokio::time::timeout(
+                remaining,
+                Self::disconnect_impl(state.clone(), &connection_id),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => errors.push(format!("{connection_id}: {error}")),
+                Err(_) => {
+                    state.detached_processes.cancel_running_hooks();
+                    errors.push(format!(
+                        "{connection_id}: shutdown drain exceeded {}ms",
+                        timeout.as_millis()
+                    ));
+                    errors.extend(terminate_detached_process_variants(&state, &connection_id));
+                }
+            }
+        }
+
+        let remaining_process_ids = state.detached_processes.connection_ids();
+        for connection_id in remaining_process_ids {
+            errors.extend(terminate_detached_process_variants(&state, &connection_id));
         }
 
         if errors.is_empty() {
@@ -3117,6 +3165,83 @@ mod tests {
             events.lines().collect::<Vec<_>>(),
             ["driver", "pre_disconnect", "post_disconnect"]
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_deadline_cancels_blocking_hooks_and_terminates_detached_processes() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let trace = temp_dir.path().join("hook-events.log");
+        let driver = Arc::new(FakeDriver::new(DbKind::Postgres)) as Arc<dyn DbDriver>;
+        let mut hooks = ConnectionHooks::default();
+        let mut blocking_hook = process_hook(&trace, "pre_disconnect", false);
+        blocking_hook.timeout_ms = None;
+        blocking_hook.env.insert(
+            "DBFLUX_MCP_HOOK_TEST_SLEEP_MS".to_string(),
+            "60000".to_string(),
+        );
+        hooks.pre_disconnect.push(blocking_hook);
+        let mut profile = ConnectionProfile::new("shutdown-deadline", DbConfig::default_postgres());
+        profile.hooks = Some(hooks);
+        let connection_id = profile.id.to_string();
+        let state = test_state_with_driver("postgres", driver, profile.clone());
+        let connection = McpConnectionFactory::new(state.clone())
+            .connect(&connection_id, None)
+            .await
+            .expect("connection should succeed");
+        state
+            .connection_cache
+            .write()
+            .await
+            .insert(connection_id.clone(), connection);
+
+        let mut detached_hook = process_hook(&trace, "detached", false);
+        detached_hook.execution_mode = dbflux_core::HookExecutionMode::Detached;
+        detached_hook.timeout_ms = None;
+        detached_hook.env.insert(
+            "DBFLUX_MCP_HOOK_TEST_SLEEP_MS".to_string(),
+            "60000".to_string(),
+        );
+        let (detached_sender, detached_receiver) = dbflux_core::detached_process_channel();
+        ProcessExecutor
+            .execute_hook(
+                &detached_hook,
+                &HookContext::from_profile(&profile),
+                &CancelToken::new(),
+                None,
+                None,
+                Some(&detached_sender),
+            )
+            .expect("detached hook should spawn");
+        let handle = detached_receiver
+            .try_iter()
+            .next()
+            .expect("detached hook process handle");
+        let shared = Arc::new(SharedDetachedProcess::new(handle));
+        state
+            .detached_processes
+            .register(&connection_id, vec![Arc::clone(&shared)]);
+
+        let started = Instant::now();
+        let result =
+            DbFluxServer::disconnect_all_with_timeout(state.clone(), Duration::from_millis(50))
+                .await;
+
+        let error = result.expect_err("shutdown should report its deadline");
+        assert!(error.contains("shutdown drain exceeded"));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(shared.terminated.load(Ordering::SeqCst));
+        assert!(state.detached_processes.connection_ids().is_empty());
+        assert!(
+            state
+                .connection_cache
+                .read()
+                .await
+                .connection_ids()
+                .is_empty()
+        );
+        let events = std::fs::read_to_string(trace).expect("hook events");
+        assert!(events.lines().any(|event| event == "pre_disconnect"));
+        assert!(!events.lines().any(|event| event == "complete"));
     }
 
     #[tokio::test]

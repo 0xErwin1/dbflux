@@ -8,9 +8,10 @@ use tokio::sync::{Mutex, RwLock};
 use dbflux_core::DbKind;
 use dbflux_core::auth::DynAuthProvider;
 use dbflux_core::{
-    AccessKind, AuthProfileManager, ConnectionMcpGovernance, ConnectionMcpPolicyBinding,
-    ConnectionProfile, DbDriver, DetachedProcessHandle, DriverKey, FormValues, GovernanceSettings,
-    KeyringSecretStore, ProfileManager, RpcServiceKind, SecretManager, ServiceConfig, ValueRef,
+    AccessKind, AuthProfileManager, CancelToken, ConnectionMcpGovernance,
+    ConnectionMcpPolicyBinding, ConnectionProfile, DbDriver, DetachedProcessHandle, DriverKey,
+    FormValues, GovernanceSettings, KeyringSecretStore, ProfileManager, RpcServiceKind,
+    SecretManager, ServiceConfig, ValueRef,
 };
 use dbflux_ipc::{AUTH_PROVIDER_RPC_API_CONTRACT, RpcAuthProvider};
 use dbflux_mcp::{
@@ -36,6 +37,7 @@ pub struct SharedDetachedProcess {
 #[derive(Default)]
 pub struct DetachedProcessRegistry {
     processes: StdMutex<HashMap<String, Vec<Arc<SharedDetachedProcess>>>>,
+    shutdown_cancel: CancelToken,
 }
 
 impl DetachedProcessRegistry {
@@ -99,6 +101,14 @@ impl DetachedProcessRegistry {
             })
             .map(str::to_string)
             .collect()
+    }
+
+    pub(crate) fn shutdown_cancel_token(&self) -> CancelToken {
+        self.shutdown_cancel.clone()
+    }
+
+    pub(crate) fn cancel_running_hooks(&self) {
+        self.shutdown_cancel.cancel();
     }
 }
 
