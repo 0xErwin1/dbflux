@@ -411,6 +411,10 @@ struct FkDisplayRound {
     /// The referenced tables no cached details settled; their metadata
     /// is fetched before the group batches run.
     unknown_tables: Vec<ReferencedTable>,
+    /// The referenced tables whose metadata fetch failed this round.
+    /// Their ids stay uncached — including as misses — so a later round
+    /// retries them instead of hiding their labels until a manual refresh.
+    failed_tables: HashSet<ReferencedTable>,
 }
 
 impl FkDisplayRound {
@@ -437,6 +441,15 @@ impl FkDisplayRound {
         for ((schema, table, pk_column), lookups) in &self.groups {
             if !self.still_current(&panel, cx) {
                 break;
+            }
+
+            if self
+                .failed_tables
+                .contains(&(schema.clone(), table.clone()))
+            {
+                // The table's metadata fetch failed: leaving the group's
+                // ids uncached lets a later round retry them.
+                continue;
             }
 
             let Some(display_column) = self
@@ -546,7 +559,13 @@ impl FkDisplayRound {
                     log::warn!(
                         "fk display: no column metadata for referenced table {table}: {error}"
                     );
-                    None
+                    // A failed metadata fetch is transient: unset the
+                    // table's entry so it is not read as a settled
+                    // "no display column" and mark it for the group skip.
+                    self.display_columns
+                        .remove(&(schema.clone(), table.clone()));
+                    self.failed_tables.insert((schema.clone(), table.clone()));
+                    continue;
                 }
             };
 
@@ -670,6 +689,7 @@ impl DataGridPanel {
             groups: group_fk_lookups(lookups),
             display_columns,
             unknown_tables,
+            failed_tables: HashSet::new(),
         };
 
         self.fk_display.task = Some(cx.spawn(async move |this, cx| {
