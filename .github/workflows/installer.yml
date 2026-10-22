@@ -8,13 +8,10 @@ name: Installer
 # The release is resolved here with an authenticated `gh` call and passed as
 # --version, because the installer's own lookup uses the unauthenticated
 # GitHub API and shared runners hit its rate limit.
+#
+# No push trigger: a commit reaches main only through a squash-merged pull
+# request, and this workflow already ran on it there.
 on:
-  push:
-    branches: [main, dev]
-    paths:
-      - 'scripts/install.sh'
-      - 'scripts/uninstall.sh'
-      - '.github/workflows/installer.yml'
   pull_request:
     branches: [main, dev]
     paths:

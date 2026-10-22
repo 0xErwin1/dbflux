@@ -227,7 +227,8 @@ visible in them.
 ## Regenerating documentation screenshots
 
 `scripts/docs_screenshots.py` produces the screenshots used by the
-documentation. It starts demo databases in Docker, runs DBFlux on a headless X
+documentation. It starts demo databases in Docker (or as local processes with
+`--services native`), runs DBFlux on a headless X
 server, drives it through `gpui-mcp` and writes one light and one dark WebP per
 shot to `docs/images/<page>/<name>-light.webp` and `<name>-dark.webp`. No window
 opens on your desktop.
@@ -250,6 +251,13 @@ the same files.
 - Docker, with its daemon running. The script starts PostgreSQL, MongoDB and
   Redis containers named `dbflux-docs-*`, bound to `127.0.0.1` on ports 55432,
   57017 and 56379, and removes them when it finishes or fails.
+- Or, with `--services native`, the database binaries on `PATH` instead of
+  Docker: `initdb`, `postgres`, `pg_isready` and `psql` from a PostgreSQL with the
+  `timescaledb` and `pgvector` extensions, `mongod` and `mongosh`, and
+  `redis-server` and `redis-cli`. The script runs each server as a local process
+  bound to `127.0.0.1` on the same ports, keeps its data under the work
+  directory, and stops it when it finishes or fails. It refuses to start a
+  server on a port that is already in use, so it never seeds another server.
 - The Nix dev shell, which provides Xvfb, xdotool, `cwebp` and Mesa's software
   Vulkan driver. The script reads the driver's ICD file from
   `DBFLUX_DOCS_VULKAN_ICD`, which the dev shell sets. Outside it, install those
@@ -276,7 +284,9 @@ nix develop -c python3 scripts/docs_screenshots.py
 | `--out <DIR>` | Where the images go. Defaults to `docs/images`. |
 | `--only <PAGE/NAME>` | Take only this shot, such as `usage/main-window`. Repeat it for several. |
 | `--theme light\|dark\|both` | Which themes to capture. Defaults to both. |
-| `--keep-running` | Leave the containers, Xvfb and the DBFlux process of the last or the failed shot running, to inspect them. |
+| `--services docker\|native` | Run the demo databases in Docker containers (the default) or as local processes. |
+| `--port <NAME>=<PORT>` | Listen port of a demo service (`postgres`, `mongodb` or `redis`), when its default port is taken. Repeat it for several. The connections in the images show the port, so use it only when needed. |
+| `--keep-running` | Leave the demo databases, Xvfb and the DBFlux process of the last or the failed shot running, to inspect them. |
 | `--dbflux <PATH>`, `--gpui-mcp <PATH>` | The binaries. Default to `target/release/dbflux` and `target/debug/gpui-mcp`. |
 | `--launcher "<COMMAND>"` | A command that prefixes both binaries. Use it to start them through a specific dynamic loader when they were built against a different glibc than the shell provides, for example `--launcher "$GLIBC/lib/ld-linux-x86-64.so.2 --library-path $GLIBC/lib:$LD_LIBRARY_PATH"`. |
 | `--vulkan-icd <PATH>` | The ICD file of a software Vulkan driver, when `DBFLUX_DOCS_VULKAN_ICD` is not set. |

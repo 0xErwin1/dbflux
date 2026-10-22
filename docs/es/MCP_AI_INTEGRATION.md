@@ -145,7 +145,7 @@ Las seis capas se ejecutan dentro del proceso del servidor en cada solicitud
 | Scripts         | `create_script`           | write                                  | Guarda un nuevo script en el directorio de scripts                                                                   |
 | Scripts         | `update_script`           | write                                  | Sobrescribe un script guardado existente                                                                             |
 | Scripts         | `delete_script`           | admin                                  | Elimina permanentemente un script                                                                                    |
-| Scripts         | `execute_script`          | computed                               | Ejecuta un script guardado contra una conexión. La clasificación se deriva del cuerpo del script                     |
+| Scripts         | `execute_script`          | computed                               | Ejecuta un script guardado de consultas de base de datos contra una conexión. La clasificación se deriva del cuerpo del script. Los scripts Lua, Python y Bash se rechazan (ver más abajo) |
 | Aprobación      | `request_execution`       | admin                                  | Encola una llamada para que la apruebe una persona. Una vez aprobada, llama a la tool con los mismos argumentos para ejecutarla una vez |
 | Aprobación      | `list_pending_executions` | read                                   | Muestra todas las ejecuciones pendientes de aprobación                                                               |
 | Aprobación      | `get_pending_execution`   | read                                   | Obtiene los detalles de una ejecución pendiente específica. Una rechazada devuelve `status: "rejected"` y el motivo |
@@ -268,6 +268,24 @@ siguen siendo el límite real.
 
 El auto-refresh del editor usa la misma aplicación. En una conexión cuyo driver
 no puede aplicar solo lectura, el auto-refresh vuelve a Manual.
+
+### Scripts que `execute_script` no puede ejecutar
+
+`execute_script` solo ejecuta scripts escritos en un lenguaje de consultas de
+base de datos. Un script Lua, Python o Bash guardado aparece en `list_scripts` y
+se puede leer con `get_script`, pero `execute_script` lo rechaza con "Script
+language not supported for execution (only database queries)" y no se ejecuta
+nada. Ejecute esos scripts desde el editor de DBFlux.
+
+### Los ajustes de seguridad del editor no se aplican
+
+Los ajustes de consultas peligrosas (**Confirm dangerous queries**, **Require
+WHERE for DELETE/UPDATE** y **Always require preview**) pertenecen al editor de
+DBFlux. El servidor MCP no los lee, ni en el nivel General, ni como override por
+driver, ni como override por conexión. Una llamada MCP solo está controlada por
+las policies y el flujo de aprobación descritos arriba: para que las sentencias
+destructivas esperen a una persona, configure la decisión de la policy para
+`destructive` (o `admin_destructive`) como Ask o Deny.
 
 ## 6. Policies y roles integrados
 

@@ -8,20 +8,32 @@ name: Tests
 # never starts, so its required status checks stay "Pending" forever and the
 # pull request is unmergeable (see GitHub's "Troubleshooting required status
 # checks"). A job skipped by a conditional reports "Success", so the workflow
-# now always triggers and the jobs decide whether the Rust checks apply. The
-# `push` trigger keeps its paths-ignore: a push run has no required checks to
-# satisfy, so skipping it entirely still saves the compute.
+# now always triggers and the jobs decide whether the Rust checks apply.
 #
 # Markdown is safe to skip because no crate pulls it into the build: there is
 # no `include_str!` of a .md file, no `#[doc = include_str!]`, and no `readme`
 # key in any manifest. Re-check that before assuming it still holds.
 on:
+  # A commit reaches main only through a squash-merged pull request whose run
+  # already gated it, so an ordinary push run repeats that work. Push runs are
+  # kept for the cache: rust-cache saves only from main (see `save-if` below),
+  # and its key changes only with the manifests, the lockfile, the pinned
+  # toolchain or this file. Any other push finds "Cache up-to-date" and saves
+  # nothing, so only a push that changes one of those paths runs here.
   push:
     branches: [main, dev]
-    paths-ignore:
-      - '**/*.md'
-      - 'web/**'
-      - '.github/workflows/web.yml'
+    paths:
+      - 'Cargo.lock'
+      - '**/Cargo.toml'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - '.github/workflows/tests.yml'
+  # Weekly, for what the push filter above no longer covers: a cache evicted
+  # under the repository's 10 GB limit is written again, and main is tested as
+  # merged. The ruleset does not require a pull request to be up to date with
+  # main, so two pull requests that pass apart can still break main together.
+  schedule:
+    - cron: '41 4 * * 1'
   pull_request:
     branches: [main, dev]
   workflow_dispatch:
@@ -69,8 +81,9 @@ jobs:
           # rather than silently disabling the checks that gate this branch.
           rust=true
 
-          # Everything that is not a pull request must run the Rust checks: a push
-          # or a manual run has no pull request to scope against.
+          # Everything that is not a pull request must run the Rust checks: a
+          # push, a scheduled or a manual run has no pull request to scope
+          # against.
           if [ "$EVENT_NAME" = "pull_request" ]; then
             if changed=$(git diff --name-only "$BASE_SHA" HEAD) && [ -n "$changed" ]; then
               # The rule the path filter used to apply, in one place: the Rust
@@ -146,16 +159,63 @@ jobs:
           # Pull requests and releases still restore from main.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e  # v2
+        with:
+          tool: cargo-nextest@0.9.133
+
+      # `cargo test` runs one test binary at a time, so the whole suite waited
+      # on the slowest one (dbflux_ui_document, 145 s). nextest schedules the
+      # tests of every binary in one pool. It does not run doctests, which get
+      # the next step, and --no-fail-fast reports every failing test instead of
+      # stopping at the first failing binary.
       - name: Run deterministic workspace tests
-        run: cargo test --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws"
+        run: cargo nextest run --workspace --locked --no-fail-fast --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws"
+
+      - name: Run doctests
+        run: cargo test --doc --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws"
 
   # Same fail-open rationale as deterministic-tests above.
+  #
+  # The suites run as four parallel groups instead of one serial job: the
+  # serial job took 15 minutes, most of it spent waiting on suites that share
+  # nothing. Groups are balanced by measured run time, and each pulls only the
+  # images its suites use. A new driver suite goes into the group that fits
+  # it, as a step guarded by that group's name. The required "Driver Live
+  # Integration" context is carried by driver-live-integration-result below.
   driver-live-integration:
-    name: Driver Live Integration
+    name: Live ${{ matrix.group }}
     needs: changes
     if: always() && needs.changes.outputs.rust != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: postgres
+            images: >-
+              mirror.gcr.io/library/postgres:16
+              mirror.gcr.io/pgvector/pgvector:0.8.0-pg16
+          - group: mssql
+            images: >-
+              mcr.microsoft.com/mssql/server:2022-latest
+          - group: mysql-mongodb-redis
+            images: >-
+              mirror.gcr.io/library/mysql:8.4
+              mirror.gcr.io/library/mongo:7
+              mirror.gcr.io/library/redis:7
+              grokzen/redis-cluster:7.0.10
+              ghcr.io/tursodatabase/libsql-server:v0.24.33
+          - group: analytics-cloud
+            images: >-
+              mirror.gcr.io/clickhouse/clickhouse-server:25.8.30.16
+              mirror.gcr.io/amazon/dynamodb-local:latest
+              mirror.gcr.io/library/influxdb:2.7
+              mirror.gcr.io/library/influxdb:1.8
+              cgr.dev/chainguard/minio:latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
+              mirror.gcr.io/localstack/localstack:3
 
     steps:
       - name: Checkout repository
@@ -184,7 +244,7 @@ jobs:
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
         with:
-          shared-key: ci-live-integration
+          shared-key: ci-live-${{ matrix.group }}
           cache-targets: true
           cache-on-failure: true
           # Saved from main only; see the deterministic job.
@@ -210,23 +270,10 @@ jobs:
       # testcontainers, so only the suite that actually needs it fails, and it
       # fails with a test error rather than a red job that ran no tests.
       - name: Pre-pull container images
+        env:
+          IMAGES: ${{ matrix.images }}
         run: |
-          images=(
-            mirror.gcr.io/library/postgres:16
-            mirror.gcr.io/pgvector/pgvector:0.8.0-pg16
-            mirror.gcr.io/library/mysql:8.4
-            mirror.gcr.io/library/mongo:7
-            mirror.gcr.io/library/redis:7
-            grokzen/redis-cluster:7.0.10
-            mirror.gcr.io/clickhouse/clickhouse-server:25.8.30.16
-            mcr.microsoft.com/mssql/server:2022-latest
-            mirror.gcr.io/amazon/dynamodb-local:latest
-            mirror.gcr.io/library/influxdb:2.7
-            mirror.gcr.io/library/influxdb:1.8
-            cgr.dev/chainguard/minio:latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
-            mirror.gcr.io/localstack/localstack:3
-            ghcr.io/tursodatabase/libsql-server:v0.24.33
-          )
+          read -ra images <<< "$IMAGES"
           unpulled=()
           for image in "${images[@]}"; do
             for attempt in 1 2 3; do
@@ -248,78 +295,100 @@ jobs:
           fi
 
       - name: Run PostgreSQL live integration tests
+        if: matrix.group == 'postgres'
         run: cargo test -p dbflux_driver_postgres --locked --test live_integration -- --ignored
 
       - name: Run Redshift execution-safety PostgreSQL protocol compatibility regression
+        if: matrix.group == 'postgres'
         run: cargo test -p dbflux_driver_redshift --locked --test live_integration redshift_query_safety_refuses_protected_requests_before_prepare -- --ignored
-        
+
       - name: Run PostgreSQL DDL integration tests
+        if: matrix.group == 'postgres'
         run: cargo test -p dbflux_driver_postgres --locked --test ddl_integration -- --ignored
 
       - name: Run PostgreSQL bulk schema columns live integration tests
+        if: matrix.group == 'postgres'
         run: cargo test -p dbflux_driver_postgres --locked --test schema_columns_live -- --ignored
 
       - name: Run PostgreSQL relational filter live integration tests
+        if: matrix.group == 'postgres'
         run: cargo test -p dbflux_driver_postgres --locked --test relational_filter_live -- --ignored
 
       - name: Run MySQL live integration tests
+        if: matrix.group == 'mysql-mongodb-redis'
         run: cargo test -p dbflux_driver_mysql --locked --test live_integration -- --ignored
 
       - name: Run MySQL query safety cancellation regression
+        if: matrix.group == 'mysql-mongodb-redis'
         run: cargo test -p dbflux_driver_mysql --locked --lib mysql_query_safety_refusal_preserves_existing_cancel_signal -- --ignored
 
       - name: Run MongoDB live integration tests
+        if: matrix.group == 'mysql-mongodb-redis'
         run: cargo test -p dbflux_driver_mongodb --locked --test live_integration -- --ignored
 
       - name: Run Redis live integration tests
+        if: matrix.group == 'mysql-mongodb-redis'
         run: cargo test -p dbflux_driver_redis --locked --test live_integration -- --ignored
 
       # The all-in-one cluster image publishes fixed host ports (7000-7005),
       # so this suite runs single-threaded to avoid two test binaries racing
       # to bind the same ports.
       - name: Run Redis Cluster live integration tests
+        if: matrix.group == 'mysql-mongodb-redis'
         run: cargo test -p dbflux_driver_redis --locked --test live_cluster -- --ignored --test-threads=1
 
       - name: Run Redis RDB analyzer live integration tests
+        if: matrix.group == 'mysql-mongodb-redis'
         run: cargo test -p dbflux_driver_redis --locked --test live_rdb -- --ignored
 
       - name: DynamoDB live integration
+        if: matrix.group == 'analytics-cloud'
         run: cargo test -p dbflux_driver_dynamodb --locked --test live_integration -- --ignored
 
       - name: Run S3 live integration tests
+        if: matrix.group == 'analytics-cloud'
         run: cargo test -p dbflux_driver_s3 --locked --test live_integration -- --ignored
 
       - name: Run SQLite live integration tests
+        if: matrix.group == 'mysql-mongodb-redis'
         run: cargo test -p dbflux_driver_sqlite --locked --test live_integration
 
       # MSSQL, InfluxDB, and ClickHouse spin up one container per test (the SQL
       # Server image is ~2 GB), so these suites run single-threaded to avoid
       # exhausting the runner with concurrent containers.
       - name: Run MSSQL live integration tests
+        if: matrix.group == 'mssql'
         run: cargo test -p dbflux_driver_mssql --locked --test live_integration -- --ignored --test-threads=1
 
       - name: Run MSSQL query safety collector regression
+        if: matrix.group == 'mssql'
         run: cargo test -p dbflux_driver_mssql --locked --lib mssql_query_safety_collector_consumes_budget_before_late_error -- --ignored --test-threads=1
 
       - name: Run MSSQL DDL integration tests
+        if: matrix.group == 'mssql'
         run: cargo test -p dbflux_driver_mssql --locked --test ddl_integration -- --ignored --test-threads=1
 
       - name: Run MSSQL instance catalog tests
+        if: matrix.group == 'mssql'
         run: cargo test -p dbflux_driver_mssql --locked --test instance_catalog -- --ignored --test-threads=1
 
       - name: Run InfluxDB live integration tests
+        if: matrix.group == 'analytics-cloud'
         run: cargo test -p dbflux_driver_influxdb --locked --test live_integration -- --ignored --test-threads=1
 
       - name: Run ClickHouse live integration tests
+        if: matrix.group == 'analytics-cloud'
         run: cargo test -p dbflux_driver_clickhouse --locked --test live_integration -- --ignored --test-threads=1
 
       - name: Run TursoDB live integration tests
+        if: matrix.group == 'mysql-mongodb-redis'
         run: cargo test -p dbflux_driver_turso --locked --test live_integration -- --ignored --test-threads=1
 
       # Each test spins up its own LocalStack container (~1.3 GB image), so
       # this suite runs single-threaded like the MSSQL/InfluxDB/ClickHouse
       # suites above.
       - name: Run CloudWatch live integration tests
+        if: matrix.group == 'analytics-cloud'
         run: cargo test -p dbflux_driver_cloudwatch --locked --test live_integration -- --ignored --test-threads=1
 
       # Redshift has no Docker-based emulator; these tests hit a real Amazon
@@ -327,7 +396,7 @@ jobs:
       # are configured (never true on a fork PR, which gets no secrets), so
       # the step reports a clean skip rather than failing.
       - name: Run Redshift live integration tests
-        if: ${{ env.DBFLUX_TEST_REDSHIFT_HOST != '' }}
+        if: ${{ matrix.group == 'postgres' && env.DBFLUX_TEST_REDSHIFT_HOST != '' }}
         env:
           DBFLUX_TEST_REDSHIFT_HOST: ${{ secrets.DBFLUX_TEST_REDSHIFT_HOST }}
           DBFLUX_TEST_REDSHIFT_PORT: ${{ secrets.DBFLUX_TEST_REDSHIFT_PORT }}
@@ -335,6 +404,27 @@ jobs:
           DBFLUX_TEST_REDSHIFT_PASSWORD: ${{ secrets.DBFLUX_TEST_REDSHIFT_PASSWORD }}
           DBFLUX_TEST_REDSHIFT_DATABASE: ${{ secrets.DBFLUX_TEST_REDSHIFT_DATABASE }}
         run: cargo test -p dbflux_driver_redshift --locked --test live_integration -- --ignored
+
+  # Aggregate gate, like clippy-result in style.yml: "Driver Live Integration"
+  # is a required status check, and the matrix above reports one context per
+  # group instead. A skipped matrix counts as a pass: it skips only on a
+  # confirmed docs-only change.
+  driver-live-integration-result:
+    name: Driver Live Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: driver-live-integration
+    if: always()
+
+    steps:
+      - name: Check matrix result
+        env:
+          RESULT: ${{ needs.driver-live-integration.result }}
+        run: |
+          if [ "$RESULT" != "success" ] && [ "$RESULT" != "skipped" ]; then
+            echo "::error::Driver live integration did not pass in every group (result: $RESULT)."
+            exit 1
+          fi
 
   # The required contexts here are "Cross-platform check macos-14" and
   # "Cross-platform check windows-latest", one per matrix leg. A job-level
@@ -353,9 +443,12 @@ jobs:
 
     # GPUI carries a large amount of platform-specific code; a macOS- or
     # Windows-only break otherwise surfaces only when build.yml runs at release
-    # or nightly tag time. A lightweight `cargo check` on each platform catches
-    # it in the PR instead. Full test execution stays on Linux above; only the
-    # scoped test steps below run here.
+    # or nightly tag time. The Clippy matrix in style.yml compiles every
+    # first-party crate on both platforms with the same features, which is
+    # what a workspace `cargo check` here used to repeat (13 of this job's 28
+    # minutes on Windows). This job keeps what Clippy does not cover: the
+    # vendored crates it never reaches, and the scoped tests below. Full test
+    # execution stays on Linux above.
     strategy:
       fail-fast: false
       matrix:
@@ -380,16 +473,23 @@ jobs:
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
         with:
-          # Shared with clippy in style.yml (same features, same target dir).
-          shared-key: ci-check-${{ matrix.os }}
+          # Not shared with clippy in style.yml. The two jobs used to share a
+          # key, and only the first to finish could save it: it held clippy's
+          # artifacts, built for a different set of packages and therefore a
+          # different feature unification, and this job rebuilt ~700 crates on
+          # a "full match".
+          shared-key: ci-cross-platform-${{ matrix.os }}
           cache-targets: true
           cache-on-failure: true
           # Saved from main only; see the deterministic job.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Cargo check
+      # lint.py lints first-party crates only, and nothing first-party depends
+      # on the UI-automation MCP server, so Clippy never compiles it or its
+      # platform-specific screen capture crate.
+      - name: Check vendored UI-automation server
         if: needs.changes.outputs.rust != 'false'
-        run: cargo check --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws,ui-automation${{ matrix.extra_features }}"
+        run: cargo check -p gpui-mcp-server --locked
 
       # The DuckDB driver links a bundled C++ engine and relies on its file lock
       # and on native paths, which `cargo check` compiles but never exercises.

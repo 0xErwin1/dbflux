@@ -55,7 +55,8 @@ SSH suite (needs SSH and PostgreSQL services you provide) — see
 ## Per-driver suites
 
 Suites marked *(local only)* have no dedicated CI step; the rest run in the
-Driver Live Integration job of `.github/workflows/tests.yml`.
+Driver Live Integration matrix of `.github/workflows/tests.yml`, split into four
+parallel groups (`postgres`, `mssql`, `mysql-mongodb-redis`, `analytics-cloud`).
 
 | Driver | Test binaries (`--test`) | Local backend | Notes |
 |---|---|---|---|
@@ -147,11 +148,12 @@ suite safe.
 
 ## Release gating
 
-The per-driver steps live in the Driver Live Integration job of
-`.github/workflows/tests.yml`. Stable and RC publication is gated by them:
-`.github/workflows/release.yml` invokes `tests.yml`, and its `Create Release`
-job cannot start until the tests job passes. Nightly builds are **not**
-test-gated — `.github/workflows/nightly.yml` calls `build.yml` directly.
+The per-driver steps live in the Driver Live Integration matrix of
+`.github/workflows/tests.yml`, and they gate pull requests. No release channel
+is test-gated: `.github/workflows/release.yml` and
+`.github/workflows/nightly.yml` call `build.yml` directly, without `tests.yml`.
+Run these suites before tagging an rc or stable (see
+[docs/RELEASE.md](../../docs/RELEASE.md)).
 
 ## ClickHouse specifics
 

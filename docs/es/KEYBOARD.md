@@ -65,7 +65,7 @@ Todo lo que se puede clicar en la estructura de la ventana tiene una tecla, y na
 
 | Teclas                                        | Acción                                                 |
 | --------------------------------------------- | ------------------------------------------------------ |
-| `q` / `e`                                     | Cambiar de pestaña del sidebar (Connections / Scripts) |
+| `q` / `e`                                     | Pestaña anterior / siguiente del sidebar (Connections / Scripts / Dashboards) |
 | `/`                                           | Enfocar búsqueda                                       |
 | `j` / `k` (o `Down` / `Up`)                   | Seleccionar siguiente / anterior                       |
 | `h` / `l`                                     | Colapsar / expandir nodo (`l` en una conexión desconectada la conecta) |
@@ -412,6 +412,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `o`                                           | Añadir fila                                |
 | `y`                                           | Copiar fila                                |
 | `i`                                           | Alternar la vista de registro (una fila)   |
+| `t` | Mostrar la vista de datos siguiente (Tabla, Árbol, JSON) de una tabla o colección que ofrece más de una |
 | `Shift+t`                                     | Mostrar la vista siguiente del resultado (Datos o Cuadrícula, JSON, Gráfico y las demás que ofrezca), dando la vuelta; el teclado sigue en los resultados |
 | `v`                                           | Alternar el panel de valor de la celda     |
 | `Ctrl+Space`                                  | Alternar el inspector de la fila           |

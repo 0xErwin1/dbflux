@@ -1,12 +1,16 @@
 # 处理结果
 
-结果渲染在文档内的结果标签页中。视图模式根据数据库类别自动选择：
+结果渲染在文档内的结果标签页中。每个表或集合以其驱动为该对象声明的视图打开，并提供其声明的其他视图：
 
-- 关系型数据库使用**表格视图**。
-- 文档集合（例如 MongoDB、DynamoDB）使用**表格视图**，同一页数据还可用**树**和 **JSON** 视图查看（见[文档集合](DOCUMENTS.md)）。
+- 关系型表和查询结果使用**表格视图**。
+- 文档集合（例如 MongoDB、DynamoDB）使用**树视图**，同一页数据还可用**表格**和 **JSON** 视图查看（见[文档集合](DOCUMENTS.md)）。
+- 含 JSON 列的表使用**表格视图**，并提供同一批行的**树**视图（见[表中的 JSON 列](DOCUMENTS.md#表中的-json-列)）。
+- 时间序列（例如 InfluxDB 的 measurement 或 TimescaleDB 的 hypertable）在其行可以绘制图表时使用**网格上方的图表**（见[时间序列表和集合](CHARTS.md#时间序列表和集合)）。
 - Redis 使用**键值视图**（见[键值视图](KEY_VALUE.md)）。
 
 当驱动声明了事件流呈现方式时，事件流类型的容器会作为事件流打开。
+
+含向量列的表还可以列出与所选行最[相似的行](#相似行)。
 
 ## 结果显示在编辑器旁边
 
@@ -73,6 +77,24 @@ JSON、XML 或纯文本显示值（根据内容检测，且仅在确实能解析
   <source media="(prefers-color-scheme: dark)" srcset="../images/results/filtering-dark.webp">
   <img src="../images/results/filtering-light.webp" alt="在筛选栏中输入 WHERE 条件后筛选出的 customers 表">
 </picture>
+
+## 相似行
+
+在含向量列的表上（目前是含 pgvector `vector` 列的 PostgreSQL 表），按 `Shift+s` 或在行菜单中选择 **查找相似行**，即可列出与所选行最接近的行。菜单项会注明它读取的列和列出的行数，或说明无法运行的原因：该行在这一列中没有值，或网格中有未保存的更改，需要先保存或还原。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/results/similar-rows-dark.webp">
+  <img src="../images/results/similar-rows-light.webp" alt="执行查找相似行后的 products 表：所选行作为参照行固定在顶部，下方是按 L2 距离排序的 10 个最近行，以及选择向量列、距离和 K 的工具栏">
+</picture>
+
+随后网格会把所选行固定在顶部并标记为 `参照行`，下方按由近到远的顺序显示与它最接近的 10 行。第一列是距离，列标题会写明距离类型。一个工具栏会取代筛选行：
+
+- 列选择器用于选择向量列。光标位于向量列上时，搜索从该列开始；否则从表的第一个向量列开始。
+- **L2**、**余弦** 和 **内积** 用于切换距离。内积显示乘积本身，从大到小排列。
+- **K** 设置列出的行数，范围为 1 到 1000。
+- **返回表** 或 `Esc` 会回到表页面，并保留其筛选条件。
+
+所选行会按主键从相似行中排除，没有向量的行不会列出，相似行为只读。不是数字的距离显示为短横线。`halfvec` 和 `sparsevec` 列不提供此搜索。
 
 ## 编辑与增删改查
 

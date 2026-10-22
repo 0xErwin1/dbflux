@@ -479,7 +479,11 @@ compara el `main` HEAD actual contra el commit desde el que se construyó el
 último nightly (`git rev-parse nightly^`, el primer padre del commit de pin). Si
 coinciden, la corrida se salta por completo: sin rebuild, sin mover el tag, sin
 churn de release. Esto evita republicar un build idéntico bajo un hash fresco no
-reproducible que rompería innecesariamente los pins de Nix. Una corrida manual
+reproducible que rompería innecesariamente los pins de Nix. También se salta cuando todas las rutas
+cambiadas desde el último nightly (`git diff nightly^..HEAD`) son prosa o
+contenido del sitio (`web/`, `*.md`, `.github/workflows/web.yml`): el tag no se
+mueve, así que el changelog del siguiente nightly sigue cubriendo esos commits.
+Una corrida manual
 `workflow_dispatch` siempre construye, incluso sin commits nuevos.
 
 ### Paquete Nix de Nightly
@@ -617,7 +621,7 @@ cargo test --workspace
 
 `scripts/lint.py` solo cubre los crates propios bajo `crates/` y nunca analiza ni reformatea los crates de terceros bajo `vendor/`.
 
-Estas suites rápidas no cubren las pruebas de integración en vivo de los drivers: suites específicas por driver, respaldadas por contenedores, archivos locales o un clúster de Redshift con credenciales, documentadas en [tests/driver-live/README.md](../../tests/driver-live/README.md). Ejecútalas antes de etiquetar un rc o stable. CI no ejecuta ninguna suite al publicar: `release.yml` compila y publica sin llamar a `tests.yml` ni a `style.yml`, y se apoya en los checks que ya corrieron en los pull requests y en `main`. Ningún canal de release está condicionado por pruebas, nightly incluido (`nightly.yml` llama a `build.yml` directamente).
+Estas suites rápidas no cubren las pruebas de integración en vivo de los drivers: suites específicas por driver, respaldadas por contenedores, archivos locales o un clúster de Redshift con credenciales, documentadas en [tests/driver-live/README.md](../../tests/driver-live/README.md). Ejecútalas antes de etiquetar un rc o stable. CI no ejecuta ninguna suite al publicar: `release.yml` compila y publica sin llamar a `tests.yml` ni a `style.yml`, y se apoya en los checks que ya corrieron en los pull requests. `main` no vuelve a ejecutar todos los checks: `tests.yml` y `style.yml` corren en un push a `main` solo cuando cambian el toolchain de Rust o los manifiestos de dependencias, además de una corrida programada semanal sobre `main`. Ningún canal de release está condicionado por pruebas, nightly incluido (`nightly.yml` llama a `build.yml` directamente).
 
 ## Relacionado
 

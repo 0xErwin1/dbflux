@@ -423,6 +423,8 @@ connection_manager:
     mcp: MCP
   field:
     show_all_databases: "Mostrar todos os bancos de dados"
+    read_only_help: "Bloqueia alterações pela grade de dados, pelo construtor de consultas e pela comparação de esquemas. Instruções digitadas no editor de consultas continuam sendo executadas."
+    read_only: "Somente leitura"
     name: Nome
     ssl_mode: Modo SSL
     ca_certificate: Certificado da CA
@@ -431,6 +433,7 @@ connection_manager:
   section:
     transport: TRANSPORTE
     navigator: "NAVEGADOR"
+    safety: "SEGURANÇA"
   banner:
     correct_following: Corrija os itens a seguir
     testing_connection: "Testando conexão…"
@@ -1570,7 +1573,6 @@ document:
       stats:
         rebuilding: "Reconstruindo o gráfico…"
         no_stats: Nenhuma estatística disponível para esta série.
-        unavailable: indisponível
         title: Estatísticas
         window:
           title: Janela
@@ -1578,12 +1580,6 @@ document:
           end: fim
           span: duração
           points: pontos
-        source:
-          title: Origem
-          measurement: measurement
-          field: field
-          host: host
-          region: região
     context_menu:
       header: "%{column} · linha %{row}"
       item:
@@ -4178,6 +4174,7 @@ settings:
       menu_select: Selecionar no menu
       menu_back: Voltar no menu
       sidebar_next_tab: Próxima aba da barra lateral
+      sidebar_prev_tab: Aba anterior da barra lateral
       refresh_schema: Atualizar schema
       open_connection_manager: Abrir gerenciador de conexões
       export_connections: "Exportar conexões"

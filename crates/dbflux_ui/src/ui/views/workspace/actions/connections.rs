@@ -1107,6 +1107,21 @@ mod active_query_prompt_tests {
         assert_eq!(quit_confirmed.get(), 0);
     }
 
+    #[gpui::test]
+    fn begin_shutdown_records_the_connected_profiles(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        let (profile_id, _) = harness.connect("prod");
+
+        let app_state = harness.app_state.clone();
+        harness.window.update(|_, cx| {
+            assert!(app_state.read(cx).begin_shutdown());
+            assert_eq!(
+                app_state.read(cx).last_connected_profiles(),
+                vec![profile_id]
+            );
+        });
+    }
+
     /// Asserts a prompt choice returned while the driver cancel was still
     /// blocked, then that the cancel ran off the UI thread once released.
     fn assert_cancel_ran_off_the_ui_thread(

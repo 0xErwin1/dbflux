@@ -191,19 +191,25 @@ query") 액션으로 만든 차트 문서는 아직 저장된 ID에 연결되지
 
 차트는 연결 프로필별로 저장할 수 있습니다. 저장된 차트를 다시 열려면 명령 팔레트에서 **차트 열기…**(`OpenSavedChart`)를 실행합니다. 현재 프로필의 저장된 차트를 퍼지(fuzzy) 오버레이에 표시합니다.
 
-### 시계열 컬렉션
+### 시계열 테이블과 컬렉션
 
-카테고리가 `DatabaseCategory::TimeSeries`인 연결(예: InfluxDB measurement)에서
-컬렉션을 열면, 데이터 그리드가 쿼리 결과와 같은 Data, Chart, JSON 뷰를 제공합니다.
+드라이버가 시계열로 선언한 테이블이나 컬렉션(`ObjectFacet::TimeSeries`: InfluxDB
+measurement, 또는 PostgreSQL의 TimescaleDB hypertable)을 열면, 데이터 그리드가 쿼리 결과와 같은 Data, Chart, JSON 뷰를 제공합니다.
 `detect_chart_columns`가 `Ok`를 반환하면 첫 페이지가 차트로 열리며, 축은
 `default_bindings_for_time_series`로 미리 설정됩니다(X는 시간, Y는 첫 번째 숫자 열,
-그룹은 첫 번째 `Text` 열). 그룹은 해당 열의 서로 다른 값마다 선을 하나씩 그리고
+그룹은 첫 번째 `Text` 열). hypertable의 시간 차원처럼 드라이버가 지정한 시간 열이
+결과에 있으면 그 열이 X에 놓이고, 없으면 첫 번째 타임스탬프 열이 놓입니다. 그룹은 해당 열의 서로 다른 값마다 선을 하나씩 그리고
 그 값으로 레이블을 붙이므로, `host` 같은 태그는 호스트마다 자기 선을 갖습니다.
 축 막대에서 그룹을 고를 때도 마찬가지입니다. 기본 그룹은 결과에서 그 열의 서로 다른 값이
 12개 이하일 때만 적용되며(`DEFAULT_GROUP_MAX_VALUES`), 그렇지 않으면 차트는 그룹 없이
 시작합니다. 축 막대에서 고른 그룹에는 이 제한이 없습니다. Data 뷰는 다른 컬렉션이 사용하는 문서 트리 대신 그리드에
 행을 표시합니다. 수동, 자동, 페이지 이동 등 어떤 새로 고침이든 사용자가 고른 뷰를
 유지하며, 새 페이지를 더 이상 차트로 그릴 수 없을 때만 Data로 돌아갑니다.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/charts/hypertable-dark.webp">
+  <img src="../images/charts/hypertable-light.webp" alt="Both 뷰로 열린 server_metrics hypertable. 행 그리드 위에 호스트마다 선이 하나씩 있는 시간별 cpu_percent 선 차트가 보입니다">
+</picture>
 
 도구 모음과 상태 표시줄은 드라이버가 실제로 실행하는 쿼리로 이 조회를 표시합니다.
 이 쿼리는 `QueryGenerator::collection_browse_query`에서 가져오므로 레이블은 연결

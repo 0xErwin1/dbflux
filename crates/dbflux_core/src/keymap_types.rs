@@ -129,6 +129,7 @@ pub enum Command {
 
     // === Sidebar ===
     SidebarNextTab,
+    SidebarPrevTab,
     RefreshSchema,
     OpenConnectionManager,
     ExportConnections,
@@ -287,6 +288,8 @@ impl Command {
             "run_query" => Some(Command::RunQuery),
             "run_query_in_new_tab" => Some(Command::RunQueryInNewTab),
             "save_query" => Some(Command::SaveQuery),
+            "save_file_as" => Some(Command::SaveFileAs),
+            "open_script_file" => Some(Command::OpenScriptFile),
             "toggle_comment" => Some(Command::ToggleComment),
             "open_history" => Some(Command::ToggleHistoryDropdown),
             "cancel_query" => Some(Command::CancelQuery),
@@ -429,6 +432,7 @@ impl Command {
             Command::MenuBack => "Menu back",
 
             Command::SidebarNextTab => "Sidebar next tab",
+            Command::SidebarPrevTab => "Sidebar previous tab",
             Command::RefreshSchema => "Refresh schema",
             Command::OpenConnectionManager => "Open connection manager",
             Command::ExportConnections => "Export connections",
@@ -629,6 +633,7 @@ impl Command {
             Command::MenuBack => "menu_back",
 
             Command::SidebarNextTab => "sidebar_next_tab",
+            Command::SidebarPrevTab => "sidebar_prev_tab",
             Command::RefreshSchema => "refresh_schema",
             Command::OpenConnectionManager => "open_connection_manager",
             Command::ExportConnections => "export_connections",
@@ -845,6 +850,7 @@ impl Command {
             Command::MenuSelect,
             Command::MenuBack,
             Command::SidebarNextTab,
+            Command::SidebarPrevTab,
             Command::RefreshSchema,
             Command::OpenConnectionManager,
             Command::ExportConnections,
@@ -1037,6 +1043,7 @@ impl Command {
             | Command::MenuBack => "Results",
 
             Command::SidebarNextTab
+            | Command::SidebarPrevTab
             | Command::RefreshSchema
             | Command::OpenConnectionManager
             | Command::ExportConnections
@@ -1647,6 +1654,22 @@ impl ContextId {
 #[cfg(test)]
 mod tests {
     use super::{Command, ContextId};
+
+    #[test]
+    fn script_file_commands_resolve_from_their_palette_ids() {
+        for command in [Command::SaveFileAs, Command::OpenScriptFile] {
+            assert_eq!(Command::from_palette_id(command.id()), Some(command));
+        }
+    }
+
+    #[test]
+    fn every_palette_id_resolves_back_to_its_command() {
+        for command in Command::all_variants() {
+            if let Some(resolved) = Command::from_palette_id(command.id()) {
+                assert_eq!(resolved, command, "palette id {:?}", command.id());
+            }
+        }
+    }
 
     #[test]
     fn command_display_names_are_stable() {

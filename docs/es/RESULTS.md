@@ -1,13 +1,24 @@
 # Trabajar con resultados
 
-Los resultados se renderizan en pestañas de resultado dentro del documento. El
-modo de vista se elige automáticamente según la categoría de la base de datos:
+Los resultados se renderizan en pestañas de resultado dentro del documento. Cada
+tabla o colección se abre en la vista que su driver declara para ese objeto, y
+ofrece las demás vistas que declara:
 
-- **Vista de tabla** para bases de datos relacionales.
-- **Vista de tabla** para colecciones de documentos (por ejemplo MongoDB,
-  DynamoDB), con vistas de **Árbol** y **JSON** de la misma página (ver
+- **Vista de tabla** para tablas relacionales y resultados de query.
+- **Vista de árbol** para colecciones de documentos (por ejemplo MongoDB,
+  DynamoDB), con vistas de **Tabla** y **JSON** de la misma página (ver
   [Colecciones de documentos](DOCUMENTS.md)).
+- **Vista de tabla** con una vista de **Árbol** de las mismas filas para una
+  tabla con columnas JSON (ver
+  [Columnas JSON en una tabla](DOCUMENTS.md#columnas-json-en-una-tabla)).
+- **Gráfico sobre la cuadrícula** para una serie temporal, como un measurement
+  de InfluxDB o una hypertable de TimescaleDB, cuando sus filas se pueden
+  graficar (ver
+  [Tablas y colecciones de series temporales](CHARTS.md#tablas-y-colecciones-de-series-temporales)).
 - **Vista clave-valor** para Redis (ver [Vista clave-valor](KEY_VALUE.md)).
+
+Una tabla con una columna vectorial también lista las filas más
+[similares](#filas-similares) a la seleccionada.
 
 Los contenedores de tipo event-stream se abren como event streams cuando el
 driver declara esa presentación.
@@ -109,6 +120,38 @@ schema](QUERY_BUILDER.md#autocompletado-consciente-del-schema)).
   <source media="(prefers-color-scheme: dark)" srcset="../images/results/filtering-dark.webp">
   <img src="../images/results/filtering-light.webp" alt="La tabla customers filtrada con una condición WHERE escrita en la barra de filtro">
 </picture>
+
+## Filas similares
+
+En una tabla con una columna vectorial (hoy, una tabla PostgreSQL con una
+columna `vector` de pgvector), pulsa `Shift+s` o elige **Buscar filas
+similares** en el menú de la fila para listar las filas más cercanas a la fila
+seleccionada. La entrada del menú indica qué columna lee y cuántas filas lista,
+o por qué no puede ejecutarse: la fila no tiene valor en esa columna, o la
+cuadrícula tiene cambios sin guardar, que hay que guardar o revertir antes.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/results/similar-rows-dark.webp">
+  <img src="../images/results/similar-rows-light.webp" alt="La tabla products tras Buscar filas similares: la fila seleccionada fijada arriba como ancla, sus diez filas más cercanas ordenadas por distancia L2 y la barra con la columna vectorial, la distancia y K">
+</picture>
+
+La cuadrícula muestra entonces la fila seleccionada fijada arriba, marcada como
+`referencia`, y debajo sus 10 filas más cercanas, de la más cercana a la más
+lejana. La primera columna contiene la distancia, bajo una cabecera que la
+nombra. Una barra reemplaza la fila de filtro:
+
+- El selector de columna elige la columna vectorial. Con el cursor sobre una
+  columna vectorial, la búsqueda empieza en esa columna; si no, en la primera de
+  la tabla.
+- **L2**, **Coseno** y **Producto interno** cambian la distancia. Producto
+  interno muestra el producto en sí, de mayor a menor.
+- **K** fija cuántas filas listar, de 1 a 1000.
+- **Volver a la tabla**, o `Esc`, regresa a la página de la tabla con su filtro.
+
+La fila seleccionada queda fuera de sus vecinas por su clave primaria, las filas
+sin vector no se listan y las filas similares son de solo lectura. Una distancia
+que no es un número se muestra como un guion. Las columnas `halfvec` y
+`sparsevec` no ofrecen la búsqueda.
 
 ## Editar y CRUD
 

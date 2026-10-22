@@ -554,7 +554,7 @@ fn load_profiles(
             value_refs,
             access_kind,
             mcp_governance,
-            read_only_flag: false,
+            read_only_flag: dto.read_only,
             environment: None,
             navigator_view: dbflux_core::NavigatorView::Advanced,
             show_all_databases: true,
@@ -2439,6 +2439,42 @@ mod tests {
 
         let policies = runtime.list_policies().expect("list policies");
         assert!(policies.iter().any(|p| p.id == "read-only"));
+    }
+
+    #[test]
+    fn load_profiles_reads_the_persisted_read_only_flag() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let repo = runtime.connection_profiles();
+
+        let locked_id = uuid::Uuid::new_v4();
+        let mut locked =
+            dbflux_storage::repositories::connection_profiles::ConnectionProfileDto::new(
+                locked_id,
+                "locked".to_string(),
+            );
+        locked.kind = Some("Turso".to_string());
+        locked.read_only = true;
+        repo.insert(&locked).expect("insert read-only profile");
+
+        let writable_id = uuid::Uuid::new_v4();
+        let mut writable =
+            dbflux_storage::repositories::connection_profiles::ConnectionProfileDto::new(
+                writable_id,
+                "writable".to_string(),
+            );
+        writable.kind = Some("Turso".to_string());
+        repo.insert(&writable).expect("insert writable profile");
+
+        let profiles = load_profiles(&runtime).expect("load profiles");
+        let find = |id| {
+            profiles
+                .iter()
+                .find(|profile| profile.id == id)
+                .expect("loaded profile")
+        };
+
+        assert!(find(locked_id).read_only_flag);
+        assert!(!find(writable_id).read_only_flag);
     }
 
     #[test]

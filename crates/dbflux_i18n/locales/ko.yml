@@ -423,6 +423,8 @@ connection_manager:
     mcp: MCP
   field:
     show_all_databases: "모든 데이터베이스 표시"
+    read_only_help: "데이터 그리드, 쿼리 빌더, 스키마 비교에서의 변경을 차단합니다. 쿼리 편집기에 입력한 문은 그대로 실행됩니다."
+    read_only: "읽기 전용"
     name: 이름
     ssl_mode: SSL 모드
     ca_certificate: CA 인증서
@@ -431,6 +433,7 @@ connection_manager:
   section:
     transport: 전송
     navigator: "탐색기"
+    safety: "안전"
   banner:
     correct_following: 다음 항목을 수정하세요
     testing_connection: "연결 테스트 중…"
@@ -1570,7 +1573,6 @@ document:
       stats:
         rebuilding: "차트 다시 생성 중…"
         no_stats: 이 계열에는 사용할 수 있는 통계가 없습니다.
-        unavailable: 사용할 수 없음
         title: 통계
         window:
           title: 구간
@@ -1578,12 +1580,6 @@ document:
           end: 종료
           span: 기간
           points: 포인트
-        source:
-          title: 소스
-          measurement: measurement
-          field: 필드
-          host: 호스트
-          region: 리전
     context_menu:
       header: "%{column} · 행 %{row}"
       item:
@@ -4178,6 +4174,7 @@ settings:
       menu_select: 메뉴 선택
       menu_back: 메뉴 뒤로
       sidebar_next_tab: 사이드바 다음 탭
+      sidebar_prev_tab: 사이드바 이전 탭
       refresh_schema: 스키마 새로고침
       open_connection_manager: 연결 관리자 열기
       export_connections: "연결 내보내기"

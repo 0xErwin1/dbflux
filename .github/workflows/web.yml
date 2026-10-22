@@ -4,13 +4,10 @@ name: Web
 # break the build even when no file under web/ was touched. Triggering on all
 # markdown costs a needless 30-second build for a file the site does not read,
 # and buys never having to edit this list when a document moves.
+#
+# No push trigger: a commit reaches main only through a squash-merged pull
+# request, and this workflow already built it there. Nothing deploys from it.
 on:
-  push:
-    branches: [main, dev]
-    paths:
-      - 'web/**'
-      - '**/*.md'
-      - '.github/workflows/web.yml'
   pull_request:
     branches: [main, dev]
     paths:

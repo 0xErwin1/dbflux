@@ -318,6 +318,8 @@ WHERE_INPUT = "e.g. id > 10 AND name LIKE '%test%'"
 CARLA_BECKER_COUNTRY = "cell-20003"
 SIXTH_ROW_ID = "cell-50000"
 
+PRODUCTS_FIRST_ID = "cell-0"
+
 # A point in the status bar, away from the chart, so the pointer does not
 # replace the point highlighted from the keyboard.
 AWAY_FROM_CHART = {"x": 1000, "y": 880}
@@ -337,11 +339,20 @@ def open_reviews_collection() -> tuple[Step, ...]:
 
     return (
         *open_sidebar_item(MONGODB, "shop", exact=True),
-        ensure(wait_selected("shop"), click_label("shop")),
+        ensure(wait_selected("shop"), click_label("shop", role="tree_item")),
         # Enter loads the database's collections, then l expands it.
         ensure(wait_for("reviews", exact=True), key("enter"), idle(), key("l")),
-        ensure(wait_selected("reviews"), click_label("reviews")),
+        ensure(wait_selected("reviews"), click_label("reviews", role="tree_item")),
         ensure(wait_visible(document_tree_id("row", "0")), key("enter")),
+    )
+
+
+def open_postgres_table(table: str, loaded: str) -> tuple[Step, ...]:
+    """Connects the demo PostgreSQL connection and opens `table`, waiting for `loaded`."""
+
+    return (
+        *open_sidebar_item(POSTGRES, "customers", exact=True),
+        *open_sidebar_item(table, loaded, exact=True),
     )
 
 
@@ -514,6 +525,17 @@ SHOTS = (
         ),
     ),
     Shot(
+        page="results",
+        name="similar-rows",
+        steps=(
+            *open_postgres_table("products", "Mechanical Keyboard"),
+            wait_gone(r"^toast-\d"),
+            # Shift+S finds the rows nearest to the selected one by its
+            # vector column, so pressing it again repeats the same search.
+            ensure(wait_visible("nearest-neighbors-summary"), click(PRODUCTS_FIRST_ID), idle(), key("shift-s")),
+        ),
+    ),
+    Shot(
         page="table-views",
         name="columns",
         steps=(
@@ -550,10 +572,24 @@ SHOTS = (
             ensure(wait_for("revenue +1", exact=True), click("y-pick-1")),
             ensure(wait_visible("y-pick-3"), click("axis-pill-y")),
             ensure(wait_gone(r"^chart-legend-series-1$"), click("y-pick-3")),
+            # The picker stays open after the click and would take the keys below.
+            ensure(wait_gone(r"^y-pick-"), key("escape")),
             call("pointer_move", **AWAY_FROM_CHART),
             # August: the readout drawn next to the point leaves the other
             # points visible.
             *highlight_chart_point(7),
+        ),
+    ),
+    Shot(
+        page="charts",
+        name="hypertable",
+        steps=(
+            *open_sidebar_item(POSTGRES, "customers", exact=True),
+            # The hypertable lives in the metrics database, which loads on Enter.
+            ensure(wait_selected("metrics"), click_label("metrics", role="tree_item")),
+            ensure(wait_for("server_metrics", exact=True), key("enter")),
+            *open_sidebar_item("server_metrics", "api-1", exact=True),
+            wait_visible("axis-pill-x"),
         ),
     ),
     Shot(
@@ -573,6 +609,17 @@ SHOTS = (
         ),
     ),
     Shot(
+        page="documents",
+        name="json-columns",
+        steps=(
+            *open_postgres_table("products", "Mechanical Keyboard"),
+            wait_gone(r"^toast-\d"),
+            ensure(wait_visible(document_tree_id("row", "0")), click("view-toggle-btn")),
+            expand_document_node("0", child="attributes"),
+            expand_document_node("0", "attributes", child="rating"),
+        ),
+    ),
+    Shot(
         page="key-value",
         name="browser",
         steps=(
@@ -588,9 +635,9 @@ SHOTS = (
         name="tree",
         steps=(
             *open_sidebar_item(POSTGRES, "customers", exact=True),
-            ensure(wait_selected("customers"), click_label("customers")),
+            ensure(wait_selected("customers"), click_label("customers", role="tree_item")),
             ensure(wait_for("Columns (5)", exact=True), key("l")),
-            ensure(wait_selected("Columns (5)"), click_label("Columns (5)")),
+            ensure(wait_selected("Columns (5)"), click_label("Columns (5)", role="tree_item")),
             ensure(wait_for("id: integer PK", exact=True), key("l")),
         ),
         crop=SIDEBAR_AREA,
@@ -600,7 +647,7 @@ SHOTS = (
         name="diagram",
         steps=(
             *open_sidebar_item(POSTGRES, "customers", exact=True),
-            ensure(wait_selected("shop"), click_label("shop")),
+            ensure(wait_selected("shop"), click_label("shop", role="tree_item")),
             ensure(wait_for("View schema diagram", exact=True), key("m")),
             ensure(wait_visible("schema-arrange"), click_label("View schema diagram")),
             wait_for("0 background tasks", exact=True),

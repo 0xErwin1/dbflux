@@ -75,3 +75,17 @@ in the order the page returns them.
   `db.orders.find({"status": "paid"})`, against the collection's database and
   prints documents as one JSON object per line. A command that writes
   refreshes the documents on screen. See [Console](CONSOLE.md).
+
+## JSON columns in a table
+
+A relational table can hold documents too. On PostgreSQL, a table with a `json`
+or `jsonb` column opens in the grid as usual and adds a **Tree** view of the
+same rows: switch with the Table / Tree button at the end of the filter row, or
+press `t` in the grid. Each row becomes one document, with the JSON values
+expanded into nested fields. The tree is read-only; edits go through the grid.
+The view you pick stays for the tab across pages and refreshes.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/documents/json-columns-dark.webp">
+  <img src="images/documents/json-columns-light.webp" alt="The PostgreSQL products table in the Tree view, with the first row expanded and its jsonb attributes column shown as nested fields">
+</picture>

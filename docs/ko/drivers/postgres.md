@@ -15,7 +15,8 @@
 - 네이티브 콘솔(`NATIVE_CONSOLE`): 테이블에는 콘솔이 붙고, 사이드바의 데이터베이스 메뉴에서는 콘솔을 별도 탭으로 열 수 있습니다. 콘솔은 `Connection::execute`를 통해 SQL 문 한 줄씩 실행하며, 편집기의 검증, 위험 쿼리 확인, 감사 행, 쿼리 기록을 사용합니다. 이 드라이버는 `QueryRequest::limit`(`REQUEST_ROW_LIMIT`)을 적용하므로 콘솔 명령에도 편집기의 행 제한이 적용됩니다.
 - 스키마, 테이블, 뷰, 인덱스, 외래 키, CHECK 제약 조건, UNIQUE 제약 조건, 사용자 정의 타입을 지원합니다.
 - 저장 루틴(함수, 프로시저, 집계 함수, 윈도우 함수)을 스키마 트리에서 읽기 전용 정의 뷰어와 함께 노출합니다.
-- 인증, SSL, SSH 터널링, URI/수동 연결 모드를 지원합니다.
+- 인증, SSL, SSH 터널링, URI/수동 연결 모드를 지원합니다. libpq와 마찬가지로 `verify-ca`는 인증서 체인만 검증하고, `verify-full`은 호스트 이름도 확인합니다.
+- TLS 인증서 파일: Connection Manager의 루트 인증서, 클라이언트 인증서, 클라이언트 키 필드 또는 libpq URI 매개변수 `sslrootcert`, `sslcert`, `sslkey`(예: `postgresql://user@host/db?sslmode=verify-full&sslrootcert=/path/ca.pem`). `verify-ca`와 `verify-full`에서는 루트 인증서가 신뢰할 수 있는 루트에 추가되며, 체인을 검증하지 않는 다른 모드에서는 무시됩니다. 클라이언트 인증서와 키는 `disable`을 제외한 모든 모드에서 상호 TLS용으로 제시됩니다. 파일은 PEM 형식이며 클라이언트 키는 PKCS#8이어야 합니다. 파일이 없거나 읽을 수 없거나 유효하지 않은 경우, 또는 키 없이 클라이언트 인증서만 있는 경우(또는 그 반대)에는 연결을 시도하기 전에 해당 파일을 명시한 오류로 연결이 실패합니다. `sslmode=disable`에서는 파일이 무시됩니다.
 - PostgreSQL 취소 토큰을 통한 쿼리 취소를 지원합니다.
 - CRUD, 인덱스, reindex, 외래 키, 타입 작업을 위한 PostgreSQL 전용 SQL/코드 생성을 포함합니다.
 - 다중 문 스크립트(여러 개의 `;`로 구분된 문)는 단순 쿼리 프로토콜을 통해 배치로 실행되며 문마다 하나의 결과 집합을 반환합니다.

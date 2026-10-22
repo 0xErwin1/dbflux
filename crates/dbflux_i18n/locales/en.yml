@@ -423,6 +423,8 @@ connection_manager:
     mcp: MCP
   field:
     show_all_databases: "Show all databases"
+    read_only_help: "Blocks changes from the data grid, the query builder and schema diff. Statements typed in the query editor still run."
+    read_only: "Read-only"
     name: Name
     ssl_mode: SSL mode
     ca_certificate: CA certificate
@@ -431,6 +433,7 @@ connection_manager:
   section:
     transport: TRANSPORT
     navigator: "NAVIGATOR"
+    safety: "SAFETY"
   banner:
     correct_following: Please correct the following
     testing_connection: "Testing connection…"
@@ -1570,7 +1573,6 @@ document:
       stats:
         rebuilding: "Rebuilding chart…"
         no_stats: No stats available for this series.
-        unavailable: unavailable
         title: Stats
         window:
           title: Window
@@ -1578,12 +1580,6 @@ document:
           end: end
           span: span
           points: points
-        source:
-          title: Source
-          measurement: measurement
-          field: field
-          host: host
-          region: region
     context_menu:
       header: "%{column} · row %{row}"
       item:
@@ -4178,6 +4174,7 @@ settings:
       menu_select: Menu select
       menu_back: Menu back
       sidebar_next_tab: Sidebar next tab
+      sidebar_prev_tab: Sidebar previous tab
       refresh_schema: Refresh schema
       open_connection_manager: Open connection manager
       export_connections: "Export connections"

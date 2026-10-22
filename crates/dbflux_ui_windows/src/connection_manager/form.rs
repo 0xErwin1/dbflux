@@ -264,6 +264,18 @@ impl ConnectionManagerWindow {
 
         self.validate_hook_bindings(cx);
 
+        // Drivers reject combinations the per-field checks cannot see (for
+        // example mutually exclusive credential sources); surface their
+        // message instead of failing the later config build silently.
+        if self.validation_errors.is_empty()
+            && let Some(driver) = self.form.selected_driver.clone()
+        {
+            let values = self.collect_form_values(driver.form_definition(), cx);
+            if let Err(error) = driver.build_config(&values) {
+                self.validation_errors.push(error.to_string());
+            }
+        }
+
         self.validation_errors.is_empty()
     }
 
@@ -309,9 +321,21 @@ impl ConnectionManagerWindow {
                 | DbConfig::MySQL { ssl_mode, .. }
                 | DbConfig::MongoDB { ssl_mode, .. }
                 | DbConfig::Redis { ssl_mode, .. }
-                | DbConfig::SqlServer { ssl_mode, .. }
                 | DbConfig::Redshift { ssl_mode, .. } => {
                     *ssl_mode = Some(selected);
+                }
+                DbConfig::SqlServer {
+                    ssl_mode,
+                    trust_server_certificate,
+                    ..
+                } => {
+                    *ssl_mode = Some(selected.clone());
+                    // `collect_form_values` does not carry the selected mode, so
+                    // the driver's `build_config` fell back to its "on" default
+                    // and set `trust_server_certificate: true`. Derive trust from
+                    // the user's selection exactly as the driver does: only
+                    // `required` validates the chain.
+                    *trust_server_certificate = !matches!(selected.as_str(), "required");
                 }
                 _ => {}
             }
@@ -366,6 +390,11 @@ impl ConnectionManagerWindow {
                 *ssl_client_cert_path = ssl_client_cert;
                 *ssl_client_key_path = ssl_client_key;
             }
+            DbConfig::SqlServer {
+                ssl_root_cert_path, ..
+            } => {
+                *ssl_root_cert_path = ssl_root_cert;
+            }
             _ => {}
         }
 
@@ -399,6 +428,7 @@ impl ConnectionManagerWindow {
         profile.environment = self.form.environment;
         profile.navigator_view = self.form.navigator_view;
         profile.show_all_databases = self.form.show_all_databases;
+        profile.read_only_flag = self.form.read_only;
         profile.proxy_profile_id = self.access.selected_proxy_id;
         profile.auth_profile_id = self.auth_profile.selected_auth_profile_id;
         profile.value_refs = self.collect_value_refs(cx);
@@ -1086,7 +1116,7 @@ mod tests {
     use dbflux_core::LogErr;
     use dbflux_core::secrecy::{ExposeSecret, SecretString};
     use dbflux_core::{
-        ConnectionHook, ConnectionHooks, ConnectionProfile, DbConfig, HookExecutionMode,
+        ConnectionHook, ConnectionHooks, ConnectionProfile, DbConfig, DbDriver, HookExecutionMode,
         HookFailureMode, HookKind, SecretStore,
     };
     use dbflux_storage::bootstrap::StorageRuntime;
@@ -1791,6 +1821,135 @@ mod tests {
         assert!(result.contains("~/.aws/credentials"));
     }
 
+    const DRIVER_BUILD_ERROR: &str = "Profile and Access Key ID cannot both be set";
+
+    /// Wraps a registered driver and rejects every form in `build_config`, so
+    /// the window's handling of a driver-side config error is exercised.
+    struct RejectingBuildDriver(Arc<dyn DbDriver>);
+
+    impl DbDriver for RejectingBuildDriver {
+        fn kind(&self) -> dbflux_core::DbKind {
+            self.0.kind()
+        }
+
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            self.0.metadata()
+        }
+
+        fn form_definition(&self) -> &dbflux_core::DriverFormDef {
+            self.0.form_definition()
+        }
+
+        fn driver_key(&self) -> dbflux_core::DriverKey {
+            self.0.driver_key()
+        }
+
+        fn build_config(
+            &self,
+            _values: &dbflux_core::FormValues,
+        ) -> Result<DbConfig, dbflux_core::DbError> {
+            Err(dbflux_core::DbError::InvalidProfile(
+                DRIVER_BUILD_ERROR.to_string(),
+            ))
+        }
+
+        fn extract_values(&self, config: &DbConfig) -> dbflux_core::FormValues {
+            self.0.extract_values(config)
+        }
+
+        fn connect_with_secrets(
+            &self,
+            profile: &ConnectionProfile,
+            password: Option<&SecretString>,
+            ssh_secret: Option<&SecretString>,
+        ) -> Result<Box<dyn dbflux_core::Connection>, dbflux_core::DbError> {
+            self.0.connect_with_secrets(profile, password, ssh_secret)
+        }
+
+        fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), dbflux_core::DbError> {
+            self.0.test_connection(profile)
+        }
+    }
+
+    fn open_rejecting_driver_window(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<AppStateEntity>,
+        WindowHandle<ConnectionManagerWindow>,
+    ) {
+        let app_state = test_app_state(cx, SecretStoreFixture::new(PasswordSaveOutcome::Success));
+        let window = open_new_profile_window(app_state.clone(), cx);
+        window
+            .update(cx, |manager, _window, _cx| {
+                let inner = manager
+                    .form
+                    .selected_driver
+                    .clone()
+                    .expect("SQLite driver selected");
+                manager.form.selected_driver = Some(Arc::new(RejectingBuildDriver(inner)));
+            })
+            .expect("swap in the rejecting driver");
+        (app_state, window)
+    }
+
+    fn shows_driver_build_error(manager: &ConnectionManagerWindow) -> bool {
+        manager
+            .validation_errors
+            .iter()
+            .chain(manager.test_error.iter())
+            .any(|message| message.contains(DRIVER_BUILD_ERROR))
+    }
+
+    #[::core::prelude::v1::test]
+    fn save_shows_the_driver_build_config_error() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let (app_state, window) = open_rejecting_driver_window(&mut cx);
+
+        let shown = window
+            .update(&mut cx, |manager, window, cx| {
+                manager.save_profile(window, cx);
+                shows_driver_build_error(manager)
+            })
+            .expect("save leaves the form window available");
+
+        assert!(
+            shown,
+            "the driver's build_config error is visible after save"
+        );
+        assert!(
+            cx.update(|cx| app_state.read(cx).profiles().is_empty()),
+            "a rejected profile is not committed"
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn test_connection_shows_the_driver_build_config_error() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let (_app_state, window) = open_rejecting_driver_window(&mut cx);
+
+        let shown = window
+            .update(&mut cx, |manager, window, cx| {
+                manager.test_connection(window, cx);
+                shows_driver_build_error(manager)
+            })
+            .expect("test connection leaves the form window available");
+
+        assert!(
+            shown,
+            "the driver's build_config error is visible after test connection"
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
     #[derive(Clone, Copy)]
     enum PasswordSaveOutcome {
         Success,
@@ -2382,6 +2541,76 @@ mod tests {
         cx.simulate_keystrokes(window.into(), "left");
         assert_eq!(ssl_mode(&mut cx), before, "Left picks it back");
 
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// The read-only toggle is a ring stop: Enter flips it, the saved profile
+    /// carries it, and editing a read-only profile shows it switched on.
+    #[::core::prelude::v1::test]
+    fn the_form_ring_toggles_read_only_and_the_profile_keeps_it() {
+        let mut cx = TestAppContext::single();
+        use super::super::MainExtraStop;
+
+        let window = open_postgres_form(&mut cx);
+
+        let read_only_stop = window
+            .update(&mut cx, |manager, _, _| {
+                manager
+                    .main_extra_stops()
+                    .iter()
+                    .position(|stop| matches!(stop, MainExtraStop::ReadOnly))
+                    .map(|index| FormFocus::MainExtra(index as u8))
+            })
+            .expect("window is open")
+            .expect("every driver offers the read-only toggle");
+
+        window
+            .update(&mut cx, |manager, _, _| manager.form_focus = read_only_stop)
+            .expect("window is open");
+        cx.simulate_keystrokes(window.into(), "enter");
+
+        let profile = window
+            .update(&mut cx, |manager, _, cx| manager.build_profile(cx))
+            .expect("window is open")
+            .expect("the form builds a profile");
+        assert!(profile.read_only_flag, "Enter switches read-only on");
+
+        let app_state = window
+            .update(&mut cx, |manager, _, _| manager.app_state.clone())
+            .expect("window is open");
+        let edit_window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| {
+                        ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx)
+                    })
+                })
+            })
+            .expect("connection manager edit window opens");
+        let restored = edit_window
+            .update(&mut cx, |manager, _, cx| {
+                manager
+                    .build_profile(cx)
+                    .map(|profile| profile.read_only_flag)
+            })
+            .expect("edit window is open");
+        assert_eq!(restored, Some(true), "editing keeps the profile read-only");
+
+        cx.simulate_keystrokes(window.into(), "enter");
+        let toggled_back = window
+            .update(&mut cx, |manager, _, cx| {
+                manager
+                    .build_profile(cx)
+                    .map(|profile| profile.read_only_flag)
+            })
+            .expect("window is open");
+        assert_eq!(toggled_back, Some(false), "Enter switches read-only off");
+
+        edit_window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
         window
             .update(&mut cx, |_, window, _| window.remove_window())
             .log_err();
@@ -3095,6 +3324,197 @@ mod tests {
             bindings.post_disconnect,
             hook_ids(&ids, &["alpha", "gamma"])
         );
+    }
+}
+
+/// SQL Server SSL mode tests. A separate module with explicit imports:
+/// combining `use super::*` with `#[gpui::test]` sends the gpui_macros
+/// expansion into unbounded recursion (see `ssh_config_host_tests`).
+#[cfg(test)]
+mod sqlserver_ssl_tests {
+    use crate::connection_manager::ConnectionManagerWindow;
+    use dbflux_core::{ConnectionProfile, DbConfig};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, TestAppContext, WindowHandle, WindowOptions};
+
+    fn init_test_runtime(cx: &mut TestAppContext) -> Entity<ToastHost> {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host: host.clone() });
+            host
+        })
+    }
+
+    fn test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("test storage runtime"),
+                )
+                .expect("test app state")
+            })
+        })
+    }
+
+    fn open_sqlserver_form_window(
+        app_state: Entity<AppStateEntity>,
+        cx: &mut TestAppContext,
+    ) -> WindowHandle<ConnectionManagerWindow> {
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx))
+                })
+            })
+            .expect("connection manager window opens");
+        window
+            .update(cx, |manager, window, cx| {
+                manager.select_driver("mssql", window, cx);
+                for (field, value) in [("host", "db.corp"), ("port", "1433"), ("user", "sa")] {
+                    manager
+                        .form
+                        .driver_inputs
+                        .get(field)
+                        .unwrap_or_else(|| panic!("mssql form has a `{field}` input"))
+                        .update(cx, |input, cx| input.set_value(value, window, cx));
+                }
+            })
+            .expect("mssql form initializes");
+        window
+    }
+
+    fn build_sqlserver_config(
+        window: &WindowHandle<ConnectionManagerWindow>,
+        ssl_mode: &str,
+        ca_path: Option<&str>,
+        cx: &mut TestAppContext,
+    ) -> DbConfig {
+        window
+            .update(cx, |manager, window, cx| {
+                manager.form.selected_ssl_mode = ssl_mode.to_string();
+                if let Some(ca_path) = ca_path {
+                    manager.form.ssl_ca_cert_input.update(cx, |input, cx| {
+                        input.set_value(ca_path, window, cx);
+                    });
+                }
+                manager
+                    .build_config(cx)
+                    .expect("the SQL Server config builds")
+            })
+            .expect("read the built config")
+    }
+
+    /// Selecting `required` for SQL Server with a CA path must save a config
+    /// that validates the certificate chain (S2): the mode is carried and
+    /// `trust_server_certificate` is derived from it exactly as the driver
+    /// does, because `collect_form_values` does not carry the selected mode.
+    #[gpui::test]
+    fn sqlserver_required_mode_builds_a_chain_validating_config_with_the_ca_path(
+        cx: &mut TestAppContext,
+    ) {
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let window = open_sqlserver_form_window(app_state, cx);
+
+        let config = build_sqlserver_config(&window, "required", Some("/etc/ssl/corp-ca.pem"), cx);
+
+        match config {
+            DbConfig::SqlServer {
+                ssl_mode,
+                trust_server_certificate,
+                ssl_root_cert_path,
+                ..
+            } => {
+                assert_eq!(ssl_mode.as_deref(), Some("required"));
+                assert!(
+                    !trust_server_certificate,
+                    "`required` must validate the chain, not call trust_cert()"
+                );
+                assert_eq!(ssl_root_cert_path.as_deref(), Some("/etc/ssl/corp-ca.pem"));
+            }
+            _ => panic!("expected SqlServer config"),
+        }
+    }
+
+    /// The reverse of the `required` case: `on` keeps the driver's
+    /// trust-cert behavior (encrypted, self-signed certs accepted).
+    #[gpui::test]
+    fn sqlserver_on_mode_builds_a_trusting_config(cx: &mut TestAppContext) {
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let window = open_sqlserver_form_window(app_state, cx);
+
+        let config = build_sqlserver_config(&window, "on", None, cx);
+
+        match config {
+            DbConfig::SqlServer {
+                ssl_mode,
+                trust_server_certificate,
+                ssl_root_cert_path,
+                ..
+            } => {
+                assert_eq!(ssl_mode.as_deref(), Some("on"));
+                assert!(
+                    trust_server_certificate,
+                    "`on` accepts self-signed certs via trust_cert()"
+                );
+                assert_eq!(ssl_root_cert_path, None);
+            }
+            _ => panic!("expected SqlServer config"),
+        }
+    }
+
+    /// Editing a saved SQL Server profile must restore its saved mode, not
+    /// silently reset it to the driver's first declared mode (`off`).
+    #[gpui::test]
+    fn editing_a_saved_sqlserver_profile_restores_its_ssl_mode(cx: &mut TestAppContext) {
+        let mut config = DbConfig::default_sqlserver();
+        if let DbConfig::SqlServer { ssl_mode, .. } = &mut config {
+            *ssl_mode = Some("required".to_string());
+        }
+        let profile = ConnectionProfile::new("mssql required", config);
+
+        let _toast_host = init_test_runtime(cx);
+        let app_state = test_app_state(cx);
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| {
+                        ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx)
+                    })
+                })
+            })
+            .expect("connection manager edit window opens");
+
+        let selected_mode = window
+            .update(cx, |manager, _window, _cx| {
+                manager.form.selected_ssl_mode.clone()
+            })
+            .expect("read the rehydrated SSL mode");
+        assert_eq!(selected_mode, "required");
+
+        let rebuilt = window
+            .update(cx, |manager, _window, cx| {
+                manager.build_config(cx).map(|config| match config {
+                    DbConfig::SqlServer {
+                        ssl_mode,
+                        trust_server_certificate,
+                        ssl_root_cert_path,
+                        ..
+                    } => (ssl_mode, trust_server_certificate, ssl_root_cert_path),
+                    _ => panic!("expected SqlServer config"),
+                })
+            })
+            .expect("rebuild the edited config");
+        let (ssl_mode, trust_server_certificate, ssl_root_cert_path) =
+            rebuilt.expect("the edited profile rebuilds its config");
+        assert_eq!(ssl_mode.as_deref(), Some("required"));
+        assert!(!trust_server_certificate);
+        assert_eq!(ssl_root_cert_path, None);
     }
 }
 /// Tests of the SSH config host picker on the Access tab (#837, T5). A
