@@ -22,7 +22,7 @@ impl Migration for MigrationImpl {
                 [],
                 |row| row.get::<_, i64>(0),
             )
-            .map(|n| n > 0)
+            .map(|count| count > 0)
             .map_err(sqlite_err)?;
 
         if !table_exists {
@@ -35,7 +35,7 @@ impl Migration for MigrationImpl {
                 [],
                 |row| row.get::<_, i64>(0),
             )
-            .map(|n| n > 0)
+            .map(|count| count > 0)
             .map_err(sqlite_err)?;
 
         if !column_exists {
