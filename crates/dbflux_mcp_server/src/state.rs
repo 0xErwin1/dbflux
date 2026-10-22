@@ -2465,7 +2465,8 @@ mod tests {
         writable.kind = Some("Turso".to_string());
         repo.insert(&writable).expect("insert writable profile");
 
-        let profiles = load_profiles(&runtime).expect("load profiles");
+        let (profiles, profile_load_errors) = load_profiles(&runtime).expect("load profiles");
+        assert!(profile_load_errors.is_empty());
         let find = |id| {
             profiles
                 .iter()

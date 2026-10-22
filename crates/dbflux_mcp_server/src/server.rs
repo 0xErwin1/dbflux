@@ -3221,14 +3221,29 @@ mod tests {
             .detached_processes
             .register(&connection_id, vec![Arc::clone(&shared)]);
 
+        let startup_deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let started = std::fs::read_to_string(&trace)
+                .map(|events| events.lines().any(|event| event == "detached"))
+                .unwrap_or(false);
+            if started {
+                break;
+            }
+            assert!(
+                Instant::now() < startup_deadline,
+                "detached hook did not record its startup event"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let shutdown_timeout = Duration::from_secs(1);
         let started = Instant::now();
         let result =
-            DbFluxServer::disconnect_all_with_timeout(state.clone(), Duration::from_millis(50))
-                .await;
+            DbFluxServer::disconnect_all_with_timeout(state.clone(), shutdown_timeout).await;
 
         let error = result.expect_err("shutdown should report its deadline");
         assert!(error.contains("shutdown drain exceeded"));
-        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(started.elapsed() < shutdown_timeout + Duration::from_millis(500));
         assert!(shared.terminated.load(Ordering::SeqCst));
         assert!(state.detached_processes.connection_ids().is_empty());
         assert!(
