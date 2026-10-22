@@ -269,6 +269,12 @@ pub enum DataGridEvent {
     /// Run the query behind a result the row limit cut short again, without
     /// the limit. Only emitted when the host offered it.
     LoadAllRowsRequested,
+
+    /// Fetch the next rows of a result the row limit cut short, because its
+    /// last row came into view. Only emitted when the host offered it; the
+    /// host answers with [`DataGridPanel::append_next_rows`] or
+    /// [`DataGridPanel::next_rows_failed`].
+    NextRowsRequested,
 }
 
 /// What the footer offers for a query result the editor row limit cut short.
@@ -278,6 +284,8 @@ pub(crate) struct LimitedRowActions {
     pub(crate) count: bool,
     /// The host can run the query again without the row limit.
     pub(crate) load_all: bool,
+    /// The host can fetch the next rows when the last one comes into view.
+    pub(crate) next_rows: bool,
 }
 
 /// The total row count of a limited result, as far as it is known.
@@ -295,6 +303,8 @@ pub(crate) enum LimitedRowTotal {
 pub(crate) struct LimitedRows {
     pub(crate) actions: LimitedRowActions,
     pub(crate) total: LimitedRowTotal,
+    /// The host is fetching the next rows.
+    pub(crate) loading_next: bool,
 }
 
 // Re-export the rail tab enum from the chart module so DataGridPanel's render
