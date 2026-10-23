@@ -1375,9 +1375,12 @@ impl MysqlDriver {
                     log::info!("[SSL] Catalog connection established with SSL (PREFERRED mode)");
                     (ssl_opts, c)
                 }
+                Err(ssl_err) if !is_tls_negotiation_failure(&ssl_err) => {
+                    return Err(format_mysql_error(&ssl_err, host, port));
+                }
                 Err(ssl_err) => {
                     log::info!(
-                        "[SSL] SSL connection failed ({}), falling back to non-SSL",
+                        "[SSL] TLS negotiation failed ({}), falling back to non-SSL",
                         ssl_err
                     );
                     let no_ssl_opts = build_mysql_opts(
@@ -1472,8 +1475,14 @@ impl MysqlDriver {
                     log::info!("[SSL] Catalog connection established with SSL");
                     ("PREFERRED", c)
                 }
+                Err(ssl_err) if !is_tls_negotiation_failure(&ssl_err) => {
+                    return Err(format_mysql_error(&ssl_err, "127.0.0.1", local_port1));
+                }
                 Err(ssl_err) => {
-                    log::info!("[SSL] SSL failed ({}), falling back to non-SSL", ssl_err);
+                    log::info!(
+                        "[SSL] TLS negotiation failed ({}), falling back to non-SSL",
+                        ssl_err
+                    );
                     let no_ssl_opts = build_mysql_opts(
                         "127.0.0.1",
                         local_port1,
@@ -5937,6 +5946,78 @@ mod read_only_tests {
                 matches!(check(sql), Err(DbError::NotSupported(_))),
                 "{sql} must be refused"
             );
+        }
+    }
+}
+
+/// Whether a failed `PREFERRED` attempt failed while setting up TLS, the
+/// only case where the MySQL client retries without it: the server does not
+/// offer TLS, or the handshake itself failed. A server error (wrong password,
+/// unknown database, missing privilege) or a network error is the real
+/// failure, and a plaintext retry would only hide it.
+fn is_tls_negotiation_failure(error: &mysql::Error) -> bool {
+    match error {
+        mysql::Error::DriverError(mysql::DriverError::TlsNotSupported)
+        | mysql::Error::TlsError(_) => true,
+        // rustls reports a failed handshake through the stream as an I/O error.
+        mysql::Error::IoError(io_error) => io_error
+            .get_ref()
+            .is_some_and(|inner| inner.is::<rustls::Error>()),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod preferred_fallback_tests {
+    use super::is_tls_negotiation_failure;
+    use mysql::{DriverError, Error, MySqlError};
+    use std::io;
+
+    fn server_error(code: u16, state: &str, message: &str) -> Error {
+        Error::MySqlError(MySqlError {
+            state: state.to_string(),
+            message: message.to_string(),
+            code,
+        })
+    }
+
+    #[test]
+    fn falls_back_when_the_server_does_not_offer_tls() {
+        assert!(is_tls_negotiation_failure(&Error::DriverError(
+            DriverError::TlsNotSupported
+        )));
+    }
+
+    #[test]
+    fn falls_back_when_the_tls_handshake_fails() {
+        let handshake = io::Error::new(
+            io::ErrorKind::InvalidData,
+            rustls::Error::General("handshake failure".to_string()),
+        );
+
+        assert!(is_tls_negotiation_failure(&Error::IoError(handshake)));
+    }
+
+    #[test]
+    fn reports_server_errors_without_a_plaintext_retry() {
+        for error in [
+            server_error(1045, "28000", "Access denied for user 'app'@'%'"),
+            server_error(1049, "42000", "Unknown database 'missing'"),
+            server_error(1044, "42000", "Access denied for user to database 'app'"),
+        ] {
+            assert!(!is_tls_negotiation_failure(&error), "{error}");
+        }
+    }
+
+    #[test]
+    fn reports_network_errors_without_a_plaintext_retry() {
+        for kind in [
+            io::ErrorKind::ConnectionRefused,
+            io::ErrorKind::TimedOut,
+            io::ErrorKind::UnexpectedEof,
+        ] {
+            let error = Error::IoError(io::Error::from(kind));
+            assert!(!is_tls_negotiation_failure(&error), "{kind:?}");
         }
     }
 }
