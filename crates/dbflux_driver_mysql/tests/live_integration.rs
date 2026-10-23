@@ -82,6 +82,40 @@ fn mysql_live_connect_ping_query_and_schema() -> Result<(), DbError> {
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn mysql_fetch_dependents_lists_views_and_foreign_key_children() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.set_active_database(Some("testdb"))?;
+
+        for statement in [
+            "CREATE TABLE dep_parent (id INT PRIMARY KEY)",
+            "CREATE TABLE dep_child (id INT, parent_id INT, FOREIGN KEY (parent_id) REFERENCES dep_parent(id))",
+            "CREATE VIEW dep_parent_view AS SELECT id FROM dep_parent",
+        ] {
+            connection.execute(&QueryRequest::new(statement))?;
+        }
+
+        let dependents = connection.fetch_dependents("testdb", None, "dep_parent")?;
+
+        assert_eq!(
+            dependents,
+            vec![
+                dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::View,
+                    qualified_name: "testdb.dep_parent_view".to_string(),
+                },
+                dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::ForeignKeyChild,
+                    qualified_name: "testdb.dep_child".to_string(),
+                },
+            ]
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn mysql_schema_introspection() -> Result<(), DbError> {
     containers::with_mysql_url(|uri| {
         let (connection, _) = connect_mysql(uri)?;

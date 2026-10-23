@@ -97,6 +97,10 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   acota bytes, trabajo del servidor, asignación de memoria del motor ni tiempo
   transcurrido. No se verificó MariaDB alojado.
 - Driver solo SQL; no expone APIs de documentos ni de key-value.
+- En MariaDB, que no tiene `information_schema.VIEW_TABLE_USAGE`, la confirmación
+  de eliminar tabla busca las vistas dependientes en las definiciones de vista
+  por el nombre `` `base`.`tabla` ``, así que una vista que llega a la tabla solo
+  a través de otra vista no aparece.
 - Las columnas `DECIMAL` se reportan como `ColumnKind::Float`, porque no existe
   un tipo de columna decimal: los gráficos y otros usos del tipo de columna las
   tratan como números de punto flotante, aunque los valores en sí se mantienen
