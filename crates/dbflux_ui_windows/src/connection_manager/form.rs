@@ -1212,6 +1212,7 @@ mod tests {
             port: None,
             database: None,
             phase: None,
+            dials_configured_endpoint: false,
         }
     }
 
