@@ -452,19 +452,49 @@ fn dispatch_session_shutdown(
         return result_receiver;
     }
 
-    let worker = std::thread::Builder::new()
-        .name("dbflux-mcp-session-shutdown".to_string())
+    let coordinator = std::thread::Builder::new()
+        .name("dbflux-mcp-session-shutdown-coordinator".to_string())
         .spawn(move || {
-            let errors = run_session_factory_shutdowns(claimed);
+            let errors = coordinate_session_shutdowns(claimed);
             report_session_shutdown_result(result_sender, errors);
         });
-    if let Err(spawn_error) = worker {
+    if let Err(spawn_error) = coordinator {
         // The sender was moved into the closure that never ran, so the channel
         // closes and an awaiting disconnect surfaces the failure; the cause is
         // kept visible here.
-        log::warn!("Unable to start the session shutdown thread: {spawn_error}");
+        log::warn!("Unable to start the session shutdown coordinator: {spawn_error}");
     }
     result_receiver
+}
+
+/// Spawns one named worker per claimed connection before waiting on any of
+/// them, so a blocked factory cannot delay its sibling variants, then joins
+/// every worker and aggregates their errors.
+fn coordinate_session_shutdowns(connections: Vec<Arc<CachedConnection>>) -> Vec<String> {
+    let mut workers = Vec::new();
+    let mut errors = Vec::new();
+    for (position, connection) in connections.into_iter().enumerate() {
+        let worker_name = format!("dbflux-mcp-session-shutdown-{position}");
+        match std::thread::Builder::new()
+            .name(worker_name.clone())
+            .spawn(move || run_session_factory_shutdown(connection))
+        {
+            Ok(worker) => workers.push((worker_name, worker)),
+            Err(spawn_error) => errors.push(format!(
+                "Unable to start session shutdown worker '{worker_name}': {spawn_error}"
+            )),
+        }
+    }
+
+    for (worker_name, worker) in workers {
+        match worker.join() {
+            Ok(connection_errors) => errors.extend(connection_errors),
+            Err(join_error) => errors.push(format!(
+                "Session shutdown worker '{worker_name}' failed: {join_error:?}"
+            )),
+        }
+    }
+    errors
 }
 
 fn report_session_shutdown_result(
@@ -476,17 +506,14 @@ fn report_session_shutdown_result(
     }
 }
 
-fn run_session_factory_shutdowns(connections: Vec<Arc<CachedConnection>>) -> Vec<String> {
-    let mut errors = Vec::new();
-    for cached in connections {
-        let connection = cached.connection();
-        if let Some(factory) = connection.execution_session_factory()
-            && let Err(error) = factory.shutdown()
-        {
-            errors.push(error.to_string());
-        }
+fn run_session_factory_shutdown(connection: Arc<CachedConnection>) -> Vec<String> {
+    let connection_handle = connection.connection();
+    if let Some(factory) = connection_handle.execution_session_factory()
+        && let Err(error) = factory.shutdown()
+    {
+        return vec![error.to_string()];
     }
-    errors
+    Vec::new()
 }
 
 /// Final cleanup for one connection id after the shutdown deadline expired.
@@ -496,7 +523,11 @@ fn run_session_factory_shutdowns(connections: Vec<Arc<CachedConnection>>) -> Vec
 /// block again. Never takes the per-profile setup lock, which a concurrent
 /// connect may hold. The session shutdown runs on a detached OS thread and is
 /// not awaited, so this stays within the overall shutdown bound.
-async fn cleanup_connection_without_hooks(state: &ServerState, connection_id: &str) -> Vec<String> {
+async fn cleanup_connection_without_hooks(
+    state: &ServerState,
+    connection_id: &str,
+    termination_outcomes: &mut TerminationOutcomes,
+) {
     let retired_connections = {
         let mut cache = state.connection_cache.write().await;
         cache.drain_connection_variants_with_keys(connection_id)
@@ -510,28 +541,97 @@ async fn cleanup_connection_without_hooks(state: &ServerState, connection_id: &s
         .pending_session_shutdowns()
         .take_variants(connection_id);
     drop(dispatch_session_shutdown(recovered));
-    let mut errors = Vec::new();
-    errors.extend(terminate_detached_process_variants(state, connection_id));
-    errors
+    terminate_detached_process_variants_with_outcomes(
+        state,
+        connection_id,
+        termination_outcomes,
+        terminate_shared_detached_process,
+    );
+}
+
+/// Termination outcomes recorded by the deadline-cleanup attempts. Handles are
+/// tracked by identity, not error text, so distinct handles with identical
+/// messages stay separate.
+#[derive(Default)]
+struct TerminationOutcomes {
+    failures_by_handle: Vec<(usize, String)>,
+}
+
+impl TerminationOutcomes {
+    /// Records the latest outcome for a handle: a failure replaces the
+    /// handle's previous entry, and a success (a later attempt that worked)
+    /// removes it, so only final failures surface and a transient first
+    /// failure is omitted.
+    fn record(&mut self, shared: &Arc<SharedDetachedProcess>, error: Option<String>) {
+        let handle = Arc::as_ptr(shared) as usize;
+        let existing = self
+            .failures_by_handle
+            .iter()
+            .position(|(failed_handle, _)| *failed_handle == handle);
+        match (existing, error) {
+            (Some(position), Some(error)) => {
+                if let Some((_, latest_failure)) = self.failures_by_handle.get_mut(position) {
+                    *latest_failure = error;
+                }
+            }
+            (Some(position), None) => {
+                self.failures_by_handle.remove(position);
+            }
+            (None, Some(error)) => self.failures_by_handle.push((handle, error)),
+            (None, None) => {}
+        }
+    }
+
+    fn into_final_errors(self) -> Vec<String> {
+        self.failures_by_handle
+            .into_iter()
+            .map(|(_, error)| error)
+            .collect()
+    }
 }
 
 fn terminate_detached_process_variants(state: &ServerState, profile_id: &str) -> Vec<String> {
-    let mut errors = Vec::new();
+    let mut outcomes = TerminationOutcomes::default();
+    terminate_detached_process_variants_with_outcomes(
+        state,
+        profile_id,
+        &mut outcomes,
+        terminate_shared_detached_process,
+    );
+    outcomes.into_final_errors()
+}
+
+/// One termination pass over a profile's detached process variants. Every
+/// attempt records its outcome per handle in `outcomes`; failed handles are
+/// re-registered so a later attempt can retry them.
+fn terminate_detached_process_variants_with_outcomes<F>(
+    state: &ServerState,
+    profile_id: &str,
+    outcomes: &mut TerminationOutcomes,
+    terminate: F,
+) where
+    F: Fn(&Arc<SharedDetachedProcess>) -> Result<(), String>,
+{
     for (connection_id, processes) in state.detached_processes.take_variants(profile_id) {
         let mut failed_processes = Vec::new();
         for shared in processes {
-            if let Err(error) = terminate_shared_detached_process(&shared) {
-                errors.push(format!(
-                    "Failed to terminate detached MCP hook for '{connection_id}': {error}"
-                ));
-                failed_processes.push(shared);
+            match terminate(&shared) {
+                Ok(()) => outcomes.record(&shared, None),
+                Err(error) => {
+                    outcomes.record(
+                        &shared,
+                        Some(format!(
+                            "Failed to terminate detached MCP hook for '{connection_id}': {error}"
+                        )),
+                    );
+                    failed_processes.push(shared);
+                }
             }
         }
         state
             .detached_processes
             .register(&connection_id, failed_processes);
     }
-    errors
 }
 
 async fn wait_for_detached_hook_ready(
@@ -1957,6 +2057,7 @@ impl DbFluxServer {
         connection_ids.dedup();
 
         let mut errors = Vec::new();
+        let mut termination_outcomes = TerminationOutcomes::default();
         for connection_id in connection_ids {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -1965,8 +2066,14 @@ impl DbFluxServer {
                     timeout.as_millis()
                 ));
                 state.detached_processes.cancel_running_hooks();
-                errors.extend(terminate_detached_process_variants(&state, &connection_id));
-                errors.extend(cleanup_connection_without_hooks(&state, &connection_id).await);
+                terminate_detached_process_variants_with_outcomes(
+                    &state,
+                    &connection_id,
+                    &mut termination_outcomes,
+                    terminate_shared_detached_process,
+                );
+                cleanup_connection_without_hooks(&state, &connection_id, &mut termination_outcomes)
+                    .await;
                 continue;
             }
 
@@ -1984,8 +2091,18 @@ impl DbFluxServer {
                         timeout.as_millis()
                     ));
                     state.detached_processes.cancel_running_hooks();
-                    errors.extend(terminate_detached_process_variants(&state, &connection_id));
-                    errors.extend(cleanup_connection_without_hooks(&state, &connection_id).await);
+                    terminate_detached_process_variants_with_outcomes(
+                        &state,
+                        &connection_id,
+                        &mut termination_outcomes,
+                        terminate_shared_detached_process,
+                    );
+                    cleanup_connection_without_hooks(
+                        &state,
+                        &connection_id,
+                        &mut termination_outcomes,
+                    )
+                    .await;
                 }
             }
         }
@@ -1998,8 +2115,14 @@ impl DbFluxServer {
 
         let remaining_process_ids = state.detached_processes.connection_ids();
         for connection_id in remaining_process_ids {
-            errors.extend(terminate_detached_process_variants(&state, &connection_id));
+            terminate_detached_process_variants_with_outcomes(
+                &state,
+                &connection_id,
+                &mut termination_outcomes,
+                terminate_shared_detached_process,
+            );
         }
+        errors.extend(termination_outcomes.into_final_errors());
 
         if errors.is_empty() {
             Ok(())

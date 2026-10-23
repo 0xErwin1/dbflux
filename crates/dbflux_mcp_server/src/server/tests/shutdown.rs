@@ -14,7 +14,7 @@ use super::*;
 struct ObservedFactory {
     calls: Arc<AtomicUsize>,
     gate: Option<Arc<(Mutex<bool>, std::sync::Condvar)>>,
-    entered: Option<mpsc::Sender<()>>,
+    entered_sender: Option<mpsc::Sender<()>>,
 }
 impl ExecutionSessionFactory for ObservedFactory {
     fn open(&self) -> Result<Arc<dyn dbflux_core::ExecutionSession>, DbError> {
@@ -22,8 +22,8 @@ impl ExecutionSessionFactory for ObservedFactory {
     }
     fn shutdown(&self) -> Result<(), DbError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        if let Some(entered) = &self.entered {
-            entered.send(()).map_err(|error| {
+        if let Some(entered_sender) = &self.entered_sender {
+            entered_sender.send(()).map_err(|error| {
                 DbError::connection_failed(format!("shutdown observer disconnected: {error}"))
             })?;
         }
@@ -85,7 +85,7 @@ fn observed(profile: &ConnectionProfile, calls: Arc<AtomicUsize>) -> ObservedCon
         factory: ObservedFactory {
             calls,
             gate: None,
-            entered: None,
+            entered_sender: None,
         },
     }
 }
@@ -230,7 +230,7 @@ async fn shutdown_deadline_fixture(directory: &std::path::Path) -> ShutdownDeadl
         connect_and_cache(&state, profile_id).await;
     }
 
-    let (session_entered, session_entered_receiver) = mpsc::channel();
+    let (session_entered_sender, session_entered_receiver) = mpsc::channel();
     let shutdown_calls = Arc::new(AtomicUsize::new(0));
     cache_observed(
         &state,
@@ -242,7 +242,7 @@ async fn shutdown_deadline_fixture(directory: &std::path::Path) -> ShutdownDeadl
             factory: ObservedFactory {
                 calls: Arc::clone(&shutdown_calls),
                 gate: None,
-                entered: Some(session_entered),
+                entered_sender: Some(session_entered_sender),
             },
         },
     )
@@ -340,6 +340,159 @@ async fn shutdown_deadline_cleans_remaining_connections_without_hooks() {
     std::fs::write(&fixture.gate, b"release").expect("release blocking hook gate");
 }
 
+// S1: a blocked factory on one per-database variant must not stop its sibling
+// variant from receiving its own shutdown attempt.
+#[tokio::test(flavor = "multi_thread")]
+async fn blocked_variant_does_not_delay_sibling_variant_shutdown() {
+    let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+    let profile = ConnectionProfile::new("variant-blocked", DbConfig::default_postgres());
+    let state = test_state_with_profiles_and_errors(
+        "postgres",
+        Arc::new(FakeDriver::new(DbKind::Postgres)),
+        vec![profile.clone()],
+        HashMap::new(),
+        Box::new(NoopSecretStore),
+    );
+    let (blocked_sender, blocked_receiver) = mpsc::channel();
+    let (sibling_sender, sibling_receiver) = mpsc::channel();
+    let blocked_calls = Arc::new(AtomicUsize::new(0));
+    let sibling_calls = Arc::new(AtomicUsize::new(0));
+    let blocked_connection = ObservedConnection {
+        inner: FakeDriver::new(DbKind::Postgres)
+            .connect_arc(&profile)
+            .expect("fake connects"),
+        factory: ObservedFactory {
+            calls: Arc::clone(&blocked_calls),
+            gate: Some(Arc::clone(&gate)),
+            entered_sender: Some(blocked_sender),
+        },
+    };
+    cache_observed(&state, profile.id.to_string(), blocked_connection).await;
+    let mut sibling_connection = observed(&profile, Arc::clone(&sibling_calls));
+    sibling_connection.factory.entered_sender = Some(sibling_sender);
+    cache_observed(
+        &state,
+        format!("{}:sibling", profile.id),
+        sibling_connection,
+    )
+    .await;
+
+    let shutdown_task = tokio::spawn(DbFluxServer::disconnect_all_with_timeout(
+        state.clone(),
+        Duration::from_secs(5),
+    ));
+    let sibling_outcome = sibling_receiver.recv_timeout(Duration::from_secs(5));
+
+    // Release the gate before any assertion, so the gated worker can always
+    // finish and the test never hangs.
+    *gate.0.lock().expect("release lock") = true;
+    gate.1.notify_all();
+    assert!(
+        sibling_outcome.is_ok(),
+        "sibling variant shutdown must not wait for a blocked sibling variant"
+    );
+    let result = shutdown_task.await.expect("shutdown task should complete");
+    result.expect("shutdown should complete once the gate is released");
+    blocked_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("blocked variant shutdown attempted after release");
+    assert_eq!(blocked_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(sibling_calls.load(Ordering::SeqCst), 1);
+}
+
+/// Registers a real sleeping child as a detached handle under `connection_key`,
+/// so termination outcomes can be exercised without touching OS permissions.
+fn register_seam_sleeper(
+    state: &ServerState,
+    connection_key: &str,
+    description: &str,
+) -> Arc<SharedDetachedProcess> {
+    let child = std::process::Command::new("sleep")
+        .arg("60")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("test sleeper child");
+    let shared = Arc::new(SharedDetachedProcess::new(DetachedProcessHandle::new(
+        child,
+        description.to_string(),
+        None,
+        None,
+        None,
+        None,
+    )));
+    state
+        .detached_processes
+        .register(connection_key, vec![Arc::clone(&shared)]);
+    shared
+}
+
+// S1: the deadline expiry branch and the hook-free cleanup each run one
+// termination pass over the same detached handles, and only each handle's
+// final outcome may surface — once per handle, with distinct handles kept
+// separate even when their error messages are identical.
+#[test]
+fn deadline_termination_reports_final_outcome_once_per_handle() {
+    let profile = ConnectionProfile::new("termination-outcomes", DbConfig::default_postgres());
+    let state = test_state_with_driver(
+        "postgres",
+        Arc::new(FakeDriver::new(DbKind::Postgres)),
+        profile.clone(),
+    );
+    let profile_id = profile.id.to_string();
+    let transient = register_seam_sleeper(&state, &profile_id, "transient");
+    let persistent_first =
+        register_seam_sleeper(&state, &format!("{profile_id}:first"), "persistent");
+    let persistent_second =
+        register_seam_sleeper(&state, &format!("{profile_id}:second"), "persistent");
+
+    let attempts = Arc::new(Mutex::new(HashMap::<String, u32>::new()));
+    let terminate = {
+        let attempts = Arc::clone(&attempts);
+        move |shared: &Arc<SharedDetachedProcess>| -> Result<(), String> {
+            let description = lock_detached_process(shared).description.clone();
+            let mut attempts = attempts.lock().expect("attempt counter");
+            let attempt = attempts
+                .entry(description.clone())
+                .and_modify(|count| *count += 1)
+                .or_insert(1);
+            match description.as_str() {
+                "transient" if *attempt == 1 => Err("boom".to_string()),
+                "transient" => Ok(()),
+                _ => Err("boom".to_string()),
+            }
+        }
+    };
+
+    let mut outcomes = TerminationOutcomes::default();
+    terminate_detached_process_variants_with_outcomes(
+        &state,
+        &profile_id,
+        &mut outcomes,
+        &terminate,
+    );
+    terminate_detached_process_variants_with_outcomes(
+        &state,
+        &profile_id,
+        &mut outcomes,
+        &terminate,
+    );
+
+    let final_errors = outcomes.into_final_errors();
+    assert_eq!(
+        final_errors.len(),
+        2,
+        "only the final failure per handle may surface: {final_errors:?}"
+    );
+    assert!(final_errors.iter().any(|error| error.contains(":first")));
+    assert!(final_errors.iter().any(|error| error.contains(":second")));
+
+    // Cleanup: really terminate the sleeper children.
+    for shared in [&transient, &persistent_first, &persistent_second] {
+        terminate_shared_detached_process(shared).expect("test sleeper terminates");
+    }
+}
+
 // S1/S2: draining a cache is not equivalent to attempting session teardown.
 #[tokio::test]
 async fn first_profile_factory_survives_hook_timeout() {
@@ -402,9 +555,9 @@ fn blocked_fallback_is_bounded_and_does_not_pin_runtime_exit() {
     let worker_gate = gate.clone();
     let calls = Arc::new(AtomicUsize::new(0));
     let worker_calls = calls.clone();
-    let (entered, enter_rx) = mpsc::channel();
-    let (result_tx, result_rx) = mpsc::channel();
-    let (exit_tx, exit_rx) = mpsc::channel();
+    let (entered_sender, entered_receiver) = mpsc::channel();
+    let (result_sender, result_receiver) = mpsc::channel();
+    let (exit_sender, exit_receiver) = mpsc::channel();
     let worker = std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -432,7 +585,7 @@ fn blocked_fallback_is_bounded_and_does_not_pin_runtime_exit() {
                 .insert(first.id.to_string(), plain);
             let mut connection = observed(&later, worker_calls);
             connection.factory.gate = Some(worker_gate);
-            connection.factory.entered = Some(entered);
+            connection.factory.entered_sender = Some(entered_sender);
             cache_observed(&state, later.id.to_string(), connection).await;
             let started = Instant::now();
             let result = tokio::time::timeout(
@@ -446,13 +599,17 @@ fn blocked_fallback_is_bounded_and_does_not_pin_runtime_exit() {
                 std::fs::read_to_string(trace).expect("hook trace"),
             )
         });
-        result_tx.send(result).expect("result observer");
+        result_sender.send(result).expect("result observer");
         drop(runtime);
-        exit_tx.send(()).expect("runtime observer");
+        exit_sender.send(()).expect("runtime observer");
     });
-    let entered = enter_rx.recv_timeout(Duration::from_secs(5)).is_ok();
-    let result = result_rx.recv_timeout(Duration::from_secs(3));
-    let exited = exit_rx.recv_timeout(Duration::from_millis(200)).is_ok();
+    let entered_observed = entered_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .is_ok();
+    let result = result_receiver.recv_timeout(Duration::from_secs(3));
+    let exited = exit_receiver
+        .recv_timeout(Duration::from_millis(200))
+        .is_ok();
     // Release BEFORE any assertions, including on the baseline where fallback
     // never starts.
     *gate.0.lock().expect("release lock") = true;
@@ -460,11 +617,11 @@ fn blocked_fallback_is_bounded_and_does_not_pin_runtime_exit() {
     worker.join().expect("runtime worker");
     let (result, elapsed, trace) = result.expect("bounded outer observer");
     eprintln!(
-        "FACTORY_ENTERED={entered} CALLS={} RESULT={result:?} ELAPSED={elapsed:?} RUNTIME_EXIT_BEFORE_RELEASE={exited}",
+        "FACTORY_ENTERED={entered_observed} CALLS={} RESULT={result:?} ELAPSED={elapsed:?} RUNTIME_EXIT_BEFORE_RELEASE={exited}",
         calls.load(Ordering::SeqCst)
     );
     assert_eq!(trace, "pre_disconnect\n");
-    assert!(entered, "later factory shutdown must be attempted");
+    assert!(entered_observed, "later factory shutdown must be attempted");
     assert!(
         result.is_ok(),
         "fallback exceeded the overall bound; outer timeout cancelled it"
