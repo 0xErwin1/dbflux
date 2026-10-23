@@ -666,7 +666,14 @@ constructor de consultas que está a su lado.
 | `Enter` | Editar el valor (panel de valor) |
 | `Escape` | Dejar de editar el valor, o volver a la grilla |
 | `Ctrl+h` | Volver a la grilla |
-| `m` (o `Shift+F10`) | Abrir el menú contextual de la grilla. Su entrada Barra de herramientas lista los botones del panel abierto: en el panel de valor los demás formatos, el ajuste de línea, Formatear, Compactar y, cuando el valor cambió, Revertir y Guardar; en el inspector de fila Fijar o Soltar |
+| `m` (o `Shift+F10`) | Abrir el menú contextual de la grilla. Su entrada Barra de herramientas lista los botones del panel abierto: en el panel de valor los demás formatos, el ajuste de línea, Formatear, Compactar y, cuando el valor cambió, Revertir y Guardar; en el inspector de fila Fijar o Soltar, e Ir al registro referenciado cuando lista referencias de clave foránea salientes, o cuando el cursor está sobre una celda de clave foránea |
+
+**Ir al registro referenciado** abre la fila a la que apunta una clave foránea de la
+fila inspeccionada, igual que hacer clic en una entrada REFERENCES del
+inspector: sigue la celda del cursor de la grilla cuando está sobre una clave
+foránea de una sola columna con valor no nulo, y si no, la primera referencia
+saliente que lista el inspector. No tiene atajo propio; se ejecuta desde la
+entrada Barra de herramientas de arriba.
 
 Los constructores de consultas tienen teclas propias, descritas en
 [Constructores de consultas](#constructores-de-consultas).

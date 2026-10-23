@@ -76,6 +76,10 @@ Microsoft SQL Server driver for DBFlux, built on the
   capped at 1000 rows per statement per T-SQL's `VALUES` row limit, exposed
   via `DriverLimits::max_bulk_insert_rows`) and driver-native `CREATE TABLE`
   DDL from a source table's columns (`TRUNCATE_TABLE` is also supported).
+- Batched primary-key row lookup (`fetch_rows_by_pks`): one
+  `WHERE pk IN (...)` statement per chunk of at most 100 values, with an
+  optional column projection; used to resolve foreign-key labels in the data
+  grid.
 - Write-privilege probe: after connecting, checks `DATABASEPROPERTYEX(DB_NAME(), 'Updateability')` for a read-only database (e.g. an Always On readable secondary) and, otherwise, whether the login holds `INSERT`/`UPDATE`/`DELETE` on any visible non-system base table via `HAS_PERMS_BY_NAME`, tightening the resolved mutation policy to read-only when the server would reject writes anyway (side-effect free; an empty database is inconclusive and leaves the policy unchanged).
 
 ### Instance Metrics
@@ -338,6 +342,8 @@ Requires the `VIEW SERVER STATE` permission.
   enforced. The bound applies to retained rows, not to total transferred
   bytes, and a single huge row is retained in full. A mutation under a row
   limit completes all of its effects.
+- Batched primary-key row lookup sends at most 100 values per query; a larger
+  request runs as several `IN (...)` statements.
 - The row-limit cap applies to ordinary SQL execution, not to every execute
   context: a capped request aimed at the driver's instance metrics or
   inspectors is rejected before the connection lock or any dispatch — those

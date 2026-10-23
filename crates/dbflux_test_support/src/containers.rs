@@ -835,14 +835,29 @@ mod tests {
         started.dedup();
         assert!(!started.is_empty(), "found no images in containers.rs");
 
-        let pre_pulled: Vec<String> = workflow
-            .lines()
-            .skip_while(|line| !line.contains("images=("))
-            .skip(1)
-            .take_while(|line| !line.trim_start().starts_with(')'))
-            .map(|line| line.trim().to_string())
-            .filter(|line| !line.is_empty())
-            .collect();
+        // The pre-pull list is the union of the matrix's per-group `images:`
+        // blocks: every line indented deeper than an `images:` key is one
+        // image reference, and the block ends at the first line at or below
+        // that key's indentation.
+        let mut pre_pulled: Vec<String> = Vec::new();
+        let mut images_block_indent: Option<usize> = None;
+        for line in workflow.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let indent = line.len() - trimmed.len();
+            if let Some(block_indent) = images_block_indent {
+                if indent > block_indent {
+                    pre_pulled.push(trimmed.to_string());
+                    continue;
+                }
+                images_block_indent = None;
+            }
+            if trimmed.starts_with("images:") {
+                images_block_indent = Some(indent);
+            }
+        }
 
         let missing: Vec<&String> = started
             .iter()

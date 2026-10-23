@@ -1,5 +1,6 @@
 #![allow(clippy::type_complexity)]
 
+use super::data_grid_panel::ReferencedRowTarget;
 use super::dedup::DocumentKey;
 use super::handle::DocumentEvent;
 use super::pane::{EmptyScriptCleanup, PaneHandle};
@@ -399,6 +400,11 @@ impl TabManager {
                     cx.emit(TabManagerEvent::OpenEditorWithContent {
                         profile_id: *profile_id,
                         sql: sql.clone(),
+                    });
+                }
+                DocumentEvent::OpenReferencedRow { target } => {
+                    cx.emit(TabManagerEvent::OpenReferencedRow {
+                        target: target.clone(),
                     });
                 }
                 _ => {}
@@ -879,6 +885,11 @@ pub enum TabManagerEvent {
     OpenEditorWithContent {
         profile_id: uuid::Uuid,
         sql: String,
+    },
+    /// Open the row a foreign-key value points at (see
+    /// [`ReferencedRowTarget`]).
+    OpenReferencedRow {
+        target: ReferencedRowTarget,
     },
 }
 

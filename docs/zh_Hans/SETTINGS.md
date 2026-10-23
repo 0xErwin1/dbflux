@@ -61,6 +61,12 @@ DBFlux 各设置项以及连接 Hooks 的参考说明——连接 Hooks 指在�
 | **补全表名时添加别名** | 开 | 在 `FROM` 或 `JOIN` 之后从 SQL 补全中接受表、视图或 CTE 时，会一并插入由其名称首字母组成的别名：`access_control` 变为 `access_control ac`，`public.order_items` 变为 `public.order_items oi`。若该别名已在语句中使用、是保留字或与已知表同名，则追加数字（`ac2`）。光标后已有别名时，或在 `INSERT INTO` 之后，不添加别名。`UPDATE` 和 `DELETE FROM` 的目标表只在允许该位置使用别名的数据库上添加别名：PostgreSQL 和 DuckDB，以及使用 `AS` 的 SQLite 和 Turso。 |
 | **使用 AS 书写别名** | 关 | 插入 `access_control AS ac`，而不是 `access_control ac`。 |
 
+### 数据网格
+
+| 设置项 | 默认值 | 作用 |
+|---------|---------|--------------|
+| **在外键单元格中显示被引用行的标签** | 关 | 保存后加载的页面会解析外键单元格，并在其 ID 旁显示被引用行的标签。行检查器始终解析引用。 |
+
 ### 启动与会话
 
 | 设置项 | 默认值 | 作用 |

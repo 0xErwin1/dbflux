@@ -122,6 +122,70 @@ impl Workspace {
         log::info!("Opened table document: {:?}.{:?}", table.schema, table.name);
     }
 
+    /// Opens the table a foreign-key value points at, positioned on the
+    /// referenced row: reuses (or opens) the table's tab, then replaces its
+    /// filter with an equality on the key column. A tab whose rows an
+    /// applied builder query owns keeps that query — the referenced row
+    /// opens in a tab of its own, since the equality would land in a filter
+    /// input the builder hides. A missing connection is reported by
+    /// [`Self::open_table_document`]; a tab that cannot be found afterwards
+    /// is left alone.
+    pub(in crate::ui::views::workspace) fn open_table_at_referenced_row(
+        &mut self,
+        target: crate::ui::document::ReferencedRowTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = crate::ui::document::DocumentKey::Table {
+            profile_id: target.profile_id,
+            database: target.database.clone(),
+            table: target.table.clone(),
+        };
+
+        let builder_tab = {
+            let manager = self.tab_manager.read(cx);
+            manager
+                .find_by_key(&key, cx)
+                .and_then(|id| manager.document(id))
+                .is_some_and(|tab| tab.as_pane().has_applied_builder_query(cx))
+        };
+
+        self.open_table_document(
+            target.profile_id,
+            target.table.clone(),
+            target.database.clone(),
+            if builder_tab {
+                TabPlacement::NewTab
+            } else {
+                TabPlacement::ReuseExisting
+            },
+            window,
+            cx,
+        );
+
+        // With a tab opened beside the builder one, `find_by_key` still
+        // returns the builder tab (the first match), so the fresh tab is
+        // addressed by the activation opening it produced.
+        let doc_id = if builder_tab {
+            self.tab_manager.read(cx).active_id()
+        } else {
+            self.tab_manager.read(cx).find_by_key(&key, cx)
+        };
+
+        if let Some(doc_id) = doc_id {
+            self.tab_manager.update(cx, |mgr, cx| {
+                if let Some(tab) = mgr.document(doc_id) {
+                    tab.as_pane().apply_table_filter(
+                        &target.key_column,
+                        &target.key_value,
+                        window,
+                        cx,
+                    );
+                }
+            });
+        }
+    }
+
     pub(in crate::ui::views::workspace) fn open_collection_document(
         &mut self,
         profile_id: uuid::Uuid,
@@ -1047,7 +1111,7 @@ impl Workspace {
 mod tests {
     // Explicit imports, not `use super::*`: the parent glob together with
     // `#[gpui::test]` sends the macro expansion into unbounded recursion.
-    use crate::ui::document::{CodeDocument, DocumentId, Tab};
+    use crate::ui::document::{CodeDocument, DataDocument, DocumentId, DocumentKey, Tab};
     use crate::ui::views::workspace::Workspace;
     use dbflux_core::QueryLanguage;
     use dbflux_ui_base::AppStateEntity;
@@ -1498,6 +1562,352 @@ mod tests {
                 "the scratch tab closes without a file to delete"
             );
         });
+    }
+
+    /// Opening a referenced row on a profile without a connection must not
+    /// panic: `open_table_document` reports the error through its toast and no
+    /// tab is opened, so the positioning step finds nothing and stays quiet.
+    #[gpui::test]
+    fn opening_a_referenced_row_without_a_connection_does_not_panic(cx: &mut TestAppContext) {
+        let (workspace, _app_state, window) = new_workspace(cx);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.open_table_at_referenced_row(
+                    crate::ui::document::ReferencedRowTarget {
+                        profile_id: uuid::Uuid::new_v4(),
+                        database: None,
+                        table: dbflux_core::TableRef::new("orders"),
+                        key_column: "id".to_string(),
+                        key_value: dbflux_core::Value::Int(7),
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            assert!(
+                workspace
+                    .read(cx)
+                    .tab_manager
+                    .read(cx)
+                    .document_ids()
+                    .is_empty(),
+                "no tab opens for a profile without a connection"
+            );
+        });
+    }
+
+    // ---- Referenced-row navigation versus the query builder ----
+
+    /// Answers every structured-SELECT request, so `apply_builder_draft_spec`
+    /// leaves the tab with `visual_select` set — its refresh prefers the
+    /// builder query over the raw filter.
+    struct ReferencedRowGenerator;
+
+    impl dbflux_core::QueryGenerator for ReferencedRowGenerator {
+        fn supported_categories(&self) -> &'static [dbflux_core::MutationCategory] {
+            &[]
+        }
+
+        fn generate_mutation(
+            &self,
+            _mutation: &dbflux_core::MutationRequest,
+        ) -> Option<dbflux_core::GeneratedQuery> {
+            None
+        }
+
+        fn generate_select(
+            &self,
+            _spec: &dbflux_core::VisualQuerySpec,
+        ) -> Result<Option<dbflux_core::SelectQuery>, dbflux_core::QueryGenError> {
+            Ok(Some(dbflux_core::SelectQuery {
+                sql: "SELECT * FROM public.orders".to_string(),
+                params: Vec::new(),
+            }))
+        }
+    }
+
+    /// Connection stub for the referenced-row navigation test: SQL dialect,
+    /// structured SELECT generation, and a recorded table browse.
+    struct ReferencedRowConnection {
+        generator: ReferencedRowGenerator,
+        browses: std::sync::Mutex<Vec<dbflux_core::TableBrowseRequest>>,
+    }
+
+    impl ReferencedRowConnection {
+        fn browses(&self) -> Vec<dbflux_core::TableBrowseRequest> {
+            self.browses.lock().expect("browse log").clone()
+        }
+    }
+
+    impl Default for ReferencedRowConnection {
+        fn default() -> Self {
+            Self {
+                generator: ReferencedRowGenerator,
+                browses: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    fn orders_page() -> dbflux_core::QueryResult {
+        let column = |name: &str, is_primary_key: bool| dbflux_core::ColumnMeta {
+            name: name.to_string(),
+            type_name: "int4".to_string(),
+            kind: dbflux_core::ColumnKind::Integer,
+            nullable: false,
+            is_primary_key,
+        };
+
+        dbflux_core::QueryResult::table(
+            vec![column("id", true), column("customer_id", false)],
+            vec![vec![dbflux_core::Value::Int(7), dbflux_core::Value::Int(8)]],
+            None,
+            std::time::Duration::ZERO,
+        )
+    }
+
+    impl dbflux_core::Connection for ReferencedRowConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            static METADATA: std::sync::OnceLock<dbflux_core::DriverMetadata> =
+                std::sync::OnceLock::new();
+
+            METADATA.get_or_init(|| {
+                dbflux_core::DriverMetadataBuilder::new(
+                    "workspace-referenced-row-test",
+                    "Referenced Row Test",
+                    dbflux_core::DatabaseCategory::Relational,
+                    dbflux_core::QueryLanguage::Sql,
+                )
+                .build()
+            })
+        }
+
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::SQLite
+        }
+
+        fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &dbflux_core::DefaultSqlDialect
+        }
+
+        fn ping(&self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn execute(
+            &self,
+            _request: &dbflux_core::QueryRequest,
+        ) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+            Ok(orders_page())
+        }
+
+        fn browse_table(
+            &self,
+            request: &dbflux_core::TableBrowseRequest,
+        ) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+            self.browses
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(request.clone());
+            Ok(orders_page())
+        }
+
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+            Ok(dbflux_core::SchemaSnapshot::default())
+        }
+
+        fn query_generator(&self) -> Option<&dyn dbflux_core::QueryGenerator> {
+            Some(&self.generator)
+        }
+    }
+
+    /// Registers `connection` as the workspace's only connected profile, the
+    /// way `connect_object_store` does, and returns the profile id.
+    fn connect_referenced_row_profile(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        connection: std::sync::Arc<dyn dbflux_core::Connection>,
+    ) -> uuid::Uuid {
+        let profile_id = uuid::Uuid::new_v4();
+
+        window.update(|_, cx| {
+            let app_state = workspace.read(cx).app_state.clone();
+
+            app_state.update(cx, |state, _| {
+                let profile = dbflux_core::ConnectionProfile::new(
+                    "orders",
+                    dbflux_core::DbConfig::SQLite {
+                        path: std::path::PathBuf::from(":memory:"),
+                        connection_id: None,
+                    },
+                );
+
+                state.connections_mut().insert(
+                    profile_id,
+                    dbflux_core::ConnectedProfile {
+                        profile,
+                        connection,
+                        schema: None,
+                        mutation_policy: dbflux_core::MutationPolicy::default(),
+                        read_only_reason: None,
+                        database_schemas: Default::default(),
+                        table_details: Default::default(),
+                        collection_children: Default::default(),
+                        schema_types: Default::default(),
+                        schema_columns: Default::default(),
+                        schema_indexes: Default::default(),
+                        schema_foreign_keys: Default::default(),
+                        schema_routines: Default::default(),
+                        dependents_cache: Default::default(),
+                        active_database: None,
+                        redis_key_cache: Default::default(),
+                        database_connections: Default::default(),
+                        proxy_tunnel: None,
+                    },
+                );
+            });
+        });
+
+        profile_id
+    }
+
+    fn orders_builder_spec() -> dbflux_core::VisualQuerySpec {
+        dbflux_core::VisualQuerySpec {
+            source: dbflux_core::SourceTable {
+                schema: Some("public".to_string()),
+                table: "orders".to_string(),
+                alias: "orders".to_string(),
+            },
+            projection: dbflux_core::Projection::All,
+            joins: vec![],
+            filter: None,
+            group_by: vec![],
+            aggregates: vec![],
+            having: None,
+            sort: vec![],
+            limit: Some(100),
+            offset: 0,
+        }
+    }
+
+    /// A referenced row opened into a tab whose rows an applied builder query
+    /// owns lands in a tab of its own: the builder tab keeps its query (the
+    /// equality would land in a filter input the builder hides), and the
+    /// fresh tab browses under the dialect-quoted equality from the first
+    /// page.
+    #[gpui::test]
+    fn a_referenced_row_opens_a_fresh_tab_when_the_existing_one_runs_a_builder_query(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, _app_state, window) = new_workspace(cx);
+
+        let connection = std::sync::Arc::new(ReferencedRowConnection::default());
+        let profile_id = connect_referenced_row_profile(window, &workspace, connection.clone());
+
+        let table = dbflux_core::TableRef::with_schema("public", "orders");
+
+        // The tab already showing the table runs an applied builder query.
+        window.update(|window, cx| {
+            let app_state = workspace.read(cx).app_state.clone();
+            let document = cx.new(|cx| {
+                DataDocument::new_for_table(
+                    profile_id,
+                    table.clone(),
+                    Some("app".to_string()),
+                    app_state,
+                    window,
+                    cx,
+                )
+            });
+            let grid = document.read(cx).data_grid_for_tests().clone();
+            grid.update(cx, |grid, cx| {
+                grid.apply_builder_draft_spec(orders_builder_spec(), cx)
+            });
+
+            let pane = DataDocument::into_pane(document, cx);
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .tab_manager
+                    .update(cx, |mgr, cx| mgr.open(Tab::Pane(Box::new(pane)), cx));
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.open_table_at_referenced_row(
+                    crate::ui::document::ReferencedRowTarget {
+                        profile_id,
+                        database: Some("app".to_string()),
+                        table: table.clone(),
+                        key_column: "id".to_string(),
+                        key_value: dbflux_core::Value::Int(7),
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let manager = workspace.read(cx).tab_manager.read(cx);
+            assert_eq!(
+                manager.document_ids().len(),
+                2,
+                "the referenced row opens a tab of its own"
+            );
+
+            let builder_tab = manager
+                .find_by_key(
+                    &DocumentKey::Table {
+                        profile_id,
+                        database: Some("app".to_string()),
+                        table: table.clone(),
+                    },
+                    cx,
+                )
+                .expect("the builder tab stays open");
+            assert!(
+                manager
+                    .document(builder_tab)
+                    .expect("the builder tab exists")
+                    .as_pane()
+                    .has_applied_builder_query(cx),
+                "the builder tab keeps its applied query"
+            );
+        });
+
+        let browses = connection.browses();
+        let reload = browses
+            .last()
+            .expect("the fresh tab reloaded under the equality");
+        assert_eq!(reload.pagination.offset(), 0);
+        assert_eq!(reload.filter.as_deref(), Some("\"id\" = 7"));
+        assert_eq!(
+            browses
+                .iter()
+                .filter(|browse| browse.filter.is_some())
+                .count(),
+            1,
+            "only the fresh tab browsed under the equality"
+        );
     }
 }
 

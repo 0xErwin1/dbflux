@@ -80,6 +80,12 @@ converted crate by crate and stays in English for now.
 | **Add an alias to table completions** | On | Accepting a table, view or CTE from SQL completion after `FROM` or `JOIN` inserts it with an alias built from the initials of its name: `access_control` becomes `access_control ac`, `public.order_items` becomes `public.order_items oi`. An alias already used in the statement, a reserved word or the name of a known table gets a number (`ac2`). No alias is added when one already follows the cursor, or after `INSERT INTO`. The target of `UPDATE` and `DELETE FROM` is aliased only on databases that accept it there: PostgreSQL and DuckDB, and SQLite and Turso with `AS`. |
 | **Write the alias with AS** | Off | Inserts `access_control AS ac` instead of `access_control ac`. |
 
+### Data grid
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| **Show referenced-row labels in foreign-key cells** | Off | Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after you save; the row inspector always resolves references. |
+
 ### Startup & session
 
 | Setting | Default | What it does |
