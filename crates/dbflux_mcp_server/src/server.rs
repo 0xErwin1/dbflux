@@ -836,17 +836,6 @@ struct HookPhaseExecutionMetadata {
     endpoint: (Option<String>, Option<u16>),
 }
 
-fn pre_connect_probe_endpoint(
-    profile: &dbflux_core::ConnectionProfile,
-    context: &HookContext,
-) -> (Option<String>, Option<u16>) {
-    if profile.uses_pipeline() || profile.config.has_ssh_tunnel() {
-        (None, None)
-    } else {
-        (context.host.clone(), context.port)
-    }
-}
-
 async fn execute_connection_hook_phase(
     state: &ServerState,
     connection_id: &str,
@@ -1044,7 +1033,11 @@ async fn run_connection_hook_phase(
 
     let mut context = HookContext::from_profile(profile);
     context.phase = Some(phase);
-    let endpoint = pre_connect_probe_endpoint(profile, &context);
+    let endpoint = context
+        .pre_connect_probe_endpoint()
+        .map_or((None, None), |(host, port)| {
+            (Some(host.to_string()), Some(port))
+        });
     let metadata = HookPhaseExecutionMetadata {
         phase,
         configured_indices,
@@ -2862,37 +2855,6 @@ mod tests {
             !trace.exists(),
             "invalid detached hooks must be rejected before spawning"
         );
-    }
-
-    #[test]
-    fn pre_connect_endpoint_probe_is_limited_to_direct_profiles() {
-        let direct = ConnectionProfile::new("direct", DbConfig::default_postgres());
-        let direct_context = HookContext::from_profile(&direct);
-        assert_eq!(
-            pre_connect_probe_endpoint(&direct, &direct_context),
-            (direct_context.host.clone(), direct_context.port)
-        );
-
-        let pipeline = pipeline_profile_with_hooks(ConnectionHooks::default());
-        let pipeline_context = HookContext::from_profile(&pipeline);
-        assert_eq!(
-            pre_connect_probe_endpoint(&pipeline, &pipeline_context),
-            (None, None)
-        );
-
-        let mut ssh = direct.clone();
-        ssh.config.assign_ssh_tunnel(
-            Some(dbflux_core::SshTunnelConfig {
-                host: "bastion.example".to_string(),
-                port: 22,
-                user: "dbflux".to_string(),
-                auth_method: Default::default(),
-                ssh_config_host: None,
-            }),
-            None,
-        );
-        let ssh_context = HookContext::from_profile(&ssh);
-        assert_eq!(pre_connect_probe_endpoint(&ssh, &ssh_context), (None, None));
     }
 
     #[tokio::test]
