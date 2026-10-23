@@ -770,8 +770,8 @@ fn table_panel(
     })
 }
 
-/// Registers a connection to `driver` under the profile the test panels are
-/// built against (`Uuid::nil()`), so a batch write reaches the fake.
+/// Keyed by `Uuid::nil()`, the profile the test panels are built against,
+/// so a batch write reaches the fake.
 ///
 /// Registered after the panel exists because the batch reads the connection
 /// when the write runs, not when the grid is built.

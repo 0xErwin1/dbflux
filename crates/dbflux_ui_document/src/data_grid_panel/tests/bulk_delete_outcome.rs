@@ -1,7 +1,7 @@
 use super::*;
 use dbflux_test_support::fake_driver::{CrudOp, FakeDriver};
 
-// === #1097 — the grid after a bulk delete that did not fully land ===
+// === The grid after a bulk delete that did not fully land ===
 
 /// A keyed `orders` grid holding rows with ids 1, 2 and 3, in a window that is
 /// never drawn, so a queued reload stays observable instead of running.
@@ -149,10 +149,20 @@ fn a_partially_failed_delete_reloads_and_keeps_the_rows_that_were_not_deleted_ma
     cx: &mut TestAppContext,
 ) {
     let (panel, window, seen) = three_row_panel(cx);
-    let driver = FakeDriver::new(dbflux_core::DbKind::SQLite).with_delete_row_error(
-        dbflux_core::Value::Int(2),
-        "violates foreign key constraint",
-    );
+    // The reload reads what is left in the table: rows 2 and 3.
+    let driver = FakeDriver::new(dbflux_core::DbKind::SQLite)
+        .with_default_result(QueryResult::table(
+            vec![key_column("id", true)],
+            (2..=3)
+                .map(|id| vec![dbflux_core::Value::Int(id)])
+                .collect(),
+            None,
+            Duration::ZERO,
+        ))
+        .with_delete_row_error(
+            dbflux_core::Value::Int(2),
+            "violates foreign key constraint",
+        );
     register_fake_connection(&panel, window, &driver);
 
     mark_rows_for_delete(&panel, window, &[0, 1, 2]);
@@ -180,6 +190,27 @@ fn a_partially_failed_delete_reloads_and_keeps_the_rows_that_were_not_deleted_ma
     assert!(
         !window.update(|_, app| panel.read(app).batch_op_in_flight),
         "a failed batch must not look like a write still in flight"
+    );
+
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| panel.process_pending_actions(window, cx));
+    });
+    window.run_until_parked();
+
+    window.update(|_, app| {
+        assert_eq!(
+            panel.read(app).result.rows,
+            vec![
+                vec![dbflux_core::Value::Int(2)],
+                vec![dbflux_core::Value::Int(3)],
+            ],
+            "the deleted row must leave the grid"
+        );
+    });
+    assert_eq!(
+        rows_marked_for_delete(&panel, window),
+        vec![0, 1],
+        "the marks follow rows 2 and 3 to their new positions"
     );
     assert!(
         !seen
@@ -216,11 +247,25 @@ fn a_row_without_a_readable_primary_key_is_reported_and_keeps_the_tab(cx: &mut T
     register_fake_connection(&panel, window, &driver);
 
     window.update(|_, app| panel.update(app, |panel, _| panel.close_after_apply = true));
-    mark_rows_for_delete(&panel, window, &[0]);
-    // Row 7 is past the loaded rows, so no primary key value can be read for it.
-    commit_deletes(&panel, window, vec![0, 7]);
+    // Row 1 loses its key cell, so no primary key value can be read for it.
+    window.update(|_, app| {
+        let table_state = panel
+            .read(app)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("a table");
+        table_state.update(app, |state, _| state.apply_returning_row(1, &[]));
+    });
+    mark_rows_for_delete(&panel, window, &[0, 1]);
+    commit_deletes(&panel, window, vec![0, 1]);
 
     assert_eq!(deleted_ids(&driver), vec![dbflux_core::Value::Int(1)]);
+    assert_eq!(
+        rows_marked_for_delete(&panel, window),
+        vec![1],
+        "a row that was not deleted stays marked"
+    );
     assert_eq!(
         last_toast_title(window),
         Some(crate::labels::bulk_delete_unidentified_label(
