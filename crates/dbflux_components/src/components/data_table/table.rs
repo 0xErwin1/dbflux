@@ -1451,6 +1451,8 @@ fn render_rows(
                         super::model::CellKind::Nested { is_array, .. } => Some(is_array),
                         _ => None,
                     };
+                    let fk_spans = display_value.fk_spans();
+                    let has_fk_spans = fk_spans.is_some();
                     let is_group_child =
                         document.is_some_and(|document| document.is_group_child(col_ix));
 
@@ -1553,14 +1555,36 @@ fn render_rows(
                                     .color(text_color),
                             )
                         })
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(font_size)
-                                .text_color(text_color)
-                                .child(display_text.to_string()),
-                        )
+                        // A resolved foreign key draws its label in the
+                        // cell's text color with the raw id muted after it.
+                        .when_some(fk_spans, |d, (label, id_suffix)| {
+                            d.child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(font_size)
+                                    .text_color(text_color)
+                                    .child(label.to_string()),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .whitespace_nowrap()
+                                    .text_size(font_size)
+                                    .text_color(theme.muted_foreground)
+                                    .child(id_suffix.to_string()),
+                            )
+                        })
+                        .when(!has_fk_spans, |d| {
+                            d.child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(font_size)
+                                    .text_color(text_color)
+                                    .child(display_text.to_string()),
+                            )
+                        })
                         .when(nested_kind == Some(true), |d| {
                             d.child(
                                 Icon::new(AppIcon::ChevronRight)

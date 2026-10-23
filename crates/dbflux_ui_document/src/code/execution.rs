@@ -1923,6 +1923,10 @@ impl CodeDocument {
                     // Builder events are only emitted from table-browsing grids.
                     // CodeDocument result grids never have a builder panel.
                 }
+                DataGridEvent::OpenReferencedRow { .. } => {
+                    // FK navigation needs a DataSource::Table with FK metadata;
+                    // CodeDocument result grids browse query results.
+                }
             });
 
         let view_handle = DataGridPanel::into_view_handle(grid.clone(), cx);

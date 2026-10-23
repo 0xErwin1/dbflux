@@ -6,11 +6,17 @@
 //! `ctrl_l_enters_the_row_inspector_and_escape_returns` and the toolbar
 //! tests in `context_menu::toolbar` (`m`, then the Toolbar submenu).
 
-use super::DataGridPanel;
-use super::rail_keys::host_table_grid_with_rail;
+use super::fk_navigation::{orders_result, orders_with_customer_fk};
+use super::rail_keys::{host_in_rail, host_table_grid_with_rail};
+use super::register_stub_connection;
+use super::{DataGridPanel, DataSource, StubConnection};
 use crate::keyboard_coverage::DATA_GRID;
+use dbflux_components::components::data_table::selection::CellCoord;
+use dbflux_core::Pagination;
+use dbflux_core::TableRef;
 use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
-use gpui::{Entity, TestAppContext, VisualTestContext};
+use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+use std::sync::Arc;
 
 fn keys(window: &mut VisualTestContext, keystrokes: &str) {
     for keystroke in keystrokes.split(' ') {
@@ -119,6 +125,80 @@ fn the_edit_bar_is_covered(cx: &mut TestAppContext) {
 
     let checked = assert_covered(&panel, &capture, window);
     assert!(checked.iter().any(|id| id == "save-btn"), "{checked:?}");
+}
+
+/// The REFERENCES entries of the row inspector are Toolbar entries of the
+/// table menu.
+#[gpui::test]
+fn the_fk_references_are_covered(cx: &mut TestAppContext) {
+    let (app_state, profile_id) = register_stub_connection(cx, Arc::new(StubConnection));
+
+    cx.update(|cx| {
+        app_state.update(cx, |app, _| {
+            let connected = app
+                .connections_mut()
+                .get_mut(&profile_id)
+                .expect("the stub connection is registered");
+            connected.table_details.insert(
+                (
+                    "app".to_string(),
+                    Some("public".to_string()),
+                    "orders".to_string(),
+                ),
+                orders_with_customer_fk(),
+            );
+        });
+    });
+
+    let (panel, window) = host_in_rail(cx, {
+        let app_state = app_state.clone();
+        move |window, cx| {
+            cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id,
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "orders"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: Some(1),
+                };
+
+                let mut panel = DataGridPanel::new_internal(
+                    source,
+                    app_state,
+                    vec!["id".to_string()],
+                    window,
+                    cx,
+                );
+                panel.set_result(orders_result(dbflux_core::Value::Int(2129)), cx);
+                panel
+            })
+        }
+    });
+
+    window.update(|_, cx| {
+        let table_state = panel
+            .read(cx)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("the result builds a table");
+        table_state.update(cx, |state, cx| state.select_cell(CellCoord::new(0, 1), cx));
+    });
+    window.run_until_parked();
+
+    let capture = FrameCapture::observe(window);
+
+    window.update(|_, cx| {
+        panel.update(cx, |panel, cx| panel.open_row_inspector(0, 1, cx));
+    });
+    window.run_until_parked();
+
+    let checked = assert_covered(&panel, &capture, window);
+    assert!(
+        checked.iter().any(|id| id == "row-inspector-reference-0"),
+        "{checked:?}"
+    );
 }
 
 /// The SQL builder rail, with a WHERE condition and its rail menu open.
