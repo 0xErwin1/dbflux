@@ -1221,21 +1221,14 @@ impl McpAccessManager {
         match provider {
             #[cfg(feature = "aws")]
             "aws-ssm" => {
-                let instance_id = params.get("instance_id").map(String::as_str).unwrap_or("");
-                let region = params
-                    .get("region")
-                    .map(String::as_str)
-                    .unwrap_or("us-east-1");
-                let remote_port = params
-                    .get("remote_port")
-                    .and_then(|value| value.parse().ok())
-                    .unwrap_or(0);
+                let ssm = dbflux_core::SsmAccessParams::from_params(params)?;
 
                 let factory = self.ssm_factory.as_ref().ok_or_else(|| {
                     dbflux_core::DbError::connection_failed("SSM tunnel factory not available")
                 })?;
 
-                let tunnel = factory.start(instance_id, region, remote_host, remote_port)?;
+                let tunnel =
+                    factory.start(&ssm.instance_id, &ssm.region, remote_host, ssm.remote_port)?;
                 Ok(AccessHandle::tunnel(tunnel.local_port(), Box::new(tunnel)))
             }
             #[cfg(not(feature = "aws"))]
@@ -2219,6 +2212,8 @@ impl ServerHandler for DbFluxServer {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "aws")]
+    mod access;
     mod shutdown;
 
     use dbflux_core::secrecy::{ExposeSecret, SecretString};

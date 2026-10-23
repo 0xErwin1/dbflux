@@ -21,7 +21,7 @@ mod sql;
 mod storage;
 pub mod values;
 
-pub use access::{AccessHandle, AccessKind, AccessManager};
+pub use access::{AccessHandle, AccessKind, AccessManager, SsmAccessParams};
 
 pub use document_id::DocumentId;
 
