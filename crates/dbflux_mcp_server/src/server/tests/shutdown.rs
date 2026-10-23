@@ -23,13 +23,19 @@ impl ExecutionSessionFactory for ObservedFactory {
     fn shutdown(&self) -> Result<(), DbError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if let Some(entered) = &self.entered {
-            entered.send(()).expect("observer alive");
+            entered.send(()).map_err(|error| {
+                DbError::connection_failed(format!("shutdown observer disconnected: {error}"))
+            })?;
         }
         if let Some(gate) = &self.gate {
             let (lock, changed) = &**gate;
-            let mut released = lock.lock().expect("gate lock");
+            let mut released = lock.lock().map_err(|error| {
+                DbError::connection_failed(format!("shutdown gate lock poisoned: {error}"))
+            })?;
             while !*released {
-                released = changed.wait(released).expect("gate wait");
+                released = changed.wait(released).map_err(|error| {
+                    DbError::connection_failed(format!("shutdown gate wait poisoned: {error}"))
+                })?;
             }
         }
         Ok(())
@@ -191,10 +197,10 @@ async fn shutdown_deadline_fixture(directory: &std::path::Path) -> ShutdownDeadl
     // every later profile must still be cleaned up after the deadline.
     let mut profiles: Vec<ConnectionProfile> = (0..3)
         .map(|index| {
-            ConnectionProfile::new(&format!("shutdown-{index}"), DbConfig::default_postgres())
+            ConnectionProfile::new(format!("shutdown-{index}"), DbConfig::default_postgres())
         })
         .collect();
-    profiles.sort_by(|left, right| left.id.to_string().cmp(&right.id.to_string()));
+    profiles.sort_by_key(|profile| profile.id.to_string());
     let blocking_id = profiles[0].id.to_string();
     let fast_id = profiles[1].id.to_string();
     let probe_profile = profiles[2].clone();
