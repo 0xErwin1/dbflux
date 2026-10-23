@@ -918,6 +918,39 @@ impl Connection for DuckDbConnection {
         Some(dbflux_core::extract_referenced_tables(query))
     }
 
+    /// Lists foreign-key child tables only: DuckDB records no dependency
+    /// between a view and the tables it reads.
+    fn fetch_dependents(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<dbflux_core::RelationRef>, DbError> {
+        let (schema_filter, _) = self.schema_filter(database, schema);
+        let rows = self
+            .run(
+                &format!(
+                    "SELECT DISTINCT schema_name, table_name FROM duckdb_constraints() \
+                     WHERE constraint_type = 'FOREIGN KEY' AND {schema_filter} \
+                     AND referenced_table = ? ORDER BY 1, 2"
+                ),
+                &[Value::Text(table.to_string())],
+                None,
+            )?
+            .rows;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| match <[Value; 2]>::try_from(row) {
+                Ok([Value::Text(schema), Value::Text(name)]) => Some(dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::ForeignKeyChild,
+                    qualified_name: format!("{schema}.{name}"),
+                }),
+                _ => None,
+            })
+            .collect())
+    }
+
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
         if !patch.identity.is_valid() {
             return Err(DbError::query_failed(
@@ -1425,6 +1458,42 @@ mod tests {
         );
         assert!(
             matches!(&row[4], Value::Document(fields) if fields.get("k") == Some(&Value::Text("v".into())))
+        );
+    }
+
+    #[test]
+    fn fetch_dependents_lists_foreign_key_children() {
+        let connection = connect();
+        connection
+            .execute(&QueryRequest::new(
+                "CREATE TABLE parent (id INTEGER PRIMARY KEY);
+                 CREATE TABLE child (id INTEGER, parent_id INTEGER REFERENCES parent(id));
+                 CREATE TABLE unrelated (id INTEGER);
+                 CREATE VIEW parent_view AS SELECT * FROM parent",
+            ))
+            .unwrap();
+
+        let dependents = connection
+            .fetch_dependents("memory", Some("main"), "parent")
+            .unwrap();
+
+        assert_eq!(
+            dependents,
+            vec![dbflux_core::RelationRef {
+                kind: dbflux_core::RelationKind::ForeignKeyChild,
+                qualified_name: "main.child".to_string(),
+            }]
+        );
+        assert_eq!(
+            connection.fetch_dependents("", None, "parent").unwrap(),
+            dependents,
+            "an empty database reads the active catalog, as table_details does"
+        );
+        assert!(
+            connection
+                .fetch_dependents("memory", Some("main"), "unrelated")
+                .unwrap()
+                .is_empty()
         );
     }
 
