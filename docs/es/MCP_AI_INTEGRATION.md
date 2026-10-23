@@ -85,6 +85,8 @@ hayas creado en la GUI de DBFlux, en **Settings → MCP → Clients**.
 **Nota**: si compilaste DBFlux sin el feature `mcp` (`--no-default-features`),
 el servidor MCP no estará disponible.
 
+El servidor carga los hooks de conexión en línea y las vinculaciones de hooks reutilizables desde la base de datos compartida. Ejecuta PreConnect y PostConnect al establecer una conexión, y PreDisconnect y PostDisconnect al desconectar una conexión abierta. Los resultados de los hooks se registran en el registro de auditoría. Un hook PreConnect independiente debe emitir su señal de preparación configurada; después de esa señal, el servidor espera el endpoint solo para perfiles directos. Los perfiles con pipeline o túnel SSH omiten esa espera porque el pipeline o el túnel resuelve su endpoint. El servidor MCP independiente no incluye un ejecutor de hooks Lua; un hook Lua habilitado devuelve un error que identifica su fase y el hook en lugar de omitirse.
+
 ## 3. Modelo de governance (conceptos centrales)
 
 Toda solicitud de IA se hace cumplir a través de todas estas capas, en orden:

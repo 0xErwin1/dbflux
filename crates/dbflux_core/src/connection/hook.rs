@@ -391,15 +391,19 @@ impl ConnectionHooks {
     ///
     /// If the profile has `hook_bindings`, each binding ID is looked up in
     /// `definitions` and placed into the corresponding phase. Missing IDs are
-    /// silently skipped (logged as warnings). If the profile has no bindings,
-    /// falls back to `profile.hooks` (inline hooks) or an empty default.
+    /// silently skipped (logged as warnings). Profiles without bindings retain
+    /// their inline hooks or use an empty default.
     pub fn resolve_from_bindings(
         profile: &ConnectionProfile,
         definitions: &HashMap<String, ConnectionHook>,
     ) -> Self {
-        if let Some(bindings) = &profile.hook_bindings {
-            let mut hooks = Self::default();
+        let mut hooks = if profile.hook_bindings.is_some() {
+            Self::default()
+        } else {
+            profile.hooks.clone().unwrap_or_default()
+        };
 
+        if let Some(bindings) = &profile.hook_bindings {
             for phase in [
                 HookPhase::PreConnect,
                 HookPhase::PostConnect,
@@ -419,11 +423,9 @@ impl ConnectionHooks {
                     }
                 }
             }
-
-            return hooks;
         }
 
-        profile.hooks.clone().unwrap_or_default()
+        hooks
     }
 }
 
@@ -616,6 +618,14 @@ impl DetachedProcessHandle {
     /// the handle across the move.
     pub fn take_containment(&mut self) -> Option<ProcessContainment> {
         self.containment.take()
+    }
+
+    /// Terminates the detached hook and its entire process tree.
+    pub fn terminate(&mut self) -> Result<(), String> {
+        terminate_child(&mut self.child, self.containment.as_ref())
+            .map_err(|error| format!("{error:?}"))?;
+        self.containment.take();
+        Ok(())
     }
 }
 
@@ -1292,6 +1302,7 @@ impl ConnectionHook {
 
         let mut command = Command::new(&resolved.program);
         command.args(&resolved.args);
+        command.stdin(Stdio::null());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
 
