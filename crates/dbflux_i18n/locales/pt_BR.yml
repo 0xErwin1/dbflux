@@ -3988,7 +3988,7 @@ settings:
     max_background_tasks:
       label: Máximo de tarefas simultâneas em segundo plano
       error: O máximo de tarefas em segundo plano deve ser >= 1
-      help: "Conta conexões, desconexões, hooks de conexão, trocas de banco de dados, tarefas de esquema e varreduras key-value em andamento. No limite, novas conexões, trocas de banco de dados, carregamentos de esquema e páginas key-value são recusados. Consultas, carregamentos da grade de dados e exportações não são limitados."
+      help: "Conta conexões, desconexões, hooks de conexão, trocas de banco de dados, tarefas de esquema e varreduras key-value em andamento. No limite, novas conexões, trocas de banco de dados, carregamentos de esquema e de detalhes de tabela e páginas key-value são recusados. Consultas, carregamentos da grade de dados e exportações não são limitados."
     pause_refresh_on_error:
       label: Pausar a atualização automática em caso de erro
     refresh_only_if_visible:
