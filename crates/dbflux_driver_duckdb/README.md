@@ -73,6 +73,9 @@ Embedded analytical database, with optional DuckLake catalogs.
   can still read files when a read-only request selects from it, and scalar
   functions added by extensions are not checked.
 - Statement timeouts are refused with `NotSupported`.
+- The drop-table confirmation lists foreign-key child tables only. DuckDB
+  records no dependency between a view and the tables it reads, so dependent
+  views are not listed.
 - Only one process can open a database file for writing; DBFlux cannot open a
   file that another program (the DuckDB CLI, a notebook, or the standalone
   `dbflux mcp` server) holds open.

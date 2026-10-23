@@ -2419,6 +2419,20 @@ impl Connection for MysqlConnection {
         Ok(Some(map))
     }
 
+    fn fetch_dependents(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<dbflux_core::RelationRef>, DbError> {
+        let mut conn = self
+            .catalog_conn
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        fetch_dependents(&mut conn, database, table)
+    }
+
     fn referenced_tables(&self, query: &str) -> Option<Vec<dbflux_core::QueryTableRef>> {
         Some(dbflux_core::extract_referenced_tables(query))
     }
@@ -4448,80 +4462,93 @@ fn mysql_routine_type_to_kind(routine_type: &str) -> RoutineKind {
 }
 
 // =============================================================================
-// Dependents introspection (stub — not yet wired into ConnectedProfile cache)
+// Dependents introspection
 // =============================================================================
-//
-// Wiring note: `table_details()` on the `RelationalConnection` trait returns
-// `TableInfo` synchronously and has no access to `ConnectedProfile`. The app
-// layer would need to call `fetch_dependents` in the same background task that
-// fetches table details, then write the result via `ConnectedProfile::populate_dependents`.
-// That wiring is deferred to a follow-up slice once the fetch task pattern is
-// extended to return both `TableInfo` and `Vec<RelationRef>`.
 
 /// Fetch objects that depend on `database.table` from a live MySQL/MariaDB connection.
 ///
 /// Covers:
-///  - Views depending on the table via `information_schema.VIEW_TABLE_USAGE`.
+///  - Views that read the table. MySQL 8.0.13+ reports them in
+///    `information_schema.VIEW_TABLE_USAGE`; MariaDB has no such table, so the
+///    stored view definitions, which always name tables as `` `db`.`table` ``,
+///    are searched instead.
 ///  - Tables with a foreign key referencing this table via `information_schema.KEY_COLUMN_USAGE`.
 ///
-/// Note: MySQL does not support materialized views or user-defined triggers on arbitrary tables
-/// in the same way PostgreSQL does; triggers are not included here.
+/// Triggers are not included.
 pub fn fetch_dependents(
     conn: &mut Conn,
     database: &str,
     table: &str,
 ) -> Result<Vec<dbflux_core::RelationRef>, dbflux_core::DbError> {
-    use dbflux_core::{DbError, RelationKind, RelationRef};
+    use dbflux_core::DbError;
     use mysql::prelude::Queryable;
 
-    let mut deps: Vec<RelationRef> = Vec::new();
+    let view_rows: Vec<(String, String)> = match conn.exec(
+        "SELECT DISTINCT VIEW_SCHEMA, VIEW_NAME
+         FROM information_schema.VIEW_TABLE_USAGE
+         WHERE TABLE_SCHEMA = ?
+           AND TABLE_NAME   = ?
+         ORDER BY VIEW_SCHEMA, VIEW_NAME",
+        (database, table),
+    ) {
+        Ok(rows) => rows,
+        Err(mysql::Error::MySqlError(server_error))
+            if server_error.code == mysql::ServerError::ER_UNKNOWN_TABLE as u16 =>
+        {
+            conn.exec(
+                "SELECT TABLE_SCHEMA, TABLE_NAME
+                 FROM information_schema.VIEWS
+                 WHERE LOCATE(CONCAT('`', ?, '`.`', ?, '`'), VIEW_DEFINITION) > 0
+                 ORDER BY TABLE_SCHEMA, TABLE_NAME",
+                (database, table),
+            )
+            .map_err(|e| DbError::QueryFailed(format!("fetch_dependents views: {}", e).into()))?
+        }
+        Err(e) => {
+            return Err(DbError::QueryFailed(
+                format!("fetch_dependents views: {}", e).into(),
+            ));
+        }
+    };
 
-    // Views that use this table
-    let view_rows: Vec<(String, String)> = conn
-        .exec(
-            "SELECT TABLE_SCHEMA, TABLE_NAME
-             FROM information_schema.VIEW_TABLE_USAGE
-             WHERE VIEW_TABLE_SCHEMA = ?
-               AND VIEW_TABLE_NAME   = ?",
-            (database, table),
-        )
-        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents views: {}", e).into()))?;
-
-    for (view_schema, view_name) in view_rows {
-        deps.push(RelationRef {
-            kind: RelationKind::View,
-            qualified_name: format!("{}.{}", view_schema, view_name),
-        });
-    }
-
-    // FK child tables
     let fk_rows: Vec<(String, String)> = conn
         .exec(
-            "SELECT DISTINCT kcu.TABLE_SCHEMA, kcu.TABLE_NAME
-             FROM information_schema.KEY_COLUMN_USAGE kcu
-             JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
-               ON rc.CONSTRAINT_NAME   = kcu.CONSTRAINT_NAME
-              AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA
-             WHERE rc.REFERENCED_TABLE_NAME = ?
-               AND kcu.REFERENCED_TABLE_SCHEMA = ?",
-            (table, database),
+            "SELECT DISTINCT TABLE_SCHEMA, TABLE_NAME
+             FROM information_schema.KEY_COLUMN_USAGE
+             WHERE REFERENCED_TABLE_SCHEMA = ?
+               AND REFERENCED_TABLE_NAME   = ?
+             ORDER BY TABLE_SCHEMA, TABLE_NAME",
+            (database, table),
         )
         .map_err(|e| DbError::QueryFailed(format!("fetch_dependents fk_children: {}", e).into()))?;
 
-    for (child_schema, child_table) in fk_rows {
-        let qualified = format!("{}.{}", child_schema, child_table);
-        if !deps
-            .iter()
-            .any(|d| d.kind == RelationKind::ForeignKeyChild && d.qualified_name == qualified)
-        {
-            deps.push(RelationRef {
-                kind: RelationKind::ForeignKeyChild,
-                qualified_name: qualified,
-            });
+    Ok(dependents_from_rows(view_rows, fk_rows))
+}
+
+/// Map `(schema, name)` rows of dependent views and foreign-key child tables
+/// to relation references, dropping duplicates.
+fn dependents_from_rows(
+    view_rows: Vec<(String, String)>,
+    fk_rows: Vec<(String, String)>,
+) -> Vec<dbflux_core::RelationRef> {
+    use dbflux_core::{RelationKind, RelationRef};
+
+    let views = view_rows.into_iter().map(|row| (RelationKind::View, row));
+    let children = fk_rows
+        .into_iter()
+        .map(|row| (RelationKind::ForeignKeyChild, row));
+
+    let mut dependents: Vec<RelationRef> = Vec::new();
+    for (kind, (schema, name)) in views.chain(children) {
+        let dependent = RelationRef {
+            kind,
+            qualified_name: format!("{}.{}", schema, name),
+        };
+        if !dependents.contains(&dependent) {
+            dependents.push(dependent);
         }
     }
-
-    Ok(deps)
+    dependents
 }
 
 /// Verdict for a single `SHOW GRANTS` line.
@@ -4688,9 +4715,10 @@ mod tests {
     use super::{
         GrantLineVerdict, MysqlCodeGenerator, MysqlDialect, MysqlDriver, MysqlGrantsVerdict,
         MysqlSslPaths, build_mysql_opts, classify_mysql_grant_line, classify_mysql_grants,
-        index_key_part_label, initial_database_from_opts, inject_password_into_mysql_uri,
-        may_open_transaction, mysql_routine_type_to_kind, mysql_text_literal,
-        normalize_mysql_tcp_host, plan_mysql_semantic_request, resolve_write_privilege,
+        dependents_from_rows, index_key_part_label, initial_database_from_opts,
+        inject_password_into_mysql_uri, may_open_transaction, mysql_routine_type_to_kind,
+        mysql_text_literal, normalize_mysql_tcp_host, plan_mysql_semantic_request,
+        resolve_write_privilege,
     };
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, DatabaseCategory, DbConfig, DbDriver,
@@ -4699,6 +4727,29 @@ mod tests {
         SqlMutationGenerator, TableBrowseRequest, TableRef, TransferFamily, Value, WritePrivilege,
     };
     use mysql::{Conn, Opts, OptsBuilder};
+
+    #[test]
+    fn dependents_from_rows_lists_views_then_deduplicated_foreign_key_children() {
+        let pair = |schema: &str, name: &str| (schema.to_string(), name.to_string());
+        let dependents = dependents_from_rows(
+            vec![pair("shop", "orders_view")],
+            vec![pair("shop", "order_items"), pair("shop", "order_items")],
+        );
+
+        assert_eq!(
+            dependents,
+            vec![
+                dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::View,
+                    qualified_name: "shop.orders_view".to_string(),
+                },
+                dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::ForeignKeyChild,
+                    qualified_name: "shop.order_items".to_string(),
+                },
+            ]
+        );
+    }
 
     fn rowid_column(name: &str, type_name: &str, nullable: bool) -> dbflux_core::ColumnInfo {
         dbflux_core::ColumnInfo {

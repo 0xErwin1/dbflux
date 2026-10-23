@@ -2874,6 +2874,42 @@ impl Connection for MssqlConnection {
         Ok(Some(map))
     }
 
+    fn fetch_dependents(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<dbflux_core::RelationRef>, DbError> {
+        let sql = dependents_sql(database);
+        let schema = schema.unwrap_or("dbo").to_string();
+        let table = table.to_string();
+
+        let rows = self.with_client(|runtime, client| {
+            runtime.block_on(async move {
+                let rows = client
+                    .query(sql, &[&schema, &table])
+                    .await
+                    .map_err(|e| format_mssql_query_error(&e))?
+                    .into_first_result()
+                    .await
+                    .map_err(|e| format_mssql_query_error(&e))?;
+
+                rows.iter()
+                    .map(|row| {
+                        let column = |index: usize| {
+                            row.try_get::<&str, _>(index)
+                                .map_err(|e| format_mssql_query_error(&e))
+                                .map(|value| value.unwrap_or_default().to_string())
+                        };
+                        Ok((column(0)?, column(1)?, column(2)?))
+                    })
+                    .collect::<Result<Vec<_>, DbError>>()
+            })
+        })?;
+
+        Ok(dependents_from_rows(rows))
+    }
+
     fn referenced_tables(&self, query: &str) -> Option<Vec<dbflux_core::QueryTableRef>> {
         Some(dbflux_core::extract_referenced_tables(query))
     }
@@ -5131,10 +5167,107 @@ fn row_by_pk_sql(
     )
 }
 
+/// Query listing the views and foreign-key child tables that depend on the
+/// table bound as `@P1` (schema) and `@P2` (name) in `database`.
+///
+/// Each row is `(kind, schema, name)` with `kind` either `V` or `F`. Only the
+/// database name is part of the text, as a bracket-quoted identifier.
+fn dependents_sql(database: &str) -> String {
+    let db = format!("[{}]", database.replace(']', "]]"));
+    format!(
+        "SELECT DISTINCT 'V', vs.name, v.name \
+         FROM {db}.sys.sql_expression_dependencies d \
+         JOIN {db}.sys.views v ON v.object_id = d.referencing_id \
+         JOIN {db}.sys.schemas vs ON vs.schema_id = v.schema_id \
+         JOIN {db}.sys.tables t ON t.object_id = d.referenced_id \
+         JOIN {db}.sys.schemas ts ON ts.schema_id = t.schema_id \
+         WHERE ts.name = @P1 AND t.name = @P2 \
+         UNION \
+         SELECT DISTINCT 'F', cs.name, ct.name \
+         FROM {db}.sys.foreign_keys fk \
+         JOIN {db}.sys.tables ct ON ct.object_id = fk.parent_object_id \
+         JOIN {db}.sys.schemas cs ON cs.schema_id = ct.schema_id \
+         JOIN {db}.sys.tables rt ON rt.object_id = fk.referenced_object_id \
+         JOIN {db}.sys.schemas rs ON rs.schema_id = rt.schema_id \
+         WHERE rs.name = @P1 AND rt.name = @P2 \
+         ORDER BY 1 DESC, 2, 3"
+    )
+}
+
+/// Map `(kind, schema, name)` rows from [`dependents_sql`] to relation
+/// references, skipping unknown kinds and duplicates.
+fn dependents_from_rows(rows: Vec<(String, String, String)>) -> Vec<dbflux_core::RelationRef> {
+    use dbflux_core::{RelationKind, RelationRef};
+
+    let mut dependents: Vec<RelationRef> = Vec::new();
+    for (kind, schema, name) in rows {
+        let kind = match kind.as_str() {
+            "V" => RelationKind::View,
+            "F" => RelationKind::ForeignKeyChild,
+            _ => continue,
+        };
+        let dependent = RelationRef {
+            kind,
+            qualified_name: format!("{schema}.{name}"),
+        };
+        if !dependents.contains(&dependent) {
+            dependents.push(dependent);
+        }
+    }
+    dependents
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use dbflux_core::{DefaultSpec, OrderByColumn};
+
+    #[test]
+    fn dependents_from_rows_maps_views_and_foreign_key_children() {
+        let rows = vec![
+            (
+                "V".to_string(),
+                "dbo".to_string(),
+                "orders_view".to_string(),
+            ),
+            (
+                "F".to_string(),
+                "sales".to_string(),
+                "order_items".to_string(),
+            ),
+            (
+                "F".to_string(),
+                "sales".to_string(),
+                "order_items".to_string(),
+            ),
+            ("X".to_string(), "dbo".to_string(), "ignored".to_string()),
+        ];
+
+        assert_eq!(
+            dependents_from_rows(rows),
+            vec![
+                dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::View,
+                    qualified_name: "dbo.orders_view".to_string(),
+                },
+                dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::ForeignKeyChild,
+                    qualified_name: "sales.order_items".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn dependents_sql_binds_schema_and_table_and_quotes_the_database() {
+        let sql = dependents_sql("odd]db");
+        assert!(sql.contains("[odd]]db].sys.foreign_keys"), "got: {sql}");
+        assert!(sql.contains("ts.name = @P1 AND t.name = @P2"), "got: {sql}");
+        assert!(
+            sql.contains("rs.name = @P1 AND rt.name = @P2"),
+            "got: {sql}"
+        );
+    }
 
     #[test]
     fn browse_sql_qualifies_the_source_database() {
