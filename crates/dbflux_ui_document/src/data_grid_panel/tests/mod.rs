@@ -688,6 +688,7 @@ mod builder_mutations;
 mod close_completion;
 mod collection_views;
 mod facets;
+mod fk_label_identity;
 mod fk_navigation;
 mod reload_pending_edits;
 mod reload_state;
