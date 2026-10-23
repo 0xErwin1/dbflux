@@ -1672,6 +1672,12 @@ document:
         toast:
           native_picker_fallback: "原生文件选择器不可用 — 已改为导出到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
           exported: "已导出到 %{path}"
+          exported_rows:
+            one: "已将 1 行已加载的数据导出到 %{path}"
+            many: "已将 %{count} 行已加载的数据导出到 %{path}"
+          native_picker_fallback_rows:
+            one: "原生文件选择器不可用 — 已改为将 1 行已加载的数据导出到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
+            many: "原生文件选择器不可用 — 已改为将 %{count} 行已加载的数据导出到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
       clipboard:
         error:
           binary_unsupported: 原始二进制无法复制到剪贴板 — 请选择 Hex 或 Base64。
@@ -1679,6 +1685,9 @@ document:
           failed: "复制失败：%{error}"
         toast:
           copied: "已将 %{format}（%{bytes} 字节）复制到剪贴板"
+          copied_rows:
+            one: "已将 1 行已加载的数据以 %{format}（%{bytes} 字节）复制到剪贴板"
+            many: "已将 %{count} 行已加载的数据以 %{format}（%{bytes} 字节）复制到剪贴板"
       document:
         toast:
           inserted: 文档已插入
@@ -1744,12 +1753,23 @@ document:
           many: "%{count} 处待处理更改"
       export:
         trigger: 导出
-        save_as_file: 保存为文件
-        copy_to_clipboard: 复制到剪贴板
+        save_as_file: 将已加载的行保存为文件
+        copy_to_clipboard: 将已加载的行复制到剪贴板
+        export_all_rows: 将所有行导出到文件
+        all:
+          task: "导出 %{table} 的所有行"
+          toast:
+            exported:
+              one: "已将 1 行导出到 %{path}"
+              many: "已将全部 %{count} 行导出到 %{path}"
+            cancelled: "导出已取消 — %{path} 仅包含停止前写入的行"
+          error:
+            failed: "导出所有行失败：%{error}"
         format:
           csv: CSV
           json_pretty: JSON（美化）
           json_compact: JSON（紧凑）
+          json_lines: "JSON（每行一个对象）"
           text: 文本
           binary: 二进制
           hex: Hex

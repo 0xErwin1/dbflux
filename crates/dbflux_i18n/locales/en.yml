@@ -1672,6 +1672,12 @@ document:
         toast:
           native_picker_fallback: "Native file picker unavailable — exported to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
           exported: "Exported to %{path}"
+          exported_rows:
+            one: "Exported 1 loaded row to %{path}"
+            many: "Exported %{count} loaded rows to %{path}"
+          native_picker_fallback_rows:
+            one: "Native file picker unavailable — exported 1 loaded row to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
+            many: "Native file picker unavailable — exported %{count} loaded rows to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
       clipboard:
         error:
           binary_unsupported: Raw binary cannot be copied to the clipboard — choose Hex or Base64 instead.
@@ -1679,6 +1685,9 @@ document:
           failed: "Copy failed: %{error}"
         toast:
           copied: "Copied %{format} (%{bytes} bytes) to clipboard"
+          copied_rows:
+            one: "Copied 1 loaded row as %{format} (%{bytes} bytes) to clipboard"
+            many: "Copied %{count} loaded rows as %{format} (%{bytes} bytes) to clipboard"
       document:
         toast:
           inserted: Document inserted
@@ -1744,12 +1753,23 @@ document:
           many: "%{count} pending changes"
       export:
         trigger: Export
-        save_as_file: Save as file
-        copy_to_clipboard: Copy to clipboard
+        save_as_file: Save loaded rows as file
+        copy_to_clipboard: Copy loaded rows to clipboard
+        export_all_rows: Export all rows to file
+        all:
+          task: "Export all rows of %{table}"
+          toast:
+            exported:
+              one: "Exported 1 row to %{path}"
+              many: "Exported all %{count} rows to %{path}"
+            cancelled: "Export cancelled — %{path} holds only the rows written before it stopped"
+          error:
+            failed: "Export of all rows failed: %{error}"
         format:
           csv: CSV
           json_pretty: "JSON (pretty)"
           json_compact: "JSON (compact)"
+          json_lines: "JSON (one object per line)"
           text: Text
           binary: Binary
           hex: Hex

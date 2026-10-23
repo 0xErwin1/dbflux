@@ -385,7 +385,7 @@ A read-only delete does not change the clipboard.
 | `Alt+l` / `Alt+h` | Next / previous result tab of a query, next / previous view (Documents, Schema, Aggregate) of a document collection, or next / previous view (Data, Columns, Partitions) of a table, wrapping at either end |
 | `Alt+w` | Close the result tab shown; the editor gets focus when it was the last |
 | `F5` | Refresh the focused document (table rows, bucket list, object listing, keys) |
-| `Ctrl+e` / `Cmd+e` | Open the export menu: the context menu keys move through its save and copy formats, `Enter` runs one, `Escape` closes it |
+| `Ctrl+e` / `Cmd+e` | Open the export menu: the context menu keys move through its formats to save or copy the loaded rows and, for a table, to export all rows; `Enter` runs one, `Escape` closes it |
 | `f` | Focus toolbar |
 | `Shift+f` | Clear the WHERE filter and reload the rows; in a document collection, empty the filter slot and find |
 | `/` | Focus search/filter |

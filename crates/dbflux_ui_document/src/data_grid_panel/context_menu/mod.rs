@@ -137,10 +137,12 @@ pub(super) fn place_context_menu(
 /// One row of the data grid's export menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ExportMenuEntry {
-    /// Write the result to a file in this format.
+    /// Write the loaded rows to a file in this format.
     Save(ExportFormat),
-    /// Put the result on the clipboard in this format.
+    /// Put the loaded rows on the clipboard in this format.
     Copy(ExportFormat),
+    /// Page through the whole table and stream it to a file in this format.
+    SaveAll(dbflux_transfer::FileFormat),
 }
 
 impl ExportMenuEntry {
@@ -1232,14 +1234,25 @@ impl DataGridPanel {
     }
 
     /// The rows of the export menu, in the order it draws them: a save row
-    /// per format, then a copy row per format.
+    /// per format, a copy row per format, then, when the whole table can be
+    /// read again, an export-all row per streaming format.
     pub(super) fn export_menu_entries(&self) -> Vec<ExportMenuEntry> {
         let formats = dbflux_export::available_formats(&self.result.shape);
+        let export_all_formats: &[dbflux_transfer::FileFormat] = if self.can_export_all_rows() {
+            &dbflux_transfer::FileFormat::ALL
+        } else {
+            &[]
+        };
 
         formats
             .iter()
             .map(|&format| ExportMenuEntry::Save(format))
             .chain(formats.iter().map(|&format| ExportMenuEntry::Copy(format)))
+            .chain(
+                export_all_formats
+                    .iter()
+                    .map(|&format| ExportMenuEntry::SaveAll(format)),
+            )
             .collect()
     }
 
@@ -1292,6 +1305,7 @@ impl DataGridPanel {
         match entry {
             ExportMenuEntry::Save(format) => self.export_with_format(format, window, cx),
             ExportMenuEntry::Copy(format) => self.copy_to_clipboard_with_format(format, window, cx),
+            ExportMenuEntry::SaveAll(format) => self.export_all_rows(format, window, cx),
         }
     }
 
@@ -1306,6 +1320,7 @@ impl DataGridPanel {
         }
 
         let result = self.result.clone();
+        let loaded_rows = loaded_row_count(&result);
         let base_name = self.export_base_name();
         let extension = format.extension();
         let suggested_name = format!("{}.{}", base_name, extension);
@@ -1377,20 +1392,27 @@ impl DataGridPanel {
                 Ok::<_, dbflux_export::ExportError>(())
             })();
 
-            let (message, is_error) = match &export_result {
-                Ok(()) if used_fallback => (
-                    crate::labels::context_menu_export_native_picker_fallback_toast(
-                        &target_path.display().to_string(),
+            let path_text = target_path.display().to_string();
+            let (message, is_error) = match (&export_result, loaded_rows) {
+                (Ok(()), Some(count)) if used_fallback => (
+                    crate::labels::context_menu_export_native_picker_fallback_rows_toast(
+                        count, &path_text,
                     ),
                     false,
                 ),
-                Ok(()) => (
-                    crate::labels::context_menu_export_exported_toast(
-                        &target_path.display().to_string(),
-                    ),
+                (Ok(()), None) if used_fallback => (
+                    crate::labels::context_menu_export_native_picker_fallback_toast(&path_text),
                     false,
                 ),
-                Err(e) => (
+                (Ok(()), Some(count)) => (
+                    crate::labels::context_menu_export_exported_rows_toast(count, &path_text),
+                    false,
+                ),
+                (Ok(()), None) => (
+                    crate::labels::context_menu_export_exported_toast(&path_text),
+                    false,
+                ),
+                (Err(e), _) => (
                     crate::labels::context_menu_export_failed_error(&e.to_string()),
                     true,
                 ),
@@ -1452,11 +1474,19 @@ impl DataGridPanel {
                     let byte_len = text.len();
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     record_clipboard_audit(&audit_service, format_name, Some(byte_len), None);
-                    self.pending.toast = Some(PendingToast {
-                        message: crate::labels::context_menu_clipboard_copied_toast(
+                    let message = match loaded_row_count(&self.result) {
+                        Some(count) => crate::labels::context_menu_clipboard_copied_rows_toast(
+                            count,
                             format_name,
                             byte_len,
                         ),
+                        None => crate::labels::context_menu_clipboard_copied_toast(
+                            format_name,
+                            byte_len,
+                        ),
+                    };
+                    self.pending.toast = Some(PendingToast {
+                        message,
                         is_error: false,
                     });
                     cx.notify();
@@ -4278,7 +4308,16 @@ impl DataGridPanel {
     }
 }
 
-fn record_export_audit(
+/// How many rows an export of the loaded result writes, or `None` for a text
+/// or binary payload, which has no rows to count.
+fn loaded_row_count(result: &dbflux_core::QueryResult) -> Option<usize> {
+    let is_payload =
+        result.rows.is_empty() && (result.text_body.is_some() || result.raw_bytes.is_some());
+
+    (!is_payload).then_some(result.rows.len())
+}
+
+pub(super) fn record_export_audit(
     audit_service: &dbflux_audit::AuditService,
     format_name: &str,
     path: Option<&std::path::Path>,

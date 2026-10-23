@@ -1672,6 +1672,12 @@ document:
         toast:
           native_picker_fallback: "네이티브 파일 선택기를 사용할 수 없습니다 — 대신 %{path}에 내보냈습니다. 저장 대화 상자를 사용하려면 xdg-desktop-portal, zenity 또는 kdialog를 설치하세요."
           exported: "%{path}에 내보냈습니다"
+          exported_rows:
+            one: "불러온 행 1개를 %{path}에 내보냈습니다"
+            many: "불러온 행 %{count}개를 %{path}에 내보냈습니다"
+          native_picker_fallback_rows:
+            one: "네이티브 파일 선택기를 사용할 수 없습니다 — 대신 불러온 행 1개를 %{path}에 내보냈습니다. 저장 대화 상자를 사용하려면 xdg-desktop-portal, zenity 또는 kdialog를 설치하세요."
+            many: "네이티브 파일 선택기를 사용할 수 없습니다 — 대신 불러온 행 %{count}개를 %{path}에 내보냈습니다. 저장 대화 상자를 사용하려면 xdg-desktop-portal, zenity 또는 kdialog를 설치하세요."
       clipboard:
         error:
           binary_unsupported: 원시 바이너리는 클립보드로 복사할 수 없습니다 — 대신 Hex 또는 Base64를 선택하세요.
@@ -1679,6 +1685,9 @@ document:
           failed: "복사에 실패했습니다: %{error}"
         toast:
           copied: "%{format} (%{bytes}바이트)를 클립보드에 복사했습니다"
+          copied_rows:
+            one: "불러온 행 1개를 %{format} (%{bytes}바이트)로 클립보드에 복사했습니다"
+            many: "불러온 행 %{count}개를 %{format} (%{bytes}바이트)로 클립보드에 복사했습니다"
       document:
         toast:
           inserted: 문서 삽입됨
@@ -1744,12 +1753,23 @@ document:
           many: "대기 중인 변경 사항 %{count}개"
       export:
         trigger: 내보내기
-        save_as_file: 파일로 저장
-        copy_to_clipboard: 클립보드로 복사
+        save_as_file: 불러온 행을 파일로 저장
+        copy_to_clipboard: 불러온 행을 클립보드로 복사
+        export_all_rows: 모든 행을 파일로 내보내기
+        all:
+          task: "%{table}의 모든 행 내보내기"
+          toast:
+            exported:
+              one: "1개 행을 %{path}에 내보냈습니다"
+              many: "모든 %{count}개 행을 %{path}에 내보냈습니다"
+            cancelled: "내보내기를 취소했습니다 — %{path}에는 중지 전에 기록된 행만 있습니다"
+          error:
+            failed: "모든 행 내보내기 실패: %{error}"
         format:
           csv: CSV
           json_pretty: "JSON (들여쓰기)"
           json_compact: "JSON (축약)"
+          json_lines: "JSON (한 줄에 객체 하나)"
           text: 텍스트
           binary: 바이너리
           hex: 16진수

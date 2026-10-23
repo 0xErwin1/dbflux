@@ -403,7 +403,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `Alt+l` / `Alt+h`                             | Pestaña de resultados siguiente / anterior de una consulta, vista siguiente / anterior (Documentos, Esquema, Agregación) de una colección de documentos, o vista siguiente / anterior (Datos, Columnas, Particiones) de una tabla, dando la vuelta en los extremos |
 | `Alt+w`                                       | Cerrar la pestaña de resultados visible; si era la última, el editor recibe el foco |
 | `F5`                                          | Recargar el documento enfocado (filas de la tabla, lista de buckets, listado de objetos, claves) |
-| `Ctrl+e` / `Cmd+e`                            | Abrir el menú de exportación: las teclas del menú contextual recorren los formatos de guardar y copiar, `Enter` ejecuta uno, `Escape` lo cierra |
+| `Ctrl+e` / `Cmd+e`                            | Abrir el menú de exportación: las teclas del menú contextual recorren los formatos para guardar o copiar las filas cargadas y, en una tabla, para exportar todas las filas; `Enter` ejecuta uno, `Escape` lo cierra |
 | `f`                                           | Enfocar la toolbar                         |
 | `Shift+f`                                     | Limpiar el filtro WHERE y recargar las filas; en una colección de documentos, vaciar el campo de filtro y buscar |
 | `/`                                           | Enfocar búsqueda/filtro                    |
