@@ -28,9 +28,10 @@ use super::*;
 use dbflux_components::components::data_table::model::{CellKind, CellValue};
 use dbflux_core::{ColumnInfo, ConnectedProfile, Connection, ForeignKeyInfo, SchemaForeignKeyInfo};
 
-/// (referenced schema, referenced table, raw id text) of one foreign-key
-/// cell.
-type FkDisplayKey = (Option<String>, String, String);
+/// (referenced schema, referenced table, referenced column, raw id text) of
+/// one foreign-key cell. The referenced column is part of the identity:
+/// `users.id = 7` and `users.legacy_id = 7` can name different rows.
+type FkDisplayKey = (Option<String>, String, String, String);
 
 /// (referenced schema, referenced table) of a referenced table.
 type ReferencedTable = (Option<String>, String);
@@ -60,7 +61,6 @@ struct FkTarget {
 /// One referenced row to fetch.
 struct FkLookup {
     key: FkDisplayKey,
-    pk_column: String,
     value: Value,
 }
 
@@ -72,27 +72,34 @@ pub(super) struct FkDisplayLoader {
     /// Advances on every round, so a fetch that lands late is not applied to
     /// the rows that replaced the ones it was started for.
     generation: u64,
-    /// Resolved labels by (schema, table, id). `None` marks an id no row
-    /// answered for, so it is not fetched again. Entries survive page turns
-    /// of the same table: an id keeps naming the same referenced row.
+    /// Resolved labels by (schema, table, referenced column, id). `None`
+    /// marks an id no row answered for, so it is not fetched again. Entries
+    /// survive page turns of the same table: an id keeps naming the same
+    /// referenced row.
     cache: HashMap<FkDisplayKey, Option<String>>,
 }
 
 impl FkDisplayLoader {
-    /// The label the cache resolved for the referenced row `id` of `table`,
-    /// when the cache holds one. Ids are keyed by the text the grid's cell
-    /// edits carry, so only the id kinds ([`Value::Int`], [`Value::Float`],
-    /// [`Value::Text`]) can match.
+    /// The label the cache resolved for the referenced row `id` of `table`
+    /// matched on `referenced_column`, when the cache holds one. Ids are
+    /// keyed by the text the grid's cell edits carry, so only the id kinds
+    /// ([`Value::Int`], [`Value::Float`], [`Value::Text`]) can match.
     pub(super) fn cached_label(
         &self,
         schema: Option<&str>,
         table: &str,
+        referenced_column: &str,
         id: &Value,
     ) -> Option<String> {
         let id_text = id_text(id)?;
 
         self.cache
-            .get(&(schema.map(str::to_string), table.to_string(), id_text))
+            .get(&(
+                schema.map(str::to_string),
+                table.to_string(),
+                referenced_column.to_string(),
+                id_text,
+            ))
             .cloned()
             .flatten()
     }
@@ -228,6 +235,7 @@ fn substitute_fk_references(
             let key = (
                 target.schema.clone(),
                 target.table.clone(),
+                target.pk_column.clone(),
                 cell.edit_text(),
             );
             let Some(label) = cache.get(&key).cloned().flatten() else {
@@ -273,17 +281,14 @@ fn fk_lookups_for_page(
             let key = (
                 target.schema.clone(),
                 target.table.clone(),
+                target.pk_column.clone(),
                 cell.edit_text(),
             );
             if cache.contains_key(&key) || !seen.insert(key.clone()) {
                 continue;
             }
 
-            lookups.push(FkLookup {
-                key,
-                pk_column: target.pk_column.clone(),
-                value,
-            });
+            lookups.push(FkLookup { key, value });
         }
     }
 
@@ -301,7 +306,7 @@ fn group_fk_lookups(lookups: Vec<FkLookup>) -> FkLookupGroups {
         let group_key = (
             lookup.key.0.clone(),
             lookup.key.1.clone(),
-            lookup.pk_column.clone(),
+            lookup.key.2.clone(),
         );
         groups.entry(group_key).or_default().push(lookup);
     }
@@ -494,7 +499,7 @@ impl FkDisplayRound {
                     let labels = labels_by_pk_text(&rows, pk_column, Some(display_column.as_str()));
 
                     for lookup in lookups {
-                        let label = labels.get(&lookup.key.2).cloned().flatten();
+                        let label = labels.get(&lookup.key.3).cloned().flatten();
                         resolved.push((lookup.key.clone(), label));
                     }
                 }
@@ -916,7 +921,12 @@ mod tests {
             pk_column: "id".to_string(),
         }];
         let cache = HashMap::from([(
-            (None, "customers".to_string(), "8".to_string()),
+            (
+                None,
+                "customers".to_string(),
+                "id".to_string(),
+                "8".to_string(),
+            ),
             Some("María López".to_string()),
         )]);
 
@@ -974,7 +984,12 @@ mod tests {
             pk_column: "id".to_string(),
         }];
         let cache = HashMap::from([(
-            (None, "customers".to_string(), "8".to_string()),
+            (
+                None,
+                "customers".to_string(),
+                "id".to_string(),
+                "8".to_string(),
+            ),
             Some("Alice".to_string()),
         )]);
 

@@ -2187,10 +2187,13 @@ impl DataGridPanel {
                 target_pk: ref_col.clone(),
                 value: cell.value.clone(),
                 // The grid resolves the same referenced rows for its FK
-                // cells; a cache hit names the row without a query.
+                // cells; a cache hit names the row without a query. The
+                // referenced column is part of the cache identity, so two
+                // foreign keys into one table never share a label.
                 display_label: self.fk_display.cached_label(
                     fk.referenced_schema.as_deref(),
                     &fk.referenced_table,
+                    ref_col,
                     &cell.value,
                 ),
                 kind: ReferenceKind::Outgoing,
