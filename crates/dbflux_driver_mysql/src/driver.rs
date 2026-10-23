@@ -6006,10 +6006,13 @@ mod read_only_tests {
 /// offer TLS, or the handshake itself failed. A server error (wrong password,
 /// unknown database, missing privilege) or a network error is the real
 /// failure, and a plaintext retry would only hide it.
+///
+/// `mysql::Error::TlsError` is not a negotiation failure: the client raises it
+/// while building its own TLS configuration (root certificate, client
+/// identity), and retrying in plaintext would send the password unencrypted.
 fn is_tls_negotiation_failure(error: &mysql::Error) -> bool {
     match error {
-        mysql::Error::DriverError(mysql::DriverError::TlsNotSupported)
-        | mysql::Error::TlsError(_) => true,
+        mysql::Error::DriverError(mysql::DriverError::TlsNotSupported) => true,
         // rustls reports a failed handshake through the stream as an I/O error.
         mysql::Error::IoError(io_error) => io_error
             .get_ref()

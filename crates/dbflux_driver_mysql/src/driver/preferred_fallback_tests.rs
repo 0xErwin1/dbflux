@@ -49,3 +49,14 @@ fn reports_network_errors_without_a_plaintext_retry() {
         assert!(!is_tls_negotiation_failure(&error), "{kind:?}");
     }
 }
+
+#[test]
+fn reports_client_tls_configuration_errors_without_a_plaintext_retry() {
+    // `make_secure` builds the client TLS configuration (root certificate,
+    // client identity, verifier) before any byte reaches the server.
+    let error = Error::TlsError(mysql::error::tls::TlsError::Tls(rustls::Error::General(
+        "invalid client private key".to_string(),
+    )));
+
+    assert!(!is_tls_negotiation_failure(&error));
+}
