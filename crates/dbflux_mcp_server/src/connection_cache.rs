@@ -328,21 +328,42 @@ impl ConnectionCache {
     /// This transfers ownership to the caller rather than dropping driver handles while a cache
     /// write lock is held; teardown can synchronously acquire that same lock.
     pub fn drain_connection_variants(&mut self, connection_id: &str) -> Vec<Arc<CachedConnection>> {
+        self.drain_connection_variants_with_keys(connection_id)
+            .into_iter()
+            .map(|(_, connection)| connection)
+            .collect()
+    }
+
+    /// Drains cached connections together with their exact cache keys.
+    pub fn drain_connection_variants_with_keys(
+        &mut self,
+        connection_id: &str,
+    ) -> Vec<(String, Arc<CachedConnection>)> {
         let prefix = format!("{}:", connection_id);
-        let keys: Vec<String> = self
+        let mut keys: Vec<String> = self
             .inner
             .keys()
             .filter(|key| *key == connection_id || key.starts_with(&prefix))
             .cloned()
             .collect();
+        keys.sort_unstable();
         keys.into_iter()
-            .filter_map(|key| self.inner.remove(&key))
+            .filter_map(|key| self.inner.remove(&key).map(|connection| (key, connection)))
             .collect()
     }
 
     /// Removes the base connection entry and any per-database variants.
     pub fn remove_connection_variants(&mut self, connection_id: &str) -> usize {
         self.drain_connection_variants(connection_id).len()
+    }
+
+    /// Returns the profile IDs represented by the base and per-database keys.
+    pub fn connection_ids(&self) -> Vec<String> {
+        let mut ids = std::collections::BTreeSet::new();
+        for key in self.inner.keys() {
+            ids.insert(key.split(':').next().unwrap_or(key).to_string());
+        }
+        ids.into_iter().collect()
     }
 }
 

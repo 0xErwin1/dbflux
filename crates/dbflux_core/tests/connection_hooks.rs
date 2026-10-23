@@ -224,6 +224,26 @@ fn profile_without_bindings_uses_inline_hooks() {
 }
 
 #[test]
+fn bindings_take_precedence_over_inline_hooks() {
+    let definitions = test_definitions();
+
+    let mut profile = test_profile();
+    profile.hooks = Some(ConnectionHooks {
+        pre_connect: vec![echo_hook("stale-inline")],
+        ..Default::default()
+    });
+    profile.hook_bindings = Some(ConnectionHookBindings {
+        pre_connect: vec!["setup-vpn".to_string()],
+        ..Default::default()
+    });
+
+    let hooks = ConnectionHooks::resolve_from_bindings(&profile, &definitions);
+
+    assert_eq!(hooks.pre_connect.len(), 1);
+    assert_eq!(hooks.pre_connect[0].display_command(), "echo vpn-up");
+}
+
+#[test]
 fn profile_without_any_hooks_runs_empty_phases() {
     let definitions = test_definitions();
     let profile = test_profile();

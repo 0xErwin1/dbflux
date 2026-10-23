@@ -58,7 +58,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 # Async runtime
-tokio = { workspace = true, features = ["rt-multi-thread", "io-util", "sync", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "io-util", "sync", "macros", "time"] }
 
 # Utilities
 uuid = { workspace = true }

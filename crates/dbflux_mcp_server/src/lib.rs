@@ -59,13 +59,18 @@ pub async fn run_mcp_server(args: McpServerArgs) -> anyhow::Result<()> {
 
     log::info!("dbflux-mcp-server initialized");
 
+    let shutdown_state = state.clone();
     let server = DbFluxServer::new(state);
 
     let service = server.serve(stdio()).await?;
 
     log::info!("dbflux-mcp-server ready");
 
-    service.waiting().await?;
+    let service_result = service.waiting().await;
+
+    if let Err(error) = DbFluxServer::disconnect_all(shutdown_state).await {
+        eprintln!("dbflux-mcp-server: failed to drain connections on shutdown: {error}");
+    }
 
     log::info!("dbflux-mcp-server shutting down");
 
@@ -87,6 +92,7 @@ pub async fn run_mcp_server(args: McpServerArgs) -> anyhow::Result<()> {
         }
     }
 
+    service_result?;
     Ok(())
 }
 

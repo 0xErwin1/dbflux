@@ -136,7 +136,8 @@ fn create_test_server_state() -> dbflux_mcp_server::state::ServerState {
         connection_cache: Arc::new(RwLock::new(
             dbflux_mcp_server::connection_cache::ConnectionCache::new(),
         )),
-        connection_setup_lock: Arc::new(tokio::sync::Mutex::new(())),
+        connection_setup_lock: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+        detached_processes: Arc::new(dbflux_mcp_server::state::DetachedProcessRegistry::new()),
         secret_manager: Arc::new(dbflux_core::SecretManager::new(Box::new(
             dbflux_core::NoopSecretStore,
         ))),
