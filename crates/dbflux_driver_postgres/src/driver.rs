@@ -1205,10 +1205,25 @@ fn connect_postgres(
 
     match connect_client(&conn_string, tls, notices) {
         Ok(client) => Ok(client),
-        Err(_) if ssl_mode == PgSslMode::Prefer => connect_client(&conn_string, NoTls, notices)
-            .map_err(|e| format_pg_error(&e, params.host, params.port)),
+        Err(e) if ssl_mode == PgSslMode::Prefer && is_tls_negotiation_failure(&e) => {
+            log::info!("[SSL] TLS negotiation failed ({e}), retrying without TLS (prefer)");
+            connect_client(&conn_string, NoTls, notices)
+                .map_err(|e| format_pg_error(&e, params.host, params.port))
+        }
         Err(e) => Err(format_pg_error(&e, params.host, params.port)),
     }
+}
+
+/// Whether a failed TLS attempt in `prefer` mode failed while negotiating
+/// TLS, the only case where libpq-style `prefer` retries without it. A server
+/// answer (wrong password, unknown database, missing privilege) or a network
+/// error is the real failure, and a plaintext retry would only hide it.
+///
+/// A server that refuses TLS never gets here: the client already continues in
+/// plaintext on the same socket.
+fn is_tls_negotiation_failure(error: &postgres::Error) -> bool {
+    error.as_db_error().is_none()
+        && std::error::Error::source(error).is_some_and(|source| source.is::<native_tls::Error>())
 }
 
 impl PostgresDriver {
@@ -1249,8 +1264,11 @@ impl PostgresDriver {
 
         let client = match connect_client(&uri, tls, &notices) {
             Ok(c) => c,
-            Err(_) if ssl_mode == PgSslMode::Prefer => connect_client(&uri, NoTls, &notices)
-                .map_err(|e| format_pg_uri_error(&e, base_uri))?,
+            Err(e) if ssl_mode == PgSslMode::Prefer && is_tls_negotiation_failure(&e) => {
+                log::info!("[SSL] TLS negotiation failed ({e}), retrying without TLS (prefer)");
+                connect_client(&uri, NoTls, &notices)
+                    .map_err(|e| format_pg_uri_error(&e, base_uri))?
+            }
             Err(e) => return Err(format_pg_uri_error(&e, base_uri)),
         };
 
@@ -8810,3 +8828,6 @@ mod notice_buffer_tests {
         assert_eq!(buffer.take(), vec![notice("from the request")]);
     }
 }
+
+#[cfg(test)]
+mod prefer_fallback_tests;

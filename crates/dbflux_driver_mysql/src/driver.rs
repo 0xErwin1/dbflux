@@ -1375,9 +1375,12 @@ impl MysqlDriver {
                     log::info!("[SSL] Catalog connection established with SSL (PREFERRED mode)");
                     (ssl_opts, c)
                 }
+                Err(ssl_err) if !is_tls_negotiation_failure(&ssl_err) => {
+                    return Err(format_mysql_error(&ssl_err, host, port));
+                }
                 Err(ssl_err) => {
                     log::info!(
-                        "[SSL] SSL connection failed ({}), falling back to non-SSL",
+                        "[SSL] TLS negotiation failed ({}), falling back to non-SSL",
                         ssl_err
                     );
                     let no_ssl_opts = build_mysql_opts(
@@ -1472,8 +1475,14 @@ impl MysqlDriver {
                     log::info!("[SSL] Catalog connection established with SSL");
                     ("PREFERRED", c)
                 }
+                Err(ssl_err) if !is_tls_negotiation_failure(&ssl_err) => {
+                    return Err(format_mysql_error(&ssl_err, "127.0.0.1", local_port1));
+                }
                 Err(ssl_err) => {
-                    log::info!("[SSL] SSL failed ({}), falling back to non-SSL", ssl_err);
+                    log::info!(
+                        "[SSL] TLS negotiation failed ({}), falling back to non-SSL",
+                        ssl_err
+                    );
                     let no_ssl_opts = build_mysql_opts(
                         "127.0.0.1",
                         local_port1,
@@ -5991,3 +6000,26 @@ mod read_only_tests {
         }
     }
 }
+
+/// Whether a failed `PREFERRED` attempt failed while setting up TLS, the
+/// only case where the MySQL client retries without it: the server does not
+/// offer TLS, or the handshake itself failed. A server error (wrong password,
+/// unknown database, missing privilege) or a network error is the real
+/// failure, and a plaintext retry would only hide it.
+///
+/// `mysql::Error::TlsError` is not a negotiation failure: the client raises it
+/// while building its own TLS configuration (root certificate, client
+/// identity), and retrying in plaintext would send the password unencrypted.
+fn is_tls_negotiation_failure(error: &mysql::Error) -> bool {
+    match error {
+        mysql::Error::DriverError(mysql::DriverError::TlsNotSupported) => true,
+        // rustls reports a failed handshake through the stream as an I/O error.
+        mysql::Error::IoError(io_error) => io_error
+            .get_ref()
+            .is_some_and(|inner| inner.is::<rustls::Error>()),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod preferred_fallback_tests;
