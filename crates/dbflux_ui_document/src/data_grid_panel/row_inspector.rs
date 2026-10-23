@@ -131,10 +131,11 @@ pub(crate) async fn count_incoming_references<Count>(
 /// Resolves the readable label behind each outgoing reference of row
 /// `generation` that carries none: `fetch` brings the referenced row keyed
 /// by its columns, `display_columns` names the column each target table is
-/// readable by. References to the same row share one fetch. Stops before
-/// the next fetch once another row opened; a row that does not answer, or
-/// a failed fetch, keeps the raw id — the label is decoration, so the
-/// failure is only logged.
+/// readable by. References to the same referenced column and id share one
+/// fetch — the referenced column is part of the identity, so two keys into
+/// one table never share an answer. Stops before the next fetch once
+/// another row opened; a row that does not answer, or a failed fetch, keeps
+/// the raw id — the label is decoration, so the failure is only logged.
 pub(crate) async fn resolve_outgoing_labels<Fetch>(
     content: &Entity<RowInspectorContent>,
     generation: u64,
@@ -149,7 +150,8 @@ pub(crate) async fn resolve_outgoing_labels<Fetch>(
     ) -> Task<Result<Option<HashMap<String, Value>>, String>>,
 {
     let executor = cx.background_executor().clone();
-    let mut resolved: HashMap<(Option<String>, String, String), Option<String>> = HashMap::new();
+    let mut resolved: HashMap<(Option<String>, String, String, String), Option<String>> =
+        HashMap::new();
 
     for (index, reference) in references.iter().enumerate() {
         if !matches!(reference.kind, ReferenceKind::Outgoing) || reference.display_label.is_some() {
@@ -162,6 +164,7 @@ pub(crate) async fn resolve_outgoing_labels<Fetch>(
         let key = (
             reference.target_schema.clone(),
             reference.target_table.clone(),
+            reference.target_pk.clone(),
             id,
         );
 
@@ -184,7 +187,7 @@ pub(crate) async fn resolve_outgoing_labels<Fetch>(
                     log::debug!(
                         "row inspector: no label for a row of {} ({}): {error}",
                         key.1,
-                        key.2
+                        key.3
                     );
                     None
                 }
