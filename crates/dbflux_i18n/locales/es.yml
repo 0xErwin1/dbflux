@@ -3988,6 +3988,7 @@ settings:
     max_background_tasks:
       label: Máximo de tareas en segundo plano simultáneas
       error: El máximo de tareas en segundo plano debe ser >= 1
+      help: "Limita la conexión, el cambio de base de datos, la carga de esquemas y la paginación key-value. Las queries y las demás acciones que ejecutas no tienen límite."
     pause_refresh_on_error:
       label: Pausar la actualización automática ante un error
     refresh_only_if_visible:

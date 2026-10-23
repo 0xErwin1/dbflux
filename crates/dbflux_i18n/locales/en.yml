@@ -3988,6 +3988,7 @@ settings:
     max_background_tasks:
       label: Max concurrent background tasks
       error: Max background tasks must be >= 1
+      help: "Limits connecting, switching databases, schema loading and key-value pagination. Queries and other actions you run are not limited."
     pause_refresh_on_error:
       label: Pause auto-refresh on error
     refresh_only_if_visible:

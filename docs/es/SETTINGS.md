@@ -109,7 +109,7 @@ y permanece en English por ahora.
 | --------------------------------------- | ------- | --------------------------------------------------------- |
 | **Default refresh policy**              | Manual  | Manual o Interval auto-refresh para las data views.       |
 | **Default refresh interval (seconds)**  | 5       | Intervalo usado cuando la policy es Interval (mínimo 1).  |
-| **Max concurrent background tasks**     | 8       | Tope de trabajo simultáneo en segundo plano (mínimo 1).   |
+| **Max concurrent background tasks**     | 8       | Tope del trabajo de conexión y de esquema: conectar, cambiar de base de datos, cargar esquemas y detalles de tablas, y la paginación key-value (mínimo 1). Al llegar al tope, ese trabajo se rechaza con un aviso hasta que termine una tarea en curso. Las queries, las cargas de datos, los exports, los dashboards y las demás acciones que ejecutas no tienen límite. |
 | **Pause auto-refresh on error**         | On      | Detiene el auto-refresh de una view después de que falla. |
 | **Auto-refresh only if tab is visible** | Off     | Se salta el refresh de las tabs que no estás mirando.     |
 

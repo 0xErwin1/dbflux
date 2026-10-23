@@ -76,7 +76,7 @@ System은 운영체제의 로캘을 따르며, 함께 제공된 로캘이 명확
 |---------|---------|--------------|
 | **Default refresh policy** | Manual | 데이터 뷰에 대한 수동 또는 간격 자동 새로고침. |
 | **Default refresh interval (seconds)** | 5 | 정책이 Interval일 때 사용되는 간격(최소 1). |
-| **Max concurrent background tasks** | 8 | 동시에 실행할 수 있는 백그라운드 작업의 상한(최소 1). |
+| **Max concurrent background tasks** | 8 | 연결과 스키마 작업의 상한(최소 1): 연결, 데이터베이스 전환, 스키마와 테이블 세부 정보 로드, 키-값 페이지 이동. 상한에 도달하면 실행 중인 작업이 끝날 때까지 이런 작업은 알림과 함께 거부됩니다. 쿼리, 데이터 로드, 내보내기, 대시보드 등 직접 실행하는 작업은 제한되지 않습니다. |
 | **Pause auto-refresh on error** | On | 뷰에서 오류가 발생하면 자동 새로고침을 멈춥니다. |
 | **Auto-refresh only if tab is visible** | Off | 보고 있지 않은 탭은 새로고침을 건너뜁니다. |
 

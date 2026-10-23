@@ -3988,6 +3988,7 @@ settings:
     max_background_tasks:
       label: 최대 동시 백그라운드 작업 수
       error: 최대 백그라운드 작업 수는 1 이상이어야 합니다
+      help: "연결, 데이터베이스 전환, 스키마 로드, 키-값 페이지 이동을 제한합니다. 쿼리 등 직접 실행하는 작업은 제한되지 않습니다."
     pause_refresh_on_error:
       label: 오류 발생 시 자동 새로고침 일시 중지
     refresh_only_if_visible:

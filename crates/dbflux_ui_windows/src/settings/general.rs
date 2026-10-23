@@ -1108,7 +1108,7 @@ impl GeneralSection {
                 dbflux_i18n::t!("settings.general.max_background_tasks.label"),
                 &self.input_max_bg_tasks,
                 None,
-                None,
+                Some(dbflux_i18n::t!("settings.general.max_background_tasks.help")),
                 GeneralFormRow::MaxBackgroundTasks,
                 cx,
             ))

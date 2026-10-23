@@ -3988,6 +3988,7 @@ settings:
     max_background_tasks:
       label: 最大并发后台任务数
       error: 最大并发后台任务数必须大于等于 1
+      help: "限制连接、切换数据库、加载架构和键值分页。查询及你执行的其他操作不受限制。"
     pause_refresh_on_error:
       label: 出错时暂停自动刷新
     refresh_only_if_visible:
