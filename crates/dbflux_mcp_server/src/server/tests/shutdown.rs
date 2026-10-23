@@ -326,6 +326,10 @@ async fn shutdown_deadline_cleans_remaining_connections_without_hooks() {
         DbFluxServer::disconnect_all_with_timeout(fixture.state.clone(), shutdown_timeout).await;
     let elapsed = started.elapsed();
 
+    // Release the gate before any assertion, so a failing assertion cannot
+    // leave a blocking child that survived hook cancellation waiting for it.
+    std::fs::write(&fixture.gate, b"release").expect("release blocking hook gate");
+
     assert_deadline_cleanup(
         &fixture,
         &detached_shared,
@@ -334,10 +338,6 @@ async fn shutdown_deadline_cleans_remaining_connections_without_hooks() {
         shutdown_timeout,
     )
     .await;
-
-    // Release the gate in case the blocking child survived hook cancellation,
-    // so it can exit before the test runtime drops.
-    std::fs::write(&fixture.gate, b"release").expect("release blocking hook gate");
 }
 
 // S1: a blocked factory on one per-database variant must not stop its sibling
@@ -402,13 +402,19 @@ async fn blocked_variant_does_not_delay_sibling_variant_shutdown() {
 
 /// Registers a real sleeping child as a detached handle under `connection_key`,
 /// so termination outcomes can be exercised without touching OS permissions.
+/// The child is this test binary running `mcp_hook_child`, which keeps the
+/// test portable to platforms without a `sleep` executable.
 fn register_seam_sleeper(
     state: &ServerState,
+    trace: &std::path::Path,
     connection_key: &str,
     description: &str,
 ) -> Arc<SharedDetachedProcess> {
-    let child = std::process::Command::new("sleep")
-        .arg("60")
+    let child = std::process::Command::new(std::env::current_exe().expect("test executable path"))
+        .args(["mcp_hook_child", "--nocapture"])
+        .env("DBFLUX_MCP_HOOK_TEST_TRACE", trace)
+        .env("DBFLUX_MCP_HOOK_TEST_PHASE", description)
+        .env("DBFLUX_MCP_HOOK_TEST_SLEEP_MS", "60000")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -440,11 +446,17 @@ fn deadline_termination_reports_final_outcome_once_per_handle() {
         profile.clone(),
     );
     let profile_id = profile.id.to_string();
-    let transient = register_seam_sleeper(&state, &profile_id, "transient");
+    let directory = tempfile::tempdir().expect("tempdir");
+    let trace = directory.path().join("seam-sleepers.log");
+    let transient = register_seam_sleeper(&state, &trace, &profile_id, "transient");
     let persistent_first =
-        register_seam_sleeper(&state, &format!("{profile_id}:first"), "persistent");
-    let persistent_second =
-        register_seam_sleeper(&state, &format!("{profile_id}:second"), "persistent");
+        register_seam_sleeper(&state, &trace, &format!("{profile_id}:first"), "persistent");
+    let persistent_second = register_seam_sleeper(
+        &state,
+        &trace,
+        &format!("{profile_id}:second"),
+        "persistent",
+    );
 
     let attempts = Arc::new(Mutex::new(HashMap::<String, u32>::new()));
     let terminate = {
