@@ -1,18 +1,22 @@
-//! "Export all rows": pages through the whole table behind a grid, with the
-//! grid's filter, sort and column projection, and streams it into one file.
+//! "Export all rows": pages through the whole read behind a grid (a table
+//! or collection browse, or a builder SELECT, which a relational filter
+//! lowers to) with the grid's filter, sort and column projection, and
+//! streams it into one file.
 //!
-//! The rows go through the same `browse_table` request the grid reads a page
-//! with, one page at a time, so memory stays bounded by the page size. It is
-//! offered for table sources only: a query result would have to be run
-//! again, and an arbitrary query may not be safe to repeat.
+//! The rows go through the same read the grid ran, one page at a time, so
+//! memory stays bounded by the page size. A query result is never offered:
+//! it would have to be run again, and an arbitrary query may not be safe to
+//! repeat.
+
+mod document_shape;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use dbflux_core::{CancelToken, Connection, TableBrowseRequest, TaskId, TaskKind, TaskTarget};
+use dbflux_core::{CancelToken, Connection, TaskId, TaskKind, TaskTarget};
 use dbflux_transfer::{
-    AutoColumnMap, BrowseSource, FileFormat, FileSink, RowSource, TableMappingMode, TransferError,
-    TransferOutcome, TransferReport, run_transfer,
+    AlignByName, AutoColumnMap, BrowseSource, FileFormat, FileSink, PageShape, ReplayableRead,
+    RowSource, TableMappingMode, TransferError, TransferOutcome, TransferReport, run_transfer,
 };
 use dbflux_ui_base::app_state_entity::AppStateChanged;
 use dbflux_ui_base::toast::Toast;
@@ -20,41 +24,61 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, repor
 use dbflux_ui_base::{SaveTargetOutcome, SaveTargetRequest};
 use gpui::*;
 
-use super::filter_bar::RelationalFilterState;
+use super::documents::CollectionTab;
 use super::{DataGridPanel, DataSource};
 use crate::progress_forwarding::spawn_task_progress_forwarder;
+use document_shape::DocumentPageShape;
 
-/// Rows read per `browse_table` call. Large enough to keep the round trips
-/// few, small enough that one page never weighs much in memory.
+/// Rows read per page. Large enough to keep the round trips few, small
+/// enough that one page never weighs much in memory.
 pub(super) const EXPORT_ALL_PAGE_SIZE: u32 = 1_000;
 
 /// What the background run needs, resolved on the foreground.
 struct ExportAllRun {
     connection: Arc<dyn Connection>,
-    request: TableBrowseRequest,
+    read: ReplayableRead,
+    shape: Box<dyn PageShape>,
     estimated_total: Option<u64>,
     format: FileFormat,
     target_path: PathBuf,
     cancel_token: CancelToken,
 }
 
+/// The source the export reads from, resolved from the grid.
+struct ExportAllSource {
+    profile_id: uuid::Uuid,
+    database: Option<String>,
+    object_name: String,
+    qualified_name: String,
+    estimated_total: Option<u64>,
+}
+
 impl DataGridPanel {
-    /// Whether the rows on screen are a page of a table read through
-    /// `browse_table`, so the whole table can be read again the same way.
-    /// A builder query, a relational filter or a nearest-neighbor search
-    /// reads the table another way, and its rows would not match the file.
+    /// Whether the rows on screen came from a read the grid can run again
+    /// page by page: a table or collection browse, or a builder SELECT
+    /// (which an active relational filter also runs).
     pub(super) fn can_export_all_rows(&self) -> bool {
-        self.source.is_table()
-            && self.last_table_browse.is_some()
-            && self.builder.visual_select.is_none()
-            && self.nearest_neighbors.is_none()
-            && matches!(
-                self.builder.relational_filter_state,
-                RelationalFilterState::Inactive
-            )
+        // A nearest-neighbor search is a top-k read with no offset: the rows
+        // loaded are already its whole result, so there is nothing to page.
+        if self.nearest_neighbors.is_some() {
+            return false;
+        }
+
+        match (&self.source, &self.last_replayable_read) {
+            (
+                DataSource::Table { .. },
+                Some(ReplayableRead::Table(_) | ReplayableRead::VisualQuery { .. }),
+            ) => true,
+            // A nested value stepped into, or the Aggregate tab, shows rows
+            // that are not documents of the collection browse.
+            (DataSource::Collection { .. }, Some(ReplayableRead::Collection { .. })) => {
+                self.collection.steps.is_empty() && self.collection.tab != CollectionTab::Aggregate
+            }
+            _ => false,
+        }
     }
 
-    /// Asks where to save, then streams every row of the table into that
+    /// Asks where to save, then streams every row of the read into that
     /// file as a task in the Tasks panel, which can cancel it.
     pub fn export_all_rows(
         &mut self,
@@ -69,23 +93,14 @@ impl DataGridPanel {
         if !self.can_export_all_rows() {
             return;
         }
-        let (
-            Some(request),
-            DataSource::Table {
-                profile_id,
-                database,
-                table,
-                total_rows,
-                ..
-            },
-        ) = (self.last_table_browse.clone(), &self.source)
+        let (Some(read), Some(source)) =
+            (self.last_replayable_read.clone(), self.export_all_source())
         else {
             return;
         };
-        let (profile_id, database, total_rows) = (*profile_id, database.clone(), *total_rows);
-        let table_name = table.qualified_name();
 
-        let Some(connection) = self.export_all_connection(profile_id, database.as_deref(), cx)
+        let Some(connection) =
+            self.export_all_connection(source.profile_id, source.database.as_deref(), cx)
         else {
             report_error(
                 UserFacingError::new(
@@ -97,7 +112,13 @@ impl DataGridPanel {
             return;
         };
 
-        let suggested_name = format!("{}.{}", table.name, format.extension());
+        let shape = self.export_all_shape(cx);
+        // The table's count does not bound a builder query's rows.
+        let estimated_total = match &read {
+            ReplayableRead::VisualQuery { .. } => None,
+            _ => source.estimated_total,
+        };
+        let suggested_name = format!("{}.{}", source.object_name, format.extension());
         let save_target_override = self.app_state.read(cx).save_target_override();
         let entity = cx.entity().downgrade();
 
@@ -108,17 +129,19 @@ impl DataGridPanel {
                 return;
             };
 
+            let qualified_name = source.qualified_name;
             let target = TaskTarget {
-                profile_id,
-                database,
+                profile_id: source.profile_id,
+                database: source.database,
             };
             let started = cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
-                    panel.start_export_all_task(&table_name, target, cx, |cancel_token| {
+                    panel.start_export_all_task(&qualified_name, target, cx, |cancel_token| {
                         ExportAllRun {
                             connection,
-                            request,
-                            estimated_total: total_rows,
+                            read,
+                            shape,
+                            estimated_total,
                             format,
                             target_path,
                             cancel_token,
@@ -128,10 +151,54 @@ impl DataGridPanel {
             });
 
             if started.is_err() {
-                log::info!("The grid closed before the export of {table_name} started");
+                log::info!("The grid closed before the export of {qualified_name} started");
             }
         })
         .detach();
+    }
+
+    fn export_all_source(&self) -> Option<ExportAllSource> {
+        match &self.source {
+            DataSource::Table {
+                profile_id,
+                database,
+                table,
+                total_rows,
+                ..
+            } => Some(ExportAllSource {
+                profile_id: *profile_id,
+                database: database.clone(),
+                object_name: table.name.clone(),
+                qualified_name: table.qualified_name(),
+                estimated_total: *total_rows,
+            }),
+            DataSource::Collection {
+                profile_id,
+                collection,
+                total_docs,
+                ..
+            } => Some(ExportAllSource {
+                profile_id: *profile_id,
+                database: Some(collection.database.clone()),
+                object_name: collection.name.clone(),
+                qualified_name: collection.qualified_name(),
+                estimated_total: *total_docs,
+            }),
+            DataSource::QueryResult { .. } => None,
+        }
+    }
+
+    /// A document collection's pages are flattened as the grid flattens its
+    /// page, so the file has the loaded-rows export's columns.
+    fn export_all_shape(&self, cx: &App) -> Box<dyn PageShape> {
+        if self.source.is_collection() && self.is_document_collection(cx) {
+            Box::new(DocumentPageShape::new(
+                self.collection.expanded.clone(),
+                self.identity_columns(),
+            ))
+        } else {
+            Box::new(AlignByName::default())
+        }
     }
 
     fn export_all_connection(
@@ -248,7 +315,7 @@ async fn choose_target_path(
     }
 }
 
-/// Reads every page of the table and writes it to the target file, keeping
+/// Reads every page of the read and writes it to the target file, keeping
 /// `progress` at `(rows written, total)` for the Tasks panel.
 fn stream_all_rows(
     run: ExportAllRun,
@@ -256,21 +323,27 @@ fn stream_all_rows(
 ) -> Result<TransferReport, TransferError> {
     let ExportAllRun {
         connection,
-        request,
+        read,
+        shape,
         estimated_total,
         format,
         target_path,
         cancel_token,
     } = run;
 
-    let mut source =
-        BrowseSource::open(connection, request, EXPORT_ALL_PAGE_SIZE, estimated_total)?;
+    let mut source = BrowseSource::open_with_shape(
+        connection,
+        read,
+        EXPORT_ALL_PAGE_SIZE,
+        estimated_total,
+        shape,
+    )?;
     let columns = source.columns().to_vec();
     // The file mirrors what the grid reads, so no column is remapped.
     let column_map = AutoColumnMap::new(&columns, &columns);
     let mut sink = FileSink::to_file(target_path, format);
 
-    run_transfer(
+    let mut report = run_transfer(
         &mut source,
         &column_map,
         &mut sink,
@@ -281,7 +354,18 @@ fn stream_all_rows(
                 *guard = (rows_done, total);
             }
         },
-    )
+    )?;
+
+    let dropped = source.dropped_columns();
+    if !dropped.is_empty() {
+        report
+            .warnings
+            .push(crate::labels::export_all_rows_dropped_columns_warning(
+                &dropped.join(", "),
+            ));
+    }
+
+    Ok(report)
 }
 
 /// Moves the task to its terminal state and tells the user how it ended.
@@ -312,6 +396,9 @@ fn finish_export_all(
                 &path_text,
             ))
             .push(cx);
+            for warning in report.warnings {
+                Toast::warning(warning).push(cx);
+            }
         }
         Err(error) => {
             let kind = match error {
@@ -330,3 +417,6 @@ fn finish_export_all(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1763,6 +1763,7 @@ document:
               one: "1개 행을 %{path}에 내보냈습니다"
               many: "모든 %{count}개 행을 %{path}에 내보냈습니다"
             cancelled: "내보내기를 취소했습니다 — %{path}에는 중지 전에 기록된 행만 있습니다"
+            dropped_columns: "첫 페이지 이후에 처음 나타난 필드는 파일에 없습니다: %{columns}"
           error:
             failed: "모든 행 내보내기 실패: %{error}"
         format:

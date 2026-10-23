@@ -245,15 +245,25 @@ al portapapeles** del menú escriben las filas que tiene la cuadrícula, que en 
 tabla son la página actual, y el aviso indica cuántas filas fueron al archivo o
 al portapapeles.
 
-Cuando la cuadrícula muestra una tabla leída página a página, el menú añade
-**Exportar todas las filas a un archivo**, en CSV o en JSON con un objeto por
-línea. Vuelve a leer la tabla completa con el filtro, el orden y la selección de
-columnas actuales de la cuadrícula, una página a la vez, y la escribe en el único
-archivo que elijas, de modo que la tabla nunca tiene que caber en memoria. La
-exportación se ejecuta como una tarea en el panel de tareas, que muestra su
-progreso y permite cancelarla; el aviso indica el total de filas y la ruta. Un
-resultado de consulta ofrece solo las filas cargadas, porque exportarlas todas
-implicaría volver a ejecutar la consulta, y lo mismo ocurre con una colección de
-documentos. Una tabla mostrada mediante el constructor de consultas, un filtro
-relacional o una búsqueda de vecinos más cercanos también ofrece solo las filas
-cargadas.
+Cuando la cuadrícula muestra una tabla o una colección leída página a página, el
+menú añade **Exportar todas las filas a un archivo**, en CSV o en JSON con un
+objeto por línea. Vuelve a leer la tabla o la colección completa con el filtro,
+el orden y la selección de columnas actuales de la cuadrícula, una página a la
+vez, y la escribe en el único archivo que elijas, de modo que los datos nunca
+tienen que caber en memoria. Una tabla mostrada mediante el constructor de
+consultas o un filtro relacional se lee con esa misma consulta, desde su
+desplazamiento y hasta su límite cuando lo define. La exportación se ejecuta
+como una tarea en el panel de tareas, que muestra su progreso y permite
+cancelarla; el aviso indica el total de filas y la ruta.
+
+Una colección de documentos se escribe con las columnas que la cuadrícula
+muestra para la primera página, incluidos los objetos expandidos. Los
+documentos de una colección no tienen por qué compartir sus campos, así que un
+campo que aparece por primera vez en una página posterior no tiene columna en
+un archivo cuyo encabezado ya está escrito; en ese caso la exportación nombra
+esos campos en una advertencia.
+
+Un resultado de consulta ofrece solo las filas cargadas, porque exportarlas
+todas implicaría volver a ejecutar la consulta. Lo mismo ocurre con una búsqueda
+de vecinos más cercanos: devuelve un número fijo de las filas más próximas, y la
+cuadrícula ya las tiene todas.

@@ -2423,6 +2423,15 @@ pub(crate) fn export_all_rows_cancelled_toast(path: &str) -> String {
     dbflux_i18n::t!("document.data.grid.export.all.toast.cancelled", path = path)
 }
 
+/// Warning after an "Export all rows" run whose later pages had fields the
+/// first page, and so the file's header, did not.
+pub(crate) fn export_all_rows_dropped_columns_warning(columns: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.grid.export.all.toast.dropped_columns",
+        columns = columns
+    )
+}
+
 /// Error text when an "Export all rows" run fails.
 pub(crate) fn export_all_rows_failed_error(error: &str) -> String {
     dbflux_i18n::t!("document.data.grid.export.all.error.failed", error = error)
@@ -8601,6 +8610,10 @@ mod tests {
         assert_eq!(
             super::export_all_rows_cancelled_toast("/tmp/users.csv"),
             "Export cancelled — /tmp/users.csv holds only the rows written before it stopped"
+        );
+        assert_eq!(
+            super::export_all_rows_dropped_columns_warning("email, phone"),
+            "Fields that first appear after the first page are not in the file: email, phone"
         );
         assert_eq!(
             super::export_all_rows_failed_error("disk full"),

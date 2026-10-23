@@ -22,7 +22,10 @@ mod table_sink;
 mod table_source;
 mod value_codec;
 
-pub use browse_source::BrowseSource;
+pub use browse_source::{
+    AlignByName, BrowseSource, PageShape, ReplayableRead, select_for_visual_spec,
+    to_transfer_column,
+};
 pub use column_map::{AutoColumnMap, ColumnMappingOverride};
 pub use dbflux_core::TransferColumn;
 pub use file_sink::{FileFormat, FileSink};

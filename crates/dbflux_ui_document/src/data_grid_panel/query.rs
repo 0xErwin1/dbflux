@@ -445,7 +445,8 @@ impl DataGridPanel {
                             panel.runner.complete_primary(task_id, cx);
                             panel.grid_table.reload = reload;
                             panel.grid_table.keep_edits_on_reload = keep_edits;
-                            panel.last_table_browse = Some(applied_request);
+                            panel.last_replayable_read =
+                                Some(dbflux_transfer::ReplayableRead::Table(applied_request));
                             panel.apply_table_result(
                                 profile_id,
                                 table_for_spawn,
@@ -595,6 +596,12 @@ impl DataGridPanel {
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
                             panel.builder.current_visual_spec = committed_spec.clone();
+                            panel.last_replayable_read = committed_spec.clone().map(|spec| {
+                                dbflux_transfer::ReplayableRead::VisualQuery {
+                                    spec,
+                                    database: database.clone(),
+                                }
+                            });
                             panel.result = query_result;
                             // Both orders describe the rows just replaced, not the
                             // new ones; keeping them would leave the grid indexing
@@ -805,6 +812,7 @@ impl DataGridPanel {
         let entity = cx.entity().clone();
         let conn_for_cleanup = conn.clone();
         let collection_for_spawn = collection.clone();
+        let applied_request = browse_request.clone();
         let pagination_for_spawn = pagination.clone();
 
         let task = cx
@@ -842,6 +850,11 @@ impl DataGridPanel {
                             panel.grid_table.reload = reload;
                             panel.grid_table.keep_edits_on_reload = keep_edits;
                             panel.collection.applied_skip = skip;
+                            panel.last_replayable_read =
+                                Some(dbflux_transfer::ReplayableRead::Collection {
+                                    request: applied_request,
+                                    skip,
+                                });
                             panel.apply_collection_result(
                                 profile_id,
                                 collection_for_spawn,

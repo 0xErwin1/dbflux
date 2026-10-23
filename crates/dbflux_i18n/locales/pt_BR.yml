@@ -1763,6 +1763,7 @@ document:
               one: "1 linha exportada para %{path}"
               many: "Todas as %{count} linhas exportadas para %{path}"
             cancelled: "Exportação cancelada — %{path} contém apenas as linhas gravadas antes da interrupção"
+            dropped_columns: "Os campos que aparecem pela primeira vez depois da primeira página não estão no arquivo: %{columns}"
           error:
             failed: "Falha ao exportar todas as linhas: %{error}"
         format:

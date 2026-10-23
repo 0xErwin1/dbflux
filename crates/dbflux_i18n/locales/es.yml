@@ -1763,6 +1763,7 @@ document:
               one: "Se exportó 1 fila a %{path}"
               many: "Se exportaron las %{count} filas a %{path}"
             cancelled: "Exportación cancelada — %{path} contiene solo las filas escritas antes de detenerse"
+            dropped_columns: "Los campos que aparecen por primera vez después de la primera página no están en el archivo: %{columns}"
           error:
             failed: "Falló la exportación de todas las filas: %{error}"
         format:

@@ -1763,6 +1763,7 @@ document:
               one: "Exported 1 row to %{path}"
               many: "Exported all %{count} rows to %{path}"
             cancelled: "Export cancelled — %{path} holds only the rows written before it stopped"
+            dropped_columns: "Fields that first appear after the first page are not in the file: %{columns}"
           error:
             failed: "Export of all rows failed: %{error}"
         format:

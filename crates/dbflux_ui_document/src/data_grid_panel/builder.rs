@@ -88,19 +88,14 @@ impl DataGridPanel {
         cx.notify();
     }
 
-    /// Produces the executable read for a builder spec.
+    /// Produces the executable read for a builder spec, through the same
+    /// rendering "Export all rows" pages a builder query with
+    /// (`dbflux_transfer::select_for_visual_spec`).
     ///
-    /// Relational drivers materialize a parameterized `SelectQuery` via
-    /// `generate_select`. Document drivers (whose `generate_select` yields
-    /// `None`) fall back to the generic `generate_read_from_spec`, whose opaque
-    /// query text is wrapped as a parameter-less `SelectQuery` so the existing
-    /// execution path runs it unchanged. Selection is by which generator method
-    /// returns a query, never by a driver id.
-    ///
-    /// Returns `Ok(None)` when no generator is available or neither path emits a
+    /// Returns `Ok(None)` when no generator is available or none renders a
     /// query, and `Err(message)` when a generator actively rejects the spec
-    /// (e.g. `generate_read_from_spec` returns `InvalidSpec`) so the caller can
-    /// surface the failure instead of silently producing an empty read.
+    /// so the caller can surface the failure instead of silently producing an
+    /// empty read.
     pub(super) fn build_visual_select(
         &self,
         spec: &VisualQuerySpec,
@@ -110,24 +105,7 @@ impl DataGridPanel {
             return Ok(None);
         };
 
-        match generator.generate_select(spec) {
-            Ok(Some(select)) => return Ok(Some(select)),
-            // No structured SELECT for this generator (Document drivers return the
-            // default `Ok(None)`; `Unsupported` is the same intent made explicit).
-            // Either way, fall through to `generate_read_from_spec`.
-            Ok(None) => {}
-            Err(dbflux_core::QueryGenError::Unsupported) => {}
-            Err(error) => return Err(error.to_string()),
-        }
-
-        match generator.generate_read_from_spec(spec) {
-            Ok(Some(generated)) => Ok(Some(dbflux_core::SelectQuery {
-                sql: generated.text,
-                params: Vec::new(),
-            })),
-            Ok(None) => Ok(None),
-            Err(error) => Err(error.to_string()),
-        }
+        dbflux_transfer::select_for_visual_spec(generator, spec)
     }
 
     /// Clears the visual spec and restores the raw filter-input chrome.
