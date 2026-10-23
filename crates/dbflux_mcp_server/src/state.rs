@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{Mutex, RwLock};
 
@@ -23,7 +23,7 @@ use dbflux_storage::paths as storage_paths;
 use dbflux_storage::repositories::governance_settings::GovernanceSettingsRepository;
 use dbflux_storage::sqlite as storage_sqlite;
 
-use crate::connection_cache::ConnectionCache;
+use crate::connection_cache::{CachedConnection, ConnectionCache};
 use crate::error_messages;
 
 /// Shared ownership for an MCP detached hook process. The supervisor and the
@@ -38,11 +38,18 @@ pub struct SharedDetachedProcess {
 pub struct DetachedProcessRegistry {
     processes: StdMutex<HashMap<String, Vec<Arc<SharedDetachedProcess>>>>,
     shutdown_cancel: CancelToken,
+    pending_session_shutdowns: SessionShutdownRegistry,
 }
 
 impl DetachedProcessRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Registry of drained connections whose session factories still need a
+    /// shutdown attempt; see [`SessionShutdownRegistry`].
+    pub(crate) fn pending_session_shutdowns(&self) -> &SessionShutdownRegistry {
+        &self.pending_session_shutdowns
     }
 
     pub(crate) fn register(&self, connection_id: &str, processes: Vec<Arc<SharedDetachedProcess>>) {
@@ -119,6 +126,105 @@ impl SharedDetachedProcess {
             finished: AtomicBool::new(false),
             terminated: AtomicBool::new(false),
         }
+    }
+}
+
+/// A cached connection drained from the cache whose execution session factory
+/// has not been shut down yet.
+pub struct PendingSessionShutdown {
+    connection: Arc<CachedConnection>,
+    attempted: AtomicBool,
+}
+
+impl PendingSessionShutdown {
+    fn new(connection: Arc<CachedConnection>) -> Arc<Self> {
+        Arc::new(Self {
+            connection,
+            attempted: AtomicBool::new(false),
+        })
+    }
+
+    /// Returns the connection when this caller is the first to attempt the
+    /// shutdown, so a shutdown already dispatched before a deadline expiry is
+    /// never dispatched twice.
+    pub(crate) fn claim_for_shutdown(&self) -> Option<Arc<CachedConnection>> {
+        self.attempted
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+            .then(|| Arc::clone(&self.connection))
+    }
+}
+
+/// Holds connections whose session factories still need a shutdown attempt.
+///
+/// Disconnect publishes its drained entries here before running hooks; a
+/// shutdown that gets cancelled past its deadline can therefore still recover
+/// the drained entries and attempt their session teardown instead of losing
+/// the connections with the cancelled future.
+#[derive(Default)]
+pub struct SessionShutdownRegistry {
+    pending: StdMutex<HashMap<String, Vec<Arc<PendingSessionShutdown>>>>,
+}
+
+impl SessionShutdownRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn register(&self, entries: &[(String, Arc<CachedConnection>)]) {
+        if entries.is_empty() {
+            return;
+        }
+
+        let mut pending = match self.pending.lock() {
+            Ok(pending) => pending,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        for (connection_key, connection) in entries {
+            pending
+                .entry(connection_key.clone())
+                .or_default()
+                .push(PendingSessionShutdown::new(Arc::clone(connection)));
+        }
+    }
+
+    /// Removes the entries registered under exactly these cache keys.
+    pub(crate) fn take_keys(&self, keys: &[String]) -> Vec<Arc<PendingSessionShutdown>> {
+        let mut pending = match self.pending.lock() {
+            Ok(pending) => pending,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        keys.iter()
+            .filter_map(|key| pending.remove(key))
+            .flatten()
+            .collect()
+    }
+
+    /// Removes the entries of a profile id and all its per-database variants.
+    pub(crate) fn take_variants(&self, profile_id: &str) -> Vec<Arc<PendingSessionShutdown>> {
+        let prefix = format!("{profile_id}:");
+        let mut pending = match self.pending.lock() {
+            Ok(pending) => pending,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let keys: Vec<String> = pending
+            .keys()
+            .filter(|key| *key == profile_id || key.starts_with(&prefix))
+            .cloned()
+            .collect();
+        keys.into_iter()
+            .filter_map(|key| pending.remove(&key))
+            .flatten()
+            .collect()
+    }
+
+    /// Removes every remaining entry; used by the shutdown final sweep.
+    pub(crate) fn take_all(&self) -> Vec<Arc<PendingSessionShutdown>> {
+        let mut pending = match self.pending.lock() {
+            Ok(pending) => pending,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        pending.drain().flat_map(|(_, entries)| entries).collect()
     }
 }
 

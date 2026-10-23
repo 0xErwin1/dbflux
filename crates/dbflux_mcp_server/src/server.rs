@@ -21,7 +21,7 @@ use crate::{
     connection_cache::CachedConnection,
     error_messages,
     governance::GovernanceMiddleware,
-    state::{ServerState, SharedDetachedProcess},
+    state::{PendingSessionShutdown, ServerState, SharedDetachedProcess},
 };
 
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -426,6 +426,92 @@ fn terminate_detached_processes(state: &ServerState, connection_id: &str) -> Vec
     state
         .detached_processes
         .register(connection_id, failed_processes);
+    errors
+}
+
+/// Runs the session factory shutdowns of claimed connections on a standalone
+/// OS thread and reports errors through the returned receiver.
+///
+/// `ExecutionSessionFactory::shutdown` is synchronous driver code that cannot
+/// be cancelled in-process, so the work must run outside the Tokio blocking
+/// pool: a detached OS thread never pins Tokio runtime shutdown, and dropping
+/// the receiver (the shutdown fallback does) keeps the overall bound while the
+/// best-effort shutdown keeps running. What may still be running at deadline
+/// or process exit is exactly this best-effort driver teardown.
+fn dispatch_session_shutdown(
+    entries: Vec<Arc<PendingSessionShutdown>>,
+) -> tokio::sync::oneshot::Receiver<Vec<String>> {
+    let (result_sender, result_receiver) = tokio::sync::oneshot::channel();
+    let claimed: Vec<Arc<CachedConnection>> = entries
+        .iter()
+        .filter_map(|entry| entry.claim_for_shutdown())
+        .collect();
+
+    if claimed.is_empty() {
+        report_session_shutdown_result(result_sender, Vec::new());
+        return result_receiver;
+    }
+
+    let worker = std::thread::Builder::new()
+        .name("dbflux-mcp-session-shutdown".to_string())
+        .spawn(move || {
+            let errors = run_session_factory_shutdowns(claimed);
+            report_session_shutdown_result(result_sender, errors);
+        });
+    if let Err(spawn_error) = worker {
+        // The sender was moved into the closure that never ran, so the channel
+        // closes and an awaiting disconnect surfaces the failure; the cause is
+        // kept visible here.
+        log::warn!("Unable to start the session shutdown thread: {spawn_error}");
+    }
+    result_receiver
+}
+
+fn report_session_shutdown_result(
+    result_sender: tokio::sync::oneshot::Sender<Vec<String>>,
+    errors: Vec<String>,
+) {
+    if let Err(unobserved) = result_sender.send(errors) {
+        log::debug!("Session shutdown observer dropped; unobserved errors: {unobserved:?}");
+    }
+}
+
+fn run_session_factory_shutdowns(connections: Vec<Arc<CachedConnection>>) -> Vec<String> {
+    let mut errors = Vec::new();
+    for cached in connections {
+        let connection = cached.connection();
+        if let Some(factory) = connection.execution_session_factory()
+            && let Err(error) = factory.shutdown()
+        {
+            errors.push(error.to_string());
+        }
+    }
+    errors
+}
+
+/// Final cleanup for one connection id after the shutdown deadline expired.
+///
+/// Removes the cached variants and attempts session factory shutdown without
+/// running any connection hooks: the deadline is already spent, and hooks may
+/// block again. Never takes the per-profile setup lock, which a concurrent
+/// connect may hold. The session shutdown runs on a detached OS thread and is
+/// not awaited, so this stays within the overall shutdown bound.
+async fn cleanup_connection_without_hooks(state: &ServerState, connection_id: &str) -> Vec<String> {
+    let retired_connections = {
+        let mut cache = state.connection_cache.write().await;
+        cache.drain_connection_variants_with_keys(connection_id)
+    };
+    state
+        .detached_processes
+        .pending_session_shutdowns()
+        .register(&retired_connections);
+    let recovered = state
+        .detached_processes
+        .pending_session_shutdowns()
+        .take_variants(connection_id);
+    drop(dispatch_session_shutdown(recovered));
+    let mut errors = Vec::new();
+    errors.extend(terminate_detached_process_variants(state, connection_id));
     errors
 }
 
@@ -1767,6 +1853,12 @@ impl DbFluxServer {
             let mut cache = state.connection_cache.write().await;
             cache.drain_connection_variants_with_keys(connection_id)
         };
+        // Publish the drained entries before running hooks, so a shutdown
+        // cancelled past its deadline can still recover and shut them down.
+        state
+            .detached_processes
+            .pending_session_shutdowns()
+            .register(&retired_connections);
         let mut errors = terminate_detached_process_variants(&state, connection_id);
         if retired_connections.is_empty() {
             return if errors.is_empty() {
@@ -1803,26 +1895,19 @@ impl DbFluxServer {
             }
         }
 
-        let connections_to_teardown = retired_connections
+        let teardown_keys: Vec<String> = retired_connections
             .iter()
-            .map(|(_, cached)| Arc::clone(cached))
-            .collect::<Vec<_>>();
-        let teardown = tokio::task::spawn_blocking(move || {
-            let mut errors = Vec::new();
-            for cached in connections_to_teardown {
-                let connection = cached.connection();
-                if let Some(factory) = connection.execution_session_factory()
-                    && let Err(error) = factory.shutdown()
-                {
-                    errors.push(error.to_string());
-                }
-            }
-            errors
-        })
-        .await;
-        match teardown {
+            .map(|(connection_key, _)| connection_key.clone())
+            .collect();
+        let pending_entries = state
+            .detached_processes
+            .pending_session_shutdowns()
+            .take_keys(&teardown_keys);
+        match dispatch_session_shutdown(pending_entries).await {
             Ok(teardown_errors) => errors.extend(teardown_errors),
-            Err(error) => errors.push(format!("Connection teardown task failed: {error}")),
+            Err(_) => {
+                errors.push("Session shutdown result channel closed unexpectedly".to_string())
+            }
         }
 
         for (connection_key, _) in &retired_connections {
@@ -1875,12 +1960,13 @@ impl DbFluxServer {
         for connection_id in connection_ids {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                state.detached_processes.cancel_running_hooks();
                 errors.push(format!(
                     "{connection_id}: shutdown drain exceeded {}ms",
                     timeout.as_millis()
                 ));
+                state.detached_processes.cancel_running_hooks();
                 errors.extend(terminate_detached_process_variants(&state, &connection_id));
+                errors.extend(cleanup_connection_without_hooks(&state, &connection_id).await);
                 continue;
             }
 
@@ -1893,15 +1979,22 @@ impl DbFluxServer {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => errors.push(format!("{connection_id}: {error}")),
                 Err(_) => {
-                    state.detached_processes.cancel_running_hooks();
                     errors.push(format!(
                         "{connection_id}: shutdown drain exceeded {}ms",
                         timeout.as_millis()
                     ));
+                    state.detached_processes.cancel_running_hooks();
                     errors.extend(terminate_detached_process_variants(&state, &connection_id));
+                    errors.extend(cleanup_connection_without_hooks(&state, &connection_id).await);
                 }
             }
         }
+
+        let leftover_entries = state
+            .detached_processes
+            .pending_session_shutdowns()
+            .take_all();
+        drop(dispatch_session_shutdown(leftover_entries));
 
         let remaining_process_ids = state.detached_processes.connection_ids();
         for connection_id in remaining_process_ids {
@@ -2010,10 +2103,13 @@ impl ServerHandler for DbFluxServer {
 mod tests {
     use super::*;
 
+    mod shutdown;
+
     use dbflux_core::secrecy::{ExposeSecret, SecretString};
     use dbflux_core::{
-        ConnectionHooks, ConnectionOverrides, ConnectionProfile, DbConfig, DbDriver, DbKind,
-        FormValues, HookFailureMode, HookKind, NoopSecretStore, ValueRef,
+        ConnectionHooks, ConnectionOverrides, ConnectionProfile, DbConfig, DbDriver, DbError,
+        DbKind, FormValues, HookFailureMode, HookKind, NoopSecretStore, QueryHandle, QueryRequest,
+        QueryResult, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, ValueRef,
     };
     use dbflux_mcp::McpRuntime;
     use dbflux_test_support::FakeDriver;
@@ -2332,6 +2428,21 @@ mod tests {
                 sleep_ms.parse().expect("test sleep duration"),
             ));
             let mut trace = std::fs::OpenOptions::new()
+                .append(true)
+                .open(std::env::var("DBFLUX_MCP_HOOK_TEST_TRACE").expect("hook trace path"))
+                .expect("reopen hook event trace");
+            writeln!(trace, "complete").expect("record hook completion");
+        }
+        if let Ok(gate_path) = std::env::var("DBFLUX_MCP_HOOK_TEST_WAIT_FOR_FILE") {
+            // Block until the test creates the gate file, so a hook can be held
+            // open for a deterministic duration instead of a fixed sleep.
+            let gate = std::path::PathBuf::from(gate_path);
+            let give_up_at = Instant::now() + Duration::from_secs(120);
+            while !gate.exists() && Instant::now() < give_up_at {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let mut trace = std::fs::OpenOptions::new()
+                .create(true)
                 .append(true)
                 .open(std::env::var("DBFLUX_MCP_HOOK_TEST_TRACE").expect("hook trace path"))
                 .expect("reopen hook event trace");
