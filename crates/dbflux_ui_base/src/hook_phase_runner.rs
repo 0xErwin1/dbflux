@@ -836,9 +836,10 @@ where
 
             if readiness_error.is_none()
                 && phase == HookPhase::PreConnect
-                && let (Some(host), Some(port)) = (context.host.clone(), context.port)
+                && let Some((host, port)) = context.pre_connect_probe_endpoint()
                 && let Err(state) =
-                    wait_for_hook_endpoint_ready(host, port, parent_cancel.as_ref(), cx).await
+                    wait_for_hook_endpoint_ready(host.to_string(), port, parent_cancel.as_ref(), cx)
+                        .await
             {
                 readiness_error = Some(state);
             }
@@ -1073,6 +1074,7 @@ mod tests {
             port: None,
             database: None,
             phase: Some(HookPhase::PreConnect),
+            dials_configured_endpoint: false,
         }
     }
 
