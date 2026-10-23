@@ -256,12 +256,13 @@ desplazamiento y hasta su límite cuando lo define. La exportación se ejecuta
 como una tarea en el panel de tareas, que muestra su progreso y permite
 cancelarla; el aviso indica el total de filas y la ruta.
 
-Una colección de documentos se escribe con las columnas que la cuadrícula
-muestra para la primera página, incluidos los objetos expandidos. Los
-documentos de una colección no tienen por qué compartir sus campos, así que un
-campo que aparece por primera vez en una página posterior no tiene columna en
-un archivo cuyo encabezado ya está escrito; en ese caso la exportación nombra
-esos campos en una advertencia.
+Una colección de documentos exportada como JSON escribe cada documento
+completo, un objeto por línea, con todos sus campos. Como CSV se escribe con
+las columnas que la cuadrícula muestra para la primera página, incluidos los
+objetos expandidos. Los documentos de una colección no tienen por qué
+compartir sus campos, así que en un CSV un campo que aparece por primera vez en
+una página posterior no tiene columna, porque el encabezado ya está escrito; en
+ese caso la exportación nombra esos campos en una advertencia.
 
 Un resultado de consulta ofrece solo las filas cargadas, porque exportarlas
 todas implicaría volver a ejecutar la consulta. Lo mismo ocurre con una búsqueda

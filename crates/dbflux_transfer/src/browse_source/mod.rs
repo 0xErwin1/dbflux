@@ -90,6 +90,11 @@ impl BrowseSource {
         self.shape.dropped_columns()
     }
 
+    /// Whether each row is one document to be written whole.
+    pub fn writes_whole_documents(&self) -> bool {
+        self.shape.writes_whole_documents()
+    }
+
     fn fetch_page(&mut self) -> Result<Option<dbflux_core::QueryResult>, TransferError> {
         let Some(page) =
             self.read

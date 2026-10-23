@@ -19,6 +19,12 @@ pub trait PageShape: Send {
 
     /// Columns later pages had that the file leaves out, in name order.
     fn dropped_columns(&self) -> Vec<String>;
+
+    /// Whether each row is one `Value::Document` to be written whole, with
+    /// its own fields, instead of values under the file's columns.
+    fn writes_whole_documents(&self) -> bool {
+        false
+    }
 }
 
 /// Writes each page's values under the first page's columns, matched by

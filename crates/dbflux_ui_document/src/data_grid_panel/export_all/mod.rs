@@ -112,7 +112,7 @@ impl DataGridPanel {
             return;
         };
 
-        let shape = self.export_all_shape(cx);
+        let shape = self.export_all_shape(format, cx);
         // The table's count does not bound a builder query's rows.
         let estimated_total = match &read {
             ReplayableRead::VisualQuery { .. } => None,
@@ -189,13 +189,16 @@ impl DataGridPanel {
     }
 
     /// A document collection's pages are flattened as the grid flattens its
-    /// page, so the file has the loaded-rows export's columns.
-    fn export_all_shape(&self, cx: &App) -> Box<dyn PageShape> {
+    /// page, so a CSV file has the loaded-rows export's columns. JSON has no
+    /// header to fix, so each document is written whole.
+    fn export_all_shape(&self, format: FileFormat, cx: &App) -> Box<dyn PageShape> {
         if self.source.is_collection() && self.is_document_collection(cx) {
-            Box::new(DocumentPageShape::new(
-                self.collection.expanded.clone(),
-                self.identity_columns(),
-            ))
+            let shape =
+                DocumentPageShape::new(self.collection.expanded.clone(), self.identity_columns());
+            match format {
+                FileFormat::Json => Box::new(shape.whole_documents()),
+                FileFormat::Csv => Box::new(shape),
+            }
         } else {
             Box::new(AlignByName::default())
         }
@@ -342,6 +345,9 @@ fn stream_all_rows(
     // The file mirrors what the grid reads, so no column is remapped.
     let column_map = AutoColumnMap::new(&columns, &columns);
     let mut sink = FileSink::to_file(target_path, format);
+    if source.writes_whole_documents() {
+        sink = sink.writing_whole_documents();
+    }
 
     let mut report = run_transfer(
         &mut source,

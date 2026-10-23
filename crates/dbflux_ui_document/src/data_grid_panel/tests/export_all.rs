@@ -18,7 +18,7 @@ use dbflux_ui_base::{AppStateEntity, SaveTargetOutcome, SaveTargetProvider};
 use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
 use uuid::Uuid;
 
-use super::{init_test_runtime, isolated_test_app_state, key_column};
+use super::{init_test_runtime, isolated_test_app_state, key_column, last_toast_title};
 use crate::data_grid_panel::DataGridPanel;
 use crate::data_grid_panel::context_menu::ExportMenuEntry;
 
@@ -549,6 +549,64 @@ fn export_all_rows_writes_every_document_of_the_collection_in_order(cx: &mut Tes
     );
 
     assert_export_task_completed(&app_state, "Export all rows of app.events", window);
+    assert_eq!(
+        last_toast_title(window),
+        Some(crate::labels::export_all_rows_dropped_columns_warning(
+            "email"
+        )),
+        "a CSV header cannot grow, so a field first seen on a later page is named"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// NDJSON has no header, so every document is written with all of its own
+/// fields, including one that first appears after the first page.
+#[gpui::test]
+fn export_all_rows_as_json_keeps_fields_that_appear_after_the_first_page(cx: &mut TestAppContext) {
+    init_test_runtime(cx);
+    let dir = scratch_dir("collection-json");
+    let target = dir.join("events.json");
+    let reads: Arc<Reads> = Arc::default();
+    let (app_state, profile_id) = app_state_saving_to(target.clone(), reads.clone(), cx);
+    let (panel, window) = open_collection(app_state.clone(), profile_id, cx);
+
+    window.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.export_all_rows(FileFormat::Json, window, cx)
+        });
+    });
+    window.run_until_parked();
+
+    let text = std::fs::read_to_string(&target).expect("the export wrote the file");
+    let documents: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("each line is one JSON object"))
+        .collect();
+    assert_eq!(documents.len() as i64, TABLE_ROWS);
+
+    let first = documents.first().expect("a first document");
+    assert!(first.get("email").is_none());
+    let with_email = documents
+        .get(FIRST_DOCUMENT_WITH_EMAIL as usize)
+        .expect("the document that carries an email");
+    assert_eq!(
+        with_email.get("_id"),
+        Some(&serde_json::json!(FIRST_DOCUMENT_WITH_EMAIL))
+    );
+    assert!(
+        with_email.get("email").is_some(),
+        "a field first seen on a later page must reach the file"
+    );
+
+    assert_export_task_completed(&app_state, "Export all rows of app.events", window);
+    assert_eq!(
+        last_toast_title(window),
+        Some(crate::labels::export_all_rows_exported_toast(
+            TABLE_ROWS as u64,
+            &target.display().to_string(),
+        )),
+        "nothing was dropped, so no warning follows the success toast"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 
