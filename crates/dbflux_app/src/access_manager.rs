@@ -157,21 +157,14 @@ impl AppAccessManager {
         match provider {
             #[cfg(feature = "aws")]
             "aws-ssm" => {
-                let instance_id = _params.get("instance_id").map(String::as_str).unwrap_or("");
-                let region = _params
-                    .get("region")
-                    .map(String::as_str)
-                    .unwrap_or("us-east-1");
-                let remote_port: u16 = _params
-                    .get("remote_port")
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
+                let ssm = dbflux_core::SsmAccessParams::from_params(_params)?;
 
                 let factory = self.ssm_factory.as_ref().ok_or_else(|| {
                     DbError::connection_failed("SSM tunnel factory not available")
                 })?;
 
-                let tunnel = factory.start(instance_id, region, _remote_host, remote_port)?;
+                let tunnel =
+                    factory.start(&ssm.instance_id, &ssm.region, _remote_host, ssm.remote_port)?;
                 let local_port = tunnel.local_port();
 
                 Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))

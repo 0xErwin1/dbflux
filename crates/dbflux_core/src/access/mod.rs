@@ -99,6 +99,52 @@ impl From<AccessKindWire> for AccessKind {
     }
 }
 
+/// Connection parameters of an `aws-ssm` managed access, validated before any
+/// AWS call so a missing field is reported by name instead of surfacing later
+/// as an AWS error for the wrong region or port 0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SsmAccessParams {
+    pub instance_id: String,
+    pub region: String,
+    pub remote_port: u16,
+}
+
+impl SsmAccessParams {
+    pub fn from_params(params: &HashMap<String, String>) -> Result<Self, DbError> {
+        let instance_id = required_param(params, "instance_id", "an instance ID")?;
+        let region = required_param(params, "region", "a region")?;
+        let remote_port = required_param(params, "remote_port", "a remote port")?;
+
+        let remote_port = remote_port
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port != 0)
+            .ok_or_else(|| {
+                DbError::InvalidProfile(format!(
+                    "AWS SSM access remote port '{remote_port}' must be a number from 1 to 65535"
+                ))
+            })?;
+
+        Ok(Self {
+            instance_id: instance_id.to_string(),
+            region: region.to_string(),
+            remote_port,
+        })
+    }
+}
+
+fn required_param<'a>(
+    params: &'a HashMap<String, String>,
+    key: &str,
+    description: &str,
+) -> Result<&'a str, DbError> {
+    params
+        .get(key)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| DbError::InvalidProfile(format!("AWS SSM access requires {description}")))
+}
+
 pub struct AccessHandle {
     local_port: u16,
     _handle: Option<Box<dyn std::any::Any + Send + Sync>>,
@@ -213,6 +259,92 @@ mod tests {
                 assert_eq!(p, params);
             }
             other => panic!("expected Managed, got {:?}", other),
+        }
+    }
+
+    fn ssm_params(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    fn ssm_error(entries: &[(&str, &str)]) -> String {
+        match SsmAccessParams::from_params(&ssm_params(entries)) {
+            Err(DbError::InvalidProfile(message)) => message,
+            other => panic!("expected InvalidProfile, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ssm_params_parse_complete_values() {
+        let parsed = SsmAccessParams::from_params(&ssm_params(&[
+            ("instance_id", " i-abc "),
+            ("region", "eu-west-1"),
+            ("remote_port", "5432"),
+        ]))
+        .unwrap();
+
+        assert_eq!(
+            parsed,
+            SsmAccessParams {
+                instance_id: "i-abc".to_string(),
+                region: "eu-west-1".to_string(),
+                remote_port: 5432,
+            }
+        );
+    }
+
+    #[test]
+    fn ssm_params_reject_missing_or_blank_instance_id() {
+        for entries in [
+            &[("region", "eu-west-1"), ("remote_port", "5432")][..],
+            &[
+                ("instance_id", "  "),
+                ("region", "eu-west-1"),
+                ("remote_port", "5432"),
+            ][..],
+        ] {
+            assert_eq!(ssm_error(entries), "AWS SSM access requires an instance ID");
+        }
+    }
+
+    #[test]
+    fn ssm_params_reject_missing_or_blank_region() {
+        for entries in [
+            &[("instance_id", "i-abc"), ("remote_port", "5432")][..],
+            &[
+                ("instance_id", "i-abc"),
+                ("region", ""),
+                ("remote_port", "5432"),
+            ][..],
+        ] {
+            assert_eq!(ssm_error(entries), "AWS SSM access requires a region");
+        }
+    }
+
+    #[test]
+    fn ssm_params_reject_missing_or_invalid_remote_port() {
+        for entries in [
+            &[("instance_id", "i-abc"), ("region", "eu-west-1")][..],
+            &[
+                ("instance_id", "i-abc"),
+                ("region", "eu-west-1"),
+                ("remote_port", " "),
+            ][..],
+        ] {
+            assert_eq!(ssm_error(entries), "AWS SSM access requires a remote port");
+        }
+
+        for port in ["0", "70000", "abc"] {
+            assert_eq!(
+                ssm_error(&[
+                    ("instance_id", "i-abc"),
+                    ("region", "eu-west-1"),
+                    ("remote_port", port),
+                ]),
+                format!("AWS SSM access remote port '{port}' must be a number from 1 to 65535")
+            );
         }
     }
 
