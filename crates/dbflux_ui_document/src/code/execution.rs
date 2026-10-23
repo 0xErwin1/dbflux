@@ -2434,6 +2434,7 @@ impl CodeDocument {
             port: None,
             database: None,
             phase: None,
+            dials_configured_endpoint: false,
         };
 
         let description =
