@@ -35,13 +35,14 @@ use dbflux_core::{
 };
 use dbflux_ssh::SshTunnel;
 use half::f16;
-use native_tls::TlsConnector;
 use postgres::types::{Date as PgDate, FromSql, Kind, Timestamp as PgTimestamp, Type};
 use postgres::{
     CancelToken as PgCancelToken, Client, NoTls, SimpleQueryMessage,
     fallible_iterator::FallibleIterator,
 };
 use postgres_native_tls::MakeTlsConnector;
+
+use crate::tls::{PgTlsFiles, TlsVerification, build_tls_connector, take_uri_tls_files};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
@@ -718,16 +719,18 @@ impl DbDriver for PostgresDriver {
                 &config.database,
                 password,
                 &config.ssl_mode,
+                &config.tls_files,
             )
         } else {
-            self.connect_direct(
-                &config.host,
-                config.port,
-                &config.user,
-                &config.database,
+            self.connect_direct(&PostgresConnectParams {
+                host: &config.host,
+                port: config.port,
+                user: &config.user,
                 password,
-                &config.ssl_mode,
-            )
+                database: &config.database,
+                ssl_mode: &config.ssl_mode,
+                tls_files: &config.tls_files,
+            })
         }
     }
 
@@ -968,6 +971,7 @@ struct ExtractedPostgresConfig {
     database: String,
     /// Postgres native sslmode id (e.g. `"prefer"`, `"verify-ca"`). Defaults to `"prefer"` when absent.
     ssl_mode: String,
+    tls_files: PgTlsFiles,
     ssh_tunnel: Option<SshTunnelConfig>,
 }
 
@@ -994,6 +998,9 @@ fn extract_postgres_config(config: &DbConfig) -> Result<ExtractedPostgresConfig,
             user,
             database,
             ssl_mode,
+            ssl_root_cert_path,
+            ssl_client_cert_path,
+            ssl_client_key_path,
             ssh_tunnel,
             ..
         } => Ok(ExtractedPostgresConfig {
@@ -1004,6 +1011,11 @@ fn extract_postgres_config(config: &DbConfig) -> Result<ExtractedPostgresConfig,
             user: user.clone(),
             database: database.clone(),
             ssl_mode: ssl_mode.clone().unwrap_or_else(|| "prefer".to_string()),
+            tls_files: PgTlsFiles::new(
+                ssl_root_cert_path.as_deref(),
+                ssl_client_cert_path.as_deref(),
+                ssl_client_key_path.as_deref(),
+            ),
             ssh_tunnel: ssh_tunnel.clone(),
         }),
         _ => Err(DbError::InvalidProfile(
@@ -1020,6 +1032,7 @@ struct PostgresConnectParams<'a> {
     database: &'a str,
     /// Postgres native sslmode id (e.g. `"prefer"`, `"verify-ca"`).
     ssl_mode: &'a str,
+    tls_files: &'a PgTlsFiles,
 }
 
 /// Escapes a value for a libpq keyword/value connection string.
@@ -1100,7 +1113,10 @@ fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
             .map_err(|e| format_pg_error(&e, params.host, params.port));
     }
 
-    let tls = MakeTlsConnector::new(build_tls_connector(ssl_mode.tls_verification())?);
+    let tls = MakeTlsConnector::new(build_tls_connector(
+        ssl_mode.tls_verification(),
+        params.tls_files,
+    )?);
 
     match Client::connect(&conn_string, tls) {
         Ok(client) => Ok(client),
@@ -1121,6 +1137,7 @@ impl PostgresDriver {
 
         let ssl_mode = parse_pg_uri_sslmode(&uri);
         let uri = with_protocol_sslmode(&uri);
+        let (uri, tls_files) = take_uri_tls_files(&uri);
 
         if ssl_mode == PgSslMode::Disable {
             let client =
@@ -1138,7 +1155,10 @@ impl PostgresDriver {
             }));
         }
 
-        let tls = MakeTlsConnector::new(build_tls_connector(ssl_mode.tls_verification())?);
+        let tls = MakeTlsConnector::new(build_tls_connector(
+            ssl_mode.tls_verification(),
+            &tls_files,
+        )?);
 
         let client = match Client::connect(&uri, tls) {
             Ok(c) => c,
@@ -1162,32 +1182,20 @@ impl PostgresDriver {
 
     fn connect_direct(
         &self,
-        host: &str,
-        port: u16,
-        user: &str,
-        database: &str,
-        password: Option<&str>,
-        ssl_mode: &str,
+        params: &PostgresConnectParams,
     ) -> Result<Box<dyn Connection>, DbError> {
         log::info!(
             "Connecting directly to PostgreSQL at {}:{} as {} (database: {})",
-            host,
-            port,
-            user,
-            database
+            params.host,
+            params.port,
+            params.user,
+            params.database
         );
 
-        let client = connect_postgres(&PostgresConnectParams {
-            host,
-            port,
-            user,
-            password,
-            database,
-            ssl_mode,
-        })?;
+        let client = connect_postgres(params)?;
 
         let cancel_token = client.cancel_token();
-        log::info!("Successfully connected to {}:{}", host, port);
+        log::info!("Successfully connected to {}:{}", params.host, params.port);
 
         Ok(Box::new(PostgresConnection {
             client: Arc::new(Mutex::new(client)),
@@ -1209,6 +1217,7 @@ impl PostgresDriver {
         database: &str,
         db_password: Option<&str>,
         ssl_mode: &str,
+        tls_files: &PgTlsFiles,
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
@@ -1250,6 +1259,7 @@ impl PostgresDriver {
             password: db_password,
             database,
             ssl_mode,
+            tls_files,
         })?;
 
         let cancel_token = client.cancel_token();
@@ -1315,20 +1325,6 @@ impl PgSslMode {
             },
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TlsVerification {
-    chain: bool,
-    hostname: bool,
-}
-
-fn build_tls_connector(verification: TlsVerification) -> Result<TlsConnector, DbError> {
-    TlsConnector::builder()
-        .danger_accept_invalid_certs(!verification.chain)
-        .danger_accept_invalid_hostnames(!verification.hostname)
-        .build()
-        .map_err(|e| DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into()))
 }
 
 /// Parses a libpq `sslmode` value. Unknown values fall back to `prefer`.

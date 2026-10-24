@@ -15,6 +15,7 @@ Advanced open-source relational database.
 - Supports schemas, tables, views, indexes, foreign keys, check constraints, unique constraints, and custom types.
 - Exposes stored routines (functions, procedures, aggregates, window functions) in the schema tree with read-only definition viewer.
 - Supports authentication, SSL, SSH tunneling, and URI/manual connection modes. As in libpq, `verify-ca` validates the certificate chain only and `verify-full` also checks the hostname.
+- TLS certificate files: the Connection Manager's root certificate, client certificate and client key fields, or the libpq URI parameters `sslrootcert`, `sslcert` and `sslkey` (for example `postgresql://user@host/db?sslmode=verify-full&sslrootcert=/path/ca.pem`). With `verify-ca` and `verify-full` the root certificate is added to the trusted roots; the other modes do not validate the chain and ignore it. The client certificate and key are presented for mutual TLS in every mode except `disable`. Files are PEM; the client key must be PKCS#8. A missing, unreadable or invalid file, or a client certificate without its key (or the reverse), fails the connection with an error naming the file, before any connection attempt. With `sslmode=disable` the files are ignored.
 - Supports query cancellation through PostgreSQL cancel tokens.
 - Includes PostgreSQL-specific SQL/code generation for CRUD, indexes, reindex, foreign keys, and type operations.
 - Multi-statement scripts (several `;`-separated statements) run as a batch via the simple query protocol, returning one result set per statement.

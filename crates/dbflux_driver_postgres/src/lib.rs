@@ -11,5 +11,6 @@
 
 pub mod driver;
 pub mod instance_catalog;
+mod tls;
 
 pub use driver::{METADATA, POSTGRES_FORM, PostgresDriver};
