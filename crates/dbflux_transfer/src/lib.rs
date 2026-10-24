@@ -9,6 +9,7 @@
 //! `generate_create_table`, `Connection::set_referential_integrity`); the
 //! pipeline, chunking, cancellation, and progress reporting live here.
 
+mod browse_source;
 mod column_map;
 pub mod export;
 mod file_sink;
@@ -21,6 +22,7 @@ mod table_sink;
 mod table_source;
 mod value_codec;
 
+pub use browse_source::BrowseSource;
 pub use column_map::{AutoColumnMap, ColumnMappingOverride};
 pub use dbflux_core::TransferColumn;
 pub use file_sink::{FileFormat, FileSink};
