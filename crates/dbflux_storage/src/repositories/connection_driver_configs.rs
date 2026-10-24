@@ -369,6 +369,17 @@ impl ConnectionDriverConfigDto {
                 dto.s3_access_key_id = access_key_id.clone();
                 dto.s3_path_style = *path_style;
             }
+            DbConfig::AwsSecrets {
+                region,
+                profile,
+                access_key_id,
+                endpoint,
+            } => {
+                dto.dynamo_region = Some(region.clone());
+                dto.dynamo_profile = profile.clone();
+                dto.dynamo_endpoint = endpoint.clone();
+                dto.s3_access_key_id = access_key_id.clone();
+            }
             DbConfig::ClickHouse {
                 url,
                 user,
@@ -615,6 +626,12 @@ impl ConnectionDriverConfigDto {
                 endpoint: self.dynamo_endpoint.clone(),
                 path_style: self.s3_path_style,
             }),
+            DbKind::AwsSecrets => Some(DbConfig::AwsSecrets {
+                region: self.dynamo_region.clone().unwrap_or_default(),
+                profile: self.dynamo_profile.clone(),
+                access_key_id: self.s3_access_key_id.clone(),
+                endpoint: self.dynamo_endpoint.clone(),
+            }),
             DbKind::ClickHouse => Some(DbConfig::ClickHouse {
                 url: self
                     .uri
@@ -670,6 +687,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::ClickHouse => "ClickHouse",
         DbKind::Turso => "Turso",
         DbKind::DuckDB => "DuckDB",
+        DbKind::AwsSecrets => "AwsSecrets",
     }
     .to_string()
 }
@@ -691,6 +709,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "ClickHouse" => Some(DbKind::ClickHouse),
         "Turso" => Some(DbKind::Turso),
         "DuckDB" => Some(DbKind::DuckDB),
+        "AwsSecrets" => Some(DbKind::AwsSecrets),
         _ => None,
     }
 }
@@ -1459,6 +1478,53 @@ mod tests {
                 assert_eq!(access_key_id.as_deref(), Some("AKIAEXAMPLE"));
                 assert_eq!(endpoint.as_deref(), Some("http://localhost:9000"));
                 assert!(path_style);
+            }
+            other => panic!("unexpected config: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn aws_secrets_driver_config_roundtrips_through_repository() {
+        let (_temp_dir, repo) = temp_repo();
+        let profile_id = uuid::Uuid::new_v4().to_string();
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'Secrets', 'aws_secrets', 'aws_secrets', datetime('now'), datetime('now'))
+                "#,
+                params![profile_id],
+            )
+            .expect("insert profile");
+
+        let config = DbConfig::AwsSecrets {
+            region: "eu-west-1".to_string(),
+            profile: Some("prod-sso".to_string()),
+            access_key_id: Some("AKIAEXAMPLE".to_string()),
+            endpoint: Some("http://localhost:4566".to_string()),
+        };
+
+        let dto = ConnectionDriverConfigDto::from_db_config(profile_id.clone(), &config);
+        repo.upsert(&dto).expect("upsert config");
+
+        let restored = repo
+            .get_for_profile(&profile_id)
+            .expect("load config")
+            .expect("stored config");
+
+        match restored.to_db_config().expect("db config") {
+            DbConfig::AwsSecrets {
+                region,
+                profile,
+                access_key_id,
+                endpoint,
+            } => {
+                assert_eq!(region, "eu-west-1");
+                assert_eq!(profile.as_deref(), Some("prod-sso"));
+                assert_eq!(access_key_id.as_deref(), Some("AKIAEXAMPLE"));
+                assert_eq!(endpoint.as_deref(), Some("http://localhost:4566"));
             }
             other => panic!("unexpected config: {other:?}"),
         }

@@ -500,6 +500,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::ClickHouse => "ClickHouse",
         DbKind::Turso => "Turso",
         DbKind::DuckDB => "DuckDB",
+        DbKind::AwsSecrets => "AwsSecrets",
     }
     .to_string()
 }
@@ -521,6 +522,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "ClickHouse" => Some(DbKind::ClickHouse),
         "Turso" => Some(DbKind::Turso),
         "DuckDB" => Some(DbKind::DuckDB),
+        "AwsSecrets" => Some(DbKind::AwsSecrets),
         _ => None,
     }
 }
@@ -541,6 +543,7 @@ fn default_db_config_for_kind(kind: DbKind) -> dbflux_core::DbConfig {
         DbKind::ClickHouse => dbflux_core::DbConfig::default_clickhouse(),
         DbKind::Turso => dbflux_core::DbConfig::default_turso(),
         DbKind::DuckDB => dbflux_core::DbConfig::default_duckdb(),
+        DbKind::AwsSecrets => dbflux_core::DbConfig::default_aws_secrets(),
     }
 }
 

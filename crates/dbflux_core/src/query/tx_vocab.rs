@@ -130,6 +130,7 @@ impl TransactionVocab {
             | DbKind::InfluxDB
             | DbKind::Redshift
             | DbKind::S3
+            | DbKind::AwsSecrets
             | DbKind::ClickHouse => None,
         }
     }

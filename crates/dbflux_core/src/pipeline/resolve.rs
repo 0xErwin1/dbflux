@@ -282,6 +282,19 @@ fn patch_config_field(config: &mut DbConfig, field: &str, value: &ResolvedValue)
             _ => {}
         },
 
+        DbConfig::AwsSecrets {
+            region,
+            profile,
+            access_key_id,
+            endpoint,
+        } => match field {
+            "region" => *region = val.to_string(),
+            "profile" => *profile = Some(val.to_string()),
+            "access_key_id" => *access_key_id = Some(val.to_string()),
+            "endpoint" => *endpoint = Some(val.to_string()),
+            _ => {}
+        },
+
         DbConfig::Turso { url } => {
             if field == "url" {
                 *url = val.to_string();

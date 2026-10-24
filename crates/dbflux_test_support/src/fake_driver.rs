@@ -348,6 +348,12 @@ impl DbDriver for FakeDriver {
                 endpoint: get_optional_string(values, "endpoint"),
                 path_style: false,
             },
+            DbKind::AwsSecrets => DbConfig::AwsSecrets {
+                region: get_string(values, "region", "us-east-1"),
+                profile: get_optional_string(values, "profile"),
+                access_key_id: get_optional_string(values, "access_key_id"),
+                endpoint: get_optional_string(values, "endpoint"),
+            },
             DbKind::ClickHouse => DbConfig::ClickHouse {
                 url: get_string(values, "url", "http://localhost:8123"),
                 user: get_string(values, "user", "default"),
@@ -503,6 +509,12 @@ impl DbDriver for FakeDriver {
                 access_key_id,
                 endpoint,
                 ..
+            }
+            | DbConfig::AwsSecrets {
+                region,
+                profile,
+                access_key_id,
+                endpoint,
             } => {
                 values.insert("region".to_string(), region.clone());
                 values.insert("profile".to_string(), profile.clone().unwrap_or_default());
@@ -690,7 +702,7 @@ impl Connection for FakeConnection {
             DbKind::SQLite | DbKind::MongoDB | DbKind::Redis => {
                 SchemaLoadingStrategy::SingleDatabase
             }
-            DbKind::DynamoDB | DbKind::CloudWatchLogs | DbKind::S3 => {
+            DbKind::DynamoDB | DbKind::CloudWatchLogs | DbKind::S3 | DbKind::AwsSecrets => {
                 SchemaLoadingStrategy::SingleDatabase
             }
             DbKind::ClickHouse | DbKind::DuckDB | DbKind::InfluxDB => {
@@ -749,7 +761,7 @@ fn active_database_from_profile(profile: &ConnectionProfile) -> Option<String> {
         DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
         DbConfig::SqlServer { database, .. } => database.clone(),
         DbConfig::Redshift { database, .. } => Some(database.clone()),
-        DbConfig::S3 { .. } => None,
+        DbConfig::S3 { .. } | DbConfig::AwsSecrets { .. } => None,
         DbConfig::ClickHouse { database, .. } => Some(database.clone()),
         DbConfig::Turso { .. } => None,
         DbConfig::External { values, .. } => values.get("database").cloned(),
@@ -774,6 +786,7 @@ fn metadata_for_kind(kind: DbKind) -> &'static DriverMetadata {
         // metadata instead of a hand-rolled fake.
         DbKind::Redshift => &REDSHIFT_METADATA,
         DbKind::S3 => &FAKE_S3_METADATA,
+        DbKind::AwsSecrets => &FAKE_AWS_SECRETS_METADATA,
         DbKind::ClickHouse => &FAKE_CLICKHOUSE_METADATA,
         DbKind::Turso => &FAKE_TURSO_METADATA,
         // DuckDB is an embedded SQL engine; the SQLite fake covers it.
@@ -793,7 +806,9 @@ fn form_for_kind(kind: DbKind) -> &'static DriverFormDef {
         DbKind::InfluxDB => &INFLUXDB_FORM,
         DbKind::SqlServer => &SQLSERVER_FORM,
         DbKind::Redshift => &REDSHIFT_FORM,
-        DbKind::S3 => &S3_FORM,
+        // The AWS secrets driver asks for the same region, profile and
+        // static-credential fields as S3.
+        DbKind::S3 | DbKind::AwsSecrets => &S3_FORM,
         DbKind::ClickHouse => &CLICKHOUSE_FORM,
         DbKind::Turso => &TURSO_FORM,
     }
@@ -1384,6 +1399,32 @@ static FAKE_S3_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetad
     editor_profile: None,
 });
 
+static FAKE_AWS_SECRETS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-aws-secrets".into(),
+    display_name: "Fake AWS Secrets".into(),
+    description: "Deterministic fake driver for tests".into(),
+    category: DatabaseCategory::SecretStore,
+    transfer_family: TransferFamily::Incompatible,
+    deployment_class: None,
+    query_language: QueryLanguage::Custom("Secrets".into()),
+    capabilities: DriverCapabilities::SECRET_STORE,
+    default_port: None,
+    uri_scheme: "aws-secrets".into(),
+    icon: Icon::Database,
+    syntax: None,
+    query: None,
+    mutation: None,
+    ddl: None,
+    transactions: None,
+    limits: None,
+    ssl_modes: None,
+    ssl_cert_fields: None,
+    classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
+});
+
 /// Minimal placeholder form for tests — the real `S3_FORM` (with the full
 /// static-credentials/endpoint/path-style field set) is defined in
 /// `dbflux_driver_s3` once the driver itself is implemented.
@@ -1735,6 +1776,7 @@ mod tests {
                 DbKind::SqlServer => DbConfig::default_sqlserver(),
                 DbKind::Redshift => DbConfig::default_redshift(),
                 DbKind::S3 => DbConfig::default_s3(),
+                DbKind::AwsSecrets => DbConfig::default_aws_secrets(),
                 DbKind::ClickHouse => DbConfig::default_clickhouse(),
                 DbKind::Turso => DbConfig::default_turso(),
                 DbKind::DuckDB => DbConfig::default_duckdb(),
