@@ -1004,7 +1004,7 @@ mod tests {
                 redshift_uri_sslmode(
                     "postgresql://cluster.example.com:5439/dev?sslmode=verify-full"
                 ),
-                RedshiftSslMode::Verify
+                RedshiftSslMode::VerifyFull
             );
         }
 
@@ -1062,7 +1062,7 @@ mod tests {
             )
             .expect("URI should parse after sslmode is stripped");
 
-            assert_eq!(ssl_mode, RedshiftSslMode::Verify);
+            assert_eq!(ssl_mode, RedshiftSslMode::VerifyFull);
         }
 
         #[test]

@@ -59,16 +59,23 @@ pub(crate) struct RedshiftConnectParams<'a> {
 /// direct/form connect path and the URI connect path.
 ///
 /// Redshift follows PostgreSQL's `sslmode` semantics. The six libpq values
-/// collapse into four connection behaviors: `disable` skips TLS entirely;
+/// collapse into five connection behaviors: `disable` skips TLS entirely;
 /// `allow`/`prefer` attempt TLS and fall back to plaintext; `require` mandates
-/// TLS without certificate validation; and `verify-ca`/`verify-full` mandate
-/// TLS with certificate validation.
+/// TLS without certificate validation; `verify-ca` mandates TLS and validates
+/// the certificate chain; and `verify-full` also validates the hostname.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RedshiftSslMode {
     Disable,
     Prefer,
     Require,
-    Verify,
+    VerifyCa,
+    VerifyFull,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TlsVerification {
+    pub chain: bool,
+    pub hostname: bool,
 }
 
 impl RedshiftSslMode {
@@ -78,20 +85,42 @@ impl RedshiftSslMode {
         match value.to_ascii_lowercase().as_str() {
             "disable" => RedshiftSslMode::Disable,
             "require" => RedshiftSslMode::Require,
-            "verify-ca" | "verify-full" => RedshiftSslMode::Verify,
+            "verify-ca" => RedshiftSslMode::VerifyCa,
+            "verify-full" => RedshiftSslMode::VerifyFull,
             // "allow" | "prefer" and any unrecognized value.
             _ => RedshiftSslMode::Prefer,
         }
     }
 
-    /// Maps to the protocol-level `postgres::Config` ssl mode. `Verify` mandates
-    /// TLS at the protocol level (`Require`) and defers certificate validation
-    /// to the native-tls connector built in [`connect_with_ssl_mode`].
+    /// Maps to the protocol-level `postgres::Config` ssl mode. The verify modes
+    /// mandate TLS at the protocol level (`Require`) and defer certificate
+    /// validation to the native-tls connector built in [`connect_with_ssl_mode`].
     pub(crate) fn config_ssl_mode(self) -> SslMode {
         match self {
             RedshiftSslMode::Disable => SslMode::Disable,
             RedshiftSslMode::Prefer => SslMode::Prefer,
-            RedshiftSslMode::Require | RedshiftSslMode::Verify => SslMode::Require,
+            RedshiftSslMode::Require | RedshiftSslMode::VerifyCa | RedshiftSslMode::VerifyFull => {
+                SslMode::Require
+            }
+        }
+    }
+
+    pub(crate) fn tls_verification(self) -> TlsVerification {
+        match self {
+            RedshiftSslMode::Disable | RedshiftSslMode::Prefer | RedshiftSslMode::Require => {
+                TlsVerification {
+                    chain: false,
+                    hostname: false,
+                }
+            }
+            RedshiftSslMode::VerifyCa => TlsVerification {
+                chain: true,
+                hostname: false,
+            },
+            RedshiftSslMode::VerifyFull => TlsVerification {
+                chain: true,
+                hostname: true,
+            },
         }
     }
 }
@@ -124,8 +153,9 @@ fn build_base_config(params: &RedshiftConnectParams, ssl_mode: RedshiftSslMode) 
 ///
 /// Shared by the direct/form path and the URI path so the per-mode certificate
 /// policy lives in exactly one place: `disable` connects without TLS;
-/// `require`/`prefer` accept invalid certificates; `verify-ca`/`verify-full`
-/// validate them; and `prefer` (like libpq) retries in plaintext when the TLS
+/// `require`/`prefer` accept invalid certificates; `verify-ca` validates the
+/// chain; `verify-full` also validates the hostname; and `prefer` (like libpq)
+/// retries in plaintext when the TLS
 /// attempt fails. `map_err` lets each caller attach its own connection-error
 /// context (host/port for the direct path, sanitized URI for the URI path).
 pub(crate) fn connect_with_ssl_mode(
@@ -134,47 +164,37 @@ pub(crate) fn connect_with_ssl_mode(
     tls_certs: &RedshiftTlsCerts,
     map_err: impl Fn(&postgres::Error) -> DbError,
 ) -> Result<Client, DbError> {
-    match ssl_mode {
-        RedshiftSslMode::Disable => config.connect(NoTls).map_err(|e| map_err(&e)),
+    if ssl_mode == RedshiftSslMode::Disable {
+        return config.connect(NoTls).map_err(|e| map_err(&e));
+    }
 
-        RedshiftSslMode::Verify => {
-            let connector = build_tls_connector(false, tls_certs)?;
-            config
-                .connect(MakeTlsConnector::new(connector))
-                .map_err(|e| map_err(&e))
-        }
+    let connector = build_tls_connector(ssl_mode.tls_verification(), tls_certs)?;
 
-        RedshiftSslMode::Require => {
-            let connector = build_tls_connector(true, tls_certs)?;
-            config
-                .connect(MakeTlsConnector::new(connector))
-                .map_err(|e| map_err(&e))
+    match config.connect(MakeTlsConnector::new(connector)) {
+        Ok(client) => Ok(client),
+        Err(_) if ssl_mode == RedshiftSslMode::Prefer => {
+            config.connect(NoTls).map_err(|e| map_err(&e))
         }
-
-        RedshiftSslMode::Prefer => {
-            let connector = build_tls_connector(true, tls_certs)?;
-            match config.connect(MakeTlsConnector::new(connector)) {
-                Ok(client) => Ok(client),
-                Err(_) => config.connect(NoTls).map_err(|e| map_err(&e)),
-            }
-        }
+        Err(e) => Err(map_err(&e)),
     }
 }
 
 /// Builds the native-tls connector for a TLS-enabled Redshift connection.
 ///
-/// `accept_invalid_certs` keeps the existing per-mode validation policy
-/// (`require` accepts, `verify-*` validates) untouched. On top of it, a pinned
-/// private CA is added when [`RedshiftTlsCerts::root_cert_path`] is set, and a
+/// `verification` carries the per-mode validation policy (`require` accepts
+/// any certificate, `verify-ca` skips only the hostname check). On top of it,
+/// a pinned private CA is added when [`RedshiftTlsCerts::root_cert_path`] is set, and a
 /// client identity for mutual TLS is applied when both client cert and key
 /// paths are set. Loading a cert never weakens validation: the root CA is
 /// *added* to the trust store, not substituted for validation.
 fn build_tls_connector(
-    accept_invalid_certs: bool,
+    verification: TlsVerification,
     tls_certs: &RedshiftTlsCerts,
 ) -> Result<TlsConnector, DbError> {
     let mut builder = TlsConnector::builder();
-    builder.danger_accept_invalid_certs(accept_invalid_certs);
+    builder
+        .danger_accept_invalid_certs(!verification.chain)
+        .danger_accept_invalid_hostnames(!verification.hostname);
 
     if let Some(path) = tls_certs.root_cert_path.as_deref() {
         builder.add_root_certificate(load_root_certificate(path)?);
@@ -1014,8 +1034,8 @@ fn redshift_value_to_value(row: &postgres::Row, idx: usize) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        RedshiftConnectParams, RedshiftSslMode, RedshiftTlsCerts, build_base_config,
-        ensure_read_only, load_client_identity, load_root_certificate,
+        RedshiftConnectParams, RedshiftSslMode, RedshiftTlsCerts, TlsVerification,
+        build_base_config, ensure_read_only, load_client_identity, load_root_certificate,
     };
     use dbflux_core::DbError;
     use postgres::config::SslMode;
@@ -1082,16 +1102,54 @@ mod tests {
         assert_eq!(RedshiftSslMode::parse("allow"), RedshiftSslMode::Prefer);
         assert_eq!(RedshiftSslMode::parse("prefer"), RedshiftSslMode::Prefer);
         assert_eq!(RedshiftSslMode::parse("require"), RedshiftSslMode::Require);
-        assert_eq!(RedshiftSslMode::parse("verify-ca"), RedshiftSslMode::Verify);
+        assert_eq!(
+            RedshiftSslMode::parse("verify-ca"),
+            RedshiftSslMode::VerifyCa
+        );
         assert_eq!(
             RedshiftSslMode::parse("verify-full"),
-            RedshiftSslMode::Verify
+            RedshiftSslMode::VerifyFull
         );
 
         // Case-insensitive, and unknown/empty fall back to prefer.
         assert_eq!(RedshiftSslMode::parse("REQUIRE"), RedshiftSslMode::Require);
         assert_eq!(RedshiftSslMode::parse("bogus"), RedshiftSslMode::Prefer);
         assert_eq!(RedshiftSslMode::parse(""), RedshiftSslMode::Prefer);
+    }
+
+    #[test]
+    fn verify_ca_checks_the_chain_but_not_the_hostname() {
+        assert_eq!(
+            RedshiftSslMode::VerifyCa.tls_verification(),
+            TlsVerification {
+                chain: true,
+                hostname: false
+            }
+        );
+        assert_eq!(
+            RedshiftSslMode::VerifyFull.tls_verification(),
+            TlsVerification {
+                chain: true,
+                hostname: true
+            }
+        );
+        for mode in [RedshiftSslMode::Prefer, RedshiftSslMode::Require] {
+            assert_eq!(
+                mode.tls_verification(),
+                TlsVerification {
+                    chain: false,
+                    hostname: false
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn verify_ca_mandates_tls_at_the_protocol_level() {
+        assert_eq!(
+            RedshiftSslMode::VerifyCa.config_ssl_mode(),
+            SslMode::Require
+        );
     }
 
     #[test]

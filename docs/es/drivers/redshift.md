@@ -24,7 +24,8 @@ directamente sobre el cliente de wire protocol
   password, SSL/`sslmode`
   (`disable`/`allow`/`prefer`/`require`/`verify-ca`/`verify-full`), un modo de
   URI de conexión (`redshift://...`, normalizado internamente a
-  `postgresql://...`), y túnel SSH.
+  `postgresql://...`), y túnel SSH. Como en libpq, `verify-ca` valida solo la
+  cadena de certificados y `verify-full` además comprueba el nombre del host.
 - Confianza TLS personalizada y TLS mutuo: para los modos con TLS habilitado se
   agrega una CA raíz privada fijada (PEM) al almacén de confianza además de las
   raíces del sistema, y un certificado de cliente + clave privada (PEM/PKCS#8)
