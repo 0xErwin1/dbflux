@@ -648,6 +648,71 @@ pub(crate) const BUCKETS: SurfaceRegistry = SurfaceRegistry {
     ],
 };
 
+/// A secret store tab: its listing and details pane. The pane actions (`m`)
+/// list Retrieve value, the copy actions, Hide all, the error actions, Load
+/// next page, Refresh and, on a hierarchical store, the path mode and Up.
+pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
+    name: "secret store",
+    contexts: &[ContextId::Results, ContextId::ContextMenu],
+    entries: &[
+        ("secret-row-*", KeyboardPath::Command(Command::SelectNext)),
+        (
+            "secret-path-row-*",
+            KeyboardPath::Command(Command::SelectNext),
+        ),
+        (
+            "secret-load-more",
+            KeyboardPath::Command(Command::ResultsNextPage),
+        ),
+        (
+            "secret-refresh",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "secret-path-crumb-*",
+            KeyboardPath::Command(Command::ColumnLeft),
+        ),
+        (
+            "segmented-secret-path-mode-*",
+            KeyboardPath::Command(Command::CycleDocumentView),
+        ),
+        (
+            "segmented-secret-value-view-*",
+            KeyboardPath::Command(Command::CycleResultView),
+        ),
+        (
+            "secret-retrieve-value",
+            KeyboardPath::Command(Command::ToggleValuePanel),
+        ),
+        (
+            "secret-value-copy-all",
+            KeyboardPath::Command(Command::ResultsCopyRow),
+        ),
+        (
+            "secret-value-copy-error",
+            KeyboardPath::Menu("secret-copy-error"),
+        ),
+        (
+            "secret-value-view-in-audit",
+            KeyboardPath::Menu("secret-view-in-audit"),
+        ),
+        (
+            "secret-value-hide-all",
+            KeyboardPath::Menu("secret-hide-all"),
+        ),
+        (
+            "secret-value-reveal-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "secret-value-copy-*",
+            KeyboardPath::MouseOnly(
+                "copies one field of the value; the copy key copies the whole value",
+            ),
+        ),
+    ],
+};
+
 /// An object editor tab. Its pane actions (`m`, once Escape leaves the
 /// text) list Save, Discard, Find, the interpretation, Reload and Load
 /// anyway.

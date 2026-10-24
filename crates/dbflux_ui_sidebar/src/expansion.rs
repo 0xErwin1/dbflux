@@ -304,6 +304,29 @@ impl Sidebar {
             self.spawn_fetch_buckets(*profile_id, cx);
         }
 
+        if let Some(SchemaNodeId::SecretStore {
+            profile_id,
+            store_id,
+        }) = &parsed
+        {
+            self.spawn_fetch_secret_paths(
+                crate::secret_store::SecretPathKey::new(*profile_id, store_id, None),
+                cx,
+            );
+        }
+
+        if let Some(SchemaNodeId::SecretPath {
+            profile_id,
+            store_id,
+            path,
+        }) = &parsed
+        {
+            self.spawn_fetch_secret_paths(
+                crate::secret_store::SecretPathKey::new(*profile_id, store_id, Some(path)),
+                cx,
+            );
+        }
+
         if let Some(SchemaNodeId::Profile { profile_id }) = &parsed {
             if self.profile_category(*profile_id, cx) == Some(DatabaseCategory::ObjectStorage) {
                 self.spawn_fetch_buckets(*profile_id, cx);
@@ -925,6 +948,16 @@ impl Sidebar {
             .collect();
         for profile_id in stale_bucket_ids {
             self.clear_bucket_cache(profile_id);
+        }
+
+        let stale_secret_path_ids: std::collections::HashSet<Uuid> = self
+            .secret_path_cache
+            .keys()
+            .map(|key| key.profile_id)
+            .filter(|id| !connected_profile_ids.contains(id))
+            .collect();
+        for profile_id in stale_secret_path_ids {
+            self.clear_secret_path_cache(profile_id);
         }
 
         // An object-storage connection that finishes while its profile node is

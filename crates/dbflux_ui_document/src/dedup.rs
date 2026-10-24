@@ -124,6 +124,11 @@ pub enum DocumentKey {
     /// root. Deduplicated by `profile_id` — one per connection.
     ObjectStoreBucketsRoot { profile_id: Uuid },
 
+    /// The browser of one store of a secret-store connection. Deduplicated by
+    /// `(profile_id, store_id)` — one tab per store; opening a path of a
+    /// hierarchical store navigates that tab.
+    SecretStore { profile_id: Uuid, store_id: String },
+
     /// The prefix/object tree browser opened for a single bucket.
     /// Deduplicated by `(profile_id, bucket)` — one per bucket per connection.
     ObjectBrowser { profile_id: Uuid, bucket: String },

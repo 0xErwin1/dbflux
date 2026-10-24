@@ -463,7 +463,7 @@ impl AuditService {
                     )));
                 }
             }
-            EventCategory::ObjectStorage => {
+            EventCategory::ObjectStorage | EventCategory::SecretStore => {
                 if !Self::has_required_text(event.connection_id.as_deref()) {
                     return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
                         "connection_id",
@@ -1469,6 +1469,37 @@ mod tests {
             ),
             "expected MissingRequiredField(object_id), got {result:?}"
         );
+    }
+
+    #[test]
+    fn test_validate_event_requires_the_secret_store_object_fields() {
+        let mut event = base_object_storage_event();
+        event.category = dbflux_core::observability::EventCategory::SecretStore;
+        event.action = "secret_value_retrieved".to_string();
+        event.object_type = Some("secrets-manager".to_string());
+        event.object_id = Some("prod/db".to_string());
+
+        AuditService::validate_event(&event)
+            .expect("SecretStore events with connection_id/object_type/object_id must pass");
+
+        for field in ["connection_id", "object_type", "object_id"] {
+            let mut missing = event.clone();
+            match field {
+                "connection_id" => missing.connection_id = None,
+                "object_type" => missing.object_type = None,
+                _ => missing.object_id = None,
+            }
+
+            let result = AuditService::validate_event(&missing);
+            assert!(
+                matches!(
+                    result,
+                    Err(AuditError::EventSink(EventSinkError::MissingRequiredField(name)))
+                        if name == field
+                ),
+                "expected MissingRequiredField({field}), got {result:?}"
+            );
+        }
     }
 
     // W1: build_truncated_envelope must never return a string longer than max_bytes.

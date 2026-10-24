@@ -1584,6 +1584,10 @@ impl AuditDocument {
                 dbflux_i18n::t!("document.audit.category.object_storage"),
                 "object_storage",
             ),
+            DropdownItem::with_value(
+                dbflux_i18n::t!("document.audit.category.secret_store"),
+                "secret_store",
+            ),
         ]
     }
 
@@ -1599,6 +1603,7 @@ impl AuditDocument {
             Some(EventCategory::Mcp) => 7,
             Some(EventCategory::Governance) => 8,
             Some(EventCategory::ObjectStorage) => 9,
+            Some(EventCategory::SecretStore) => 10,
             None => 0,
         }
     }
@@ -1615,6 +1620,7 @@ impl AuditDocument {
             7 => Some(EventCategory::Mcp),
             8 => Some(EventCategory::Governance),
             9 => Some(EventCategory::ObjectStorage),
+            10 => Some(EventCategory::SecretStore),
             _ => None,
         }
     }
@@ -2166,6 +2172,11 @@ mod tests {
             dbflux_i18n::t!("document.audit.level.warn")
         );
         assert_eq!(category_items[8].value.as_ref(), "object_storage");
+        assert_eq!(category_items[9].value.as_ref(), "secret_store");
+        assert_eq!(
+            category_items[9].label.as_ref(),
+            dbflux_i18n::t!("document.audit.category.secret_store")
+        );
         assert_eq!(
             category_items[8].label.as_ref(),
             dbflux_i18n::t!("document.audit.category.object_storage")

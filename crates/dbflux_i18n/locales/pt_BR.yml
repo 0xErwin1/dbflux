@@ -959,6 +959,7 @@ document:
       query: Consulta
       script: Script
       system: Sistema
+      secret_store: "Cofre de segredos"
     export:
       unsupported_source: A exportação só está disponível no visualizador de auditoria integrado
       exported:
@@ -3403,6 +3404,130 @@ document:
     new: Nova aba
     close_named: "Fechar %{title}"
     unsaved_changes: Alterações não salvas
+  secret_store:
+    title: "%{store} · %{connection}"
+    search_placeholder: "A busca roda no cofre; os valores nunca são listados"
+    toolbar:
+      refresh: "Atualizar"
+    load_more: "Carregar a próxima página"
+    loading_more: "Carregando a próxima página…"
+    columns:
+      name: "Nome"
+      description: "Descrição"
+      rotation: "Rotação"
+      last_changed: "Última alteração"
+      type: "Tipo"
+      tier: "Nível"
+      version: "Versão"
+      last_modified: "Última modificação"
+    badge:
+      managed: "Gerenciado por %{service}"
+      deletes: "Será excluído em %{date}"
+    path_mode:
+      tree: "Árvore"
+      flat: "Plano"
+      toggle: "Alternar entre árvore e lista plana"
+    path:
+      up: "Subir um nível"
+    empty:
+      loading: "Listando segredos…"
+      error: "Não foi possível listar os segredos: %{error}"
+      no_match: "Nenhum segredo corresponde a \"%{query}\""
+      no_secrets: "Este cofre não tem segredos aqui"
+    error:
+      connection_unavailable: "A conexão não está disponível"
+      store_unavailable: "A conexão não tem o cofre %{store}"
+    footer:
+      loaded:
+        one: "%{count} segredo carregado"
+        many: "%{count} segredos carregados"
+      hint:
+        open: "abrir"
+        retrieve: "obter valor"
+        copy_id: "copiar ID"
+        filter: "filtrar"
+        up: "subir"
+    status:
+      list_timing:
+        one: "Listagem · %{count} segredo · %{millis} ms"
+        many: "Listagem · %{count} segredos · %{millis} ms"
+      describe_timing: "Descrição · %{millis} ms"
+      retrieve_timing: "Obter valor · %{millis} ms"
+      duration_tooltip: "Duração no cliente da última chamada ao cofre"
+    rotation:
+      off: "Desativada"
+      enabled: "Ativada"
+      disabled: "Desativada"
+      every_days: "A cada %{count} dias"
+      every_hours: "A cada %{count} horas"
+      schedule_with_window: "%{schedule} · janela %{window} (%{expression})"
+      title: "Rotação"
+      status: "Status"
+      schedule: "Agendamento"
+      next: "Próxima rotação"
+      function: "Função"
+      last: "Última rotação"
+    details:
+      none: "Selecione um segredo para ver os detalhes"
+      loading: "Carregando os detalhes…"
+      failed: "Não foi possível carregar os detalhes"
+      title: "Detalhes do segredo"
+      resource_id: "ARN"
+      type: "Tipo"
+      tier: "Nível"
+      data_type: "Tipo de dados"
+      encryption_key: "Chave de criptografia"
+      description: "Descrição"
+      version: "Versão"
+      last_modified: "Última modificação"
+      created: "Criado"
+      last_changed: "Última alteração"
+      last_retrieved: "Última obtenção"
+      versions: "Versões"
+    tags:
+      title: "Tags"
+      none: "Sem tags"
+    managed:
+      title: "Gerenciado por %{service}"
+      body: "%{name} pertence a %{service}. %{service} faz a rotação e a atualização, então o DBFlux o mostra somente leitura."
+    action:
+      copy_resource_id: "Copiar ARN"
+    toast:
+      value_copied: "Valor copiado para a área de transferência"
+      resource_id_copied: "ARN copiado para a área de transferência"
+      error_copied: "Erro copiado para a área de transferência"
+    value:
+      title: "Valor"
+      not_loaded: "Valor não carregado"
+      not_loaded_hint: "O DBFlux só busca o valor quando você pede. Cada obtenção fica registrada na auditoria, sem o valor."
+      encrypted_hint: "Este valor é descriptografado com sua chave de criptografia ao ser obtido. A obtenção é auditada, o valor não."
+      needs_decrypt: "Requer permissão para descriptografar com %{key}"
+      retrieve: "Obter valor"
+      retrieving: "Obtendo o valor…"
+      retrieved_at: "Obtido às %{time} · auditado"
+      view:
+        key_value: "Chave/valor"
+        plaintext: "Texto simples"
+      plaintext_only: "Chave/valor só abre quando o valor é um objeto JSON de um nível com valores escalares. JSON aninhado, arrays e qualquer outro texto abrem como texto simples."
+      binary_size: "Binário · %{size}"
+      read_only: "Somente leitura"
+      binary_note: "Valores binários são gravados por outras ferramentas. O DBFlux os mostra em base64 e não os edita."
+      reveal: "Mostrar"
+      hide: "Ocultar"
+      reveal_all: "Mostrar ou ocultar o valor"
+      show_all: "Mostrar tudo"
+      hide_all: "Ocultar tudo"
+      copy: "Copiar valor"
+      copy_json: "Copiar JSON"
+      copy_all: "Copiar valor"
+      tab_only: "Valor visível só nesta aba; é apagado ao fechar"
+      failed_decrypt: "Não foi possível descriptografar o valor"
+      failed: "Não foi possível obter o valor"
+      copy_error: "Copiar erro"
+      view_in_audit: "Ver na auditoria"
+      metadata_loaded: "Metadados carregados · só o valor falhou"
+      deletion_scheduled: "Exclusão agendada para %{date}"
+      deletion_scheduled_body: "O valor não pode ser obtido até que seja restaurado."
 document_tree:
   search_placeholder: Buscar…
   view:
@@ -3423,6 +3548,7 @@ documents:
       object_storage_account: Nenhuma conexão ativa para esta conta de armazenamento de objetos
       bucket: Nenhuma conexão ativa para este bucket
       object: Nenhuma conexão ativa para este objeto
+      secret_store: "Nenhuma conexão ativa para este cofre de segredos"
   error:
     write_initial_script_failed: "Falha ao gravar o conteúdo inicial do script: %{error}"
     save_session_failed: Falha ao salvar o manifesto da sessão
@@ -5084,6 +5210,7 @@ sidebar:
         opening_access: "Pipeline: abrindo o acesso (%{method})"
         connecting: "Pipeline: conectando o driver (%{driver})"
         fetching_schema: "Pipeline: buscando o schema"
+    listing_secret_paths: "Listando caminhos de segredos: %{name}"
   toast:
     edit_reconnect_updated: "'%{name}' atualizada"
     edit_reconnect_body: Reconecte para aplicar as alterações à sessão ativa.
@@ -5133,6 +5260,7 @@ sidebar:
     add_external_folder_failed: "Não foi possível adicionar a pasta: %{error}"
     remove_external_folder_failed: "Não foi possível remover a pasta: %{error}"
     script_operation_failed: "A operação no script falhou: %{error}"
+    list_secret_paths_failed: "Falha ao listar os caminhos de segredos: %{error}"
   tree:
     container:
       relational: Tabelas (%{count})

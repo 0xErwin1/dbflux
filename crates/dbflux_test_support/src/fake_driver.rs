@@ -1,3 +1,4 @@
+use dbflux_core::chrono;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     Connection, ConnectionProfile, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError,
@@ -8,6 +9,10 @@ use dbflux_core::{
     TransactionCapabilities, TransferFamily, field, field_required,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
+use dbflux_core::{
+    SecretDetails, SecretListPage, SecretListRequest, SecretRotation, SecretStoreCapabilities,
+    SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag, SecretValue,
+};
 use dbflux_driver_cloudwatch::CLOUDWATCH_FORM;
 use dbflux_driver_dynamodb::DYNAMODB_FORM;
 use dbflux_driver_influxdb::INFLUXDB_FORM;
@@ -78,6 +83,7 @@ struct FakeDriverState {
     connect_error: RwLock<Option<String>>,
     refuse_read_only: AtomicBool,
     delete_row_errors: RwLock<Vec<(dbflux_core::Value, String)>>,
+    secret_store_calls: Mutex<FakeSecretStoreCalls>,
 }
 
 #[derive(Clone)]
@@ -184,6 +190,12 @@ impl FakeDriver {
             cancel_active_calls: self.state.cancel_active_calls.load(Ordering::Relaxed),
             close_calls: self.state.close_calls.load(Ordering::Relaxed),
         }
+    }
+
+    /// Every call the fake secret stores of a `DbKind::AwsSecrets` connection
+    /// received, in order.
+    pub fn secret_store_calls(&self) -> FakeSecretStoreCalls {
+        mutex_lock(&self.state.secret_store_calls).clone()
     }
 
     pub fn as_driver_arc(self) -> Arc<dyn DbDriver> {
@@ -583,6 +595,7 @@ struct FakeConnection {
     state: Arc<FakeDriverState>,
     metadata: Arc<DriverMetadata>,
     active_database: RwLock<Option<String>>,
+    secret_stores: Vec<FakeSecretStore>,
 }
 
 impl FakeConnection {
@@ -592,11 +605,17 @@ impl FakeConnection {
         state: Arc<FakeDriverState>,
         metadata: Arc<DriverMetadata>,
     ) -> Self {
+        let secret_stores = match kind {
+            DbKind::AwsSecrets => fake_secret_stores(&state),
+            _ => Vec::new(),
+        };
+
         Self {
             kind,
             state,
             metadata,
             active_database: RwLock::new(active_database_from_profile(profile)),
+            secret_stores,
         }
     }
 
@@ -744,6 +763,13 @@ impl Connection for FakeConnection {
 
     fn dialect(&self) -> &dyn SqlDialect {
         &DEFAULT_SQL_DIALECT
+    }
+
+    fn secret_stores(&self) -> Vec<&dyn SecretStoreSource> {
+        self.secret_stores
+            .iter()
+            .map(|store| store as &dyn SecretStoreSource)
+            .collect()
     }
 }
 
@@ -1866,4 +1892,413 @@ mod tests {
         ));
         assert!(connection.execute(&QueryRequest::new("SELECT 1")).is_ok());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Fake secret stores
+// ---------------------------------------------------------------------------
+
+/// The calls the fake secret stores received, as `(store_id, argument)`.
+#[derive(Debug, Clone, Default)]
+pub struct FakeSecretStoreCalls {
+    pub list_requests: Vec<(String, SecretListRequest)>,
+    pub described: Vec<(String, String)>,
+    pub value_requests: Vec<(String, String)>,
+}
+
+/// Id of the fake flat store, shaped like AWS Secrets Manager.
+pub const FAKE_SECRETS_STORE_ID: &str = "secrets-manager";
+
+/// Id of the fake hierarchical store, shaped like SSM Parameter Store.
+pub const FAKE_PARAMETER_STORE_ID: &str = "parameter-store";
+
+/// Value the fake flat store returns for its key/value secret's `password`.
+pub const FAKE_SECRET_PASSWORD: &str = "fake-password-7f3a";
+
+/// Value the fake flat store returns for its plaintext secret.
+pub const FAKE_SECRET_PLAINTEXT: &str = "fake plaintext token 91c2";
+
+/// Bytes the fake flat store returns for its binary secret.
+pub const FAKE_SECRET_BINARY: &[u8] = &[0xde, 0xad, 0xbe, 0xef, 0x00, 0x42];
+
+/// Error the fake parameter store returns for its `SecureString`.
+pub const FAKE_KMS_DENIED_MESSAGE: &str =
+    "User is not authorized to perform kms:Decrypt on key alias/app-prod";
+
+enum FakeSecretPayload {
+    Text(String),
+    Binary(Vec<u8>),
+    Denied(&'static str),
+    Unavailable(&'static str),
+}
+
+struct FakeSecret {
+    details: SecretDetails,
+    payload: FakeSecretPayload,
+}
+
+/// A deterministic in-memory secret store. A flat store matches its name
+/// filter as a prefix, a hierarchical one as a substring of the full name.
+struct FakeSecretStore {
+    descriptor: SecretStoreDescriptor,
+    secrets: Vec<FakeSecret>,
+    default_page_size: usize,
+    state: Arc<FakeDriverState>,
+}
+
+impl FakeSecretStore {
+    fn record_list(&self, request: &SecretListRequest) {
+        mutex_lock(&self.state.secret_store_calls)
+            .list_requests
+            .push((self.descriptor.id.clone(), request.clone()));
+    }
+
+    fn hierarchical(&self) -> bool {
+        self.descriptor
+            .supports(SecretStoreCapabilities::HIERARCHICAL)
+    }
+
+    fn matches_filter(&self, name: &str, filter: Option<&str>) -> bool {
+        match filter.map(str::trim).filter(|filter| !filter.is_empty()) {
+            None => true,
+            Some(filter) if self.hierarchical() => name.contains(filter),
+            Some(filter) => name.starts_with(filter),
+        }
+    }
+
+    /// Entries of one listing before paging, and the sub-paths found under
+    /// the requested path.
+    fn listing(&self, request: &SecretListRequest) -> (Vec<&FakeSecret>, Vec<String>) {
+        let filter = request.name_filter.as_deref();
+
+        if !self.hierarchical() {
+            let entries = self
+                .secrets
+                .iter()
+                .filter(|secret| self.matches_filter(&secret.details.summary.name, filter))
+                .collect();
+            return (entries, Vec::new());
+        }
+
+        let path = request.path.clone().unwrap_or_else(|| "/".to_string());
+        let mut entries = Vec::new();
+        let mut child_paths = Vec::new();
+
+        for secret in &self.secrets {
+            let name = &secret.details.summary.name;
+            let Some(rest) = name.strip_prefix(path.as_str()) else {
+                continue;
+            };
+
+            match rest.split_once('/') {
+                Some((segment, _)) if !request.recursive => {
+                    let child = format!("{path}{segment}/");
+                    if !child_paths.contains(&child) {
+                        child_paths.push(child);
+                    }
+                }
+                _ => {
+                    if self.matches_filter(name, filter) {
+                        entries.push(secret);
+                    }
+                }
+            }
+        }
+
+        (entries, child_paths)
+    }
+
+    fn find(&self, name: &str) -> Result<&FakeSecret, DbError> {
+        self.secrets
+            .iter()
+            .find(|secret| secret.details.summary.name == name)
+            .ok_or_else(|| DbError::object_not_found(format!("Secret {name} not found")))
+    }
+}
+
+impl SecretStoreSource for FakeSecretStore {
+    fn descriptor(&self) -> &SecretStoreDescriptor {
+        &self.descriptor
+    }
+
+    /// Pages by offset: the page token is the index of the first entry of
+    /// the next page. Every page repeats the full set of sub-paths, which is
+    /// what a real store may do, so callers must merge them.
+    fn list(&self, request: &SecretListRequest) -> Result<SecretListPage, DbError> {
+        self.record_list(request);
+
+        let (entries, child_paths) = self.listing(request);
+        let start = match request.page_token.as_deref() {
+            Some(token) => token
+                .parse::<usize>()
+                .map_err(|_| DbError::query_failed(format!("Invalid page token {token}")))?,
+            None => 0,
+        };
+        let page_size = request
+            .page_size
+            .map_or(self.default_page_size, |size| size as usize)
+            .max(1);
+
+        let end = (start + page_size).min(entries.len());
+        let page: Vec<SecretSummary> = entries
+            .get(start..end)
+            .unwrap_or_default()
+            .iter()
+            .map(|secret| secret.details.summary.clone())
+            .collect();
+
+        Ok(SecretListPage {
+            entries: page,
+            child_paths,
+            next_page_token: (end < entries.len()).then(|| end.to_string()),
+        })
+    }
+
+    fn describe(&self, name: &str) -> Result<SecretDetails, DbError> {
+        mutex_lock(&self.state.secret_store_calls)
+            .described
+            .push((self.descriptor.id.clone(), name.to_string()));
+
+        self.find(name).map(|secret| secret.details.clone())
+    }
+
+    fn get_value(&self, name: &str, _version: Option<&str>) -> Result<SecretValue, DbError> {
+        mutex_lock(&self.state.secret_store_calls)
+            .value_requests
+            .push((self.descriptor.id.clone(), name.to_string()));
+
+        let secret = self.find(name)?;
+        let version = secret.details.summary.version.clone();
+
+        match &secret.payload {
+            FakeSecretPayload::Text(text) => Ok(SecretValue::text(version, text.clone())),
+            FakeSecretPayload::Binary(bytes) => Ok(SecretValue::binary(version, bytes.clone())),
+            FakeSecretPayload::Denied(message) => Err(DbError::permission_denied(*message)),
+            FakeSecretPayload::Unavailable(message) => Err(DbError::query_failed(*message)),
+        }
+    }
+}
+
+fn fake_time(month: u32, day: u32, hour: u32) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::TimeZone as _;
+
+    chrono::Utc
+        .with_ymd_and_hms(2026, month, day, hour, 0, 0)
+        .single()
+}
+
+fn fake_secret(
+    summary: SecretSummary,
+    details: impl FnOnce(SecretDetails) -> SecretDetails,
+    payload: FakeSecretPayload,
+) -> FakeSecret {
+    let base = SecretDetails {
+        resource_id: Some(format!("arn:fake:secret:{}", summary.name)),
+        created: fake_time(1, 10, 8),
+        summary,
+        ..SecretDetails::default()
+    };
+
+    FakeSecret {
+        details: details(base),
+        payload,
+    }
+}
+
+fn fake_secret_stores(state: &Arc<FakeDriverState>) -> Vec<FakeSecretStore> {
+    vec![
+        FakeSecretStore {
+            descriptor: SecretStoreDescriptor::new(
+                FAKE_SECRETS_STORE_ID,
+                "Secrets Manager",
+                SecretStoreCapabilities::VERSIONS
+                    | SecretStoreCapabilities::VERSION_LABELS
+                    | SecretStoreCapabilities::ROTATION
+                    | SecretStoreCapabilities::SOFT_DELETE,
+            ),
+            secrets: fake_flat_secrets(),
+            default_page_size: 4,
+            state: state.clone(),
+        },
+        FakeSecretStore {
+            descriptor: SecretStoreDescriptor::new(
+                FAKE_PARAMETER_STORE_ID,
+                "Parameter Store",
+                SecretStoreCapabilities::VERSIONS
+                    | SecretStoreCapabilities::HIERARCHICAL
+                    | SecretStoreCapabilities::TYPED_VALUES,
+            ),
+            secrets: fake_parameters(),
+            default_page_size: 2,
+            state: state.clone(),
+        },
+    ]
+}
+
+/// Six secrets, so the default page of four leaves a second page: a
+/// key/value secret with rotation, a secret managed by another service, a
+/// plaintext one, a binary one, one pending deletion and one more key/value.
+fn fake_flat_secrets() -> Vec<FakeSecret> {
+    let rotation = SecretRotation {
+        enabled: true,
+        schedule: Some("rate(30 days)".to_string()),
+        window: Some("4h".to_string()),
+        function: Some("rotate-api-credentials".to_string()),
+        last_rotated: fake_time(9, 20, 3),
+        next_rotation: fake_time(10, 20, 3),
+    };
+
+    vec![
+        fake_secret(
+            SecretSummary {
+                description: Some("Payments API credentials".to_string()),
+                version: Some("v-current".to_string()),
+                last_changed: fake_time(9, 20, 3),
+                rotation: Some(rotation),
+                ..SecretSummary::new("prod/api/credentials")
+            },
+            |details| SecretDetails {
+                encryption_key: Some("alias/secrets".to_string()),
+                last_accessed: fake_time(10, 1, 0),
+                version_count: Some(4),
+                version_labels: vec!["AWSCURRENT".to_string(), "AWSPREVIOUS".to_string()],
+                tags: vec![
+                    SecretTag::new("team", "payments"),
+                    SecretTag::new("env", "prod"),
+                ],
+                ..details
+            },
+            FakeSecretPayload::Text(format!(
+                r#"{{"username":"api-user","password":"{FAKE_SECRET_PASSWORD}","port":5432}}"#
+            )),
+        ),
+        fake_secret(
+            SecretSummary {
+                description: Some("Master password of the orders database".to_string()),
+                last_changed: fake_time(8, 2, 12),
+                owning_service: Some("rds".to_string()),
+                ..SecretSummary::new("prod/db/master")
+            },
+            |details| SecretDetails {
+                version_count: Some(1),
+                version_labels: vec!["AWSCURRENT".to_string()],
+                ..details
+            },
+            FakeSecretPayload::Text(r#"{"username":"admin","password":"managed-pass"}"#.into()),
+        ),
+        fake_secret(
+            SecretSummary {
+                description: Some("Legacy deploy token".to_string()),
+                last_changed: fake_time(7, 15, 9),
+                deletion_scheduled_for: fake_time(11, 1, 0),
+                ..SecretSummary::new("prod/deploy/legacy-token")
+            },
+            |details| SecretDetails {
+                deleted_at: fake_time(10, 2, 0),
+                ..details
+            },
+            FakeSecretPayload::Unavailable("The secret is scheduled for deletion"),
+        ),
+        fake_secret(
+            SecretSummary {
+                description: Some("Webhook signing token".to_string()),
+                last_changed: fake_time(6, 5, 11),
+                ..SecretSummary::new("prod/notify/webhook-token")
+            },
+            |details| details,
+            FakeSecretPayload::Text(FAKE_SECRET_PLAINTEXT.to_string()),
+        ),
+        fake_secret(
+            SecretSummary {
+                description: Some("Signing key in DER form".to_string()),
+                last_changed: fake_time(5, 3, 14),
+                ..SecretSummary::new("prod/tls/signing-key")
+            },
+            |details| details,
+            FakeSecretPayload::Binary(FAKE_SECRET_BINARY.to_vec()),
+        ),
+        fake_secret(
+            SecretSummary {
+                description: Some("Staging API credentials".to_string()),
+                last_changed: fake_time(4, 8, 16),
+                ..SecretSummary::new("staging/api/credentials")
+            },
+            |details| details,
+            FakeSecretPayload::Text(r#"{"username":"staging","password":"staging-pass"}"#.into()),
+        ),
+    ]
+}
+
+fn fake_parameter(
+    name: &str,
+    value_type: &str,
+    tier: &str,
+    payload: FakeSecretPayload,
+) -> FakeSecret {
+    fake_secret(
+        SecretSummary {
+            value_type: Some(value_type.to_string()),
+            tier: Some(tier.to_string()),
+            version: Some("3".to_string()),
+            last_changed: fake_time(9, 1, 10),
+            ..SecretSummary::new(name)
+        },
+        |details| SecretDetails {
+            data_type: Some("text".to_string()),
+            last_changed_by: Some("arn:fake:user/deployer".to_string()),
+            encryption_key: (value_type == "SecureString").then(|| "alias/app-prod".to_string()),
+            tags: vec![SecretTag::new("app", "shop")],
+            ..details
+        },
+        payload,
+    )
+}
+
+/// A path tree `/app/prod/{db,feature-flags}/…`, `/app/staging/db/…` and
+/// `/shared/…`, with a `SecureString` the caller may not decrypt.
+fn fake_parameters() -> Vec<FakeSecret> {
+    vec![
+        fake_parameter(
+            "/app/prod/db/host",
+            "String",
+            "Standard",
+            FakeSecretPayload::Text("db.prod.internal".to_string()),
+        ),
+        fake_parameter(
+            "/app/prod/db/password",
+            "SecureString",
+            "Standard",
+            FakeSecretPayload::Denied(FAKE_KMS_DENIED_MESSAGE),
+        ),
+        fake_parameter(
+            "/app/prod/db/port",
+            "String",
+            "Standard",
+            FakeSecretPayload::Text("5432".to_string()),
+        ),
+        fake_parameter(
+            "/app/prod/feature-flags/checkout",
+            "String",
+            "Advanced",
+            FakeSecretPayload::Text("enabled".to_string()),
+        ),
+        fake_parameter(
+            "/app/prod/region",
+            "String",
+            "Standard",
+            FakeSecretPayload::Text("eu-west-1".to_string()),
+        ),
+        fake_parameter(
+            "/app/staging/db/host",
+            "String",
+            "Standard",
+            FakeSecretPayload::Text("db.staging.internal".to_string()),
+        ),
+        fake_parameter(
+            "/shared/endpoint",
+            "String",
+            "Standard",
+            FakeSecretPayload::Text("https://api.example.test".to_string()),
+        ),
+    ]
 }

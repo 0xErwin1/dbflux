@@ -182,6 +182,7 @@ fn render_profile(connected: ConnectedProfile, surroundings: Surroundings) -> St
         &HashMap::new(),
         &HashMap::new(),
         &surroundings.bucket_cache,
+        &HashMap::new(),
     );
 
     let mut text = String::new();

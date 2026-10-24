@@ -1122,6 +1122,7 @@ pub(crate) fn audit_category_label(category: dbflux_core::EventCategory) -> Stri
         EventCategory::ObjectStorage => {
             dbflux_i18n::t!("document.audit.category.object_storage")
         }
+        EventCategory::SecretStore => dbflux_i18n::t!("document.audit.category.secret_store"),
     }
 }
 
@@ -5106,6 +5107,7 @@ mod tests {
         EventCategory::Mcp,
         EventCategory::Governance,
         EventCategory::ObjectStorage,
+        EventCategory::SecretStore,
     ];
 
     const ALL_EVENT_OUTCOMES: &[EventOutcome] = &[
@@ -5146,6 +5148,7 @@ mod tests {
             EventCategory::Mcp => "document.audit.category.mcp",
             EventCategory::Governance => "document.audit.category.governance",
             EventCategory::ObjectStorage => "document.audit.category.object_storage",
+            EventCategory::SecretStore => "document.audit.category.secret_store",
         }
     }
 
