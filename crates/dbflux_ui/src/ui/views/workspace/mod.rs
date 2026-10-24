@@ -1118,6 +1118,19 @@ impl Workspace {
                 SidebarEvent::OpenObjectStoreBucket { profile_id, bucket } => {
                     this.open_object_browser(*profile_id, bucket.clone(), window, cx);
                 }
+                SidebarEvent::OpenSecretStore {
+                    profile_id,
+                    store_id,
+                    path,
+                } => {
+                    this.open_secret_store_document(
+                        *profile_id,
+                        store_id.clone(),
+                        path.clone(),
+                        window,
+                        cx,
+                    );
+                }
                 SidebarEvent::RequestSqlPreview {
                     profile_id,
                     table_info,

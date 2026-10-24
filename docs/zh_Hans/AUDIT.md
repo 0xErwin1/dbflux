@@ -55,6 +55,7 @@ DBFlux 将所有重要操作记录到存储在 SQLite 中的统一审计追踪�
 | `Config` | `config` | 配置文件变更、设置修改 |
 | `System` | `system` | 应用启动、panic、迁移 |
 | `ObjectStorage` | `object_storage` | 对象存储的增删改与变更事件（上传、下载、删除、预签名、重命名、创建桶 / 文件夹、回写编辑） |
+| `SecretStore` | `secret_store` | 密钥值读取（`secret_value_retrieved`、`secret_value_retrieve_failed`）；值本身从不被记录 |
 
 ### 执行者类型
 
@@ -80,6 +81,7 @@ DBFlux 将所有重要操作记录到存储在 SQLite 中的统一审计追踪�
 | `Mcp` | `actor_id`、`object_id`（工具名称） |
 | `Config` | `object_type`、`object_id` |
 | `ObjectStorage` | `connection_id`、`object_type`、`object_id` |
+| `SecretStore` | `connection_id`、`object_type`（存储库 id）、`object_id`（密钥名称） |
 | `Governance`、`System` | 无附加字段 |
 
 ## 隐私与脱敏

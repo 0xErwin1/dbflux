@@ -463,6 +463,7 @@ connection_manager:
       key_value: "Key-value"
       time_series_and_logs: "Time series and logs"
       object_storage: "Object storage"
+      secret_store: "Secret stores"
       other: "Other"
   export:
     target:
@@ -958,6 +959,7 @@ document:
       query: Query
       script: Script
       system: System
+      secret_store: "Secret Store"
     export:
       unsupported_source: Export is only available for the built-in audit viewer
       exported:
@@ -3402,6 +3404,130 @@ document:
     new: New tab
     close_named: "Close %{title}"
     unsaved_changes: Unsaved changes
+  secret_store:
+    title: "%{store} · %{connection}"
+    search_placeholder: "Search runs on the store, values are never listed"
+    toolbar:
+      refresh: "Refresh"
+    load_more: "Load next page"
+    loading_more: "Loading the next page…"
+    columns:
+      name: "Name"
+      description: "Description"
+      rotation: "Rotation"
+      last_changed: "Last changed"
+      type: "Type"
+      tier: "Tier"
+      version: "Version"
+      last_modified: "Last modified"
+    badge:
+      managed: "Managed by %{service}"
+      deletes: "Deletes %{date}"
+    path_mode:
+      tree: "Tree"
+      flat: "Flat"
+      toggle: "Switch tree and flat listing"
+    path:
+      up: "Up one level"
+    empty:
+      loading: "Listing secrets…"
+      error: "The secrets could not be listed: %{error}"
+      no_match: "No secret matches \"%{query}\""
+      no_secrets: "This store holds no secrets here"
+    error:
+      connection_unavailable: "The connection is not available"
+      store_unavailable: "The connection has no store %{store}"
+    footer:
+      loaded:
+        one: "%{count} secret loaded"
+        many: "%{count} secrets loaded"
+      hint:
+        open: "open"
+        retrieve: "retrieve value"
+        copy_id: "copy ID"
+        filter: "filter"
+        up: "up"
+    status:
+      list_timing:
+        one: "List · %{count} secret · %{millis} ms"
+        many: "List · %{count} secrets · %{millis} ms"
+      describe_timing: "Describe · %{millis} ms"
+      retrieve_timing: "Retrieve value · %{millis} ms"
+      duration_tooltip: "Client-side duration of the last store call"
+    rotation:
+      off: "Off"
+      enabled: "Enabled"
+      disabled: "Disabled"
+      every_days: "Every %{count} days"
+      every_hours: "Every %{count} hours"
+      schedule_with_window: "%{schedule} · window %{window} (%{expression})"
+      title: "Rotation"
+      status: "Status"
+      schedule: "Schedule"
+      next: "Next rotation"
+      function: "Function"
+      last: "Last rotated"
+    details:
+      none: "Select a secret to see its details"
+      loading: "Loading the details…"
+      failed: "The details could not be loaded"
+      title: "Secret details"
+      resource_id: "ARN"
+      type: "Type"
+      tier: "Tier"
+      data_type: "Data type"
+      encryption_key: "Encryption key"
+      description: "Description"
+      version: "Version"
+      last_modified: "Last modified"
+      created: "Created"
+      last_changed: "Last changed"
+      last_retrieved: "Last retrieved"
+      versions: "Versions"
+    tags:
+      title: "Tags"
+      none: "No tags"
+    managed:
+      title: "Managed by %{service}"
+      body: "%{name} belongs to %{service}. %{service} rotates and updates it, so DBFlux shows it read only."
+    action:
+      copy_resource_id: "Copy ARN"
+    toast:
+      value_copied: "Value copied to the clipboard"
+      resource_id_copied: "ARN copied to the clipboard"
+      error_copied: "Error copied to the clipboard"
+    value:
+      title: "Value"
+      not_loaded: "Value not loaded"
+      not_loaded_hint: "DBFlux fetches the value only when you ask. Each retrieval is recorded in the audit log, without the value."
+      encrypted_hint: "This value is decrypted with its encryption key when retrieved. The retrieval is audited, the value is not."
+      needs_decrypt: "Needs permission to decrypt with %{key}"
+      retrieve: "Retrieve value"
+      retrieving: "Retrieving the value…"
+      retrieved_at: "Retrieved %{time} · audited"
+      view:
+        key_value: "Key/value"
+        plaintext: "Plaintext"
+      plaintext_only: "Key/value opens only when the value parses as a one-level JSON object with scalar values. Nested JSON, arrays and any other text open as plaintext."
+      binary_size: "Binary · %{size}"
+      read_only: "Read only"
+      binary_note: "Binary values are written by other tools. DBFlux shows them as base64 and does not edit them."
+      reveal: "Reveal"
+      hide: "Hide"
+      reveal_all: "Reveal or hide the value"
+      show_all: "Reveal all"
+      hide_all: "Hide all"
+      copy: "Copy value"
+      copy_json: "Copy JSON"
+      copy_all: "Copy value"
+      tab_only: "Value visible in this tab only, cleared on close"
+      failed_decrypt: "The value could not be decrypted"
+      failed: "The value could not be retrieved"
+      copy_error: "Copy error"
+      view_in_audit: "View in Audit"
+      metadata_loaded: "Metadata loaded · only the value failed"
+      deletion_scheduled: "Deletion scheduled for %{date}"
+      deletion_scheduled_body: "Its value cannot be retrieved until it is restored."
 document_tree:
   search_placeholder: Search…
   view:
@@ -3422,6 +3548,7 @@ documents:
       object_storage_account: No active connection for this object-storage account
       bucket: No active connection for this bucket
       object: No active connection for this object
+      secret_store: "No active connection for this secret store"
   error:
     write_initial_script_failed: "Failed to write initial script content: %{error}"
     save_session_failed: Failed to save session manifest
@@ -5083,6 +5210,7 @@ sidebar:
         opening_access: "Pipeline: Opening access (%{method})"
         connecting: "Pipeline: Connecting driver (%{driver})"
         fetching_schema: "Pipeline: Fetching schema"
+    listing_secret_paths: "Listing secret paths: %{name}"
   toast:
     edit_reconnect_updated: "'%{name}' updated"
     edit_reconnect_body: Reconnect to apply the changes to the live session.
@@ -5132,6 +5260,7 @@ sidebar:
     add_external_folder_failed: "Could not add the folder: %{error}"
     remove_external_folder_failed: "Could not remove the folder: %{error}"
     script_operation_failed: "The script operation failed: %{error}"
+    list_secret_paths_failed: "Failed to list secret paths: %{error}"
   tree:
     container:
       relational: Tables (%{count})
@@ -5140,6 +5269,7 @@ sidebar:
       time_series: Measurements (%{count})
       log_stream: Log Groups (%{count})
       object_storage: Buckets (%{count})
+      secret_store: Stores (%{count})
     folder:
       empty_databases:
         one: "%{count} empty database"

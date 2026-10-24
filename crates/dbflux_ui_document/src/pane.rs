@@ -350,6 +350,11 @@ pub struct PaneHandle {
     pub take_pending_open_object_editor:
         Option<Box<dyn Fn(&mut App) -> Option<ObjectEditorRequest>>>,
 
+    /// Opens `path` of a hierarchical secret store in its existing tab, so a
+    /// path activated in the sidebar navigates the store's one tab. Only
+    /// `SecretStoreDocument` populates it.
+    pub navigate_secret_path: Option<Box<dyn Fn(Option<String>, &mut App)>>,
+
     /// Returns the side panels the document currently shows, drawn by the
     /// workspace as islands beside the document island. `None` for documents
     /// that never show one.
@@ -479,6 +484,7 @@ impl PaneHandle {
             tab_tooltip: None,
             take_pending_open_bucket: None,
             take_pending_open_object_editor: None,
+            navigate_secret_path: None,
             side_panels: None,
             pane_actions: None,
             on_close: None,

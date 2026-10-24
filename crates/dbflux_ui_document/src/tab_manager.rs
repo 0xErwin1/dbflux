@@ -271,6 +271,18 @@ impl Tab {
         }
     }
 
+    /// Opens `path` in this tab when it is a secret store document. A no-op
+    /// for every other document type.
+    pub fn navigate_secret_path(&self, path: Option<String>, cx: &mut App) {
+        match self {
+            Tab::Pane(p) => {
+                if let Some(navigate) = p.navigate_secret_path.as_ref() {
+                    navigate(path, cx);
+                }
+            }
+        }
+    }
+
     /// Drains an open-this-object-in-an-editor-tab intent, if this tab has one
     /// pending. `None` for every other document type.
     pub fn take_pending_open_object_editor(

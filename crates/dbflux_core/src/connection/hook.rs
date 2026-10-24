@@ -553,6 +553,9 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
         } => (Some(host.clone()), Some(*port), Some(database.clone())),
         DbConfig::S3 {
             region, endpoint, ..
+        }
+        | DbConfig::AwsSecrets {
+            region, endpoint, ..
         } => (
             endpoint.clone().or_else(|| Some(region.clone())),
             None,

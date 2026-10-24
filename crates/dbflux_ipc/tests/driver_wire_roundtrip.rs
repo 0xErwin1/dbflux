@@ -1533,6 +1533,7 @@ fn database_category_variants_keep_their_postcard_indices() {
         (DatabaseCategory::ReservedWideColumn, 5),
         (DatabaseCategory::LogStream, 6),
         (DatabaseCategory::ObjectStorage, 7),
+        (DatabaseCategory::SecretStore, 8),
     ];
 
     for (category, expected_index) in cases {

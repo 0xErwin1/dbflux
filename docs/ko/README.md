@@ -95,6 +95,7 @@ SmartScreen 단계를 포함한 전체 가이드는 [DBFlux 설치](INSTALL.md)�
 - HTTP를 통한 **TursoDB** 및 libSQL (`sqld`): 스키마 탐색, 타입이 지정된 CRUD, 편집기 탭별 대화형 트랜잭션을 지원합니다
 - 로그 그룹/스트림 탐색과 이벤트 스트리밍을 지원하는 **CloudWatch Logs**
 - 버킷 탐색, 개체 미리 보기/편집, 전체 CRUD, 사전 서명된 URL을 지원하는 **Amazon S3** — S3 호환 엔드포인트(Cloudflare R2, MinIO) 포함
+- 페이지 나누기 목록, 파라미터 경로 탐색, 시크릿 세부 정보, 명시적으로 요청할 때만 감사와 함께 값을 조회하는 **AWS Secrets Manager 및 Parameter Store**
 - **RPC를 통한 외부 드라이버** ([Driver RPC Protocol](DRIVER_RPC_PROTOCOL.md)을 통해 프로세스 외부 드라이버 등록)
 
 전체 기능 매트릭스와 드라이버별 제한 사항은 [docs/DRIVERS.md](DRIVERS.md)를 참조하세요.

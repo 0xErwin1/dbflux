@@ -146,6 +146,7 @@ fn category_icon(category: Option<EventCategory>) -> AppIcon {
         Some(EventCategory::Mcp) => AppIcon::Bot,
         Some(EventCategory::Governance) => AppIcon::Scale,
         Some(EventCategory::ObjectStorage) => AppIcon::Boxes,
+        Some(EventCategory::SecretStore) => AppIcon::Lock,
         None => AppIcon::Info,
     }
 }

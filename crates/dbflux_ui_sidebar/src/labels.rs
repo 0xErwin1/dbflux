@@ -697,6 +697,17 @@ pub(crate) fn list_buckets_failed_label(error: &str) -> String {
     dbflux_i18n::t!("sidebar.toast.list_buckets_failed", error = error)
 }
 
+/// Translated task-panel label for a background listing of a secret store's
+/// path tree, e.g. `"Listing secret paths: prod-aws"`.
+pub(crate) fn listing_secret_paths_task_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.task.listing_secret_paths", name = name)
+}
+
+/// Translated task-failure detail reported when listing secret paths fails.
+pub(crate) fn list_secret_paths_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.list_secret_paths_failed", error = error)
+}
+
 /// Translated toast reported when SQL/query code generation fails.
 pub(crate) fn code_generation_failed_label(error: &str) -> String {
     dbflux_i18n::t!("sidebar.toast.code_generation_failed", error = error)
@@ -795,22 +806,24 @@ pub(crate) fn pipeline_stage_label(state: &PipelineState) -> Option<String> {
 mod tests {
     use dbflux_core::DatabaseCategory;
 
-    const ALL_CATEGORIES: [DatabaseCategory; 6] = [
+    const ALL_CATEGORIES: [DatabaseCategory; 7] = [
         DatabaseCategory::Relational,
         DatabaseCategory::Document,
         DatabaseCategory::KeyValue,
         DatabaseCategory::TimeSeries,
         DatabaseCategory::LogStream,
         DatabaseCategory::ObjectStorage,
+        DatabaseCategory::SecretStore,
     ];
 
-    const CONTAINER_KEYS: [&str; 6] = [
+    const CONTAINER_KEYS: [&str; 7] = [
         "sidebar.tree.container.relational",
         "sidebar.tree.container.document",
         "sidebar.tree.container.key_value",
         "sidebar.tree.container.time_series",
         "sidebar.tree.container.log_stream",
         "sidebar.tree.container.object_storage",
+        "sidebar.tree.container.secret_store",
     ];
 
     const SLICE_KEYS: [&str; 10] = [
@@ -1843,7 +1856,7 @@ mod tests {
         );
     }
 
-    const E1_KEYS: [&str; 22] = [
+    const E1_KEYS: [&str; 24] = [
         "sidebar.error.cannot_load_schema_types",
         "sidebar.error.cannot_load_schema_indexes",
         "sidebar.error.cannot_load_schema_foreign_keys",
@@ -1854,6 +1867,8 @@ mod tests {
         "sidebar.toast.load_failed.routines",
         "sidebar.task.listing_buckets",
         "sidebar.toast.list_buckets_failed",
+        "sidebar.task.listing_secret_paths",
+        "sidebar.toast.list_secret_paths_failed",
         "sidebar.toast.code_generation_failed",
         "sidebar.toast.loading_event_streams",
         "sidebar.task.loading_database_schema",

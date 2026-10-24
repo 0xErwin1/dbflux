@@ -463,6 +463,7 @@ connection_manager:
       key_value: "키-값"
       time_series_and_logs: "시계열 및 로그"
       object_storage: "오브젝트 스토리지"
+      secret_store: "시크릿 저장소"
       other: "기타"
   export:
     target:
@@ -958,6 +959,7 @@ document:
       query: 쿼리
       script: 스크립트
       system: 시스템
+      secret_store: "시크릿 저장소"
     export:
       unsupported_source: 내보내기는 내장 감사 뷰어에서만 사용할 수 있습니다
       exported:
@@ -3402,6 +3404,130 @@ document:
     new: 새 탭
     close_named: "%{title} 닫기"
     unsaved_changes: 저장되지 않은 변경 사항
+  secret_store:
+    title: "%{store} · %{connection}"
+    search_placeholder: "검색은 저장소에서 실행되며 값은 나열되지 않습니다"
+    toolbar:
+      refresh: "새로 고침"
+    load_more: "다음 페이지 불러오기"
+    loading_more: "다음 페이지를 불러오는 중…"
+    columns:
+      name: "이름"
+      description: "설명"
+      rotation: "교체"
+      last_changed: "마지막 변경"
+      type: "유형"
+      tier: "계층"
+      version: "버전"
+      last_modified: "마지막 수정"
+    badge:
+      managed: "%{service}에서 관리"
+      deletes: "%{date}에 삭제"
+    path_mode:
+      tree: "트리"
+      flat: "평면"
+      toggle: "트리와 평면 목록 전환"
+    path:
+      up: "한 단계 위로"
+    empty:
+      loading: "시크릿을 나열하는 중…"
+      error: "시크릿을 나열할 수 없습니다: %{error}"
+      no_match: "\"%{query}\"와 일치하는 시크릿이 없습니다"
+      no_secrets: "이 저장소의 이 위치에는 시크릿이 없습니다"
+    error:
+      connection_unavailable: "연결을 사용할 수 없습니다"
+      store_unavailable: "연결에 %{store} 저장소가 없습니다"
+    footer:
+      loaded:
+        one: "시크릿 %{count}개 불러옴"
+        many: "시크릿 %{count}개 불러옴"
+      hint:
+        open: "열기"
+        retrieve: "값 가져오기"
+        copy_id: "ID 복사"
+        filter: "필터"
+        up: "위로"
+    status:
+      list_timing:
+        one: "목록 · 시크릿 %{count}개 · %{millis} ms"
+        many: "목록 · 시크릿 %{count}개 · %{millis} ms"
+      describe_timing: "설명 · %{millis} ms"
+      retrieve_timing: "값 가져오기 · %{millis} ms"
+      duration_tooltip: "마지막 저장소 호출의 클라이언트 측 소요 시간"
+    rotation:
+      off: "꺼짐"
+      enabled: "사용"
+      disabled: "사용 안 함"
+      every_days: "%{count}일마다"
+      every_hours: "%{count}시간마다"
+      schedule_with_window: "%{schedule} · 기간 %{window} (%{expression})"
+      title: "교체"
+      status: "상태"
+      schedule: "일정"
+      next: "다음 교체"
+      function: "함수"
+      last: "마지막 교체"
+    details:
+      none: "세부 정보를 보려면 시크릿을 선택하세요"
+      loading: "세부 정보를 불러오는 중…"
+      failed: "세부 정보를 불러올 수 없습니다"
+      title: "시크릿 세부 정보"
+      resource_id: "ARN"
+      type: "유형"
+      tier: "계층"
+      data_type: "데이터 유형"
+      encryption_key: "암호화 키"
+      description: "설명"
+      version: "버전"
+      last_modified: "마지막 수정"
+      created: "생성됨"
+      last_changed: "마지막 변경"
+      last_retrieved: "마지막 조회"
+      versions: "버전"
+    tags:
+      title: "태그"
+      none: "태그 없음"
+    managed:
+      title: "%{service}에서 관리"
+      body: "%{name}은(는) %{service}에 속합니다. %{service}에서 교체하고 업데이트하므로 DBFlux에서는 읽기 전용으로 표시합니다."
+    action:
+      copy_resource_id: "ARN 복사"
+    toast:
+      value_copied: "값을 클립보드에 복사했습니다"
+      resource_id_copied: "ARN을 클립보드에 복사했습니다"
+      error_copied: "오류를 클립보드에 복사했습니다"
+    value:
+      title: "값"
+      not_loaded: "값을 불러오지 않음"
+      not_loaded_hint: "DBFlux는 요청할 때만 값을 가져옵니다. 각 조회는 값 없이 감사 로그에 기록됩니다."
+      encrypted_hint: "이 값은 조회할 때 암호화 키로 복호화됩니다. 조회는 감사되지만 값은 기록되지 않습니다."
+      needs_decrypt: "%{key}(으)로 복호화할 권한이 필요합니다"
+      retrieve: "값 가져오기"
+      retrieving: "값을 가져오는 중…"
+      retrieved_at: "%{time}에 가져옴 · 감사됨"
+      view:
+        key_value: "키/값"
+        plaintext: "일반 텍스트"
+      plaintext_only: "키/값 보기는 값이 스칼라 값만 있는 1단계 JSON 객체일 때만 열립니다. 중첩된 JSON, 배열 및 기타 텍스트는 일반 텍스트로 열립니다."
+      binary_size: "바이너리 · %{size}"
+      read_only: "읽기 전용"
+      binary_note: "바이너리 값은 다른 도구가 작성합니다. DBFlux는 base64로 표시하며 편집하지 않습니다."
+      reveal: "표시"
+      hide: "숨기기"
+      reveal_all: "값 표시 또는 숨기기"
+      show_all: "모두 표시"
+      hide_all: "모두 숨기기"
+      copy: "값 복사"
+      copy_json: "JSON 복사"
+      copy_all: "값 복사"
+      tab_only: "값은 이 탭에서만 표시되며 닫으면 지워집니다"
+      failed_decrypt: "값을 복호화할 수 없습니다"
+      failed: "값을 가져올 수 없습니다"
+      copy_error: "오류 복사"
+      view_in_audit: "감사에서 보기"
+      metadata_loaded: "메타데이터 불러옴 · 값만 실패"
+      deletion_scheduled: "%{date}에 삭제 예정"
+      deletion_scheduled_body: "복원될 때까지 값을 가져올 수 없습니다."
 document_tree:
   search_placeholder: 검색…
   view:
@@ -3422,6 +3548,7 @@ documents:
       object_storage_account: 이 개체 스토리지 계정에 대한 활성 연결이 없습니다
       bucket: 이 버킷에 대한 활성 연결이 없습니다
       object: 이 개체에 대한 활성 연결이 없습니다
+      secret_store: "이 시크릿 저장소에 대한 활성 연결이 없습니다"
   error:
     write_initial_script_failed: "초기 스크립트 내용을 쓰지 못했습니다: %{error}"
     save_session_failed: 세션 매니페스트를 저장하지 못했습니다
@@ -5082,6 +5209,7 @@ sidebar:
         opening_access: "파이프라인: 접근 권한 여는 중 (%{method})"
         connecting: "파이프라인: 드라이버 연결 중 (%{driver})"
         fetching_schema: "파이프라인: 스키마 가져오는 중"
+    listing_secret_paths: "시크릿 경로 나열 중: %{name}"
   toast:
     edit_reconnect_updated: "'%{name}'이(가) 업데이트되었습니다"
     edit_reconnect_body: 변경 사항을 라이브 세션에 적용하려면 다시 연결하세요.
@@ -5131,6 +5259,7 @@ sidebar:
     add_external_folder_failed: "폴더를 추가하지 못했습니다: %{error}"
     remove_external_folder_failed: "폴더를 제거하지 못했습니다: %{error}"
     script_operation_failed: "스크립트 작업에 실패했습니다: %{error}"
+    list_secret_paths_failed: "시크릿 경로를 나열하지 못했습니다: %{error}"
   tree:
     container:
       relational: 테이블 (%{count})
@@ -5139,6 +5268,7 @@ sidebar:
       time_series: 측정값 (%{count})
       log_stream: 로그 그룹 (%{count})
       object_storage: 버킷 (%{count})
+      secret_store: 저장소 (%{count})
     folder:
       empty_databases:
         one: "빈 데이터베이스 %{count}개"

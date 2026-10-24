@@ -488,6 +488,78 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Opens the document of one secret store, or focuses the store's
+    /// existing tab. A `path` of a hierarchical store opens at that path, and
+    /// navigates an existing tab to it.
+    pub(in crate::ui::views::workspace) fn open_secret_store_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        store_id: String,
+        path: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let has_connection = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+
+        let existing_id = if has_connection {
+            self.tab_manager.read(cx).find_by_key(
+                &crate::ui::document::DocumentKey::SecretStore {
+                    profile_id,
+                    store_id: store_id.clone(),
+                },
+                cx,
+            )
+        } else {
+            None
+        };
+
+        match decide_open_document(has_connection, existing_id) {
+            OpenDocumentDecision::ErrorNoConnection => {
+                let message =
+                    documents_no_active_connection_message(NoActiveConnectionKind::SecretStore);
+                Toast::error(message.clone())
+                    .meta_right(now_hms())
+                    .action(copy_action(message))
+                    .push(cx);
+                return;
+            }
+            OpenDocumentDecision::FocusExisting(id) => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    if path.is_some()
+                        && let Some(tab) = mgr.documents().iter().find(|tab| tab.id() == id)
+                    {
+                        tab.navigate_secret_path(path.clone(), cx);
+                    }
+                    mgr.activate(id, cx);
+                });
+                return;
+            }
+            OpenDocumentDecision::OpenNew => {}
+        }
+
+        let doc = cx.new(|cx| {
+            crate::ui::document::SecretStoreDocument::new(
+                profile_id,
+                store_id,
+                path,
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+        let pane = crate::ui::document::SecretStoreDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     /// Opens the prefix/object tree browser for a single bucket, or focuses
     /// the existing one for that `(profile_id, bucket)` pair. Reached from
     /// the buckets table's Enter-on-row action and the sidebar's

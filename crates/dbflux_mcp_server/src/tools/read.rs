@@ -497,7 +497,8 @@ impl DbFluxServer {
             | DatabaseCategory::ReservedGraph
             | DatabaseCategory::TimeSeries
             | DatabaseCategory::ReservedWideColumn
-            | DatabaseCategory::ObjectStorage => {
+            | DatabaseCategory::ObjectStorage
+            | DatabaseCategory::SecretStore => {
                 Self::select_data_table_routed(&check, &request).await
             }
         }
@@ -837,7 +838,8 @@ impl DbFluxServer {
             | DatabaseCategory::ReservedGraph
             | DatabaseCategory::TimeSeries
             | DatabaseCategory::ReservedWideColumn
-            | DatabaseCategory::ObjectStorage => {
+            | DatabaseCategory::ObjectStorage
+            | DatabaseCategory::SecretStore => {
                 let mut request =
                     TableCountRequest::new(Self::table_ref_for_connection(&connection, table));
 

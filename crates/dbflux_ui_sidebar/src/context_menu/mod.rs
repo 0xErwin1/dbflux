@@ -116,6 +116,8 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
         | SchemaNodeKind::DependentItem
         | SchemaNodeKind::Bucket
         | SchemaNodeKind::BucketsFolder
+        | SchemaNodeKind::SecretStore
+        | SchemaNodeKind::SecretPath
         | SchemaNodeKind::InstanceFolder => false,
     }
 }
@@ -2564,9 +2566,11 @@ mod menu_availability_tests {
         let mut all_kinds = ALL_KINDS.to_vec();
         all_kinds.push(SchemaNodeKind::Bucket);
         all_kinds.push(SchemaNodeKind::BucketsFolder);
+        all_kinds.push(SchemaNodeKind::SecretStore);
+        all_kinds.push(SchemaNodeKind::SecretPath);
 
         let discriminants: Vec<usize> = all_kinds.iter().map(|kind| *kind as usize).collect();
-        let expected: Vec<usize> = (0..=SchemaNodeKind::BucketsFolder as usize).collect();
+        let expected: Vec<usize> = (0..=SchemaNodeKind::SecretPath as usize).collect();
         assert_eq!(
             discriminants, expected,
             "ALL_KINDS must list every SchemaNodeKind variant in declaration order"

@@ -27,9 +27,9 @@ Open the Connection Manager to create or edit connections:
 The Connection Manager presents a driver picker. Available drivers depend on the
 features the binary was built with; the standard build includes SQLite,
 PostgreSQL, MySQL/MariaDB, Microsoft SQL Server, Amazon Redshift, ClickHouse,
-TursoDB, DuckDB, MongoDB, DynamoDB, Redis, InfluxDB, CloudWatch Logs, and Amazon S3. The
-picker groups drivers by category: Relational, Document, Key-value, Time series
-and logs, and Object storage. Externally registered RPC drivers also appear here
+TursoDB, DuckDB, MongoDB, DynamoDB, Redis, InfluxDB, CloudWatch Logs, Amazon S3, and
+AWS Secrets. The picker groups drivers by category: Relational, Document,
+Key-value, Time series and logs, Object storage, and Secret stores. Externally registered RPC drivers also appear here
 when configured (see `docs/RPC_SERVICES_CONFIG.md`).
 
 Use `/` to filter the driver list, `j`/`k` (or arrow keys) to move, and `Enter`

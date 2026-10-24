@@ -77,6 +77,7 @@ export const DOCS_SECTIONS: readonly DocsSection[] = [
       'drivers/influxdb',
       'drivers/cloudwatch',
       'drivers/s3',
+      'drivers/aws_secrets',
       'drivers/ipc',
     ],
   },
@@ -152,6 +153,7 @@ export const DOC_TITLES: Readonly<Record<string, string>> = {
   'drivers/influxdb': 'InfluxDB',
   'drivers/cloudwatch': 'CloudWatch',
   'drivers/s3': 'S3',
+  'drivers/aws_secrets': 'AWS Secrets',
   'drivers/ipc': 'External RPC drivers',
 };
 

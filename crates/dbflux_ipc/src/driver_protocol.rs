@@ -1031,6 +1031,35 @@ mod tests {
     use std::time::Duration;
     use uuid::Uuid;
 
+    /// `DriverCapabilities` crosses the wire inside `DriverMetadata` as its raw
+    /// bits. Postcard encodes `u64` and `u128` as the same varint, so flags a
+    /// peer built against the former `u64` type encodes decode unchanged, and a
+    /// host that sets no bit above 63 encodes exactly the bytes such a peer reads.
+    #[test]
+    fn capability_bits_keep_the_u64_wire_encoding() {
+        use dbflux_core::DriverCapabilities;
+
+        let legacy_bits: u64 = DriverCapabilities::OBJECT_STORAGE.bits() as u64
+            | DriverCapabilities::REQUEST_ROW_LIMIT.bits() as u64;
+        let legacy_bytes = postcard::to_allocvec(&legacy_bits).expect("encode legacy bits");
+
+        let decoded: DriverCapabilities =
+            postcard::from_bytes(&legacy_bytes).expect("decode legacy bits");
+        assert_eq!(
+            decoded,
+            DriverCapabilities::OBJECT_STORAGE | DriverCapabilities::REQUEST_ROW_LIMIT
+        );
+
+        let host_bytes = postcard::to_allocvec(&decoded).expect("encode host flags");
+        assert_eq!(host_bytes, legacy_bytes);
+
+        let widened = DriverCapabilities::SECRET_STORE | DriverCapabilities::OBJECT_STORAGE;
+        let widened_bytes = postcard::to_allocvec(&widened).expect("encode widened flags");
+        let round_trip: DriverCapabilities =
+            postcard::from_bytes(&widened_bytes).expect("decode widened flags");
+        assert_eq!(round_trip, widened);
+    }
+
     /// `TableBrowseRequest` and `TableCountRequest` cross the driver RPC wire,
     /// and `framing.rs` encodes every frame with postcard, which is positional.
     /// A field that is skipped is absent from the bytes while the decoder still

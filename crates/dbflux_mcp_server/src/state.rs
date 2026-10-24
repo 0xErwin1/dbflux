@@ -1256,6 +1256,7 @@ fn str_to_db_kind(value: &str) -> Option<dbflux_core::DbKind> {
         "S3" => Some(dbflux_core::DbKind::S3),
         "Turso" => Some(dbflux_core::DbKind::Turso),
         "DuckDB" => Some(dbflux_core::DbKind::DuckDB),
+        "AwsSecrets" => Some(dbflux_core::DbKind::AwsSecrets),
         _ => None,
     }
 }
@@ -1275,6 +1276,7 @@ fn default_db_config_for_kind(kind: dbflux_core::DbKind) -> dbflux_core::DbConfi
         dbflux_core::DbKind::Redshift => dbflux_core::DbConfig::default_redshift(),
         dbflux_core::DbKind::ClickHouse => dbflux_core::DbConfig::default_clickhouse(),
         dbflux_core::DbKind::S3 => dbflux_core::DbConfig::default_s3(),
+        dbflux_core::DbKind::AwsSecrets => dbflux_core::DbConfig::default_aws_secrets(),
         dbflux_core::DbKind::Turso => dbflux_core::DbConfig::default_turso(),
         dbflux_core::DbKind::DuckDB => dbflux_core::DbConfig::default_duckdb(),
     }

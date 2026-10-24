@@ -463,6 +463,7 @@ connection_manager:
       key_value: "Clave-valor"
       time_series_and_logs: "Series temporales y logs"
       object_storage: "Almacenamiento de objetos"
+      secret_store: "Almacenes de secretos"
       other: "Otros"
   export:
     target:
@@ -958,6 +959,7 @@ document:
       query: Consulta
       script: Script
       system: Sistema
+      secret_store: "Almacén de secretos"
     export:
       unsupported_source: La exportación solo está disponible para el visor de auditoría integrado
       exported:
@@ -3402,6 +3404,130 @@ document:
     new: Nueva pestaña
     close_named: "Cerrar %{title}"
     unsaved_changes: Cambios sin guardar
+  secret_store:
+    title: "%{store} · %{connection}"
+    search_placeholder: "La búsqueda se ejecuta en el almacén; los valores nunca se listan"
+    toolbar:
+      refresh: "Actualizar"
+    load_more: "Cargar la página siguiente"
+    loading_more: "Cargando la página siguiente…"
+    columns:
+      name: "Nombre"
+      description: "Descripción"
+      rotation: "Rotación"
+      last_changed: "Último cambio"
+      type: "Tipo"
+      tier: "Nivel"
+      version: "Versión"
+      last_modified: "Última modificación"
+    badge:
+      managed: "Gestionado por %{service}"
+      deletes: "Se elimina el %{date}"
+    path_mode:
+      tree: "Árbol"
+      flat: "Plano"
+      toggle: "Alternar entre árbol y lista plana"
+    path:
+      up: "Subir un nivel"
+    empty:
+      loading: "Listando secretos…"
+      error: "No se pudieron listar los secretos: %{error}"
+      no_match: "Ningún secreto coincide con \"%{query}\""
+      no_secrets: "Este almacén no tiene secretos aquí"
+    error:
+      connection_unavailable: "La conexión no está disponible"
+      store_unavailable: "La conexión no tiene el almacén %{store}"
+    footer:
+      loaded:
+        one: "%{count} secreto cargado"
+        many: "%{count} secretos cargados"
+      hint:
+        open: "abrir"
+        retrieve: "obtener valor"
+        copy_id: "copiar ID"
+        filter: "filtrar"
+        up: "subir"
+    status:
+      list_timing:
+        one: "Listado · %{count} secreto · %{millis} ms"
+        many: "Listado · %{count} secretos · %{millis} ms"
+      describe_timing: "Descripción · %{millis} ms"
+      retrieve_timing: "Obtener valor · %{millis} ms"
+      duration_tooltip: "Duración en el cliente de la última llamada al almacén"
+    rotation:
+      off: "Desactivada"
+      enabled: "Activada"
+      disabled: "Desactivada"
+      every_days: "Cada %{count} días"
+      every_hours: "Cada %{count} horas"
+      schedule_with_window: "%{schedule} · ventana %{window} (%{expression})"
+      title: "Rotación"
+      status: "Estado"
+      schedule: "Programación"
+      next: "Próxima rotación"
+      function: "Función"
+      last: "Última rotación"
+    details:
+      none: "Selecciona un secreto para ver sus detalles"
+      loading: "Cargando los detalles…"
+      failed: "No se pudieron cargar los detalles"
+      title: "Detalles del secreto"
+      resource_id: "ARN"
+      type: "Tipo"
+      tier: "Nivel"
+      data_type: "Tipo de datos"
+      encryption_key: "Clave de cifrado"
+      description: "Descripción"
+      version: "Versión"
+      last_modified: "Última modificación"
+      created: "Creado"
+      last_changed: "Último cambio"
+      last_retrieved: "Última obtención"
+      versions: "Versiones"
+    tags:
+      title: "Etiquetas"
+      none: "Sin etiquetas"
+    managed:
+      title: "Gestionado por %{service}"
+      body: "%{name} pertenece a %{service}. %{service} lo rota y lo actualiza, así que DBFlux lo muestra en solo lectura."
+    action:
+      copy_resource_id: "Copiar ARN"
+    toast:
+      value_copied: "Valor copiado al portapapeles"
+      resource_id_copied: "ARN copiado al portapapeles"
+      error_copied: "Error copiado al portapapeles"
+    value:
+      title: "Valor"
+      not_loaded: "Valor no cargado"
+      not_loaded_hint: "DBFlux obtiene el valor solo cuando lo pides. Cada obtención queda registrada en la auditoría, sin el valor."
+      encrypted_hint: "Este valor se descifra con su clave de cifrado al obtenerlo. Se audita la obtención, no el valor."
+      needs_decrypt: "Requiere permiso para descifrar con %{key}"
+      retrieve: "Obtener valor"
+      retrieving: "Obteniendo el valor…"
+      retrieved_at: "Obtenido a las %{time} · auditado"
+      view:
+        key_value: "Clave/valor"
+        plaintext: "Texto plano"
+      plaintext_only: "Clave/valor solo se abre cuando el valor es un objeto JSON de un nivel con valores escalares. El JSON anidado, los arrays y cualquier otro texto se abren como texto plano."
+      binary_size: "Binario · %{size}"
+      read_only: "Solo lectura"
+      binary_note: "Los valores binarios los escriben otras herramientas. DBFlux los muestra en base64 y no los edita."
+      reveal: "Mostrar"
+      hide: "Ocultar"
+      reveal_all: "Mostrar u ocultar el valor"
+      show_all: "Mostrar todo"
+      hide_all: "Ocultar todo"
+      copy: "Copiar valor"
+      copy_json: "Copiar JSON"
+      copy_all: "Copiar valor"
+      tab_only: "Valor visible solo en esta pestaña; se borra al cerrarla"
+      failed_decrypt: "No se pudo descifrar el valor"
+      failed: "No se pudo obtener el valor"
+      copy_error: "Copiar error"
+      view_in_audit: "Ver en auditoría"
+      metadata_loaded: "Metadatos cargados · solo falló el valor"
+      deletion_scheduled: "Eliminación programada para el %{date}"
+      deletion_scheduled_body: "Su valor no se puede obtener hasta que se restaure."
 document_tree:
   search_placeholder: Buscar…
   view:
@@ -3422,6 +3548,7 @@ documents:
       object_storage_account: No hay conexión activa para esta cuenta de almacenamiento de objetos
       bucket: No hay conexión activa para este bucket
       object: No hay conexión activa para este objeto
+      secret_store: "No hay una conexión activa para este almacén de secretos"
   error:
     write_initial_script_failed: "No se pudo escribir el contenido inicial del script: %{error}"
     save_session_failed: No se pudo guardar el manifiesto de la sesión
@@ -5083,6 +5210,7 @@ sidebar:
         opening_access: "Pipeline: abriendo acceso (%{method})"
         connecting: "Pipeline: conectando el driver (%{driver})"
         fetching_schema: "Pipeline: obteniendo el esquema"
+    listing_secret_paths: "Listando rutas de secretos: %{name}"
   toast:
     edit_reconnect_updated: "'%{name}' actualizado"
     edit_reconnect_body: Reconecta para aplicar los cambios a la sesión activa.
@@ -5132,6 +5260,7 @@ sidebar:
     add_external_folder_failed: "No se pudo agregar la carpeta: %{error}"
     remove_external_folder_failed: "No se pudo quitar la carpeta: %{error}"
     script_operation_failed: "La operación sobre el script falló: %{error}"
+    list_secret_paths_failed: "No se pudieron listar las rutas de secretos: %{error}"
   tree:
     container:
       relational: Tablas (%{count})
@@ -5140,6 +5269,7 @@ sidebar:
       time_series: Mediciones (%{count})
       log_stream: Log Groups (%{count})
       object_storage: Buckets (%{count})
+      secret_store: Almacenes (%{count})
     folder:
       empty_databases:
         one: "%{count} base de datos vacía"

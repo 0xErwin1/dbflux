@@ -349,6 +349,10 @@ jobs:
         if: matrix.group == 'analytics-cloud'
         run: cargo test -p dbflux_driver_s3 --locked --test live_integration -- --ignored
 
+      - name: Run AWS Secrets Manager and Parameter Store live integration tests
+        if: matrix.group == 'analytics-cloud'
+        run: cargo test -p dbflux_driver_aws_secrets --locked --test live_integration -- --ignored
+
       - name: Run SQLite live integration tests
         if: matrix.group == 'mysql-mongodb-redis'
         run: cargo test -p dbflux_driver_sqlite --locked --test live_integration

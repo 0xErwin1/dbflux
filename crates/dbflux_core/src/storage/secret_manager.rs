@@ -319,6 +319,7 @@ impl SecretManager {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::AwsSecrets { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
             | DbConfig::DuckDB { .. }
