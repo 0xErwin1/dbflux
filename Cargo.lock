@@ -3043,6 +3043,7 @@ dependencies = [
  "hex",
  "log",
  "mysql",
+ "rustls 0.23.44",
  "serde_json",
  "urlencoding",
 ]
