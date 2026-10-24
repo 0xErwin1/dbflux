@@ -415,53 +415,8 @@ fn register_writable_connection_with_driver(
     panel: &gpui::Entity<DataGridPanel>,
     window: &mut VisualTestContext,
 ) -> dbflux_test_support::fake_driver::FakeDriver {
-    use dbflux_core::{ConnectedProfile, DbConfig, DbKind, MutationPolicy};
-    use dbflux_test_support::fake_driver::FakeDriver;
-    use std::path::PathBuf;
-
-    let driver = FakeDriver::new(DbKind::SQLite);
-
-    window.update(|_, app| {
-        let app_state = panel.read(app).app_state.clone();
-
-        app_state.update(app, |state, _| {
-            let profile = dbflux_core::ConnectionProfile::new(
-                "staged-edits",
-                DbConfig::SQLite {
-                    path: PathBuf::from(":memory:"),
-                    connection_id: None,
-                },
-            );
-            let connection = driver
-                .connect_arc(&profile)
-                .expect("the fake driver connects");
-
-            state.connections_mut().insert(
-                Uuid::nil(),
-                ConnectedProfile {
-                    profile,
-                    connection,
-                    schema: None,
-                    mutation_policy: MutationPolicy::Allowed,
-                    read_only_reason: None,
-                    database_schemas: Default::default(),
-                    table_details: Default::default(),
-                    collection_children: Default::default(),
-                    schema_types: Default::default(),
-                    schema_columns: Default::default(),
-                    schema_indexes: Default::default(),
-                    schema_foreign_keys: Default::default(),
-                    schema_routines: Default::default(),
-                    dependents_cache: Default::default(),
-                    active_database: None,
-                    redis_key_cache: Default::default(),
-                    database_connections: Default::default(),
-                    proxy_tunnel: None,
-                },
-            );
-        });
-    });
-
+    let driver = dbflux_test_support::fake_driver::FakeDriver::new(dbflux_core::DbKind::SQLite);
+    register_fake_connection(panel, window, &driver);
     driver
 }
 
