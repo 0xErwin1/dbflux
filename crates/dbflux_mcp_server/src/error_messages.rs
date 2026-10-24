@@ -338,6 +338,16 @@ pub(crate) fn unknown_tool(tool_id: &str, category: &str) -> String {
     )
 }
 
+/// Format a connect timeout that names the stage the connection stalled in.
+pub(crate) fn connect_stage_timeout(budget: std::time::Duration, stage: &str) -> String {
+    let budget = if budget.subsec_millis() == 0 {
+        format!("{}s", budget.as_secs())
+    } else {
+        format!("{}ms", budget.as_millis())
+    };
+    format!("Connection timed out after {budget} while {stage}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

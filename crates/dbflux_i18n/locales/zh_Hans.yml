@@ -4012,6 +4012,7 @@ settings:
     max_background_tasks:
       label: 最大并发后台任务数
       error: 最大并发后台任务数必须大于等于 1
+      help: "计入正在运行的连接、断开连接、连接钩子、切换数据库、架构任务和键值扫描。达到上限后，新的连接、切换数据库、架构和表详情加载以及键值分页会被拒绝。查询、数据表格加载和导出不受限制。"
     pause_refresh_on_error:
       label: 出错时暂停自动刷新
     refresh_only_if_visible:
