@@ -878,9 +878,9 @@ pub struct DataGridPanel {
     /// The rows on screen are the nearest neighbors of a row, not a page of
     /// the table. Cleared by any other result.
     nearest_neighbors: Option<nearest_neighbors::NearestNeighborSearch>,
-    /// The browse request behind the rows on screen, for a table read through
-    /// `browse_table`. "Export all rows" pages through it again.
-    last_table_browse: Option<dbflux_core::TableBrowseRequest>,
+    /// The read behind the rows on screen: a table or collection browse, or
+    /// a builder SELECT. "Export all rows" pages through it again.
+    last_replayable_read: Option<dbflux_transfer::ReplayableRead>,
     /// The neighbor bar's controls and the search in flight.
     nearest: nearest_neighbors::NearestNeighborsUi,
     view_config: super::data_view::DataViewConfig,
@@ -1472,7 +1472,7 @@ impl DataGridPanel {
             pk_details_pending: false,
             pk_requery_pending: false,
             nearest_neighbors: None,
-            last_table_browse: None,
+            last_replayable_read: None,
             nearest,
             view_config,
             context_menu: None,

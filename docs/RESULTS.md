@@ -225,13 +225,23 @@ The menu's **Save loaded rows as file** and **Copy loaded rows to clipboard**
 sections write the rows the grid holds, which for a table is the current page,
 and the toast states how many rows went into the file or the clipboard.
 
-When the grid shows a table read page by page, the menu adds **Export all rows
-to file**, in CSV or in JSON with one object per line. It reads the whole table
-again with the grid's current filter, sort and column selection, one page at a
-time, and streams it into the one file you choose, so the table never has to
-fit in memory. The export runs as a task in the Tasks panel, which shows its
-progress and can cancel it; the toast states the total row count and the path.
+When the grid shows a table or a collection read page by page, the menu adds
+**Export all rows to file**, in CSV or in JSON with one object per line. It
+reads the whole table or collection again with the grid's current filter, sort
+and column selection, one page at a time, and streams it into the one file you
+choose, so the data never has to fit in memory. A table shown through the query
+builder or a relational filter is read through the same query, starting at its
+offset and stopping at its limit when it sets one. The export runs as a task in
+the Tasks panel, which shows its progress and can cancel it; the toast states
+the total row count and the path.
+
+A document collection exported as JSON writes each document whole, one object
+per line, with every field it has. As CSV it is written with the columns the
+grid shows for the first page, including expanded objects. Documents of one
+collection need not share their fields, so in a CSV file a field that first
+appears on a later page has no column, because the header is already written;
+the export then names those fields in a warning.
+
 A query result offers only the loaded rows, because exporting all of them would
-mean running the query again, and so does a document collection. A table shown
-through the query builder, a relational filter or a nearest-neighbor search
-also offers only the loaded rows.
+mean running the query again. So does a nearest-neighbor search: it returns a
+fixed number of the closest rows, and the grid already holds all of them.

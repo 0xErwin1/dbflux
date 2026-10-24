@@ -1763,6 +1763,7 @@ document:
               one: "已将 1 行导出到 %{path}"
               many: "已将全部 %{count} 行导出到 %{path}"
             cancelled: "导出已取消 — %{path} 仅包含停止前写入的行"
+            dropped_columns: "首页之后才出现的字段未写入文件：%{columns}"
           error:
             failed: "导出所有行失败：%{error}"
         format:
