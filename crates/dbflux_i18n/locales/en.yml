@@ -3991,6 +3991,7 @@ settings:
     max_background_tasks:
       label: Max concurrent background tasks
       error: Max background tasks must be >= 1
+      help: "Counts running connects, disconnects, connection hooks, database switches, schema tasks and key-value scans. At the cap, new connects, database switches, schema and table-detail loads and key-value pages are refused. Queries, data-grid loads and exports are not limited."
     pause_refresh_on_error:
       label: Pause auto-refresh on error
     refresh_only_if_visible:
