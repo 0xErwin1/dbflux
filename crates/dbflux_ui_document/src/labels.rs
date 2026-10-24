@@ -401,6 +401,7 @@ pub(crate) fn chart_rail_why_text(numeric_columns: usize, timestamp_columns: usi
 
 /// Item kind affected by a bulk delete, selecting the plural noun used in
 /// the completion toast and the partial-failure catalog buckets.
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum MutationItemKind {
     Row,
     Document,
@@ -467,6 +468,21 @@ pub(crate) fn partial_delete_label(
     };
 
     dbflux_i18n::t!(key, done = done, total = total, error = error)
+}
+
+/// Warning for a batch delete that left out items whose identity could not be
+/// read, with the deleted and skipped counts interpolated.
+pub(crate) fn bulk_delete_unidentified_label(
+    kind: MutationItemKind,
+    done: usize,
+    skipped: usize,
+) -> String {
+    let key = match kind {
+        MutationItemKind::Row => "document.data.mutation.toast.unidentified_delete.row",
+        MutationItemKind::Document => "document.data.mutation.toast.unidentified_delete.document",
+    };
+
+    dbflux_i18n::t!(key, done = done, skipped = skipped)
 }
 
 /// Toast text for a batch delete that completed in full, with the number of
