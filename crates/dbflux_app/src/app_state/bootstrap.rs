@@ -71,6 +71,9 @@ use dbflux_driver_turso::TursoDriver;
 #[cfg(feature = "s3")]
 use dbflux_driver_s3::S3Driver;
 
+#[cfg(feature = "aws_secrets")]
+use dbflux_driver_aws_secrets::AwsSecretsDriver;
+
 use crate::auth_provider_registry::AuthProviderRegistry;
 use crate::config_loader::{EditableGlobalHook, HookLoadDiagnostic, ProtectedHookRow};
 use crate::rpc_services::external_audit::{ExternalAuditSink, NoOpContextProvider};
@@ -1249,6 +1252,11 @@ impl AppState {
         #[cfg(feature = "s3")]
         {
             drivers.insert("s3".to_string(), Arc::new(S3Driver::new()));
+        }
+
+        #[cfg(feature = "aws_secrets")]
+        {
+            drivers.insert("aws_secrets".to_string(), Arc::new(AwsSecretsDriver::new()));
         }
 
         drivers

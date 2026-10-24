@@ -699,12 +699,33 @@ where
 /// marker with a poll of `/_localstack/health` so the test does not race a
 /// container that has printed the marker but not yet finished wiring up the
 /// scoped services.
+pub fn with_localstack_cloudwatch_endpoint<T, E, F>(run: F) -> Result<T, E>
+where
+    E: From<dbflux_core::DbError>,
+    F: FnOnce(String) -> Result<T, E>,
+{
+    with_localstack_services("logs,cloudwatch", run)
+}
+
+/// Spin up a LocalStack community container scoped to the Secrets Manager,
+/// Systems Manager (Parameter Store) and KMS APIs, and pass its endpoint to
+/// `run`. KMS is included so `SecureString` parameters and customer-managed
+/// keys can be exercised. Readiness works like
+/// [`with_localstack_cloudwatch_endpoint`].
+pub fn with_localstack_secrets_endpoint<T, E, F>(run: F) -> Result<T, E>
+where
+    E: From<dbflux_core::DbError>,
+    F: FnOnce(String) -> Result<T, E>,
+{
+    with_localstack_services("secretsmanager,ssm,kms", run)
+}
+
 #[expect(
     clippy::expect_used,
     clippy::unwrap_in_result,
     reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
 )]
-pub fn with_localstack_cloudwatch_endpoint<T, E, F>(run: F) -> Result<T, E>
+fn with_localstack_services<T, E, F>(services: &str, run: F) -> Result<T, E>
 where
     E: From<dbflux_core::DbError>,
     F: FnOnce(String) -> Result<T, E>,
@@ -712,7 +733,7 @@ where
     let image = hub_image("localstack/localstack", "3")
         .with_exposed_port(ContainerPort::Tcp(4566))
         .with_wait_for(WaitFor::message_on_stdout("Ready."))
-        .with_env_var("SERVICES", "logs,cloudwatch");
+        .with_env_var("SERVICES", services);
 
     let container = image.start().expect("failed to start localstack container");
     let port = container

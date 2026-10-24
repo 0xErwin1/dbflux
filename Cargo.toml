@@ -48,6 +48,7 @@ members = [
     "crates/dbflux_driver_influxdb",
     "crates/dbflux_portability",
     "crates/dbflux_driver_s3",
+    "crates/dbflux_driver_aws_secrets",
     "crates/dbflux_i18n",
     # Upstream themixednuts/gpui-mcp crates for UI automation; see vendor/gpui-mcp/VENDOR.md.
     "vendor/gpui-mcp/crates/gpui-mcp",
@@ -111,6 +112,7 @@ dbflux_schema_viz = { path = "crates/dbflux_schema_viz" }
 dbflux_driver_influxdb = { path = "crates/dbflux_driver_influxdb" }
 dbflux_portability = { path = "crates/dbflux_portability" }
 dbflux_driver_s3 = { path = "crates/dbflux_driver_s3" }
+dbflux_driver_aws_secrets = { path = "crates/dbflux_driver_aws_secrets" }
 dbflux_app = { path = "crates/dbflux_app" }
 dbflux_components = { path = "crates/dbflux_components" }
 dbflux_ui_base = { path = "crates/dbflux_ui_base" }
