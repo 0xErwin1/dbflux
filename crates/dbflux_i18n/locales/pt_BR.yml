@@ -1891,6 +1891,9 @@ document:
         partial_delete:
           row: "%{done} de %{total} linha(s) excluída(s), depois falhou: %{error}"
           document: "%{done} de %{total} documento(s) excluído(s), depois falhou: %{error}"
+        unidentified_delete:
+          row: "%{done} linha(s) excluída(s); %{skipped} linha(s) não foram excluídas porque os valores da chave primária não puderam ser lidos. Elas continuam marcadas para exclusão."
+          document: "%{done} documento(s) excluído(s); %{skipped} documento(s) não foram excluídos porque os valores de _id não puderam ser lidos. Eles continuam marcados para exclusão."
         chunk_size_reduced: "Tamanho do bloco reduzido de %{original} para %{effective} — o limite de parâmetros do driver forçou o piso do bloco abaixo de %{floor}. O processamento será mais lento que o esperado."
         chunk_size_adjusted: "Tamanho do bloco ajustado de %{original} para %{effective} para respeitar os limites de parâmetros do driver."
         execution_completed:

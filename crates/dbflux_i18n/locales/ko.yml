@@ -1891,6 +1891,9 @@ document:
         partial_delete:
           row: "행 %{total}개 중 %{done}개를 삭제한 후 실패했습니다: %{error}"
           document: "문서 %{total}개 중 %{done}개를 삭제한 후 실패했습니다: %{error}"
+        unidentified_delete:
+          row: "행 %{done}개를 삭제했습니다. 기본 키 값을 읽을 수 없어 행 %{skipped}개는 삭제하지 않았으며, 삭제 표시가 그대로 남아 있습니다."
+          document: "문서 %{done}개를 삭제했습니다. _id 값을 읽을 수 없어 문서 %{skipped}개는 삭제하지 않았으며, 삭제 표시가 그대로 남아 있습니다."
         chunk_size_reduced: "청크 크기를 %{original}에서 %{effective}(으)로 줄였습니다 — 드라이버 매개변수 제한 때문에 청크 하한이 %{floor} 아래로 내려갔습니다. 처리가 예상보다 느려집니다."
         chunk_size_adjusted: "드라이버 매개변수 제한 내에서 유지하도록 청크 크기를 %{original}에서 %{effective}(으)로 조정했습니다."
         execution_completed:
