@@ -670,6 +670,7 @@ use dbflux_components::components::data_table::selection::CellCoord;
 mod builder_binding;
 mod builder_draft_and_fk;
 mod builder_mutations;
+mod bulk_delete_outcome;
 mod close_completion;
 mod collection_views;
 mod facets;
@@ -750,6 +751,61 @@ fn table_panel(
         });
         panel
     })
+}
+
+/// Keyed by `Uuid::nil()`, the profile the test panels are built against,
+/// so a batch write reaches the fake.
+///
+/// Registered after the panel exists because the batch reads the connection
+/// when the write runs, not when the grid is built.
+fn register_fake_connection(
+    panel: &gpui::Entity<DataGridPanel>,
+    window: &mut VisualTestContext,
+    driver: &dbflux_test_support::fake_driver::FakeDriver,
+) {
+    use dbflux_core::{ConnectedProfile, DbConfig, MutationPolicy};
+    use std::path::PathBuf;
+
+    window.update(|_, app| {
+        let app_state = panel.read(app).app_state.clone();
+
+        app_state.update(app, |state, _| {
+            let profile = dbflux_core::ConnectionProfile::new(
+                "staged-edits",
+                DbConfig::SQLite {
+                    path: PathBuf::from(":memory:"),
+                    connection_id: None,
+                },
+            );
+            let connection = driver
+                .connect_arc(&profile)
+                .expect("the fake driver connects");
+
+            state.connections_mut().insert(
+                Uuid::nil(),
+                ConnectedProfile {
+                    profile,
+                    connection,
+                    schema: None,
+                    mutation_policy: MutationPolicy::Allowed,
+                    read_only_reason: None,
+                    database_schemas: Default::default(),
+                    table_details: Default::default(),
+                    collection_children: Default::default(),
+                    schema_types: Default::default(),
+                    schema_columns: Default::default(),
+                    schema_indexes: Default::default(),
+                    schema_foreign_keys: Default::default(),
+                    schema_routines: Default::default(),
+                    dependents_cache: Default::default(),
+                    active_database: None,
+                    redis_key_cache: Default::default(),
+                    database_connections: Default::default(),
+                    proxy_tunnel: None,
+                },
+            );
+        });
+    });
 }
 
 fn last_toast_title(window: &mut gpui::VisualTestContext) -> Option<String> {
