@@ -67,6 +67,8 @@ pub struct FileSink {
     schema: Option<String>,
     table: String,
     format: FileFormat,
+    /// Set by [`FileSink::to_file`]; overrides the `schema.table.ext` name.
+    target_path: Option<PathBuf>,
     columns: Vec<ColumnMeta>,
     writer: Option<StreamWriter>,
     rows_written: u64,
@@ -84,9 +86,26 @@ impl FileSink {
             schema,
             table: table.into(),
             format,
+            target_path: None,
             columns: Vec::new(),
             writer: None,
             rows_written: 0,
+        }
+    }
+
+    /// Writes to exactly `path`, for a single-file export whose name the
+    /// user chose.
+    pub fn to_file(path: impl Into<PathBuf>, format: FileFormat) -> Self {
+        let path = path.into();
+        let table = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let dir = path.parent().map(PathBuf::from).unwrap_or_default();
+
+        Self {
+            target_path: Some(path),
+            ..Self::new(dir, None, table, format)
         }
     }
 
@@ -100,6 +119,10 @@ impl FileSink {
     }
 
     fn path(&self) -> PathBuf {
+        if let Some(path) = &self.target_path {
+            return path.clone();
+        }
+
         self.dir.join(self.file_name())
     }
 }

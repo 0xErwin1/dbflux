@@ -1672,6 +1672,12 @@ document:
         toast:
           native_picker_fallback: "O seletor de arquivos nativo não está disponível — exportado para %{path}. Instale xdg-desktop-portal, zenity ou kdialog para ter uma caixa de diálogo de salvar."
           exported: "Exportado para %{path}"
+          exported_rows:
+            one: "1 linha carregada exportada para %{path}"
+            many: "%{count} linhas carregadas exportadas para %{path}"
+          native_picker_fallback_rows:
+            one: "O seletor de arquivos nativo não está disponível — 1 linha carregada exportada para %{path}. Instale xdg-desktop-portal, zenity ou kdialog para ter uma caixa de diálogo de salvar."
+            many: "O seletor de arquivos nativo não está disponível — %{count} linhas carregadas exportadas para %{path}. Instale xdg-desktop-portal, zenity ou kdialog para ter uma caixa de diálogo de salvar."
       clipboard:
         error:
           binary_unsupported: Dados binários brutos não podem ser copiados para a área de transferência — escolha Hex ou Base64.
@@ -1679,6 +1685,9 @@ document:
           failed: "Falha ao copiar: %{error}"
         toast:
           copied: "%{format} copiado (%{bytes} bytes) para a área de transferência"
+          copied_rows:
+            one: "1 linha carregada copiada como %{format} (%{bytes} bytes) para a área de transferência"
+            many: "%{count} linhas carregadas copiadas como %{format} (%{bytes} bytes) para a área de transferência"
       document:
         toast:
           inserted: Documento inserido
@@ -1744,12 +1753,23 @@ document:
           many: "%{count} alterações pendentes"
       export:
         trigger: Exportar
-        save_as_file: Salvar como arquivo
-        copy_to_clipboard: Copiar para a área de transferência
+        save_as_file: Salvar linhas carregadas como arquivo
+        copy_to_clipboard: Copiar linhas carregadas para a área de transferência
+        export_all_rows: Exportar todas as linhas para um arquivo
+        all:
+          task: "Exportar todas as linhas de %{table}"
+          toast:
+            exported:
+              one: "1 linha exportada para %{path}"
+              many: "Todas as %{count} linhas exportadas para %{path}"
+            cancelled: "Exportação cancelada — %{path} contém apenas as linhas gravadas antes da interrupção"
+          error:
+            failed: "Falha ao exportar todas as linhas: %{error}"
         format:
           csv: CSV
           json_pretty: "JSON (formatado)"
           json_compact: "JSON (compacto)"
+          json_lines: "JSON (um objeto por linha)"
           text: Texto
           binary: Binário
           hex: Hex

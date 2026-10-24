@@ -239,3 +239,21 @@ resultado e incluyen:
 - **JSON (pretty)** y **JSON (compact)**
 - **Text**
 - **Binary** (para resultados con forma binaria)
+
+Las secciones **Guardar filas cargadas como archivo** y **Copiar filas cargadas
+al portapapeles** del menú escriben las filas que tiene la cuadrícula, que en una
+tabla son la página actual, y el aviso indica cuántas filas fueron al archivo o
+al portapapeles.
+
+Cuando la cuadrícula muestra una tabla leída página a página, el menú añade
+**Exportar todas las filas a un archivo**, en CSV o en JSON con un objeto por
+línea. Vuelve a leer la tabla completa con el filtro, el orden y la selección de
+columnas actuales de la cuadrícula, una página a la vez, y la escribe en el único
+archivo que elijas, de modo que la tabla nunca tiene que caber en memoria. La
+exportación se ejecuta como una tarea en el panel de tareas, que muestra su
+progreso y permite cancelarla; el aviso indica el total de filas y la ruta. Un
+resultado de consulta ofrece solo las filas cargadas, porque exportarlas todas
+implicaría volver a ejecutar la consulta, y lo mismo ocurre con una colección de
+documentos. Una tabla mostrada mediante el constructor de consultas, un filtro
+relacional o una búsqueda de vecinos más cercanos también ofrece solo las filas
+cargadas.

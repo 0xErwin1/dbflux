@@ -4,6 +4,7 @@ mod chrome;
 pub(crate) mod context_menu;
 mod document_view;
 mod documents;
+mod export_all;
 mod facets;
 pub(crate) mod filter_bar;
 mod fk_display;
@@ -877,6 +878,9 @@ pub struct DataGridPanel {
     /// The rows on screen are the nearest neighbors of a row, not a page of
     /// the table. Cleared by any other result.
     nearest_neighbors: Option<nearest_neighbors::NearestNeighborSearch>,
+    /// The browse request behind the rows on screen, for a table read through
+    /// `browse_table`. "Export all rows" pages through it again.
+    last_table_browse: Option<dbflux_core::TableBrowseRequest>,
     /// The neighbor bar's controls and the search in flight.
     nearest: nearest_neighbors::NearestNeighborsUi,
     view_config: super::data_view::DataViewConfig,
@@ -1468,6 +1472,7 @@ impl DataGridPanel {
             pk_details_pending: false,
             pk_requery_pending: false,
             nearest_neighbors: None,
+            last_table_browse: None,
             nearest,
             view_config,
             context_menu: None,

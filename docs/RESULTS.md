@@ -220,3 +220,18 @@ command palette. The available formats depend on the result shape and include:
 - **JSON (pretty)** and **JSON (compact)**
 - **Text**
 - **Binary** (for binary-shaped results)
+
+The menu's **Save loaded rows as file** and **Copy loaded rows to clipboard**
+sections write the rows the grid holds, which for a table is the current page,
+and the toast states how many rows went into the file or the clipboard.
+
+When the grid shows a table read page by page, the menu adds **Export all rows
+to file**, in CSV or in JSON with one object per line. It reads the whole table
+again with the grid's current filter, sort and column selection, one page at a
+time, and streams it into the one file you choose, so the table never has to
+fit in memory. The export runs as a task in the Tasks panel, which shows its
+progress and can cancel it; the toast states the total row count and the path.
+A query result offers only the loaded rows, because exporting all of them would
+mean running the query again, and so does a document collection. A table shown
+through the query builder, a relational filter or a nearest-neighbor search
+also offers only the loaded rows.

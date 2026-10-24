@@ -1672,6 +1672,12 @@ document:
         toast:
           native_picker_fallback: "Selector de archivos nativo no disponible — se exportó a %{path} en su lugar. Instala xdg-desktop-portal, zenity o kdialog para obtener un diálogo de guardado."
           exported: "Exportado a %{path}"
+          exported_rows:
+            one: "Se exportó 1 fila cargada a %{path}"
+            many: "Se exportaron %{count} filas cargadas a %{path}"
+          native_picker_fallback_rows:
+            one: "Selector de archivos nativo no disponible — se exportó 1 fila cargada a %{path} en su lugar. Instala xdg-desktop-portal, zenity o kdialog para obtener un diálogo de guardado."
+            many: "Selector de archivos nativo no disponible — se exportaron %{count} filas cargadas a %{path} en su lugar. Instala xdg-desktop-portal, zenity o kdialog para obtener un diálogo de guardado."
       clipboard:
         error:
           binary_unsupported: El binario sin procesar no se puede copiar al portapapeles — elige Hex o Base64 en su lugar.
@@ -1679,6 +1685,9 @@ document:
           failed: "Error al copiar: %{error}"
         toast:
           copied: "Copiado %{format} (%{bytes} bytes) al portapapeles"
+          copied_rows:
+            one: "Se copió 1 fila cargada como %{format} (%{bytes} bytes) al portapapeles"
+            many: "Se copiaron %{count} filas cargadas como %{format} (%{bytes} bytes) al portapapeles"
       document:
         toast:
           inserted: Documento insertado
@@ -1744,12 +1753,23 @@ document:
           many: "%{count} cambios pendientes"
       export:
         trigger: Exportar
-        save_as_file: Guardar como archivo
-        copy_to_clipboard: Copiar al portapapeles
+        save_as_file: Guardar filas cargadas como archivo
+        copy_to_clipboard: Copiar filas cargadas al portapapeles
+        export_all_rows: Exportar todas las filas a un archivo
+        all:
+          task: "Exportar todas las filas de %{table}"
+          toast:
+            exported:
+              one: "Se exportó 1 fila a %{path}"
+              many: "Se exportaron las %{count} filas a %{path}"
+            cancelled: "Exportación cancelada — %{path} contiene solo las filas escritas antes de detenerse"
+          error:
+            failed: "Falló la exportación de todas las filas: %{error}"
         format:
           csv: CSV
           json_pretty: "JSON (con formato)"
           json_compact: "JSON (compacto)"
+          json_lines: "JSON (un objeto por línea)"
           text: Texto
           binary: Binario
           hex: Hex

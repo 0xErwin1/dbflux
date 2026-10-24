@@ -381,6 +381,7 @@ impl DataGridPanel {
         );
 
         let estimate_request = browse_request.clone();
+        let applied_request = browse_request.clone();
 
         let task_target = TaskTarget {
             profile_id,
@@ -444,6 +445,7 @@ impl DataGridPanel {
                             panel.runner.complete_primary(task_id, cx);
                             panel.grid_table.reload = reload;
                             panel.grid_table.keep_edits_on_reload = keep_edits;
+                            panel.last_table_browse = Some(applied_request);
                             panel.apply_table_result(
                                 profile_id,
                                 table_for_spawn,
