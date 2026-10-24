@@ -1912,6 +1912,9 @@ document:
         partial_delete:
           row: "Deleted %{done} of %{total} row(s), then failed: %{error}"
           document: "Deleted %{done} of %{total} document(s), then failed: %{error}"
+        unidentified_delete:
+          row: "Deleted %{done} row(s); %{skipped} row(s) were not deleted because their primary key values could not be read. They stay marked for delete."
+          document: "Deleted %{done} document(s); %{skipped} document(s) were not deleted because their _id values could not be read. They stay marked for delete."
         chunk_size_reduced: "Chunk size reduced from %{original} to %{effective} — driver parameter limit forced the chunk floor below %{floor}. Processing will be slower than expected."
         chunk_size_adjusted: "Chunk size adjusted from %{original} to %{effective} to stay within driver parameter limits."
         execution_completed:

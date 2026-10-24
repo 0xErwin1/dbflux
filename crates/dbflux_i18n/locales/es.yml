@@ -1912,6 +1912,9 @@ document:
         partial_delete:
           row: "Se eliminaron %{done} de %{total} fila(s); luego falló: %{error}"
           document: "Se eliminaron %{done} de %{total} documento(s); luego falló: %{error}"
+        unidentified_delete:
+          row: "Se eliminaron %{done} fila(s); %{skipped} fila(s) no se eliminaron porque no se pudieron leer sus valores de clave primaria. Siguen marcadas para eliminar."
+          document: "Se eliminaron %{done} documento(s); %{skipped} documento(s) no se eliminaron porque no se pudieron leer sus valores de _id. Siguen marcados para eliminar."
         chunk_size_reduced: "Tamaño de lote reducido de %{original} a %{effective} — el límite de parámetros del controlador forzó el piso del lote por debajo de %{floor}. El procesamiento será más lento de lo esperado."
         chunk_size_adjusted: "Tamaño de lote ajustado de %{original} a %{effective} para mantenerse dentro de los límites de parámetros del controlador."
         execution_completed:
