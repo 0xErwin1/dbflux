@@ -3046,8 +3046,10 @@ mod tests {
         drop(probe);
 
         // Set before the listener binds, so the connect can only see it set if
-        // it waited for the endpoint. Timing the connect instead failed under
-        // load: the setup below eats into the endpoint's delay.
+        // it waited for the endpoint. Setting it after the bind would race the
+        // server's probe, which can succeed as soon as the socket listens.
+        // Timing the connect instead failed under load: the setup below eats
+        // into the endpoint's delay.
         let endpoint_binding = Arc::new(AtomicBool::new(false));
         let endpoint = std::thread::spawn({
             let endpoint_binding = Arc::clone(&endpoint_binding);

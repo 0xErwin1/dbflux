@@ -162,8 +162,6 @@ fn write_v1_line_protocol(endpoint: &str, database: &str, lines: &str) -> Result
     }
 }
 
-/// Creates `database` on InfluxDB v1 and waits until the server lists it.
-///
 /// `/query` answers 200 even when the statement fails, with the error inside
 /// the JSON body, so the status alone does not prove the database exists. A
 /// write sent before the server lists it fails with "database not found".
@@ -171,7 +169,7 @@ fn setup_v1_database(endpoint: &str, database: &str) -> Result<(), DbError> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
-        .map_err(|e| DbError::connection_failed(e.to_string()))?;
+        .map_err(|error| DbError::connection_failed(error.to_string()))?;
 
     v1_statement(&client, endpoint, &format!("CREATE DATABASE {database}"))?;
 
@@ -190,8 +188,6 @@ fn setup_v1_database(endpoint: &str, database: &str) -> Result<(), DbError> {
     }
 }
 
-/// Runs one InfluxQL statement and returns the response body, failing on an
-/// HTTP error or on an error the statement reports inside the body.
 fn v1_statement(
     client: &reqwest::blocking::Client,
     endpoint: &str,
@@ -206,19 +202,20 @@ fn v1_statement(
     let resp = client
         .post(&url)
         .send()
-        .map_err(|e| DbError::connection_failed(e.to_string()))?;
+        .map_err(|error| DbError::connection_failed(error.to_string()))?;
     let status = resp.status().as_u16();
     let body = resp
         .text()
-        .map_err(|e| DbError::connection_failed(e.to_string()))?;
+        .map_err(|error| DbError::connection_failed(error.to_string()))?;
     if status >= 300 {
         return Err(DbError::query_failed(format!(
             "{statement} failed: HTTP {status}: {body}"
         )));
     }
 
-    let parsed: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| DbError::query_failed(format!("{statement}: invalid JSON {body}: {e}")))?;
+    let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|error| {
+        DbError::query_failed(format!("{statement}: invalid JSON {body}: {error}"))
+    })?;
     let statement_error = parsed["results"]
         .as_array()
         .into_iter()
