@@ -3045,10 +3045,18 @@ mod tests {
         let port = probe.local_addr().expect("endpoint address").port();
         drop(probe);
 
-        let endpoint = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(250));
-            let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind hook endpoint");
-            listener.accept().expect("accept readiness probe");
+        // Set before the listener binds, so the connect can only see it set if
+        // it waited for the endpoint. Timing the connect instead failed under
+        // load: the setup below eats into the endpoint's delay.
+        let endpoint_binding = Arc::new(AtomicBool::new(false));
+        let endpoint = std::thread::spawn({
+            let endpoint_binding = Arc::clone(&endpoint_binding);
+            move || {
+                std::thread::sleep(Duration::from_millis(250));
+                endpoint_binding.store(true, Ordering::SeqCst);
+                let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind hook endpoint");
+                listener.accept().expect("accept readiness probe");
+            }
         });
 
         let mut hook = process_hook(&trace, "pre_connect", false);
@@ -3078,14 +3086,15 @@ mod tests {
         }
         let connection_id = profile.id.to_string();
         let state = test_state_with_driver("postgres", driver_handle, profile);
-        let started = Instant::now();
-
         let connection = McpConnectionFactory::new(state.clone())
             .connect(&connection_id, None)
             .await
             .expect("hook signal and endpoint should permit connection");
 
-        assert!(started.elapsed() >= Duration::from_millis(200));
+        assert!(
+            endpoint_binding.load(Ordering::SeqCst),
+            "the connect must wait until the hook endpoint is listening"
+        );
         endpoint.join().expect("endpoint listener thread");
         state
             .connection_cache

@@ -162,33 +162,85 @@ fn write_v1_line_protocol(endpoint: &str, database: &str, lines: &str) -> Result
     }
 }
 
-/// Write line-protocol data to InfluxDB v1, creating the database first.
+/// Creates `database` on InfluxDB v1 and waits until the server lists it.
+///
+/// `/query` answers 200 even when the statement fails, with the error inside
+/// the JSON body, so the status alone does not prove the database exists. A
+/// write sent before the server lists it fails with "database not found".
 fn setup_v1_database(endpoint: &str, database: &str) -> Result<(), DbError> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .map_err(|e| DbError::connection_failed(e.to_string()))?;
 
+    v1_statement(&client, endpoint, &format!("CREATE DATABASE {database}"))?;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let listed = v1_statement(&client, endpoint, "SHOW DATABASES")?;
+        if v1_lists_database(&listed, database) {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(DbError::query_failed(format!(
+                "database {database} was created but is not listed: {listed}"
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Runs one InfluxQL statement and returns the response body, failing on an
+/// HTTP error or on an error the statement reports inside the body.
+fn v1_statement(
+    client: &reqwest::blocking::Client,
+    endpoint: &str,
+    statement: &str,
+) -> Result<serde_json::Value, DbError> {
     let url = format!(
         "{}/query?q={}",
         endpoint.trim_end_matches('/'),
-        urlencoding::encode(&format!("CREATE DATABASE {database}")),
+        urlencoding::encode(statement),
     );
 
     let resp = client
         .post(&url)
         .send()
         .map_err(|e| DbError::connection_failed(e.to_string()))?;
-
-    if resp.status().as_u16() < 300 {
-        Ok(())
-    } else {
-        let status = resp.status().as_u16();
-        let body = resp.text().unwrap_or_default();
-        Err(DbError::query_failed(format!(
-            "CREATE DATABASE failed: HTTP {status}: {body}"
-        )))
+    let status = resp.status().as_u16();
+    let body = resp
+        .text()
+        .map_err(|e| DbError::connection_failed(e.to_string()))?;
+    if status >= 300 {
+        return Err(DbError::query_failed(format!(
+            "{statement} failed: HTTP {status}: {body}"
+        )));
     }
+
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| DbError::query_failed(format!("{statement}: invalid JSON {body}: {e}")))?;
+    let statement_error = parsed["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find_map(|result| result["error"].as_str());
+    if let Some(error) = statement_error {
+        return Err(DbError::query_failed(format!(
+            "{statement} failed: {error}"
+        )));
+    }
+
+    Ok(parsed)
+}
+
+fn v1_lists_database(show_databases: &serde_json::Value, database: &str) -> bool {
+    show_databases["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|result| result["series"].as_array().into_iter().flatten())
+        .flat_map(|series| series["values"].as_array().into_iter().flatten())
+        .any(|row| row[0].as_str() == Some(database))
 }
 
 /// Build a query request with an explicit collection window (triggers time injection).
