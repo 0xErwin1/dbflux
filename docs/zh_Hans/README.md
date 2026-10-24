@@ -88,6 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 - **DuckDB** 文件与内存数据库，连接时可挂载 DuckLake 目录
 - **CloudWatch Logs**，支持日志组 / 流浏览与事件流
 - **Amazon S3**，支持存储桶浏览、对象预览 / 编辑、完整增删改查与预签名 URL，并兼容 S3 端点（Cloudflare R2、MinIO）
+- **AWS Secrets Manager 与 Parameter Store**，支持分页列表、参数路径浏览、密钥详情，以及仅在显式请求时进行并经过审计的值读取
 - **基于 RPC 的外部驱动**（通过[驱动 RPC 协议](DRIVER_RPC_PROTOCOL.md)注册进程外驱动）
 
 完整能力矩阵与各驱动限制参见 [docs/DRIVERS.md](DRIVERS.md)。

@@ -97,6 +97,7 @@ unsigned macOS and Windows builds, is in [Installing DBFlux](docs/INSTALL.md).
 - **DuckDB** files and in-memory databases, with DuckLake catalogs attached on connect
 - **CloudWatch Logs** with log group/stream browsing and event streaming
 - **Amazon S3** with bucket browsing, object preview/editing, full CRUD, and presigned URLs, including S3-compatible endpoints (Cloudflare R2, MinIO)
+- **AWS Secrets Manager and Parameter Store** with paginated listing, parameter path browsing, secret details, and audited value retrieval on explicit request
 - **External drivers over RPC** (register out-of-process drivers via the [Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md))
 
 See [docs/DRIVERS.md](docs/DRIVERS.md) for a full capability matrix and per-driver limitations.

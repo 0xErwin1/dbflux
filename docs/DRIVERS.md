@@ -15,7 +15,7 @@ adapts purely from this metadata. The relevant fields are:
 
 - **`DatabaseCategory`** — selects the view model and terminology. Values:
   `Relational`, `Document`, `KeyValue`, `TimeSeries`, `LogStream`,
-  `ObjectStorage`. A category lands together with a driver that declares it.
+  `ObjectStorage`, `SecretStore`. A category lands together with a driver that declares it.
 - **`QueryLanguage`** — drives editor mode, placeholder text, and query parsing.
   Values include `Sql`, `MongoQuery`, `RedisCommands`, `Cypher`, `InfluxQuery`,
   `Flux`, `Cql`, `CloudWatchLogsInsightsQl`, `OpenSearchPpl`, `OpenSearchSql`,
@@ -47,6 +47,7 @@ The capability flags listed below are exactly the ones each driver's
 | TursoDB | Relational | SQL | Auth token, views, indexes, foreign keys, check/unique constraints, prepared statements, insert/update/delete, pagination, sorting, filtering, CSV/JSON export, transactions, transactional DDL, multi-statement | Remote Turso / libSQL over HTTP (`libsql://`, or `http://` for a local `sqld`); interactive transactions run on per-document server streams; no query cancellation, SSH tunnel, replicas, or database switching. |
 | DuckDB | Relational | SQL | Multiple databases, schemas, views, indexes, foreign keys, check/unique constraints, prepared statements, insert/update/delete with RETURNING, pagination, sorting, filtering, CSV/JSON export, transactions, transactional DDL, query cancellation, row limits, read-only enforcement, multi-statement | Embedded file or in-memory database; attaches a DuckLake catalog on connect; only one process can hold a file for writing; no statement timeouts. |
 | Amazon S3 | Object Storage | Custom("S3") | Auth (profile/SSO or static credentials, custom endpoint), bucket browsing, paginated object navigation, preview, full CRUD, presigned URLs | S3-compatible (Cloudflare R2, MinIO); no multipart upload/transfers panel, no embedded PDF viewer, no lifecycle/ACL management or S3 Select. |
+| AWS Secrets | Secret Store | Custom("AWS Secrets") | Auth (profile/SSO or static credentials, custom endpoint), Secrets Manager and Parameter Store in one connection, paginated listing with name search, parameter path hierarchy, details, explicit value retrieval | Read only (no create, edit, delete, restore, versions or rotation); one region per connection; LocalStack does not honor Parameter Store page sizes. |
 
 ## Per-driver summary
 
@@ -180,6 +181,20 @@ creation, rename (copy-then-delete), and presigned URLs. It does not support
 multipart upload, a transfers panel, an embedded PDF viewer, lifecycle/ACL
 management, or S3 Select. See
 [`crates/dbflux_driver_s3/README.md`](../crates/dbflux_driver_s3/README.md).
+
+### AWS Secrets
+
+Secret-store driver for AWS Secrets Manager and Systems Manager Parameter
+Store, authenticating via AWS profile/SSO or static credentials with an
+optional endpoint override. One connection shows both stores in the sidebar.
+Listing is paginated on the server side with name search, and Parameter Store
+paths are browsed one level at a time. Listing and the details pane never
+fetch a value: a value is read only when the user runs Retrieve value, which
+records an audit event without the value. Key/value JSON secrets render as a
+table, other text as plaintext and binary secrets as base64, and secrets owned
+by another service are marked read only. A missing `kms:Decrypt` permission is
+reported as an error, never as an empty value. This release is read only. See
+[`crates/dbflux_driver_aws_secrets/README.md`](../crates/dbflux_driver_aws_secrets/README.md).
 
 ## External RPC drivers
 

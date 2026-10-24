@@ -61,6 +61,7 @@ con estos campos:
 | `Config`        | `config`         | Cambios de profile, modificaciones de settings                                                                     |
 | `System`        | `system`         | Arranque de la aplicación, panics, migraciones                                                                     |
 | `ObjectStorage` | `object_storage` | Eventos de CRUD/mutación de object storage (upload, download, delete, presign, rename, create bucket/folder, save-back edit) |
+| `SecretStore` | `secret_store` | Lecturas de valores de secretos (`secret_value_retrieved`, `secret_value_retrieve_failed`); el valor nunca se registra |
 
 ### Tipos de actor
 
@@ -86,6 +87,7 @@ La validación la aplica `AuditService::validate_event()` antes de almacenar:
 | `Mcp`                  | `actor_id`, `object_id` (nombre de la tool)                             |
 | `Config`               | `object_type`, `object_id`                                              |
 | `ObjectStorage`        | `connection_id`, `object_type`, `object_id`                             |
+| `SecretStore`          | `connection_id`, `object_type` (id del almacén), `object_id` (nombre del secreto) |
 | `Governance`, `System` | Sin campos adicionales                                                  |
 
 ## Privacidad y redacción

@@ -96,6 +96,7 @@ sem assinatura do macOS e do Windows, está em [Instalando o DBFlux](../INSTALL.
 - **TursoDB** e libSQL (`sqld`) sobre HTTP, com descoberta de schema, CRUD tipado e transações interativas por aba do editor
 - **CloudWatch Logs** com navegação de grupos/streams de log e streaming de eventos
 - **Amazon S3** com navegação de buckets, pré-visualização/edição de objetos, CRUD completo e URLs pré-assinadas, incluindo endpoints compatíveis com S3 (Cloudflare R2, MinIO)
+- **AWS Secrets Manager e Parameter Store** com listagem paginada, navegação por caminhos de parâmetros, detalhes dos segredos e leitura auditada do valor somente sob pedido explícito
 - **Drivers externos via RPC** (registre drivers fora de processo pelo [Protocolo RPC de drivers](../DRIVER_RPC_PROTOCOL.md))
 
 Veja [docs/DRIVERS.md](../DRIVERS.md) para a matriz completa de recursos e as limitações por driver.

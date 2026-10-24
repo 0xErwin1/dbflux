@@ -95,6 +95,7 @@ de macOS y Windows, está en [Instalar DBFlux](INSTALL.md).
 - **DuckDB** en archivos y en memoria, con catálogos DuckLake adjuntados al conectar
 - **CloudWatch Logs** con navegación de log groups/streams y streaming de eventos
 - **Amazon S3** con navegación de buckets, preview/edición de objetos, CRUD completo y URLs presignadas, incluyendo endpoints compatibles con S3 (Cloudflare R2, MinIO)
+- **AWS Secrets Manager y Parameter Store** con listado paginado, navegación por paths de parámetros, detalles de secretos y lectura auditada del valor solo a pedido explícito
 - **Drivers externos por RPC** (registra drivers fuera de proceso vía el [Protocolo RPC de drivers](DRIVER_RPC_PROTOCOL.md))
 
 Ver [docs/DRIVERS.md](DRIVERS.md) para una matriz de capacidades completa y limitaciones por driver.

@@ -28,8 +28,9 @@ El Connection Manager muestra un selector de drivers. Los drivers disponibles
 dependen de los features con los que se compiló el binario; el build estándar
 incluye SQLite, PostgreSQL, MySQL/MariaDB, Microsoft SQL Server, Amazon
 Redshift, ClickHouse, TursoDB, DuckDB, MongoDB, DynamoDB, Redis, InfluxDB, CloudWatch
-Logs y Amazon S3. El selector agrupa los drivers por categoría: Relacional,
-Documentos, Clave-valor, Series temporales y logs, y Almacenamiento de objetos.
+Logs, Amazon S3 y AWS Secrets. El selector agrupa los drivers por categoría:
+Relacional, Documentos, Clave-valor, Series temporales y logs, Almacenamiento de
+objetos, y Almacenes de secretos.
 Los drivers RPC registrados externamente también aparecen aquí cuando están
 configurados (ver `docs/RPC_SERVICES_CONFIG.md`).
 

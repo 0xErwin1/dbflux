@@ -10,7 +10,7 @@
 
 모든 드라이버는 `DriverMetadata` 값(`crates/dbflux_core/src/driver/capabilities.rs`에 정의)을 노출합니다. UI는 드라이버에 독립적이며 순수하게 이 메타데이터만으로 동작을 조정합니다. 관련 필드는 다음과 같습니다:
 
-- **`DatabaseCategory`** — 뷰 모델과 용어를 선택합니다. 값: `Relational`, `Document`, `KeyValue`, `TimeSeries`, `LogStream`, `ObjectStorage`. 카테고리는 그것을 선언하는 드라이버와 함께 추가됩니다.
+- **`DatabaseCategory`** — 뷰 모델과 용어를 선택합니다. 값: `Relational`, `Document`, `KeyValue`, `TimeSeries`, `LogStream`, `ObjectStorage`, `SecretStore`. 카테고리는 그것을 선언하는 드라이버와 함께 추가됩니다.
 - **`QueryLanguage`** — 에디터 모드, 자리 표시자 텍스트, 쿼리 파싱을 결정합니다. 값에는 `Sql`, `MongoQuery`, `RedisCommands`, `Cypher`, `InfluxQuery`, `Flux`, `Cql`, `CloudWatchLogsInsightsQl`, `OpenSearchPpl`, `OpenSearchSql`, 스크립트 언어인 `Lua` / `Python` / `Bash`, 그리고 `Custom(String)`이 포함됩니다.
 - **`DriverCapabilities`** — 지원되는 기능(트랜잭션, 페이지 나누기, 스키마, 키-값 작업 등)을 선언하는 `u64` 비트플래그 집합입니다. 편의용 베이스인 `RELATIONAL_BASE`, `DOCUMENT_BASE`, `KEYVALUE_BASE`는 각 카테고리의 공통 플래그를 묶어 줍니다.
 
@@ -34,6 +34,7 @@
 | ClickHouse | 관계형 | SQL | 여러 데이터베이스, 뷰, 인증, 페이지 나누기, 정렬, 필터, 그룹화, 조인, CTE, 윈도우, CSV/JSON 내보내기 | HTTP(S), ClickHouse Cloud 포함, 구조화된 변경, DDL, 트랜잭션, SSH 터널링, 쿼리 매개변수가 없는 읽기 중심 DBFlux 통합. |
 | TursoDB | 관계형 | SQL | 인증 토큰, 뷰, 인덱스, 외래 키, CHECK/UNIQUE 제약 조건, 프리페어드 스테이트먼트, 삽입/업데이트/삭제, 페이지 나누기, 정렬, 필터, CSV/JSON 내보내기, 트랜잭션, 트랜잭션 DDL, 다중 문 | HTTP를 통한 원격 Turso / libSQL(`libsql://`, 로컬 `sqld`는 `http://`), 대화형 트랜잭션은 문서별 서버 스트림에서 실행, 쿼리 취소, SSH 터널, 복제본, 데이터베이스 전환 없음. |
 | Amazon S3 | 개체 스토리지 | Custom("S3") | 인증(프로필/SSO 또는 정적 자격 증명, 사용자 지정 엔드포인트), 버킷 탐색, 페이지 나누기 기반 개체 탐색, 미리 보기, 전체 CRUD, 사전 서명된 URL | S3 호환(Cloudflare R2, MinIO), 멀티파트 업로드/전송 패널 없음, 내장 PDF 뷰어 없음, 수명 주기/ACL 관리 및 S3 Select 없음. |
+| AWS Secrets | 시크릿 저장소 | Custom("AWS Secrets") | 인증(프로필/SSO 또는 정적 자격 증명, 사용자 지정 엔드포인트), 한 연결에서 Secrets Manager와 Parameter Store, 이름 검색이 있는 페이지 나누기 목록, 파라미터 경로 계층, 세부 정보, 명시적 값 조회 | 읽기 전용(생성, 편집, 삭제, 복원, 버전, 교체 없음), 연결당 리전 하나, LocalStack은 Parameter Store 페이지 크기를 따르지 않음. |
 
 ## 드라이버별 요약
 
@@ -88,6 +89,10 @@ HTTP(S)를 통해 자체 호스팅 ClickHouse와 ClickHouse Cloud를 다루는 �
 ### Amazon S3
 
 AWS S3와 S3 호환 엔드포인트(Cloudflare R2, MinIO)를 위한 개체 스토리지 드라이버입니다. 엔드포인트 재정의와 경로 스타일 주소 지정과 함께 AWS 프로필/SSO 또는 정적 자격 증명으로 인증합니다. 연결 루트는 버킷 테이블을 열고, 버킷 탐색은 (AWS 콘솔 방식으로) 수준별 페이지 나누기를 하며 선택적으로 페이지 나누기가 없는 트리 모드를 제공합니다. 개체 미리 보기는 이미지를 기본 지원하고, 텍스트 유사 개체는 저장 후 되돌리기가 가능한 인라인 편집 버퍼로, PDF와 기타 바이너리 개체는 메타데이터와 다운로드/외부 열기를 제공합니다. 아카이브 스토리지 클래스(GLACIER, DEEP_ARCHIVE)는 본문 미리 보기를 완전히 건너뜁니다. 업로드, 삭제, 확인 입력이 필요한 재귀적 프리픽스/버킷 삭제, 폴더/버킷 생성, 이름 바꾸기(복사 후 삭제), 사전 서명된 URL을 지원합니다. 멀티파트 업로드, 전송 패널, 내장 PDF 뷰어, 수명 주기/ACL 관리, S3 Select는 지원하지 않습니다. 자세한 내용은 [`crates/dbflux_driver_s3/README.md`](../crates/dbflux_driver_s3/README.md)를 참조하세요.
+
+### AWS Secrets
+
+AWS Secrets Manager와 Systems Manager Parameter Store를 위한 시크릿 저장소 드라이버이며, AWS 프로필/SSO 또는 정적 자격 증명과 선택적 엔드포인트 재정의로 인증합니다. 한 연결이 사이드바에 두 저장소를 모두 보여 줍니다. 목록은 이름 검색과 함께 서버 측에서 페이지를 나누고, Parameter Store 경로는 한 수준씩 탐색합니다. 목록과 세부 정보 패널은 값을 절대 가져오지 않습니다. 값은 사용자가 Retrieve value를 실행할 때만 읽히며, 이때 값 없이 감사 이벤트가 기록됩니다. 키/값 JSON 시크릿은 표로, 그 밖의 텍스트는 일반 텍스트로, 바이너리 시크릿은 base64로 표시되며, 다른 서비스가 소유한 시크릿은 읽기 전용으로 표시됩니다. `kms:Decrypt` 권한이 없으면 빈 값이 아니라 오류로 보고됩니다. 이 릴리스는 읽기 전용입니다. 자세한 내용은 [`crates/dbflux_driver_aws_secrets/README.md`](../crates/dbflux_driver_aws_secrets/README.md)를 참조하세요.
 
 ## 외부 RPC 드라이버
 
