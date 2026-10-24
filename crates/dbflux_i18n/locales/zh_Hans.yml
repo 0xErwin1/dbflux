@@ -1708,6 +1708,9 @@ document:
         partial_delete:
           row: "已删除 %{done}/%{total} 行，随后失败：%{error}"
           document: "已删除 %{done}/%{total} 个文档，随后失败：%{error}"
+        unidentified_delete:
+          row: "已删除 %{done} 行；%{skipped} 行因无法读取主键值而未删除，仍标记为待删除。"
+          document: "已删除 %{done} 个文档；%{skipped} 个文档因无法读取 _id 值而未删除，仍标记为待删除。"
         chunk_size_reduced: "分块大小已从 %{original} 减小到 %{effective} — 驱动参数限制迫使分块下限低于 %{floor}。处理速度将慢于预期。"
         chunk_size_adjusted: "分块大小已从 %{original} 调整为 %{effective}，以保持在驱动参数限制之内。"
         execution_completed:

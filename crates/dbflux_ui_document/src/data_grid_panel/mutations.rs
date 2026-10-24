@@ -3,6 +3,7 @@ use super::{
     DataGridEvent, DataGridPanel, DataSource, PendingBatchRemaining, PendingDeleteConfirm,
     PendingToast,
 };
+use dbflux_components::components::data_table::DataTableState;
 use dbflux_components::components::document_tree::NodeId;
 use dbflux_core::{
     CollectionRef, ColumnAssignment, DocumentFilter, DocumentUpdate, Pagination, QueryResult,
@@ -1754,6 +1755,7 @@ impl DataGridPanel {
 
         // Collect PK identity for every row upfront before any async work
         let mut identities = Vec::with_capacity(count);
+        let mut unidentified = 0;
         {
             let state = table_state.read(cx);
             let model = state.model();
@@ -1772,10 +1774,11 @@ impl DataGridPanel {
                 }
 
                 if pk_columns.len() != pk_indices.len() || pk_values.len() != pk_indices.len() {
-                    log::error!(
+                    log::warn!(
                         "[BULK DELETE] Failed to build row identity for row {}",
                         row_idx
                     );
+                    unidentified += 1;
                     continue;
                 }
 
@@ -1866,53 +1869,15 @@ impl DataGridPanel {
                         |warning| report_error(warning, cx),
                     );
 
-                    let success_count = successful_results.len();
-                    if let Some(e) = last_error {
-                        panel.runner.fail_mutation(task_id, e.to_string(), cx);
-                        panel.abandon_close_apply(cx);
-                        report_error(
-                            UserFacingError::new(
-                                ErrorKind::Driver,
-                                crate::labels::partial_delete_label(
-                                    crate::labels::MutationItemKind::Row,
-                                    success_count,
-                                    identities.len(),
-                                    &e.to_string(),
-                                ),
-                            ),
-                            cx,
-                        );
-                    } else {
-                        panel.runner.complete_mutation(task_id, cx);
-
-                        // Unmark all successfully deleted rows
-                        table_state_clone.update(cx, |state, cx| {
-                            for (row_idx, _) in identities.iter().take(success_count) {
-                                state.edit_buffer_mut().unmark_delete(*row_idx);
-                            }
-                            cx.notify();
-                        });
-
-                        panel.pending.toast = Some(PendingToast {
-                            message: crate::labels::bulk_delete_success_label(
-                                crate::labels::MutationItemKind::Row,
-                                success_count,
-                            ),
-                            is_error: false,
-                        });
-
-                        panel.batch_op_in_flight = false;
-                        if panel.pending_batch_remaining.is_some() {
-                            panel.process_next_batch_op(cx);
-                        } else {
-                            // A batch of deletes parks on the confirmation instead
-                            // of staging remaining work, so the pump never runs
-                            // and this tail is what reports the batch.
-                            panel.finish_close_after_apply(cx);
-                            panel.queue_reload_after_mutation(cx);
-                        }
-                    }
-                    cx.notify();
+                    let outcome = BulkDeleteOutcome {
+                        kind: crate::labels::MutationItemKind::Row,
+                        task_id,
+                        attempted_rows: identities.iter().map(|(row_idx, _)| *row_idx).collect(),
+                        deleted: successful_results.len(),
+                        error: last_error,
+                        unidentified,
+                    };
+                    panel.finish_bulk_delete(&table_state_clone, outcome, cx);
                 });
             });
         })
@@ -1936,6 +1901,7 @@ impl DataGridPanel {
 
         // Collect filters for every document upfront
         let mut filters = Vec::with_capacity(count);
+        let mut unidentified = 0;
         {
             let state = table_state.read(cx);
             let model = state.model();
@@ -1962,10 +1928,11 @@ impl DataGridPanel {
                             dbflux_core::DocumentFilter::new(serde_json::json!({"_id": s}))
                         }
                         _ => {
-                            log::error!(
+                            log::warn!(
                                 "[BULK DELETE] Invalid _id value for document at row {}",
                                 row_idx
                             );
+                            unidentified += 1;
                             continue;
                         }
                     }
@@ -2064,57 +2031,133 @@ impl DataGridPanel {
                         |warning| report_error(warning, cx),
                     );
 
-                    let success_count = successful_results.len();
-                    if let Some(e) = last_error {
-                        panel.runner.fail_mutation(task_id, e.to_string(), cx);
-                        panel.abandon_close_apply(cx);
-                        report_error(
-                            UserFacingError::new(
-                                ErrorKind::Driver,
-                                crate::labels::partial_delete_label(
-                                    crate::labels::MutationItemKind::Document,
-                                    success_count,
-                                    filters.len(),
-                                    &e.to_string(),
-                                ),
-                            ),
-                            cx,
-                        );
-                    } else {
-                        panel.runner.complete_mutation(task_id, cx);
-
-                        table_state_clone.update(cx, |state, cx| {
-                            for (row_idx, _) in filters.iter().take(success_count) {
-                                state.edit_buffer_mut().unmark_delete(*row_idx);
-                            }
-                            cx.notify();
-                        });
-
-                        panel.pending.toast = Some(PendingToast {
-                            message: crate::labels::bulk_delete_success_label(
-                                crate::labels::MutationItemKind::Document,
-                                success_count,
-                            ),
-                            is_error: false,
-                        });
-
-                        panel.batch_op_in_flight = false;
-                        if panel.pending_batch_remaining.is_some() {
-                            panel.process_next_batch_op(cx);
-                        } else {
-                            // A batch of deletes parks on the confirmation instead
-                            // of staging remaining work, so the pump never runs
-                            // and this tail is what reports the batch.
-                            panel.finish_close_after_apply(cx);
-                            panel.queue_reload_after_mutation(cx);
-                        }
-                    }
-                    cx.notify();
+                    let outcome = BulkDeleteOutcome {
+                        kind: crate::labels::MutationItemKind::Document,
+                        task_id,
+                        attempted_rows: filters.iter().map(|(row_idx, _)| *row_idx).collect(),
+                        deleted: successful_results.len(),
+                        error: last_error,
+                        unidentified,
+                    };
+                    panel.finish_bulk_delete(&table_state_clone, outcome, cx);
                 });
             });
         })
         .detach();
     }
+
+    /// Shows the result of a bulk delete in the grid and reports it.
+    ///
+    /// Deletes run one by one and stop at the first error, so a failed run can
+    /// already have deleted rows. Those rows lose their mark, so saving again
+    /// does not retry a row that no longer exists, and a reload drops them from
+    /// the grid while carrying the marks of the rows that were not deleted over
+    /// by identity.
+    fn finish_bulk_delete(
+        &mut self,
+        table_state: &Entity<DataTableState>,
+        outcome: BulkDeleteOutcome,
+        cx: &mut Context<Self>,
+    ) {
+        let BulkDeleteOutcome {
+            kind,
+            task_id,
+            attempted_rows,
+            deleted,
+            error,
+            unidentified,
+        } = outcome;
+
+        table_state.update(cx, |state, cx| {
+            for row_idx in attempted_rows.iter().take(deleted) {
+                state.edit_buffer_mut().unmark_delete(*row_idx);
+            }
+            cx.notify();
+        });
+
+        if let Some(error) = error {
+            self.runner.fail_mutation(task_id, error.to_string(), cx);
+            self.abandon_close_apply(cx);
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Driver,
+                    crate::labels::partial_delete_label(
+                        kind,
+                        deleted,
+                        attempted_rows.len(),
+                        &error.to_string(),
+                    ),
+                ),
+                cx,
+            );
+            if unidentified > 0 {
+                report_unidentified_deletes(kind, deleted, unidentified, cx);
+            }
+            if deleted > 0 {
+                self.queue_reload_after_mutation(cx);
+            }
+            cx.notify();
+            return;
+        }
+
+        self.runner.complete_mutation(task_id, cx);
+
+        if unidentified > 0 {
+            // The rows left out are still staged, so a close waiting on this
+            // apply must keep the tab instead of closing over them.
+            self.abandon_close_apply_independent(cx);
+            report_unidentified_deletes(kind, deleted, unidentified, cx);
+        } else {
+            self.pending.toast = Some(PendingToast {
+                message: crate::labels::bulk_delete_success_label(kind, deleted),
+                is_error: false,
+            });
+        }
+
+        self.batch_op_in_flight = false;
+        if self.pending_batch_remaining.is_some() {
+            self.process_next_batch_op(cx);
+        } else {
+            // A batch of deletes parks on the confirmation instead of staging
+            // remaining work, so the pump never runs and this tail is what
+            // reports the batch.
+            self.finish_close_after_apply(cx);
+            self.queue_reload_after_mutation(cx);
+        }
+        cx.notify();
+    }
+}
+
+/// What a bulk delete did, as the grid needs it to show the result.
+struct BulkDeleteOutcome {
+    kind: crate::labels::MutationItemKind,
+    task_id: Uuid,
+    /// Rows the delete ran against, in the order it ran them.
+    attempted_rows: Vec<usize>,
+    /// How many of `attempted_rows`, from the first, were deleted.
+    deleted: usize,
+    /// The error that stopped the run.
+    error: Option<dbflux_core::DbError>,
+    /// Marked rows left out because their identity could not be read.
+    unidentified: usize,
+}
+
+/// Tells the user that marked rows were left out of a delete, as a warning:
+/// the rest of the delete may have landed.
+fn report_unidentified_deletes(
+    kind: crate::labels::MutationItemKind,
+    deleted: usize,
+    unidentified: usize,
+    cx: &mut App,
+) {
+    report_error(
+        UserFacingError::new(
+            ErrorKind::Driver,
+            crate::labels::bulk_delete_unidentified_label(kind, deleted, unidentified),
+        )
+        .with_severity(dbflux_core::observability::EventSeverity::Warn),
+        cx,
+    );
 }
 
 #[cfg(test)]

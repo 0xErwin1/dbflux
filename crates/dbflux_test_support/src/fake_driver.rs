@@ -77,6 +77,7 @@ struct FakeDriverState {
     ping_error: RwLock<Option<String>>,
     connect_error: RwLock<Option<String>>,
     refuse_read_only: AtomicBool,
+    delete_row_errors: RwLock<Vec<(dbflux_core::Value, String)>>,
 }
 
 #[derive(Clone)]
@@ -157,6 +158,17 @@ impl FakeDriver {
 
     pub fn with_connect_error(self, message: impl Into<String>) -> Self {
         *rwlock_write(&self.state.connect_error) = Some(message.into());
+        self
+    }
+
+    /// Fails `delete_row` for every row whose identity holds `value`, the way
+    /// a driver refuses a delete that a foreign key still references.
+    pub fn with_delete_row_error(
+        self,
+        value: dbflux_core::Value,
+        message: impl Into<String>,
+    ) -> Self {
+        rwlock_write(&self.state.delete_row_errors).push((value, message.into()));
         self
     }
 
@@ -691,6 +703,14 @@ impl Connection for FakeConnection {
     }
 
     fn delete_row(&self, delete: &RowDelete) -> Result<CrudResult, DbError> {
+        if let dbflux_core::RecordIdentity::Composite { values, .. } = &delete.identity
+            && let Some((_, message)) = rwlock_read(&self.state.delete_row_errors)
+                .iter()
+                .find(|(value, _)| values.contains(value))
+        {
+            return Err(DbError::query_failed(message.clone()));
+        }
+
         mutex_lock(&self.state.crud_ops).push(CrudOp::Delete(delete.clone()));
         Ok(CrudResult::new(1, None))
     }
