@@ -24,6 +24,10 @@ use crate::{
     state::{PendingSessionShutdown, ServerState, SharedDetachedProcess},
 };
 
+mod connect_deadline;
+
+use connect_deadline::{ConnectDeadlines, connect_with_deadline, run_with_stage_deadline};
+
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 async fn profile_connection_setup_lock(
@@ -1273,11 +1277,21 @@ impl AccessManager for McpAccessManager {
 
 struct McpConnectionFactory {
     state: ServerState,
+    deadlines: ConnectDeadlines,
 }
 
 impl McpConnectionFactory {
     fn new(state: ServerState) -> Self {
-        Self { state }
+        Self {
+            state,
+            deadlines: ConnectDeadlines::default(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_deadlines(mut self, deadlines: ConnectDeadlines) -> Self {
+        self.deadlines = deadlines;
+        self
     }
 
     async fn connect(
@@ -1379,10 +1393,16 @@ impl McpConnectionFactory {
         let keyring_password =
             DbFluxServer::resolve_profile_secrets(&self.state, &profile)?.password;
         let pipeline_input = self.build_pipeline_input(profile).await?;
-        let (state_tx, _state_rx) = dbflux_core::pipeline_state_channel();
-        let pipeline_output = dbflux_core::run_pipeline(pipeline_input, &state_tx)
-            .await
-            .map_err(|error| format!("Pipeline stage '{}': {}", error.stage, error.source))?;
+        let cancel = pipeline_input.cancel.clone();
+        let (state_tx, state_rx) = dbflux_core::pipeline_state_channel();
+        let pipeline_output = run_with_stage_deadline(
+            async move { dbflux_core::run_pipeline(pipeline_input, &state_tx).await },
+            state_rx,
+            &self.deadlines,
+            &cancel,
+        )
+        .await?
+        .map_err(|error| format!("Pipeline stage '{}': {}", error.stage, error.source))?;
 
         let mut profile = pipeline_output.resolved_profile;
         let access_handle = pipeline_output.access_handle;
@@ -1400,19 +1420,22 @@ impl McpConnectionFactory {
         let driver_id_for_error = driver_id.clone();
         let connection_key_for_error = connection_key.clone();
 
-        let mut connection = tokio::task::spawn_blocking(move || {
-            driver
-                .connect_with_overrides(&profile, &overrides)
-                .map_err(|error| {
-                    error_messages::connection_error(
-                        &connection_key_for_error,
-                        &driver_id_for_error,
-                        error,
-                    )
-                })
-        })
-        .await
-        .map_err(|error| format!("Blocking task failed: {}", error))??;
+        let mut connection = connect_with_deadline(
+            move || {
+                driver
+                    .connect_with_overrides(&profile, &overrides)
+                    .map_err(|error| {
+                        error_messages::connection_error(
+                            &connection_key_for_error,
+                            &driver_id_for_error,
+                            error,
+                        )
+                    })
+            },
+            self.deadlines.driver_connect,
+            &driver_id,
+        )
+        .await?;
 
         if let Err(hook_error) = run_connection_hook_phase(
             &self.state,
@@ -1463,19 +1486,22 @@ impl McpConnectionFactory {
         let driver_id_for_error = driver_id.clone();
         let hook_profile = profile.clone();
 
-        let mut connection = tokio::task::spawn_blocking(move || {
-            driver
-                .connect_with_secrets(&profile, password.as_ref(), ssh_secret.as_ref())
-                .map_err(|error| {
-                    error_messages::connection_error(
-                        &connection_key_for_error,
-                        &driver_id_for_error,
-                        error,
-                    )
-                })
-        })
-        .await
-        .map_err(|error| format!("Blocking task failed: {}", error))??;
+        let mut connection = connect_with_deadline(
+            move || {
+                driver
+                    .connect_with_secrets(&profile, password.as_ref(), ssh_secret.as_ref())
+                    .map_err(|error| {
+                        error_messages::connection_error(
+                            &connection_key_for_error,
+                            &driver_id_for_error,
+                            error,
+                        )
+                    })
+            },
+            self.deadlines.driver_connect,
+            &driver_id,
+        )
+        .await?;
 
         if let Err(hook_error) = run_connection_hook_phase(
             &self.state,
@@ -2239,6 +2265,7 @@ mod tests {
         inner: FakeDriver,
         invocations: Arc<Mutex<Vec<ConnectInvocation>>>,
         event_trace: Option<std::path::PathBuf>,
+        connect_delay: Option<Duration>,
     }
 
     impl RecordingDriver {
@@ -2247,7 +2274,13 @@ mod tests {
                 inner,
                 invocations: Arc::new(Mutex::new(Vec::new())),
                 event_trace: None,
+                connect_delay: None,
             }
+        }
+
+        fn with_connect_delay(mut self, delay: Duration) -> Self {
+            self.connect_delay = Some(delay);
+            self
         }
 
         fn with_event_trace(mut self, path: std::path::PathBuf) -> Self {
@@ -2256,6 +2289,9 @@ mod tests {
         }
 
         fn record_connection(&self) {
+            if let Some(delay) = self.connect_delay {
+                std::thread::sleep(delay);
+            }
             if let Some(path) = &self.event_trace {
                 use std::io::Write;
 
@@ -2614,6 +2650,66 @@ mod tests {
         let audit_json = serde_json::to_string(&audit_events).expect("serialize hook audit events");
         assert!(!audit_json.contains("DBFLUX_MCP_HOOK_TEST_TRACE"));
         assert!(audit_json.contains("hook_index"));
+    }
+
+    fn short_connect_deadlines() -> ConnectDeadlines {
+        ConnectDeadlines {
+            stage: Duration::from_millis(500),
+            login: Duration::from_millis(500),
+            driver_connect: Duration::from_millis(100),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pipeline_connect_times_out_naming_the_driver_stage_and_closes_late_connection() {
+        let inner = FakeDriver::new(DbKind::Postgres);
+        let driver =
+            RecordingDriver::new(inner.clone()).with_connect_delay(Duration::from_millis(300));
+        let profile = pipeline_profile_with_hooks(ConnectionHooks::default());
+        let connection_id = profile.id.to_string();
+        let state = test_state_with_driver("postgres", Arc::new(driver), profile);
+
+        let error = McpConnectionFactory::new(state)
+            .with_deadlines(short_connect_deadlines())
+            .connect(&connection_id, None)
+            .await
+            .err()
+            .expect("a slow driver connect must time out");
+
+        assert_eq!(
+            error,
+            "Connection timed out after 100ms while Connecting (postgres)"
+        );
+        let closed = tokio::time::timeout(Duration::from_secs(5), async {
+            while inner.stats().close_calls == 0 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(closed.is_ok(), "the late connection must be closed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn direct_connect_times_out_naming_the_driver_stage() {
+        let inner = FakeDriver::new(DbKind::Postgres);
+        let driver =
+            RecordingDriver::new(inner.clone()).with_connect_delay(Duration::from_millis(300));
+        let profile = ConnectionProfile::new("slow-direct", DbConfig::default_postgres());
+        assert!(!profile.uses_pipeline());
+        let connection_id = profile.id.to_string();
+        let state = test_state_with_driver("postgres", Arc::new(driver), profile);
+
+        let error = McpConnectionFactory::new(state)
+            .with_deadlines(short_connect_deadlines())
+            .connect(&connection_id, None)
+            .await
+            .err()
+            .expect("a slow driver connect must time out");
+
+        assert_eq!(
+            error,
+            "Connection timed out after 100ms while Connecting (postgres)"
+        );
     }
 
     #[tokio::test]
