@@ -1983,6 +1983,25 @@ pub trait Connection: Send + Sync {
         None
     }
 
+    /// Returns the secret stores this connection exposes, in display order.
+    ///
+    /// Drivers that implement `SecretStoreSource` override this. Drivers without
+    /// secret stores inherit the empty default and MUST NOT advertise
+    /// `DriverCapabilities::SECRET_STORE`.
+    fn secret_stores(&self) -> Vec<&dyn crate::connection::secret_store::SecretStoreSource> {
+        Vec::new()
+    }
+
+    /// Returns the store whose descriptor id is `store_id`.
+    fn secret_store(
+        &self,
+        store_id: &str,
+    ) -> Option<&dyn crate::connection::secret_store::SecretStoreSource> {
+        self.secret_stores()
+            .into_iter()
+            .find(|store| store.descriptor().id == store_id)
+    }
+
     /// Returns the language service for this connection.
     ///
     /// Provides validation and dangerous-query detection for the connection's

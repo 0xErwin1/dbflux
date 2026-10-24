@@ -53,6 +53,11 @@ pub const fn category_presentation(category: DatabaseCategory) -> CategoryPresen
             DriverIconTone::Warning,
             "sidebar.tree.container.object_storage",
         ),
+        DatabaseCategory::SecretStore => (
+            AppIcon::Lock,
+            DriverIconTone::Violet,
+            "sidebar.tree.container.secret_store",
+        ),
     };
 
     CategoryPresentation {
@@ -66,13 +71,14 @@ pub const fn category_presentation(category: DatabaseCategory) -> CategoryPresen
 mod tests {
     use super::*;
 
-    const ALL_CATEGORIES: [DatabaseCategory; 6] = [
+    const ALL_CATEGORIES: [DatabaseCategory; 7] = [
         DatabaseCategory::Relational,
         DatabaseCategory::Document,
         DatabaseCategory::KeyValue,
         DatabaseCategory::TimeSeries,
         DatabaseCategory::LogStream,
         DatabaseCategory::ObjectStorage,
+        DatabaseCategory::SecretStore,
     ];
 
     #[test]
@@ -130,6 +136,11 @@ mod tests {
                 DatabaseCategory::ObjectStorage,
                 AppIcon::Boxes,
                 DriverIconTone::Warning,
+            ),
+            (
+                DatabaseCategory::SecretStore,
+                AppIcon::Lock,
+                DriverIconTone::Violet,
             ),
         ];
 

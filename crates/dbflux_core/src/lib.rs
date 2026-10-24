@@ -87,6 +87,11 @@ pub use connection::dashboard_import::{
 };
 
 pub use connection::dashboard_source::{DashboardRef, DashboardSource, RemoteDashboard};
+pub use connection::secret_store::{
+    SecretDetails, SecretListPage, SecretListRequest, SecretPayload, SecretRotation,
+    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
+    SecretValue,
+};
 
 pub use connection::dump_analysis::{
     DumpAnalysisError, DumpAnalysisReport, DumpAnalyzer, DumpKeyEntry, DumpPrefixEntry,

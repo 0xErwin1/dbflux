@@ -463,6 +463,7 @@ connection_manager:
       key_value: "Clave-valor"
       time_series_and_logs: "Series temporales y logs"
       object_storage: "Almacenamiento de objetos"
+      secret_store: "Almacenes de secretos"
       other: "Otros"
   export:
     target:
@@ -5140,6 +5141,7 @@ sidebar:
       time_series: Mediciones (%{count})
       log_stream: Log Groups (%{count})
       object_storage: Buckets (%{count})
+      secret_store: Almacenes (%{count})
     folder:
       empty_databases:
         one: "%{count} base de datos vacía"

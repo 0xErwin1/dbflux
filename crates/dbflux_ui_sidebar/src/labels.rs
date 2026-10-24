@@ -795,22 +795,24 @@ pub(crate) fn pipeline_stage_label(state: &PipelineState) -> Option<String> {
 mod tests {
     use dbflux_core::DatabaseCategory;
 
-    const ALL_CATEGORIES: [DatabaseCategory; 6] = [
+    const ALL_CATEGORIES: [DatabaseCategory; 7] = [
         DatabaseCategory::Relational,
         DatabaseCategory::Document,
         DatabaseCategory::KeyValue,
         DatabaseCategory::TimeSeries,
         DatabaseCategory::LogStream,
         DatabaseCategory::ObjectStorage,
+        DatabaseCategory::SecretStore,
     ];
 
-    const CONTAINER_KEYS: [&str; 6] = [
+    const CONTAINER_KEYS: [&str; 7] = [
         "sidebar.tree.container.relational",
         "sidebar.tree.container.document",
         "sidebar.tree.container.key_value",
         "sidebar.tree.container.time_series",
         "sidebar.tree.container.log_stream",
         "sidebar.tree.container.object_storage",
+        "sidebar.tree.container.secret_store",
     ];
 
     const SLICE_KEYS: [&str; 10] = [

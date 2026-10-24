@@ -463,6 +463,7 @@ connection_manager:
       key_value: "键值"
       time_series_and_logs: "时间序列和日志"
       object_storage: "对象存储"
+      secret_store: "密钥存储"
       other: "其他"
   export:
     target:
@@ -5138,6 +5139,7 @@ sidebar:
       time_series: "测量（%{count}）"
       log_stream: "日志组（%{count}）"
       object_storage: "存储桶（%{count}）"
+      secret_store: "存储库（%{count}）"
     folder:
       empty_databases:
         one: "%{count} 个空数据库"

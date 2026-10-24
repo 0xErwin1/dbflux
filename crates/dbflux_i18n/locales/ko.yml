@@ -463,6 +463,7 @@ connection_manager:
       key_value: "키-값"
       time_series_and_logs: "시계열 및 로그"
       object_storage: "오브젝트 스토리지"
+      secret_store: "시크릿 저장소"
       other: "기타"
   export:
     target:
@@ -5139,6 +5140,7 @@ sidebar:
       time_series: 측정값 (%{count})
       log_stream: 로그 그룹 (%{count})
       object_storage: 버킷 (%{count})
+      secret_store: 저장소 (%{count})
     folder:
       empty_databases:
         one: "빈 데이터베이스 %{count}개"
