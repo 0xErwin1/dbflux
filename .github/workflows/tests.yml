@@ -219,6 +219,7 @@ jobs:
             mirror.gcr.io/library/postgres:16
             mirror.gcr.io/pgvector/pgvector:0.8.0-pg16
             mirror.gcr.io/library/mysql:8.4
+            mirror.gcr.io/library/mysql:5.7
             mirror.gcr.io/library/mongo:7
             mirror.gcr.io/library/redis:7
             grokzen/redis-cluster:7.0.10
