@@ -101,6 +101,9 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   de eliminar tabla busca las vistas dependientes en las definiciones de vista
   por el nombre `` `base`.`tabla` ``, así que una vista que llega a la tabla solo
   a través de otra vista no aparece.
+- Los servidores anteriores a MySQL 8.0.16 o MariaDB 10.2.22 no tienen
+  `information_schema.CHECK_CONSTRAINTS` ni guardan las restricciones `CHECK`,
+  así que los detalles de tabla no muestran restricciones de verificación en ellos.
 - Las columnas `DECIMAL` se reportan como `ColumnKind::Float`, porque no existe
   un tipo de columna decimal: los gráficos y otros usos del tipo de columna las
   tratan como números de punto flotante, aunque los valores en sí se mantienen

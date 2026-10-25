@@ -7,10 +7,10 @@
 )]
 
 use dbflux_core::{
-    ConnectionProfile, DbConfig, DbDriver, DbError, DbKind, DescribeRequest, ExplainRequest,
-    OrderByColumn, Pagination, QueryRequest, ReadOnlyEnforcement, RecordIdentity, RowDelete,
-    RowInsert, RowPatch, SchemaLoadingStrategy, TableBrowseRequest, TableCountRequest, TableRef,
-    TransactionStateNote, Value,
+    ConnectionProfile, ConstraintKind, DbConfig, DbDriver, DbError, DbKind, DescribeRequest,
+    ExplainRequest, OrderByColumn, Pagination, QueryRequest, ReadOnlyEnforcement, RecordIdentity,
+    RowDelete, RowInsert, RowPatch, SchemaLoadingStrategy, TableBrowseRequest, TableCountRequest,
+    TableRef, TransactionStateNote, Value,
 };
 use dbflux_driver_mysql::MysqlDriver;
 use dbflux_test_support::containers;
@@ -186,6 +186,52 @@ fn mysql_schema_introspection() -> Result<(), DbError> {
             .expect("foreign keys should be loaded");
         assert!(!fks.is_empty());
         assert_eq!(fks[0].referenced_table, "test_users");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_57_table_details_load_without_check_constraints_table() -> Result<(), DbError> {
+    containers::with_mysql_57_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.set_active_database(Some("testdb"))?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE legacy_users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(255) NOT NULL,
+                age INT,
+                CONSTRAINT uq_legacy_users_email UNIQUE (email),
+                CONSTRAINT ck_legacy_users_age CHECK (age >= 0)
+            )",
+        ))?;
+
+        let table = connection.table_details("testdb", None, "legacy_users")?;
+
+        let columns = table.columns.as_ref().expect("columns should be loaded");
+        assert_eq!(columns.len(), 3);
+
+        let constraints = table
+            .constraints
+            .as_ref()
+            .expect("constraints should be loaded");
+        let unique = constraints
+            .iter()
+            .find(|constraint| constraint.name == "uq_legacy_users_email")
+            .expect("unique constraint");
+        assert_eq!(unique.kind, ConstraintKind::Unique);
+        assert_eq!(unique.columns, vec!["email".to_string()]);
+        assert_eq!(unique.check_clause, None);
+
+        // MySQL 5.7 parses CHECK constraints but never stores them.
+        assert!(
+            constraints
+                .iter()
+                .all(|constraint| constraint.kind != ConstraintKind::Check)
+        );
 
         Ok(())
     })
