@@ -1667,6 +1667,27 @@ impl ConnectionManager {
         })
     }
 
+    /// Applies a saved profile's read-only setting to its open session.
+    ///
+    /// Switching the setting on makes the session read-only at once. Switching
+    /// it off leaves the session read-only until it reconnects: the
+    /// write-privilege probe runs only at connect time, and while the profile
+    /// was read-only its result was not kept, so the session cannot tell
+    /// whether the server would still refuse writes.
+    pub fn apply_profile_read_only_flag(&mut self, profile_id: Uuid, read_only_flag: bool) {
+        if !read_only_flag {
+            return;
+        }
+
+        let Some(connected) = self.connections.get_mut(&profile_id) else {
+            return;
+        };
+
+        connected.profile.read_only_flag = true;
+        connected.mutation_policy = MutationPolicy::ReadOnly;
+        connected.read_only_reason = Some(ReadOnlyReason::ProfileSetting);
+    }
+
     pub fn apply_switch_database(
         &mut self,
         profile_id: Uuid,

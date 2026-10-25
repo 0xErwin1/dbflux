@@ -4652,6 +4652,62 @@ mod auto_refresh_tests {
         assert!(!showed_read_only_profile_toast(window, &toasts));
     }
 
+    /// Saves the document's connected profile with `read_only_flag`, as the
+    /// connection manager does when the user edits an open connection.
+    fn save_profile_read_only_flag(
+        window: &mut VisualTestContext,
+        document: &Entity<CodeDocument>,
+        read_only_flag: bool,
+    ) {
+        window.update(|_, cx| {
+            let app_state = document.read(cx).app_state.clone();
+            let profile_id = document.read(cx).connection_id.expect("connected");
+
+            app_state.update(cx, |app, _| {
+                let mut profile = app
+                    .connections()
+                    .get(&profile_id)
+                    .expect("profile is connected")
+                    .profile
+                    .clone();
+                profile.read_only_flag = read_only_flag;
+                app.update_profile(profile);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn saving_an_open_profile_as_read_only_refuses_the_next_write(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) =
+            open_connected(cx, &driver, "UPDATE users SET name = 'a' WHERE id = 1");
+
+        save_profile_read_only_flag(window, &document, true);
+        run_query(window, &document);
+
+        assert!(executed(&driver).is_empty());
+        assert!(showed_read_only_profile_toast(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn saving_an_open_profile_as_writable_keeps_it_read_only_until_reconnect(
+        cx: &mut TestAppContext,
+    ) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) = open_connected_with_profile(
+            cx,
+            &driver,
+            "UPDATE users SET name = 'a' WHERE id = 1",
+            true,
+        );
+
+        save_profile_read_only_flag(window, &document, false);
+        run_query(window, &document);
+
+        assert!(executed(&driver).is_empty());
+        assert!(showed_read_only_profile_toast(window, &toasts));
+    }
+
     #[gpui::test]
     fn a_manual_run_requests_no_read_only_enforcement(cx: &mut TestAppContext) {
         let driver = FakeDriver::new(DbKind::SQLite).with_read_only_enforcement();

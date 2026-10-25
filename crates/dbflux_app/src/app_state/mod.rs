@@ -1290,6 +1290,10 @@ impl AppState {
             connected.profile.show_all_databases = profile.show_all_databases;
         }
 
+        self.facade
+            .connections
+            .apply_profile_read_only_flag(profile.id, profile.read_only_flag);
+
         self.facade.profiles.update(profile);
 
         self.record_config_event(

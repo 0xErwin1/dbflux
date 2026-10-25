@@ -45,7 +45,8 @@ toggle. When it is on, DBFlux blocks changes made from the data grid, the visual
 query builder and schema diff on that connection, refuses query editor
 statements that would change data or schema, and denies MCP calls above the
 `read` class (see [Read-only connections](MCP_AI_INTEGRATION.md#read-only-connections)).
-Read statements still run. The editor classifies a statement from its text, so a
+Read statements still run. Switching the setting on applies to an open
+connection at once, while switching it off takes effect after reconnecting. The editor classifies a statement from its text, so a
 function with side effects called from a `SELECT`, such as PostgreSQL `setval`,
 still runs: read-only database credentials remain the stronger boundary.
 
