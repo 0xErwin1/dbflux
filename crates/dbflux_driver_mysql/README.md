@@ -57,6 +57,7 @@ Exposes tabular snapshots of running server state:
 - Batched primary-key row lookup sends at most 100 values per query; a larger request runs as several `IN (...)` statements.
 - SQL-only driver; it does not expose document or key-value APIs.
 - On MariaDB, which has no `information_schema.VIEW_TABLE_USAGE`, the drop-table confirmation finds dependent views by searching view definitions for the `` `database`.`table` `` name, so a view that reaches the table only through another view is not listed.
+- MySQL before 8.0.16 does not store `CHECK` constraints, so table details list none there. MariaDB before 10.2.22 (10.3.10 in the 10.3 series) stores them but has no `information_schema.CHECK_CONSTRAINTS`, so table details list its check constraints without their clause.
 - `DECIMAL` columns are reported as `ColumnKind::Float`, since there is no decimal column kind: charts and other users of the column kind treat them as floating-point numbers, while the values themselves stay exact.
 
 - Instance metrics return a single data point per call (current snapshot from `SHOW GLOBAL STATUS`), not a historical time series. Cumulative counters (e.g. `mysql.bytes_sent`) grow monotonically — interpret them as deltas between samples rather than absolute rates.

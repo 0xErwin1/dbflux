@@ -4280,35 +4280,64 @@ fn fetch_foreign_keys(
     Ok(builder.build_sorted())
 }
 
+/// `CHECK_CONSTRAINTS` exists only from MySQL 8.0.16 and MariaDB 10.2.22
+/// (10.3.10 in the 10.3 series). Older MySQL parses `CHECK` but never stores
+/// it; older MariaDB stores it and lists it in `TABLE_CONSTRAINTS`, but has no
+/// table to read its clause from.
+const CONSTRAINTS_QUERY: &str = r"
+    SELECT
+        tc.CONSTRAINT_NAME,
+        tc.CONSTRAINT_TYPE,
+        GROUP_CONCAT(kcu.COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION) as COLUMNS,
+        cc.CHECK_CLAUSE
+    FROM information_schema.TABLE_CONSTRAINTS tc
+    LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu
+        ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+        AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+        AND tc.TABLE_NAME = kcu.TABLE_NAME
+    LEFT JOIN information_schema.CHECK_CONSTRAINTS cc
+        ON tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
+        AND tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA
+    WHERE tc.TABLE_SCHEMA = ?
+        AND tc.TABLE_NAME = ?
+        AND tc.CONSTRAINT_TYPE IN ('UNIQUE', 'CHECK')
+    GROUP BY tc.CONSTRAINT_NAME, tc.CONSTRAINT_TYPE, cc.CHECK_CLAUSE
+    ORDER BY tc.CONSTRAINT_NAME
+";
+
+const CONSTRAINTS_WITHOUT_CHECK_CLAUSE_QUERY: &str = r"
+    SELECT
+        tc.CONSTRAINT_NAME,
+        tc.CONSTRAINT_TYPE,
+        GROUP_CONCAT(kcu.COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION) as COLUMNS,
+        NULL as CHECK_CLAUSE
+    FROM information_schema.TABLE_CONSTRAINTS tc
+    LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu
+        ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+        AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+        AND tc.TABLE_NAME = kcu.TABLE_NAME
+    WHERE tc.TABLE_SCHEMA = ?
+        AND tc.TABLE_NAME = ?
+        AND tc.CONSTRAINT_TYPE IN ('UNIQUE', 'CHECK')
+    GROUP BY tc.CONSTRAINT_NAME, tc.CONSTRAINT_TYPE
+    ORDER BY tc.CONSTRAINT_NAME
+";
+
 fn fetch_constraints(
     conn: &mut Conn,
     database: &str,
     table: &str,
 ) -> Result<Vec<ConstraintInfo>, DbError> {
-    let query = r"
-        SELECT
-            tc.CONSTRAINT_NAME,
-            tc.CONSTRAINT_TYPE,
-            GROUP_CONCAT(kcu.COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION) as COLUMNS,
-            cc.CHECK_CLAUSE
-        FROM information_schema.TABLE_CONSTRAINTS tc
-        LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu
-            ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
-            AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
-            AND tc.TABLE_NAME = kcu.TABLE_NAME
-        LEFT JOIN information_schema.CHECK_CONSTRAINTS cc
-            ON tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
-            AND tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA
-        WHERE tc.TABLE_SCHEMA = ?
-            AND tc.TABLE_NAME = ?
-            AND tc.CONSTRAINT_TYPE IN ('UNIQUE', 'CHECK')
-        GROUP BY tc.CONSTRAINT_NAME, tc.CONSTRAINT_TYPE, cc.CHECK_CLAUSE
-        ORDER BY tc.CONSTRAINT_NAME
-    ";
-
-    let rows: Vec<mysql::Row> = conn
-        .exec(query, (database, table))
-        .map_err(|e| format_mysql_query_error(&e))?;
+    let rows: Vec<mysql::Row> = match conn.exec(CONSTRAINTS_QUERY, (database, table)) {
+        Ok(rows) => rows,
+        Err(mysql::Error::MySqlError(server_error))
+            if server_error.code == mysql::ServerError::ER_UNKNOWN_TABLE as u16 =>
+        {
+            conn.exec(CONSTRAINTS_WITHOUT_CHECK_CLAUSE_QUERY, (database, table))
+                .map_err(|e| format_mysql_query_error(&e))?
+        }
+        Err(e) => return Err(format_mysql_query_error(&e)),
+    };
 
     Ok(rows
         .into_iter()
