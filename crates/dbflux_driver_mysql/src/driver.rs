@@ -4280,9 +4280,10 @@ fn fetch_foreign_keys(
     Ok(builder.build_sorted())
 }
 
-/// `CHECK_CONSTRAINTS` exists only from MySQL 8.0.16 and MariaDB 10.2.22.
-/// Older servers parse `CHECK` but never store it, so without that table
-/// there is no check clause to read.
+/// `CHECK_CONSTRAINTS` exists only from MySQL 8.0.16 and MariaDB 10.2.22
+/// (10.3.10 in the 10.3 series). Older MySQL parses `CHECK` but never stores
+/// it; older MariaDB stores it and lists it in `TABLE_CONSTRAINTS`, but has no
+/// table to read its clause from.
 const CONSTRAINTS_QUERY: &str = r"
     SELECT
         tc.CONSTRAINT_NAME,
