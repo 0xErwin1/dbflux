@@ -929,8 +929,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn unreadable_profile_store_falls_back_to_the_flag_loaded_at_startup() {
-        let (mut state, connection_id) = state_with_profile(true).await;
+    async fn unreadable_profile_store_denies_a_write_on_a_profile_writable_at_startup() {
+        let (mut state, connection_id) = state_with_profile(false).await;
         let store_dir = tempfile::tempdir().expect("temp dir should be created");
         state.profile_store_path = Some(store_dir.path().join("missing").join("dbflux.db"));
 
@@ -942,7 +942,7 @@ mod tests {
         )
         .await;
 
-        let error = result.expect_err("the startup flag still denies the write");
+        let error = result.expect_err("an unreadable store must not let a write through");
         assert_eq!(
             error.data,
             Some(serde_json::json!({
@@ -950,5 +950,23 @@ mod tests {
             }))
         );
         assert!(!handler_ran);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unreadable_profile_store_still_allows_a_read() {
+        let (mut state, connection_id) = state_with_profile(false).await;
+        let store_dir = tempfile::tempdir().expect("temp dir should be created");
+        state.profile_store_path = Some(store_dir.path().join("missing").join("dbflux.db"));
+
+        let (result, handler_ran) = authorize_on(
+            state,
+            &connection_id,
+            "select_data",
+            ExecutionClassification::Read,
+        )
+        .await;
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(handler_ran);
     }
 }

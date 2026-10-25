@@ -214,7 +214,7 @@ SQL Server、Turso、外部 IPC 驱动程序、DynamoDB、CloudWatch 和 InfluxD
 
 如上文所述，在无法强制只读的驱动上，`execute_script` 会把读取脚本按 `write` 处理，因此在使用这类驱动的只读连接上它也会被拒绝。`select_data`、`count_records` 和其他读取工具仍会执行。
 
-MCP 服务器在每次调用时都会从 `dbflux.db` 读取该设置，因此在 GUI 中所做的更改无需重启服务器即可在下一次调用时生效。
+MCP 服务器在每次调用时都会从 `dbflux.db` 读取该设置，因此在 GUI 中所做的更改无需重启服务器即可在下一次调用时生效。如果服务器无法读取该文件，则会将该连接视为只读。
 
 ## 6. 内置策略与角色
 

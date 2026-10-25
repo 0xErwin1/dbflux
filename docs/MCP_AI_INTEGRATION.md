@@ -214,7 +214,7 @@ When a connection's profile has **Read-only** switched on in the Connection Mana
 
 `execute_script` governs a read script as `write` on a driver that cannot enforce read-only, as described above, so on a read-only connection with such a driver it is denied too. `select_data`, `count_records` and the other read tools still run.
 
-The MCP server reads the setting from `dbflux.db` on every call, so a change made in the GUI applies to the next call without restarting the server.
+The MCP server reads the setting from `dbflux.db` on every call, so a change made in the GUI applies to the next call without restarting the server. If the server cannot read the file, it treats the connection as read-only.
 
 ## 6. Built-in Policies and Roles
 

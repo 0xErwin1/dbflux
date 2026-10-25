@@ -1481,7 +1481,10 @@ impl ServerState {
     /// Returns `true` if the given connection's profile is set to read-only.
     ///
     /// The flag is read from `profile_store_path` on every call. When the
-    /// stored profile cannot be read, or no store is configured, the profile
+    /// store cannot be read, the connection counts as read-only: the gate only
+    /// refuses calls above `read`, so reads keep working, and a write never
+    /// slips through on a profile switched to read-only after startup. When
+    /// the profile is not in the store, or no store is configured, the profile
     /// loaded at startup decides.
     ///
     /// An unknown connection reports `false`: it is already denied as not
@@ -1513,19 +1516,19 @@ impl ServerState {
             Ok(Ok(flag)) => flag,
             Ok(Err(error)) => {
                 log::warn!(
-                    "Failed to read the read-only flag of profile {} from storage, using the flag loaded at startup: {}",
+                    "Failed to read the read-only flag of profile {} from storage, treating the connection as read-only: {}",
                     profile_uuid,
                     error
                 );
-                None
+                Some(true)
             }
             Err(error) => {
                 log::warn!(
-                    "Read-only flag lookup for profile {} did not complete, using the flag loaded at startup: {}",
+                    "Read-only flag lookup for profile {} did not complete, treating the connection as read-only: {}",
                     profile_uuid,
                     error
                 );
-                None
+                Some(true)
             }
         }
     }
