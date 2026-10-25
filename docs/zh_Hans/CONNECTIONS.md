@@ -144,6 +144,7 @@ SSH 隧道有两种用法：
 | **SSO 会话** | 可选，引用一个 **AWS SSO Session** 配置文件。设置后，起始 URL 和区域将从该会话继承，对应的内联字段会置灰。 |
 | **SSO 起始 URL** | 你的 Identity Center 门户 URL（使用会话时可跳过）。 |
 | **区域** | 例如 `us-east-1`。 |
+| **Endpoint URL** | 可选，例如 LocalStack 使用 `http://localhost:4566`。通过 `~/.aws/config` 中的 `[services]` 节，仅作用于 Secrets Manager 和 SSM。AWS 共享凭据配置文件也有同一字段。 |
 | **账户** | **登录后才**会填充的下拉框，列出当前 SSO 会话可访问的账户。 |
 | **角色** | 选定账户后才会填充的下拉框。 |
 
@@ -204,6 +205,9 @@ SSM 需要 `PATH` 中有 AWS CLI 和 Session Manager 插件。在 macOS 和 Linu
 - AWS 云密钥管理 / AWS 参数存储来源可以指向 JSON 密钥中的某个 **JSON 键**，因此一份 JSON 文档就能为多个字段供值。
 - 解析结果会缓存 **5 分钟**，避免每次重连都重新获取。
 - 由认证提供程序支持的 AWS 云密钥管理 / AWS 参数存储来源**要求连接上配置了认证配置文件**（连接前强制校验）。
+- 要访问 LocalStack 或 VPC 终端节点，请在 AWS 认证配置文件中设置 **Endpoint URL**。AWS SDK 也会读取 `AWS_ENDPOINT_URL_SECRETS_MANAGER` 和 `AWS_ENDPOINT_URL_SSM`。
+
+> **注意：**DBFlux 将终端节点写入配置文件引用的 `[services]` 节，因此只作用于 Secrets Manager 和 SSM，包括使用该配置文件运行的 AWS CLI `secretsmanager`、`ssm` 命令以及 SSM 端口转发。DynamoDB、S3 和 CloudWatch 保持默认终端节点。与其他配置文件共享的 `[services]` 节不会被修改，DBFlux 会为此配置文件创建单独的副本。
 
 ---
 
