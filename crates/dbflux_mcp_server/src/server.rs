@@ -2492,6 +2492,7 @@ mod tests {
             detached_processes: Arc::new(crate::state::DetachedProcessRegistry::new()),
             secret_manager: Arc::new(dbflux_core::SecretManager::new(secret_store)),
             mcp_enabled_by_default: true,
+            profile_store_path: None,
         }
     }
 

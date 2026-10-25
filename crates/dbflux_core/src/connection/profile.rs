@@ -1620,8 +1620,10 @@ pub struct ConnectionProfile {
 
     /// When `true`, the mutation policy resolves to read-only with
     /// `ReadOnlyReason::ProfileSetting`, which blocks data-grid edits, visual
-    /// query builder mutations and schema-diff apply. The SQL editor and MCP do
-    /// not consult it. Settable in Connection Manager. Defaults to `false`.
+    /// query builder mutations, schema-diff apply and SQL editor statements
+    /// above `Read`. The MCP server reads it directly and denies every call
+    /// above `Read` on the connection. Settable in Connection Manager.
+    /// Defaults to `false`.
     #[serde(default)]
     pub read_only_flag: bool,
 

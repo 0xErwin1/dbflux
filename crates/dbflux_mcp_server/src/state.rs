@@ -244,6 +244,12 @@ pub struct ServerState {
     pub detached_processes: Arc<DetachedProcessRegistry>,
     pub secret_manager: Arc<SecretManager>,
     pub mcp_enabled_by_default: bool,
+    /// Path of the `dbflux.db` the profiles were loaded from.
+    ///
+    /// The read-only gate reads the profile flag from here on every call, so a
+    /// profile switched to read-only in the GUI takes effect without restarting
+    /// the server. `None` keeps the gate on the profiles loaded at startup.
+    pub profile_store_path: Option<PathBuf>,
 }
 
 impl ServerState {
@@ -285,6 +291,7 @@ impl ServerState {
             detached_processes: Arc::new(DetachedProcessRegistry::new()),
             secret_manager,
             mcp_enabled_by_default: governance_settings.mcp_enabled_by_default,
+            profile_store_path: Some(storage_runtime.dbflux_db_path().to_path_buf()),
         };
 
         // Load connection policy assignments
@@ -1470,6 +1477,76 @@ impl ServerState {
             None => self.mcp_enabled_by_default,
         }
     }
+
+    /// Returns `true` if the given connection's profile is set to read-only.
+    ///
+    /// The flag is read from `profile_store_path` on every call. When the
+    /// store cannot be read, the connection counts as read-only: the gate only
+    /// refuses calls above `read`, so reads keep working, and a write never
+    /// slips through on a profile switched to read-only after startup. When
+    /// the profile is not in the store, or no store is configured, the profile
+    /// loaded at startup decides.
+    ///
+    /// An unknown connection reports `false`: it is already denied as not
+    /// MCP-enabled, so this check never has to decide for it.
+    pub async fn is_read_only_connection(&self, connection_id: &str) -> bool {
+        let Ok(profile_uuid) = connection_id.parse::<uuid::Uuid>() else {
+            return false;
+        };
+
+        if let Some(stored_flag) = self.stored_read_only_flag(profile_uuid).await {
+            return stored_flag;
+        }
+
+        let profile_manager = self.profile_manager.read().await;
+        profile_manager
+            .find_by_id(profile_uuid)
+            .is_some_and(|profile| profile.read_only_flag)
+    }
+
+    async fn stored_read_only_flag(&self, profile_uuid: uuid::Uuid) -> Option<bool> {
+        let db_path = self.profile_store_path.clone()?;
+
+        let read = tokio::task::spawn_blocking(move || {
+            read_stored_read_only_flag(&db_path, &profile_uuid.to_string())
+        })
+        .await;
+
+        match read {
+            Ok(Ok(flag)) => flag,
+            Ok(Err(error)) => {
+                log::warn!(
+                    "Failed to read the read-only flag of profile {} from storage, treating the connection as read-only: {}",
+                    profile_uuid,
+                    error
+                );
+                Some(true)
+            }
+            Err(error) => {
+                log::warn!(
+                    "Read-only flag lookup for profile {} did not complete, treating the connection as read-only: {}",
+                    profile_uuid,
+                    error
+                );
+                Some(true)
+            }
+        }
+    }
+}
+
+fn read_stored_read_only_flag(
+    db_path: &std::path::Path,
+    profile_id: &str,
+) -> Result<Option<bool>, dbflux_storage::error::StorageError> {
+    let connection = storage_sqlite::open_database(db_path)?;
+
+    #[allow(clippy::arc_with_non_send_sync)]
+    let repository =
+        dbflux_storage::repositories::connection_profiles::ConnectionProfileRepository::new(
+            Arc::new(connection),
+        );
+
+    Ok(repository.get(profile_id)?.map(|profile| profile.read_only))
 }
 
 fn build_driver_registry() -> HashMap<String, Arc<dyn DbDriver>> {

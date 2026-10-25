@@ -142,6 +142,7 @@ fn create_test_server_state() -> dbflux_mcp_server::state::ServerState {
             dbflux_core::NoopSecretStore,
         ))),
         mcp_enabled_by_default: true,
+        profile_store_path: None,
     }
 }
 

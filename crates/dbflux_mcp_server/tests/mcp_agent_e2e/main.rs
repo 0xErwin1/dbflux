@@ -277,6 +277,7 @@ fn build_state(
         detached_processes: Arc::new(dbflux_mcp_server::state::DetachedProcessRegistry::new()),
         secret_manager: Arc::new(SecretManager::new(Box::new(NoopSecretStore))),
         mcp_enabled_by_default: true,
+        profile_store_path: None,
     }
 }
 

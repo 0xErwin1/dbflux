@@ -8,7 +8,7 @@ use dbflux_core::observability::actions::MCP_AUTHORIZE;
 use dbflux_core::observability::{EventCategory, EventOrigin};
 use dbflux_mcp::server::authorization::{
     APPROVAL_REQUIRED_CODE, AuthorizationOutcome, AuthorizationRequest, HUMAN_ONLY_APPROVAL_TOOLS,
-    SELF_APPROVAL_FORBIDDEN_CODE, authorize_request,
+    READ_ONLY_CONNECTION_CODE, SELF_APPROVAL_FORBIDDEN_CODE, authorize_request,
 };
 use dbflux_mcp::server::request_context::RequestIdentity;
 use dbflux_mcp::{
@@ -89,6 +89,7 @@ fn request(tool_id: &str, classification: ExecutionClassification) -> Authorizat
         tool_id: tool_id.to_string(),
         classification,
         mcp_enabled_for_connection: true,
+        read_only_connection: false,
         correlation_id: None,
     }
 }
@@ -100,19 +101,31 @@ fn authorize(
     classification: ExecutionClassification,
     payload: serde_json::Value,
 ) -> AuthorizationOutcome {
+    authorize_on(runtime, engine, tool_id, classification, payload, false)
+}
+
+/// Authorizes like [`authorize`], on a connection whose profile read-only
+/// setting is `read_only_connection`.
+fn authorize_on(
+    runtime: &mut McpRuntime,
+    engine: &PolicyEngine,
+    tool_id: &str,
+    classification: ExecutionClassification,
+    payload: serde_json::Value,
+    read_only_connection: bool,
+) -> AuthorizationOutcome {
+    let request = AuthorizationRequest {
+        read_only_connection,
+        ..request(tool_id, classification)
+    };
+
     #[expect(
         clippy::expect_used,
         reason = "test helper: an unexpected authorization error from policy evaluation, audit \
             recording, or approval flow must abort this test"
     )]
     runtime
-        .authorize_with_approval_mut(
-            &trusted_registry(),
-            engine,
-            &request(tool_id, classification),
-            payload,
-            1,
-        )
+        .authorize_with_approval_mut(&trusted_registry(), engine, &request, payload, 1)
         .expect("authorization should succeed")
 }
 
@@ -526,4 +539,135 @@ fn ask_decisions_survive_the_dto_round_trip_used_by_settings_and_storage() {
     )
     .expect("a policy serialized before Ask existed should deserialize");
     assert!(legacy.approval_classes.is_empty());
+}
+
+#[test]
+fn read_only_connection_denies_a_write_before_the_policy_and_audits_it() {
+    let mut runtime = runtime_for_test("dbflux-mcp-read-only-write.sqlite");
+    let engine = ask_engine(&["insert_record"]);
+
+    let outcome = authorize_on(
+        &mut runtime,
+        &engine,
+        "insert_record",
+        ExecutionClassification::Write,
+        serde_json::json!({"table": "users"}),
+        true,
+    );
+
+    assert!(!outcome.allowed);
+    assert_eq!(outcome.deny_code, Some(READ_ONLY_CONNECTION_CODE));
+    assert!(
+        outcome.pending_execution_id.is_none(),
+        "a read-only connection must not queue the call for approval"
+    );
+
+    let events = authorize_events(&runtime);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].outcome.as_deref(), Some("failure"));
+    assert_eq!(
+        events[0].error_code.as_deref(),
+        Some(READ_ONLY_CONNECTION_CODE)
+    );
+}
+
+#[test]
+fn read_only_connection_denies_every_class_above_read() {
+    let mut runtime = runtime_for_test("dbflux-mcp-read-only-classes.sqlite");
+    let engine = ask_engine(&["any_tool"]);
+
+    for classification in [
+        ExecutionClassification::Write,
+        ExecutionClassification::Destructive,
+        ExecutionClassification::AdminSafe,
+        ExecutionClassification::Admin,
+        ExecutionClassification::AdminDestructive,
+    ] {
+        let outcome = authorize_on(
+            &mut runtime,
+            &engine,
+            "any_tool",
+            classification,
+            serde_json::json!({}),
+            true,
+        );
+
+        assert_eq!(
+            outcome.deny_code,
+            Some(READ_ONLY_CONNECTION_CODE),
+            "{classification:?} must be denied on a read-only connection"
+        );
+    }
+}
+
+#[test]
+fn read_only_connection_still_allows_a_read() {
+    let mut runtime = runtime_for_test("dbflux-mcp-read-only-read.sqlite");
+    let engine = ask_engine(&["select_data"]);
+
+    let outcome = authorize_on(
+        &mut runtime,
+        &engine,
+        "select_data",
+        ExecutionClassification::Read,
+        serde_json::json!({"table": "users"}),
+        true,
+    );
+
+    assert!(outcome.allowed);
+    assert!(outcome.deny_code.is_none());
+}
+
+#[test]
+fn read_only_connection_denies_request_execution() {
+    let mut runtime = runtime_for_test("dbflux-mcp-read-only-request.sqlite");
+    let engine = ask_engine(&["request_execution"]);
+
+    let outcome = authorize_on(
+        &mut runtime,
+        &engine,
+        "request_execution",
+        ExecutionClassification::Admin,
+        serde_json::json!({"tool_id": "delete_records"}),
+        true,
+    );
+
+    assert!(!outcome.allowed);
+    assert_eq!(outcome.deny_code, Some(READ_ONLY_CONNECTION_CODE));
+    assert!(outcome.pending_execution_id.is_none());
+}
+
+#[test]
+fn read_only_connection_denies_the_replay_of_an_approved_call() {
+    let mut runtime = runtime_for_test("dbflux-mcp-read-only-replay.sqlite");
+    let engine = ask_engine(&["delete_records"]);
+    let payload = serde_json::json!({"table": "users", "where": {"id": 7}});
+
+    let queued = authorize(
+        &mut runtime,
+        &engine,
+        "delete_records",
+        ExecutionClassification::Destructive,
+        payload.clone(),
+    );
+    let pending_id = queued
+        .pending_execution_id
+        .expect("the first call should be queued");
+
+    runtime
+        .approve_pending_execution_with_origin_mut(&pending_id, "local", EventOrigin::local())
+        .expect("approval should succeed");
+
+    let replay = authorize_on(
+        &mut runtime,
+        &engine,
+        "delete_records",
+        ExecutionClassification::Destructive,
+        payload,
+        true,
+    );
+
+    assert!(!replay.allowed, "an approval must not override read-only");
+    assert_eq!(replay.deny_code, Some(READ_ONLY_CONNECTION_CODE));
+    assert!(replay.approved_execution_id.is_none());
 }
