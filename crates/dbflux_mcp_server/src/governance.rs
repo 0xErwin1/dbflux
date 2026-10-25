@@ -608,6 +608,7 @@ mod tests {
                 dbflux_core::NoopSecretStore,
             ))),
             mcp_enabled_by_default: true,
+            profile_store_path: None,
         }
     }
 
@@ -849,6 +850,105 @@ mod tests {
             .and_then(|data| data.get("code"))
             .and_then(|code| code.as_str());
         assert_eq!(code, Some(APPROVAL_REQUIRED_CODE));
+        assert!(!handler_ran);
+    }
+
+    /// Builds a state whose profile was loaded with `loaded_flag` and is
+    /// stored with `stored_flag`, as after the user toggles the flag in the
+    /// GUI while the server runs.
+    async fn state_with_stored_profile(
+        loaded_flag: bool,
+        stored_flag: bool,
+    ) -> (ServerState, String, tempfile::TempDir) {
+        let (mut state, connection_id) = state_with_profile(loaded_flag).await;
+
+        let store_dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = store_dir.path().join("dbflux.db");
+        let storage = dbflux_storage::StorageRuntime::for_path(db_path.clone())
+            .expect("storage should initialize");
+
+        let profile_uuid: uuid::Uuid = connection_id.parse().expect("profile id is a uuid");
+        let mut stored =
+            dbflux_storage::repositories::connection_profiles::ConnectionProfileDto::new(
+                profile_uuid,
+                "read-only-test".to_string(),
+            );
+        stored.read_only = stored_flag;
+        storage
+            .connection_profiles()
+            .insert(&stored)
+            .expect("profile should be stored");
+
+        state.profile_store_path = Some(db_path);
+
+        (state, connection_id, store_dir)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn profile_set_to_read_only_after_startup_denies_a_write() {
+        let (state, connection_id, _store_dir) = state_with_stored_profile(false, true).await;
+
+        let (result, handler_ran) = authorize_on(
+            state,
+            &connection_id,
+            "insert_record",
+            ExecutionClassification::Write,
+        )
+        .await;
+
+        let error = result.expect_err("a write on a profile now read-only must be denied");
+        assert_eq!(
+            error.data,
+            Some(serde_json::json!({
+                "code": dbflux_mcp::server::authorization::READ_ONLY_CONNECTION_CODE
+            }))
+        );
+        assert!(!handler_ran);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn profile_made_writable_after_startup_leaves_a_write_to_the_policy() {
+        let (state, connection_id, _store_dir) = state_with_stored_profile(true, false).await;
+
+        let (result, handler_ran) = authorize_on(
+            state,
+            &connection_id,
+            "insert_record",
+            ExecutionClassification::Write,
+        )
+        .await;
+
+        let error = result.expect_err("the admin role asks for approval of a write");
+        let code = error
+            .data
+            .as_ref()
+            .and_then(|data| data.get("code"))
+            .and_then(|code| code.as_str());
+        assert_eq!(code, Some(APPROVAL_REQUIRED_CODE));
+        assert!(!handler_ran);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unreadable_profile_store_falls_back_to_the_flag_loaded_at_startup() {
+        let (mut state, connection_id) = state_with_profile(true).await;
+        let store_dir = tempfile::tempdir().expect("temp dir should be created");
+        state.profile_store_path = Some(store_dir.path().join("missing").join("dbflux.db"));
+
+        let (result, handler_ran) = authorize_on(
+            state,
+            &connection_id,
+            "insert_record",
+            ExecutionClassification::Write,
+        )
+        .await;
+
+        let error = result.expect_err("the startup flag still denies the write");
+        assert_eq!(
+            error.data,
+            Some(serde_json::json!({
+                "code": dbflux_mcp::server::authorization::READ_ONLY_CONNECTION_CODE
+            }))
+        );
         assert!(!handler_ran);
     }
 }

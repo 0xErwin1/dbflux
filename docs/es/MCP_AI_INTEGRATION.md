@@ -293,7 +293,7 @@ Cuando el perfil de una conexión tiene **Solo lectura** activado en el Connecti
 
 `execute_script` gobierna un script de lectura como `write` en un driver que no puede imponer solo lectura, como se describe arriba, así que en una conexión de solo lectura con ese driver también se deniega. `select_data`, `count_records` y las demás herramientas de lectura se siguen ejecutando.
 
-El servidor MCP lee el ajuste al arrancar. Después de cambiarlo, reinicia el proceso del servidor MCP.
+El servidor MCP lee el ajuste de `dbflux.db` en cada llamada, así que un cambio hecho en la GUI se aplica a la siguiente llamada sin reiniciar el servidor.
 
 ## 6. Policies y roles integrados
 
@@ -538,7 +538,7 @@ Para evitar contaminar las máquinas de desarrollo durante los tests:
 ### Solicitud denegada porque la conexión es de solo lectura
 
 - El perfil de la conexión tiene **Solo lectura** activado (Connection Manager → pestaña Main → Seguridad). En ella solo se ejecutan llamadas `metadata` y `read`, digan lo que digan las políticas.
-- Desactiva el ajuste y reinicia el proceso del servidor MCP para volver a permitir escrituras.
+- Desactiva el ajuste para volver a permitir escrituras. La siguiente llamada ve el cambio.
 
 ### Policy denegada
 
