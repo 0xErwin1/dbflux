@@ -749,15 +749,24 @@ impl AppState {
         }
     }
 
+    /// Installs a finished connection for `profile`.
+    ///
+    /// `profile` is the copy taken when the connection attempt started. The
+    /// read-only setting is taken from the saved profile instead, so a save
+    /// made while the attempt was running decides the session's policy.
     pub fn apply_connect_profile(
         &mut self,
-        profile: ConnectionProfile,
+        mut profile: ConnectionProfile,
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
         proxy_tunnel: Option<Box<dyn std::any::Any + Send + Sync>>,
         is_mcp_actor: bool,
         probe: dbflux_core::WritePrivilege,
     ) {
+        if let Some(saved) = self.facade.profiles.find_by_id(profile.id) {
+            profile.read_only_flag = saved.read_only_flag;
+        }
+
         self.facade.connections.apply_connect_profile(
             profile,
             connection,

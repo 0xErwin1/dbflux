@@ -49,8 +49,9 @@ grilla de datos, el constructor visual de consultas y la comparación de esquema
 esa conexión, rechaza las sentencias del editor de consultas que cambiarían datos o
 esquema, y deniega las llamadas MCP por encima de la clase `read` (ver
 [Conexiones de solo lectura](MCP_AI_INTEGRATION.md#conexiones-de-solo-lectura)).
-Las sentencias de lectura se siguen ejecutando. Activar el ajuste se aplica de
-inmediato a una conexión abierta, mientras que desactivarlo surte efecto al reconectar. El editor clasifica cada sentencia por
+Las sentencias de lectura se siguen ejecutando. En la app, activar el ajuste se aplica
+de inmediato a una conexión abierta, mientras que desactivarlo surte efecto al reconectar.
+MCP toma cualquiera de los dos cambios en su siguiente llamada. El editor clasifica cada sentencia por
 su texto, así que una función con efectos secundarios llamada desde un `SELECT`, como
 `setval` de PostgreSQL, se sigue ejecutando: las credenciales de solo lectura en la
 base de datos siguen siendo el límite más fuerte.

@@ -4652,6 +4652,69 @@ mod auto_refresh_tests {
         assert!(!showed_read_only_profile_toast(window, &toasts));
     }
 
+    #[gpui::test]
+    fn a_profile_saved_as_read_only_while_connecting_opens_read_only(cx: &mut TestAppContext) {
+        cx.update(theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        let toasts = cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host: host.clone() });
+            host
+        });
+        let app_state = cx.new(|_| {
+            AppStateEntity::new_with_storage_runtime(
+                StorageRuntime::in_memory().expect("in-memory storage"),
+            )
+            .expect("app state")
+        });
+
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let profile_at_connect_start = ConnectionProfile::new(
+            "fake",
+            DbConfig::SQLite {
+                path: ":memory:".into(),
+                connection_id: None,
+            },
+        );
+        let profile_id = profile_at_connect_start.id;
+        let connection = driver
+            .connect_arc(&profile_at_connect_start)
+            .expect("fake connection");
+
+        cx.update(|cx| {
+            app_state.update(cx, |app, _| {
+                app.profiles_mut().push(profile_at_connect_start.clone());
+
+                let mut saved = profile_at_connect_start.clone();
+                saved.read_only_flag = true;
+                app.update_profile(saved);
+
+                app.apply_connect_profile(
+                    profile_at_connect_start,
+                    connection,
+                    None,
+                    None,
+                    false,
+                    WritePrivilege::Unknown,
+                );
+            });
+        });
+
+        let (document, _outside, window) = host_modal(cx, move |window, cx| {
+            let mut document =
+                CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx);
+            document.connection_id = Some(profile_id);
+            document.set_content("UPDATE users SET name = 'a' WHERE id = 1", window, cx);
+            document
+        });
+        window.run_until_parked();
+
+        run_query(window, &document);
+
+        assert!(executed(&driver).is_empty());
+        assert!(showed_read_only_profile_toast(window, &toasts));
+    }
+
     /// Saves the document's connected profile with `read_only_flag`, as the
     /// connection manager does when the user edits an open connection.
     fn save_profile_read_only_flag(
