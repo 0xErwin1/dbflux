@@ -423,7 +423,7 @@ connection_manager:
     mcp: MCP
   field:
     show_all_databases: "Mostrar todas las bases de datos"
-    read_only_help: "Bloquea los cambios desde la grilla de datos, el constructor de consultas y la comparación de esquemas. Las sentencias escritas en el editor de consultas se siguen ejecutando."
+    read_only_help: "Bloquea los cambios desde la grilla de datos, el constructor de consultas, la comparación de esquemas y el editor de consultas, y deniega las escrituras por MCP en esta conexión. Las sentencias de lectura se siguen ejecutando."
     read_only: "Solo lectura"
     name: Nombre
     ssl_mode: Modo SSL

@@ -423,7 +423,7 @@ connection_manager:
     mcp: MCP
   field:
     show_all_databases: "Show all databases"
-    read_only_help: "Blocks changes from the data grid, the query builder and schema diff. Statements typed in the query editor still run."
+    read_only_help: "Blocks changes from the data grid, the query builder, schema diff and the query editor, and denies MCP writes on this connection. Read statements still run."
     read_only: "Read-only"
     name: Name
     ssl_mode: SSL mode

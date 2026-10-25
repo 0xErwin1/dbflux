@@ -206,6 +206,14 @@ SQL Server, Turso, 외부 IPC 드라이버, DynamoDB, CloudWatch, InfluxDB는 �
 
 위험 쿼리 설정(**Confirm dangerous queries**, **Require WHERE for DELETE/UPDATE**, **Always require preview**)은 DBFlux 편집기에 속합니다. MCP 서버는 General 수준, 드라이버별 재정의, 연결별 재정의 어디에서도 이 설정을 읽지 않습니다. MCP 호출은 위에서 설명한 정책과 승인 흐름으로만 통제됩니다. 파괴적인 문장이 사람의 승인을 기다리게 하려면 정책에서 `destructive`(또는 `admin_destructive`)의 결정을 Ask 또는 Deny로 설정하세요.
 
+### 읽기 전용 연결
+
+연결 관리자에서 연결 프로필의 **읽기 전용**이 켜져 있으면, 그 연결에서 `read` 클래스보다 높은 모든 호출이 오류 코드 `connection_read_only`로 거부됩니다. 이 검사는 정책보다 먼저 실행되므로 어떤 정책, 역할, 승인도 그 호출을 허용할 수 없습니다. `request_execution`은 거부되고, 설정을 켜기 전에 승인된 호출도 다시 호출하면 거부됩니다. 거부될 때마다 결과가 `failure`인 `mcp_authorize` 감사 이벤트가 기록됩니다.
+
+위에서 설명했듯이 `execute_script`는 읽기 전용을 강제할 수 없는 드라이버에서 읽기 스크립트를 `write`로 다루므로, 그런 드라이버의 읽기 전용 연결에서는 이것도 거부됩니다. `select_data`, `count_records` 등 읽기 도구는 그대로 실행됩니다.
+
+MCP 서버는 시작할 때 이 설정을 읽습니다. 설정을 바꾼 뒤에는 MCP 서버 프로세스를 다시 시작하세요.
+
 ## 6. 내장 정책과 역할
 
 세 개의 정책과 세 개의 역할은 변경할 수 없는 내장 항목으로 제공됩니다. 디스크에 무엇이 저장되어 있든 항상 존재하며, 삭제하거나 수정할 수 없습니다.
@@ -335,6 +343,7 @@ let outcome = authorize_request(
         tool_id: "select_data".to_string(),
         classification: ExecutionClassification::Read,
         mcp_enabled_for_connection: true,
+        read_only_connection: false,
         correlation_id: None,
     },
     now_epoch_ms(),
@@ -385,6 +394,11 @@ AI 클라이언트를 MCP 서버에 연결하기 전에:
 
 - 대상 연결의 거버넌스 설정에서 MCP를 활성화합니다 (연결 관리자 → MCP 탭).
 - 또는 모든 연결을 활성화하려면 설정에서 `mcp_enabled_by_default: true`를 지정합니다.
+
+### 연결이 읽기 전용이라 요청이 거부됨
+
+- 연결 프로필의 **읽기 전용**이 켜져 있습니다(연결 관리자 → 메인 탭 → 안전). 정책과 관계없이 그 연결에서는 `metadata`와 `read` 호출만 실행됩니다.
+- 쓰기를 다시 허용하려면 설정을 끄고 MCP 서버 프로세스를 다시 시작하세요.
 
 ### 정책에 의해 거부됨
 

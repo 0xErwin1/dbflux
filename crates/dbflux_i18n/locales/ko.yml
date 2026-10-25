@@ -423,7 +423,7 @@ connection_manager:
     mcp: MCP
   field:
     show_all_databases: "모든 데이터베이스 표시"
-    read_only_help: "데이터 그리드, 쿼리 빌더, 스키마 비교에서의 변경을 차단합니다. 쿼리 편집기에 입력한 문은 그대로 실행됩니다."
+    read_only_help: "데이터 그리드, 쿼리 빌더, 스키마 비교, 쿼리 편집기에서의 변경을 차단하고 이 연결에 대한 MCP 쓰기를 거부합니다. 읽기 문은 그대로 실행됩니다."
     read_only: "읽기 전용"
     name: 이름
     ssl_mode: SSL 모드

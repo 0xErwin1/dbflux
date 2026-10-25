@@ -42,8 +42,12 @@ see [Form mode vs. direct URI](#form-mode-vs-direct-uri).
 
 The **Safety** section at the end of the Main tab holds the **Read-only**
 toggle. When it is on, DBFlux blocks changes made from the data grid, the visual
-query builder and schema diff on that connection. Statements typed in the query
-editor still run.
+query builder and schema diff on that connection, refuses query editor
+statements that would change data or schema, and denies MCP calls above the
+`read` class (see [Read-only connections](MCP_AI_INTEGRATION.md#read-only-connections)).
+Read statements still run. The editor classifies a statement from its text, so a
+function with side effects called from a `SELECT`, such as PostgreSQL `setval`,
+still runs: read-only database credentials remain the stronger boundary.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/connections/driver-picker-dark.webp">

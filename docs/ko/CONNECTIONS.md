@@ -38,8 +38,12 @@ MongoDB, DynamoDB, Redis, InfluxDB, CloudWatch Logs, Amazon S3, AWS Secrets가
 [폼 모드 vs. 직접 URI](#폼-모드-vs-직접-uri)를 참고하세요.
 
 메인 탭 끝의 **안전** 섹션에는 **읽기 전용** 토글이 있습니다. 켜면 DBFlux는 해당
-연결에서 데이터 그리드, 비주얼 쿼리 빌더, 스키마 비교로 하는 변경을 차단합니다.
-쿼리 편집기에 입력한 문은 그대로 실행됩니다.
+연결에서 데이터 그리드, 비주얼 쿼리 빌더, 스키마 비교로 하는 변경을 차단하고, 데이터나
+스키마를 바꾸는 쿼리 편집기의 문을 거부하며, `read` 클래스보다 높은 MCP 호출을 거부합니다
+([읽기 전용 연결](MCP_AI_INTEGRATION.md#읽기-전용-연결) 참고). 읽기 문은 그대로
+실행됩니다. 편집기는 문을 텍스트로 분류하므로 PostgreSQL `setval`처럼 부수 효과가 있는
+함수를 `SELECT`에서 호출하면 그대로 실행됩니다. 더 강한 경계는 여전히 데이터베이스의 읽기
+전용 자격 증명입니다.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">

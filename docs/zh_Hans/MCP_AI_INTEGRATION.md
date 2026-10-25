@@ -208,6 +208,14 @@ SQL Server、Turso、外部 IPC 驱动程序、DynamoDB、CloudWatch 和 InfluxD
 
 危险查询设置（**Confirm dangerous queries**、**Require WHERE for DELETE/UPDATE** 和 **Always require preview**）属于 DBFlux 编辑器。MCP 服务器不会读取它们，无论是 General 级别、按驱动程序的覆盖还是按连接的覆盖。MCP 调用只受上文所述的策略和审批流程控制：若要让破坏性语句等待人工审批，请将策略中 `destructive`（或 `admin_destructive`）的决定设为 Ask 或 Deny。
 
+### 只读连接
+
+当连接的配置文件在连接管理器中开启了 **只读** 时，该连接上所有高于 `read` 类别的调用都会以错误码 `connection_read_only` 被拒绝。这项检查在策略之前进行，因此任何策略、角色或审批都无法放行该调用：`request_execution` 会被拒绝，在开启该设置之前已批准的调用再次发起时也会被拒绝。每次拒绝都会记录为结果为 `failure` 的 `mcp_authorize` 审计事件。
+
+如上文所述，在无法强制只读的驱动上，`execute_script` 会把读取脚本按 `write` 处理，因此在使用这类驱动的只读连接上它也会被拒绝。`select_data`、`count_records` 和其他读取工具仍会执行。
+
+MCP 服务器在启动时读取该设置。更改后请重启 MCP 服务器进程。
+
 ## 6. 内置策略与角色
 
 三个策略与三个角色作为不可变的内置项随程序提供。无论磁盘上持久化了什么，它们始终存在，并且不能被删除或修改。
@@ -338,6 +346,7 @@ let outcome = authorize_request(
         tool_id: "select_data".to_string(),
         classification: ExecutionClassification::Read,
         mcp_enabled_for_connection: true,
+        read_only_connection: false,
         correlation_id: None,
     },
     now_epoch_ms(),
@@ -388,6 +397,11 @@ if !outcome.allowed {
 
 - 在目标连接的治理设置中启用 MCP（连接管理器 → MCP 标签页）。
 - 或者，如果希望所有连接都启用，可在配置中设置 `mcp_enabled_by_default: true`。
+
+### 请求因连接为只读被拒绝
+
+- 该连接的配置文件开启了 **只读**（连接管理器 → 主选项卡 → 安全）。无论策略如何，该连接上只执行 `metadata` 和 `read` 调用。
+- 关闭该设置并重启 MCP 服务器进程，即可重新允许写入。
 
 ### 被策略拒绝
 

@@ -423,7 +423,7 @@ connection_manager:
     mcp: MCP
   field:
     show_all_databases: "Mostrar todos os bancos de dados"
-    read_only_help: "Bloqueia alterações pela grade de dados, pelo construtor de consultas e pela comparação de esquemas. Instruções digitadas no editor de consultas continuam sendo executadas."
+    read_only_help: "Bloqueia alterações pela grade de dados, pelo construtor de consultas, pela comparação de esquemas e pelo editor de consultas, e nega escritas por MCP nesta conexão. Instruções de leitura continuam sendo executadas."
     read_only: "Somente leitura"
     name: Nome
     ssl_mode: Modo SSL

@@ -423,7 +423,7 @@ connection_manager:
     mcp: MCP
   field:
     show_all_databases: "显示所有数据库"
-    read_only_help: "阻止通过数据网格、查询构建器和模式对比进行的更改。在查询编辑器中输入的语句仍会执行。"
+    read_only_help: "阻止通过数据网格、查询构建器、模式对比和查询编辑器进行的更改，并拒绝此连接上的 MCP 写入。读取语句仍会执行。"
     read_only: "只读"
     name: 名称
     ssl_mode: SSL 模式
