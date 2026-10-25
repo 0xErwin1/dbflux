@@ -93,6 +93,7 @@ fn authorization_denies_untrusted_and_audits_reason() {
             tool_id: "read_query".to_string(),
             classification: ExecutionClassification::Read,
             mcp_enabled_for_connection: true,
+            read_only_connection: false,
             correlation_id: None,
         },
         10,

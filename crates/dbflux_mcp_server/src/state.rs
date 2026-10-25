@@ -1470,6 +1470,21 @@ impl ServerState {
             None => self.mcp_enabled_by_default,
         }
     }
+
+    /// Returns `true` if the given connection's profile is set to read-only.
+    ///
+    /// An unknown connection reports `false`: it is already denied as not
+    /// MCP-enabled, so this check never has to decide for it.
+    pub async fn is_read_only_connection(&self, connection_id: &str) -> bool {
+        let Ok(profile_uuid) = connection_id.parse::<uuid::Uuid>() else {
+            return false;
+        };
+
+        let profile_manager = self.profile_manager.read().await;
+        profile_manager
+            .find_by_id(profile_uuid)
+            .is_some_and(|profile| profile.read_only_flag)
+    }
 }
 
 fn build_driver_registry() -> HashMap<String, Arc<dyn DbDriver>> {
