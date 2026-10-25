@@ -209,6 +209,7 @@ SSH 터널은 두 가지 방식으로 사용할 수 있습니다:
 | **SSO session** | **AWS SSO Session** 프로필에 대한 선택적 참조입니다. 설정하면 Start URL과 리전이 상속되고 해당 인라인 필드는 회색으로 비활성화됩니다. |
 | **SSO Start URL** | Identity Center 포털 URL입니다(세션을 사용한다면 건너뜁니다). |
 | **Region** | 예: `us-east-1`. |
+| **Endpoint URL** | 선택 사항. 예: LocalStack의 경우 `http://localhost:4566`. `~/.aws/config`의 `[services]` 섹션을 통해 Secrets Manager와 SSM에만 적용됩니다. AWS Shared Credentials 프로필에도 같은 필드가 있습니다. |
 | **Account** | **로그인 후에** 채워지는 드롭다운 — SSO 세션이 접근할 수 있는 계정을 나열합니다. |
 | **Role** | 계정을 선택하면 채워지는 드롭다운입니다. |
 
@@ -286,6 +287,15 @@ macOS와 Linux에서 DBFlux를 터미널 밖(Finder, Dock, 데스크톱 항목)�
 - 확인된 값은 재연결 때마다 다시 가져오지 않도록 **5분** 동안 캐시됩니다.
 - 인증 공급자에 의해 지원되는 Secret/Parameter 소스는 연결에 **인증 프로필이
   필요**합니다(연결 전에 강제됩니다).
+- LocalStack 또는 VPC 엔드포인트에 연결하려면 AWS 인증 프로필에 **Endpoint
+  URL**을 설정하세요. AWS SDK는 `AWS_ENDPOINT_URL_SECRETS_MANAGER`와
+  `AWS_ENDPOINT_URL_SSM`도 따릅니다.
+
+> **주의:** DBFlux는 프로필이 참조하는 `[services]` 섹션에 엔드포인트를
+> 기록하므로 Secrets Manager와 SSM에만 적용됩니다. 해당 프로필로 실행하는 AWS
+> CLI의 `secretsmanager`, `ssm` 명령과 SSM 포트 포워딩도 포함됩니다. DynamoDB,
+> S3, CloudWatch는 기본 엔드포인트를 유지합니다. 다른 프로필과 공유하는
+> `[services]` 섹션은 수정하지 않으며, 이 프로필에 별도의 사본을 만듭니다.
 
 ---
 

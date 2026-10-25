@@ -438,6 +438,9 @@ impl AwsSsoAuthProvider {
                 if let Some(ref role_name) = p.sso_role_name {
                     fields.insert("sso_role_name".to_string(), role_name.clone());
                 }
+                if let Some(ref endpoint_url) = p.value_source_endpoint_url {
+                    fields.insert(ENDPOINT_URL_FIELD.to_string(), endpoint_url.clone());
+                }
 
                 let id = aws_profile_uuid("aws-sso", &p.name);
 
@@ -566,16 +569,12 @@ impl AwsSharedCredentialsAuthProvider {
         let mut cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
         let names = cache.shared_profile_names();
 
-        // Build a region lookup from the config profiles (names only; no keys).
+        // Look up non-secret config keys (region, value-source endpoint) by profile name.
         let config_profiles = cache.profiles().to_vec();
-        let region_lookup: HashMap<String, String> = config_profiles
+        let config_lookup: HashMap<String, &crate::config::AwsProfileInfo> = config_profiles
             .iter()
             .filter(|p| !p.is_sso && !p.is_sso_session)
-            .filter_map(|p| {
-                p.region
-                    .as_ref()
-                    .map(|r| (p.name.to_lowercase(), r.clone()))
-            })
+            .map(|p| (p.name.to_lowercase(), p))
             .collect();
 
         names
@@ -591,8 +590,13 @@ impl AwsSharedCredentialsAuthProvider {
                 let mut fields = HashMap::new();
                 fields.insert("profile_name".to_string(), name.clone());
 
-                if let Some(region) = region_lookup.get(&name.to_lowercase()) {
-                    fields.insert("region".to_string(), region.clone());
+                if let Some(config_profile) = config_lookup.get(&name.to_lowercase()) {
+                    if let Some(ref region) = config_profile.region {
+                        fields.insert("region".to_string(), region.clone());
+                    }
+                    if let Some(ref endpoint_url) = config_profile.value_source_endpoint_url {
+                        fields.insert(ENDPOINT_URL_FIELD.to_string(), endpoint_url.clone());
+                    }
                 }
 
                 // Security invariant: no key material in reflected fields.
@@ -649,6 +653,26 @@ fn required_text_field(id: &str, label: &str, placeholder: &str) -> FormFieldDef
     }
 }
 
+fn endpoint_url_field() -> FormFieldDef {
+    FormFieldDef {
+        id: ENDPOINT_URL_FIELD.to_string(),
+        label: "Endpoint URL".to_string(),
+        kind: FormFieldKind::Text,
+        placeholder: "http://localhost:4566".to_string(),
+        required: false,
+        default_value: String::new(),
+        enabled_when_checked: None,
+        enabled_when_unchecked: None,
+        disabled_when_field_set: None,
+        enabled_when_field_equals: None,
+        help: Some(
+            "Optional. Sets the Secrets Manager and SSM endpoint only, through a services \
+             section in ~/.aws/config. Other AWS services keep their default endpoints."
+                .to_string(),
+        ),
+    }
+}
+
 fn build_aws_sso_form() -> AuthFormDef {
     AuthFormDef {
         tabs: vec![FormTab {
@@ -690,6 +714,7 @@ fn build_aws_sso_form() -> AuthFormDef {
                         help: None,
                     },
                     required_text_field("region", "Region", "us-east-1"),
+                    endpoint_url_field(),
                     FormFieldDef {
                         id: "sso_account_id".to_string(),
                         label: "Account ID".to_string(),
@@ -748,6 +773,7 @@ fn build_aws_shared_credentials_form() -> AuthFormDef {
                     fields: vec![
                         required_text_field("profile_name", "AWS Profile Name", "default"),
                         required_text_field("region", "Region", "us-east-1"),
+                        endpoint_url_field(),
                         FormFieldDef {
                             id: "aws_access_key_id".to_string(),
                             label: "Access Key ID".to_string(),
@@ -983,20 +1009,67 @@ fn build_aws_value_providers_blocking(
             ))
         })?;
 
-    runtime.block_on(async move {
-        let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest()).region(region);
+    let sdk_config = runtime.block_on(load_value_source_sdk_config(profile_name, region, None));
 
-        if let Some(name) = profile_name {
-            loader = loader.profile_name(name);
+    Ok((
+        AwsSecretsManagerProvider::new(sdk_config.clone()),
+        AwsSsmParameterProvider::new(sdk_config),
+    ))
+}
+
+/// Loads the `SdkConfig` shared by the Secrets Manager and SSM value sources.
+///
+/// The SDK keeps the profile's `[services]` section (and `AWS_ENDPOINT_URL*`
+/// variables) on the returned config, and each service client resolves its own
+/// endpoint from it, which is how value sources reach LocalStack or a VPC
+/// endpoint. `profile_files` overrides the default `~/.aws` files.
+async fn load_value_source_sdk_config(
+    profile_name: Option<String>,
+    region: RegionProviderChain,
+    profile_files: Option<aws_runtime::env_config::file::EnvConfigFiles>,
+) -> aws_config::SdkConfig {
+    let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest()).region(region);
+
+    if let Some(name) = profile_name {
+        loader = loader.profile_name(name);
+    }
+
+    if let Some(files) = profile_files {
+        loader = loader.profile_files(files);
+    }
+
+    loader.load().await
+}
+
+const ENDPOINT_URL_FIELD: &str = "endpoint_url";
+
+/// Reads the edited Endpoint URL: `None` when the field is absent (leave the
+/// config alone), `Some(None)` when blank (remove the endpoint), otherwise the
+/// trimmed URL.
+fn value_source_endpoint_edit(fields: &HashMap<String, String>) -> Option<Option<String>> {
+    let value = fields.get(ENDPOINT_URL_FIELD)?.trim();
+    Some((!value.is_empty()).then(|| value.to_string()))
+}
+
+fn apply_value_source_endpoint_edit(
+    contents: String,
+    name: &str,
+    edit: &Option<Option<String>>,
+) -> String {
+    match edit {
+        Some(endpoint_url) => {
+            crate::config::apply_value_source_endpoint(&contents, name, endpoint_url.as_deref())
         }
+        None => contents,
+    }
+}
 
-        let sdk_config = loader.load().await;
-
-        Ok((
-            AwsSecretsManagerProvider::new(sdk_config.clone()),
-            AwsSsmParameterProvider::new(sdk_config),
-        ))
-    })
+fn new_profile_endpoint_url(profile: &AuthProfile) -> String {
+    profile
+        .fields
+        .get(ENDPOINT_URL_FIELD)
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default()
 }
 
 /// Builds an `SdkConfig` from explicit static credentials stored in the
@@ -1137,6 +1210,8 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
     /// `sso_region`, `sso_role_name`, `region`, `output`.
     /// Fields written (session-ref form): `sso_session`, `sso_account_id`,
     /// `sso_role_name`, `region`, `output`.
+    /// Both forms also set the Secrets Manager and SSM endpoint through a
+    /// `[services]` section, and remove it when the field is blank.
     fn save_edit(
         &self,
         name: &str,
@@ -1192,6 +1267,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
                 .collect();
                 (collected, &["sso_session"])
             };
+        let endpoint_edit = value_source_endpoint_edit(fields);
 
         let snapshot_hash = aws_snapshot.config_section.as_ref().map(|h| h.0);
 
@@ -1217,7 +1293,13 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .collect();
-            crate::config::replace_or_append_profile_block(existing, name, &borrowed, remove_keys)
+            let updated = crate::config::replace_or_append_profile_block(
+                existing,
+                name,
+                &borrowed,
+                remove_keys,
+            );
+            apply_value_source_endpoint_edit(updated, name, &endpoint_edit)
         });
 
         if result.is_err() || conflict_detected.get() {
@@ -1269,6 +1351,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
                 &sso_account_id,
                 &sso_role_name,
                 &region,
+                &new_profile_endpoint_url(profile),
             )
             .map(|_| ())
             .map_err(|e| e.to_string()),
@@ -1537,9 +1620,13 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
             .unwrap_or_default();
 
         Some(
-            crate::config::append_aws_shared_credentials_profile(&name, &region)
-                .map(|_| ())
-                .map_err(|e| e.to_string()),
+            crate::config::append_aws_shared_credentials_profile(
+                &name,
+                &region,
+                &new_profile_endpoint_url(profile),
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
         )
     }
 
@@ -1615,6 +1702,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
             .iter()
             .filter_map(|&key| fields.get(key).map(|v| (key.to_string(), v.clone())))
             .collect();
+        let endpoint_edit = value_source_endpoint_edit(fields);
 
         // Credentials-side fields (includes write-only secrets). Held as
         // SecretString and exposed only at the point the credentials block is
@@ -1633,7 +1721,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
         })
         .collect();
 
-        let has_config_fields = !config_fields.is_empty();
+        let has_config_fields = !config_fields.is_empty() || endpoint_edit.is_some();
         let has_creds_fields = !creds_fields.is_empty();
 
         // Write config section first (when there are config-side fields to write).
@@ -1660,7 +1748,9 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
                     .iter()
                     .map(|(k, v)| (k.as_str(), v.as_str()))
                     .collect();
-                crate::config::replace_or_append_profile_block(existing, name, &borrowed, &[])
+                let updated =
+                    crate::config::replace_or_append_profile_block(existing, name, &borrowed, &[]);
+                apply_value_source_endpoint_edit(updated, name, &endpoint_edit)
             });
 
             if result.is_err() || conflict_detected.get() {
@@ -3998,5 +4088,279 @@ sso_region = us-east-1
         assert_eq!(names.len(), 2);
         assert!(names.contains(&"ci-user".to_string()));
         assert!(names.contains(&"staging".to_string()));
+    }
+
+    // --- Profile endpoint_url (value-source custom endpoint) ---
+
+    fn form_field<'a>(form: &'a AuthFormDef, id: &str) -> Option<&'a FormFieldDef> {
+        form.tabs
+            .iter()
+            .flat_map(|tab| tab.sections.iter())
+            .flat_map(|section| section.fields.iter())
+            .find(|field| field.id == id)
+    }
+
+    #[test]
+    fn sso_and_shared_forms_declare_optional_endpoint_url_field() {
+        for form in [build_aws_sso_form(), build_aws_shared_credentials_form()] {
+            let field = form_field(&form, "endpoint_url").expect("endpoint_url field");
+            assert_eq!(field.label, "Endpoint URL");
+            assert!(matches!(field.kind, FormFieldKind::Text));
+            assert!(!field.required);
+        }
+
+        assert!(form_field(&build_aws_sso_session_form(), "endpoint_url").is_none());
+    }
+
+    const LOCAL_SERVICES: &str = "[services local-stack]\nsecrets_manager =\n  endpoint_url = http://localhost:4566\nssm =\n  endpoint_url = http://localhost:4566\n";
+
+    #[test]
+    fn endpoint_url_field_help_names_value_source_services() {
+        let help = endpoint_url_field().help.expect("help text");
+        assert!(help.contains("Secrets Manager and SSM"), "{help}");
+        assert!(help.contains("services section"), "{help}");
+    }
+
+    #[test]
+    fn sso_reflect_exposes_services_endpoint_url() {
+        let config = format!(
+            "[profile dev-sso]\nsso_start_url = https://example.awsapps.com/start\nservices = local-stack\n\n{LOCAL_SERVICES}"
+        );
+        let provider = sso_provider_with_config(&config);
+        let profiles = provider.reflect_profiles();
+
+        assert_eq!(
+            profiles[0].fields.get("endpoint_url").map(String::as_str),
+            Some("http://localhost:4566")
+        );
+    }
+
+    #[test]
+    fn shared_reflect_exposes_services_endpoint_url() {
+        let config = format!(
+            "[profile local]\nregion = us-east-1\nservices = local-stack\n\n{LOCAL_SERVICES}"
+        );
+        let provider = shared_provider_with_files(&config, "[local]\naws_access_key_id = test\n");
+        let profiles = provider.reflect_profiles();
+
+        let local = profiles.iter().find(|p| p.name == "local").expect("local");
+        assert_eq!(
+            local.fields.get("endpoint_url").map(String::as_str),
+            Some("http://localhost:4566")
+        );
+    }
+
+    #[test]
+    fn shared_reflect_ignores_profile_level_endpoint_url() {
+        let config = "[profile local]\nregion = us-east-1\nendpoint_url = http://localhost:4566\n";
+        let provider = shared_provider_with_files(config, "[local]\n");
+        let profiles = provider.reflect_profiles();
+
+        let local = profiles.iter().find(|p| p.name == "local").expect("local");
+        assert!(!local.fields.contains_key("endpoint_url"));
+    }
+
+    #[test]
+    fn sso_save_edit_writes_services_endpoint_url() {
+        let config = "[profile dev-sso]\nsso_start_url = https://example.awsapps.com/start\n";
+        let (provider, config_path, _creds, _dir) = sso_provider_with_config_and_creds(config, "");
+        let snapshot = provider.open_edit_snapshot("dev-sso");
+
+        let mut fields = HashMap::new();
+        fields.insert(
+            "endpoint_url".to_string(),
+            " http://localhost:4566 ".to_string(),
+        );
+
+        let outcome = provider.save_edit("dev-sso", &fields, &snapshot);
+        assert!(matches!(outcome, AuthSaveOutcome::Saved), "{outcome:?}");
+
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        assert_eq!(
+            after,
+            "[profile dev-sso]\nsso_start_url = https://example.awsapps.com/start\nservices = dbflux-dev-sso\n\n\
+             [services dbflux-dev-sso]\nsecrets_manager =\n  endpoint_url = http://localhost:4566\n\
+             secrets-manager =\n  endpoint_url = http://localhost:4566\n\
+             ssm =\n  endpoint_url = http://localhost:4566\n"
+        );
+    }
+
+    #[test]
+    fn sso_save_edit_blank_endpoint_url_removes_exclusive_services_section() {
+        let config = format!(
+            "[profile dev-sso]\nsso_start_url = https://example.awsapps.com/start\nservices = local-stack\n\n{LOCAL_SERVICES}"
+        );
+        let (provider, config_path, _creds, _dir) = sso_provider_with_config_and_creds(&config, "");
+        let snapshot = provider.open_edit_snapshot("dev-sso");
+
+        let mut fields = HashMap::new();
+        fields.insert("endpoint_url".to_string(), "  ".to_string());
+
+        let outcome = provider.save_edit("dev-sso", &fields, &snapshot);
+        assert!(matches!(outcome, AuthSaveOutcome::Saved), "{outcome:?}");
+
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        assert_eq!(
+            after,
+            "[profile dev-sso]\nsso_start_url = https://example.awsapps.com/start\n"
+        );
+    }
+
+    #[test]
+    fn shared_save_edit_copies_shared_services_section() {
+        let config = format!(
+            "[profile local]\nregion = us-east-1\nservices = local-stack\n\n\
+             [profile other]\nservices = local-stack\n\n{LOCAL_SERVICES}"
+        );
+        let (provider, config_path, _creds, _dir) = shared_provider_with_paths(&config, "");
+        let snapshot = provider.open_edit_snapshot("local");
+
+        let mut fields = HashMap::new();
+        fields.insert("endpoint_url".to_string(), "http://vpce.local".to_string());
+
+        let outcome = provider.save_edit("local", &fields, &snapshot);
+        assert!(matches!(outcome, AuthSaveOutcome::Saved), "{outcome:?}");
+
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        assert_eq!(
+            after,
+            format!(
+                "[profile local]\nregion = us-east-1\nservices = dbflux-local\n\n\
+                 [profile other]\nservices = local-stack\n\n{LOCAL_SERVICES}\n\
+                 [services dbflux-local]\nsecrets_manager =\n  endpoint_url = http://vpce.local\n\
+                 ssm =\n  endpoint_url = http://vpce.local\n\
+                 secrets-manager =\n  endpoint_url = http://vpce.local\n"
+            )
+        );
+    }
+
+    #[test]
+    fn shared_save_edit_blank_endpoint_url_unlinks_shared_services_section() {
+        let config = format!(
+            "[profile local]\nregion = us-east-1\nservices = local-stack\n\n\
+             [profile other]\nservices = local-stack\n\n{LOCAL_SERVICES}"
+        );
+        let (provider, config_path, _creds, _dir) = shared_provider_with_paths(&config, "");
+        let snapshot = provider.open_edit_snapshot("local");
+
+        let mut fields = HashMap::new();
+        fields.insert("region".to_string(), "us-east-1".to_string());
+        fields.insert("endpoint_url".to_string(), String::new());
+
+        let outcome = provider.save_edit("local", &fields, &snapshot);
+        assert!(matches!(outcome, AuthSaveOutcome::Saved), "{outcome:?}");
+
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        assert_eq!(
+            after,
+            format!(
+                "[profile local]\nregion = us-east-1\n\n\
+                 [profile other]\nservices = local-stack\n\n{LOCAL_SERVICES}"
+            )
+        );
+    }
+
+    #[test]
+    fn shared_save_edit_without_endpoint_field_keeps_services_section() {
+        let config = format!(
+            "[profile local]\nregion = us-east-1\nservices = local-stack\n\n{LOCAL_SERVICES}"
+        );
+        let (provider, config_path, _creds, _dir) = shared_provider_with_paths(&config, "");
+        let snapshot = provider.open_edit_snapshot("local");
+
+        let mut fields = HashMap::new();
+        fields.insert("region".to_string(), "eu-west-1".to_string());
+
+        let outcome = provider.save_edit("local", &fields, &snapshot);
+        assert!(matches!(outcome, AuthSaveOutcome::Saved), "{outcome:?}");
+
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        assert_eq!(
+            after,
+            format!(
+                "[profile local]\nregion = eu-west-1\nservices = local-stack\n\n{LOCAL_SERVICES}"
+            )
+        );
+    }
+
+    /// Accepts one connection on `listener` and returns its request head.
+    async fn accept_request_head(listener: &tokio::net::TcpListener) -> String {
+        use tokio::io::AsyncReadExt;
+
+        let accepted = tokio::time::timeout(std::time::Duration::from_secs(10), listener.accept())
+            .await
+            .expect("the client never reached the endpoint");
+        let (mut stream, _) = accepted.expect("accept");
+        let mut buffer = vec![0_u8; 8192];
+        let read = stream.read(&mut buffer).await.expect("read request");
+        String::from_utf8_lossy(&buffer[..read]).to_string()
+    }
+
+    #[test]
+    fn value_source_sdk_config_scopes_services_endpoint_to_value_source_clients() {
+        use aws_runtime::env_config::file::{EnvConfigFileKind, EnvConfigFiles};
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        runtime.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+
+            // The file is produced by the same writer the Endpoint URL field uses.
+            let config = crate::config::apply_value_source_endpoint(
+                "[profile local]\nregion = us-east-1\naws_access_key_id = test\n\
+                 aws_secret_access_key = test\n",
+                "local",
+                Some(&endpoint),
+            );
+            assert!(config.contains("services = dbflux-local"), "{config}");
+
+            let dir = tempfile::tempdir().unwrap();
+            let config_path = dir.path().join("config");
+            std::fs::write(&config_path, config).unwrap();
+
+            let profile_files = EnvConfigFiles::builder()
+                .with_file(EnvConfigFileKind::Config, &config_path)
+                .build();
+
+            let sdk_config = load_value_source_sdk_config(
+                Some("local".to_string()),
+                sdk_region_provider(Some("us-east-1"), Some("local")),
+                Some(profile_files),
+            )
+            .await;
+
+            // Services without a `[services]` entry, such as DynamoDB, fall
+            // back to this profile-wide endpoint, which must stay unset.
+            assert_eq!(sdk_config.endpoint_url(), None);
+
+            let secrets_client = aws_sdk_secretsmanager::Client::new(&sdk_config);
+            let secrets_call = tokio::spawn(async move {
+                secrets_client
+                    .get_secret_value()
+                    .secret_id("db")
+                    .send()
+                    .await
+            });
+            let secrets_request = accept_request_head(&listener).await;
+            secrets_call.abort();
+            assert!(
+                secrets_request.contains("secretsmanager.GetSecretValue"),
+                "{secrets_request}"
+            );
+
+            let ssm_client = aws_sdk_ssm::Client::new(&sdk_config);
+            let ssm_call =
+                tokio::spawn(async move { ssm_client.get_parameter().name("db").send().await });
+            let ssm_request = accept_request_head(&listener).await;
+            ssm_call.abort();
+            assert!(
+                ssm_request.contains("AmazonSSM.GetParameter"),
+                "{ssm_request}"
+            );
+        });
     }
 }

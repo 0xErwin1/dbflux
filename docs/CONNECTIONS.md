@@ -217,6 +217,7 @@ The form is provider-driven. For AWS SSO you fill:
 | **SSO session** | Optional reference to an **AWS SSO Session** profile. When set, Start URL and Region are inherited and their inline fields grey out. |
 | **SSO Start URL** | Your Identity Center portal URL (skip if using a session). |
 | **Region** | e.g. `us-east-1`. |
+| **Endpoint URL** | Optional, e.g. `http://localhost:4566` for LocalStack. Applies to Secrets Manager and SSM only, through a `[services]` section in `~/.aws/config`. AWS Shared Credentials profiles have the same field. |
 | **Account** | A dropdown that populates **after you log in** — it lists the accounts your SSO session can access. |
 | **Role** | A dropdown that populates once an account is chosen. |
 
@@ -299,6 +300,16 @@ Notes:
   reconnect.
 - Secret/Parameter sources backed by an auth provider **require an Auth Profile**
   on the connection (enforced before connecting).
+- To reach LocalStack or a VPC endpoint, set **Endpoint URL** on the AWS Auth
+  Profile. The AWS SDK also honors `AWS_ENDPOINT_URL_SECRETS_MANAGER` and
+  `AWS_ENDPOINT_URL_SSM`.
+
+> **Heads-up:** DBFlux writes the endpoint to a `[services]` section that the
+> profile references, so it applies only to Secrets Manager and SSM. That
+> includes the AWS CLI's `secretsmanager` and `ssm` commands and SSM port
+> forwarding run with that profile. DynamoDB, S3 and CloudWatch keep their
+> default endpoints. A `[services]` section shared with another profile is
+> never edited: DBFlux gives this profile its own copy.
 
 ---
 

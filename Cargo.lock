@@ -3199,6 +3199,7 @@ version = "0.10.0-dev.0"
 dependencies = [
  "async-trait",
  "aws-config",
+ "aws-runtime",
  "aws-sdk-secretsmanager",
  "aws-sdk-ssm",
  "aws-sdk-sso",

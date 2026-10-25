@@ -24,6 +24,11 @@ pub struct AwsProfileInfo {
     pub sso_region: Option<String>,
     pub sso_account_id: Option<String>,
     pub sso_role_name: Option<String>,
+    /// Name of the `[services <name>]` section this profile references.
+    pub services: Option<String>,
+    /// `endpoint_url` of the `secrets_manager` service (falling back to `ssm`)
+    /// in the referenced `[services]` section.
+    pub value_source_endpoint_url: Option<String>,
     /// Name of the `[sso-session <name>]` section this profile references, if
     /// the profile uses the indirection form (`sso_session = <name>`) instead
     /// of inline `sso_start_url` keys. Empty for sso-session sections.
@@ -39,6 +44,21 @@ pub struct AwsProfileInfo {
 enum SectionKind {
     Profile(String),
     SsoSession(String),
+    Services(String),
+}
+
+/// Service names, as written in a `[services]` section, whose endpoint the
+/// value-source Endpoint URL field manages.
+///
+/// Secrets Manager is written twice: the AWS CLI reads the documented
+/// `secrets_manager`, while the Rust SDK DBFlux uses derives `secrets-manager`
+/// from the service id and does not match the snake_case form.
+const VALUE_SOURCE_SERVICES: [&str; 3] = ["secrets_manager", "secrets-manager", "ssm"];
+
+#[derive(Debug, Default)]
+struct ServicesEndpoints {
+    secrets_manager: Option<String>,
+    ssm: Option<String>,
 }
 
 #[derive(Debug)]
@@ -282,8 +302,10 @@ pub(crate) fn parse_aws_credentials_str(contents: &str) -> Vec<String> {
 /// Malformed sections are skipped with a warning.
 pub(crate) fn parse_aws_config_str(contents: &str) -> Vec<AwsProfileInfo> {
     let mut profiles = Vec::new();
+    let mut services: HashMap<String, ServicesEndpoints> = HashMap::new();
     let mut current_section: Option<SectionKind> = None;
     let mut current_keys: HashMap<String, String> = HashMap::new();
+    let mut current_service: Option<String> = None;
 
     for line in contents.lines() {
         let trimmed = line.trim();
@@ -298,6 +320,12 @@ pub(crate) fn parse_aws_config_str(contents: &str) -> Vec<AwsProfileInfo> {
             let header = &trimmed[1..trimmed.len() - 1].trim();
             current_section = parse_section_kind(header);
             current_keys.clear();
+            current_service = None;
+            continue;
+        }
+
+        if let Some(SectionKind::Services(section_name)) = &current_section {
+            parse_services_line(line, section_name, &mut current_service, &mut services);
             continue;
         }
 
@@ -308,7 +336,60 @@ pub(crate) fn parse_aws_config_str(contents: &str) -> Vec<AwsProfileInfo> {
 
     flush_section(&current_section, &current_keys, &mut profiles);
 
+    for profile in &mut profiles {
+        let Some(section_name) = &profile.services else {
+            continue;
+        };
+        if let Some(endpoints) = services.get(&section_name.to_lowercase()) {
+            profile.value_source_endpoint_url = endpoints
+                .secrets_manager
+                .clone()
+                .or_else(|| endpoints.ssm.clone());
+        }
+    }
+
     profiles
+}
+
+/// Tracks the open service sub-section of a `[services]` section and records
+/// the `endpoint_url` sub-properties of the value-source services.
+///
+/// A non-indented `service =` line with an empty value opens a sub-section;
+/// the indented `key = value` lines after it belong to that service.
+fn parse_services_line(
+    line: &str,
+    section_name: &str,
+    current_service: &mut Option<String>,
+    services: &mut HashMap<String, ServicesEndpoints>,
+) {
+    let Some((key, value)) = parse_key_value(line.trim()) else {
+        return;
+    };
+
+    if !is_indented(line) {
+        *current_service = value.is_empty().then_some(key);
+        return;
+    }
+
+    let Some(service) = current_service.as_deref() else {
+        return;
+    };
+    if key != "endpoint_url" {
+        return;
+    }
+
+    let endpoints = services.entry(section_name.to_lowercase()).or_default();
+    match service {
+        "secrets_manager" | "secrets-manager" => {
+            endpoints.secrets_manager.get_or_insert(value);
+        }
+        "ssm" => endpoints.ssm = Some(value),
+        _ => {}
+    }
+}
+
+fn is_indented(line: &str) -> bool {
+    line.starts_with([' ', '\t'])
 }
 
 fn parse_section_kind(header: &str) -> Option<SectionKind> {
@@ -332,6 +413,15 @@ fn parse_section_kind(header: &str) -> Option<SectionKind> {
             return None;
         }
         return Some(SectionKind::SsoSession(name.to_string()));
+    }
+
+    if let Some(name) = header.strip_prefix("services") {
+        let name = name.trim();
+        if name.is_empty() {
+            log::warn!("Skipping AWS config section with empty services name");
+            return None;
+        }
+        return Some(SectionKind::Services(name.to_string()));
     }
 
     None
@@ -362,6 +452,7 @@ fn flush_section(
     let (name, is_sso_session) = match section {
         SectionKind::Profile(name) => (name.clone(), false),
         SectionKind::SsoSession(name) => (name.clone(), true),
+        SectionKind::Services(_) => return,
     };
 
     let is_sso =
@@ -372,6 +463,7 @@ fn flush_section(
     let sso_role_name = keys.get("sso_role_name").cloned();
     let sso_session = keys.get("sso_session").cloned();
     let region = keys.get("region").cloned();
+    let services = keys.get("services").cloned();
 
     profiles.push(AwsProfileInfo {
         name,
@@ -381,6 +473,8 @@ fn flush_section(
         sso_region,
         sso_account_id,
         sso_role_name,
+        services,
+        value_source_endpoint_url: None,
         sso_session,
         is_sso_session,
     });
@@ -513,6 +607,8 @@ fn restore_backup_for_path(path: &std::path::Path) -> Result<(), io::Error> {
 ///
 /// The generated block uses the modern SSO format (direct keys, no
 /// `sso-session` indirection) compatible with AWS CLI v2 and the AWS SDK.
+/// A non-empty `value_source_endpoint_url` is written to a `[services]`
+/// section, in the same write, through `apply_value_source_endpoint`.
 pub fn append_aws_sso_profile(
     name: &str,
     sso_start_url: &str,
@@ -520,6 +616,7 @@ pub fn append_aws_sso_profile(
     sso_account_id: &str,
     sso_role_name: &str,
     region: &str,
+    value_source_endpoint_url: &str,
 ) -> Result<bool, std::io::Error> {
     let path = config_file_path();
 
@@ -539,7 +636,7 @@ pub fn append_aws_sso_profile(
     writeln!(block, "sso_role_name = {sso_role_name}").ok();
     writeln!(block, "region = {region}").ok();
 
-    append_config_block_if_absent(&path, name, &block)
+    append_config_block_if_absent(&path, name, &block, value_source_endpoint_url)
 }
 
 /// Appends a new shared-credentials profile block to `~/.aws/config`.
@@ -549,12 +646,14 @@ pub fn append_aws_sso_profile(
 /// and the function returns `Ok(false)`. On a successful write it returns
 /// `Ok(true)`.
 ///
-/// Shared-credentials profiles carry only a `region` key in `~/.aws/config`;
-/// the actual `aws_access_key_id` / `aws_secret_access_key` live in
+/// Shared-credentials profiles carry only `region` (plus the optional
+/// `services` reference written for `value_source_endpoint_url`) in
+/// `~/.aws/config`; the actual `aws_access_key_id` / `aws_secret_access_key` live in
 /// `~/.aws/credentials`, which DBFlux does not manage.
 pub fn append_aws_shared_credentials_profile(
     name: &str,
     region: &str,
+    value_source_endpoint_url: &str,
 ) -> Result<bool, std::io::Error> {
     let path = config_file_path();
 
@@ -570,7 +669,7 @@ pub fn append_aws_shared_credentials_profile(
     writeln!(block, "{header}").ok();
     writeln!(block, "region = {region}").ok();
 
-    append_config_block_if_absent(&path, name, &block)
+    append_config_block_if_absent(&path, name, &block, value_source_endpoint_url)
 }
 
 /// Appends a new `[sso-session <name>]` block to `~/.aws/config`.
@@ -658,6 +757,7 @@ fn append_config_block_if_absent(
     path: &std::path::Path,
     name: &str,
     block: &str,
+    value_source_endpoint_url: &str,
 ) -> Result<bool, std::io::Error> {
     let mut appended = false;
 
@@ -673,7 +773,12 @@ fn append_config_block_if_absent(
             content.push('\n');
         }
         content.push_str(block);
-        content
+
+        if value_source_endpoint_url.is_empty() {
+            content
+        } else {
+            apply_value_source_endpoint(&content, name, Some(value_source_endpoint_url))
+        }
     })?;
 
     Ok(appended)
@@ -1029,6 +1134,271 @@ pub(crate) fn replace_or_append_sso_session_block(
     result
 }
 
+/// Sets (`Some`) or removes (`None`) the Secrets Manager and SSM
+/// `endpoint_url` of `profile_name` through its `[services]` section.
+///
+/// A profile-level `endpoint_url` would redirect every AWS service using the
+/// profile, so the endpoint is scoped to the value-source services instead. A
+/// `[services]` section referenced by another profile is never modified:
+/// this profile gets an edited copy (or loses its reference on removal).
+pub(crate) fn apply_value_source_endpoint(
+    contents: &str,
+    profile_name: &str,
+    endpoint_url: Option<&str>,
+) -> String {
+    let profiles = parse_aws_config_str(contents);
+    let Some(profile) = profiles
+        .iter()
+        .find(|p| !p.is_sso_session && p.name.eq_ignore_ascii_case(profile_name))
+    else {
+        return contents.to_string();
+    };
+
+    let Some(section_name) = profile.services.clone() else {
+        let Some(url) = endpoint_url else {
+            return contents.to_string();
+        };
+        let body = edit_value_source_endpoints("", Some(url));
+        return link_new_services_section(contents, &profiles, profile_name, &body);
+    };
+
+    let header = services_header(&section_name);
+    let existing_section = section_raw_bytes(contents, &header);
+    let body = existing_section
+        .and_then(|raw| raw.split_once('\n'))
+        .map(|(_, body)| body)
+        .unwrap_or("");
+
+    let edited = edit_value_source_endpoints(body, endpoint_url);
+    if edited == body {
+        return contents.to_string();
+    }
+
+    let shared = profiles.iter().any(|other| {
+        !other.is_sso_session
+            && !other.name.eq_ignore_ascii_case(profile_name)
+            && other
+                .services
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(&section_name))
+    });
+    let emptied = !has_properties(&edited);
+
+    match (shared, emptied) {
+        (false, true) => {
+            let without_section = remove_section(contents, &header);
+            replace_or_append_profile_block(&without_section, profile_name, &[], &["services"])
+        }
+        (true, true) => replace_or_append_profile_block(contents, profile_name, &[], &["services"]),
+        (false, false) => match existing_section {
+            Some(raw) => replace_section_body(contents, &header, raw, &edited),
+            None => append_section(contents, &header, &edited),
+        },
+        (true, false) => link_new_services_section(contents, &profiles, profile_name, &edited),
+    }
+}
+
+fn services_header(name: &str) -> String {
+    format!("[services {name}]")
+}
+
+/// Points `profile_name` at a new `[services]` section holding `body`, named
+/// `dbflux-<profile>` unless another section or profile already uses it.
+fn link_new_services_section(
+    contents: &str,
+    profiles: &[AwsProfileInfo],
+    profile_name: &str,
+    body: &str,
+) -> String {
+    let base = format!("dbflux-{profile_name}");
+    let is_taken = |candidate: &str| {
+        section_raw_bytes(contents, &services_header(candidate)).is_some()
+            || profiles.iter().any(|p| {
+                p.services
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(candidate))
+            })
+    };
+
+    let mut section_name = base.clone();
+    let mut suffix = 2;
+    while is_taken(&section_name) {
+        section_name = format!("{base}-{suffix}");
+        suffix += 1;
+    }
+
+    let linked = replace_or_append_profile_block(
+        contents,
+        profile_name,
+        &[("services", &section_name)],
+        &[],
+    );
+    append_section(&linked, &services_header(&section_name), body)
+}
+
+fn append_section(contents: &str, header: &str, body: &str) -> String {
+    let mut result = contents.to_string();
+    if !result.is_empty() {
+        if !result.ends_with('\n') {
+            result.push('\n');
+        }
+        result.push('\n');
+    }
+    result.push_str(header);
+    result.push('\n');
+    result.push_str(body.trim_end_matches(['\n', '\r']));
+    result.push('\n');
+    result
+}
+
+fn replace_section_body(contents: &str, header: &str, raw: &str, body: &str) -> String {
+    let start = find_section_start(contents, &header.to_lowercase());
+    let end = start + raw.len();
+    let header_line = match raw.split_once('\n') {
+        Some((line, _)) => format!("{line}\n"),
+        None => format!("{raw}\n"),
+    };
+
+    let mut result = String::with_capacity(contents.len());
+    result.push_str(&contents[..start]);
+    result.push_str(&header_line);
+    result.push_str(body);
+    result.push_str(&contents[end..]);
+    result
+}
+
+fn remove_section(contents: &str, header: &str) -> String {
+    let Some(raw) = section_raw_bytes(contents, header) else {
+        return contents.to_string();
+    };
+    let start = find_section_start(contents, &header.to_lowercase());
+    let end = start + raw.len();
+
+    let mut result = String::with_capacity(contents.len());
+    result.push_str(&contents[..start]);
+    if end < contents.len() {
+        result.push_str(&contents[end..]);
+    } else {
+        // The section was the last one: drop the blank separator left behind.
+        let trimmed_len = result.trim_end_matches(['\n', '\r']).len();
+        result.truncate(trimmed_len);
+        if !result.is_empty() {
+            result.push('\n');
+        }
+    }
+    result
+}
+
+/// Applies the endpoint edit to every value-source service in a `[services]`
+/// section body, leaving all other lines byte-for-byte intact.
+fn edit_value_source_endpoints(body: &str, endpoint_url: Option<&str>) -> String {
+    let mut lines: Vec<String> = body.split_inclusive('\n').map(str::to_string).collect();
+    if let Some(last) = lines.last_mut()
+        && !last.ends_with('\n')
+    {
+        last.push('\n');
+    }
+
+    for service in VALUE_SOURCE_SERVICES {
+        match endpoint_url {
+            Some(url) => set_service_endpoint(&mut lines, service, url),
+            None => remove_service_endpoint(&mut lines, service),
+        }
+    }
+
+    let edited = lines.concat();
+    if edited.trim_end_matches(['\n', '\r']) == body.trim_end_matches(['\n', '\r']) {
+        return body.to_string();
+    }
+    edited
+}
+
+fn line_key_value(line: &str) -> Option<(String, String)> {
+    let trimmed = line.trim();
+    if trimmed.starts_with('#') || trimmed.starts_with(';') {
+        return None;
+    }
+    parse_key_value(trimmed)
+}
+
+/// Returns the line range `(header, end)` of a `service =` sub-section; `end`
+/// is exclusive and stops at the first blank or non-indented line.
+fn find_service(lines: &[String], service: &str) -> Option<(usize, usize)> {
+    let header = lines.iter().position(|line| {
+        !is_indented(line)
+            && line_key_value(line).is_some_and(|(key, value)| key == service && value.is_empty())
+    })?;
+
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(header + 1)
+        .find(|(_, line)| !is_indented(line) || line.trim().is_empty())
+        .map_or(lines.len(), |(index, _)| index);
+
+    Some((header, end))
+}
+
+fn is_endpoint_line(line: &str) -> bool {
+    line_key_value(line).is_some_and(|(key, _)| key == "endpoint_url")
+}
+
+fn set_service_endpoint(lines: &mut Vec<String>, service: &str, url: &str) {
+    let Some((header, end)) = find_service(lines, service) else {
+        let insert_at = lines
+            .iter()
+            .rposition(|line| !line.trim().is_empty())
+            .map_or(0, |index| index + 1);
+        lines.insert(insert_at, format!("{service} =\n"));
+        lines.insert(insert_at + 1, format!("  endpoint_url = {url}\n"));
+        return;
+    };
+
+    let existing = lines
+        .iter_mut()
+        .take(end)
+        .skip(header + 1)
+        .find(|line| is_endpoint_line(line));
+
+    match existing {
+        Some(line) => {
+            let indent_len = line.len() - line.trim_start().len();
+            let terminator = if line.ends_with("\r\n") { "\r\n" } else { "\n" };
+            let indent = line.get(..indent_len).unwrap_or("").to_string();
+            *line = format!("{indent}endpoint_url = {url}{terminator}");
+        }
+        None => lines.insert(end, format!("  endpoint_url = {url}\n")),
+    }
+}
+
+fn remove_service_endpoint(lines: &mut Vec<String>, service: &str) {
+    let Some((header, end)) = find_service(lines, service) else {
+        return;
+    };
+
+    let mut index = 0;
+    let mut remaining = 0;
+    lines.retain(|line| {
+        let in_service = index > header && index < end;
+        index += 1;
+        if in_service && is_endpoint_line(line) {
+            return false;
+        }
+        if in_service {
+            remaining += 1;
+        }
+        true
+    });
+
+    if remaining == 0 {
+        lines.remove(header);
+    }
+}
+
+fn has_properties(body: &str) -> bool {
+    body.lines().any(|line| line_key_value(line).is_some())
+}
+
 /// Builds the replacement `[profile NAME]` section block for `~/.aws/config`.
 ///
 /// Existing on-disk keys not present in `fields` are preserved (merge
@@ -1045,12 +1415,27 @@ fn build_profile_block(
     let remove: std::collections::HashSet<String> =
         remove_keys.iter().map(|k| k.to_lowercase()).collect();
 
-    // Collect existing keys from the current on-disk section, in order.
-    let mut existing_keys: Vec<(String, String)> = Vec::new();
+    // Collect existing keys from the current on-disk section, in order. An
+    // indented line is a sub-property of the key above it and is carried
+    // verbatim with that key, so nested settings are never flattened.
+    let mut existing_keys: Vec<(String, String, Vec<&str>)> = Vec::new();
+    let mut trailing_blank_lines = 0;
     if let Some(raw) = section_raw_bytes(contents, header) {
         for line in raw.lines().skip(1) {
+            if line.trim().is_empty() {
+                trailing_blank_lines += 1;
+                continue;
+            }
+            if is_indented(line) {
+                if let Some((_, _, sub_properties)) = existing_keys.last_mut() {
+                    sub_properties.push(line);
+                    trailing_blank_lines = 0;
+                }
+                continue;
+            }
             if let Some((k, v)) = parse_key_value(line) {
-                existing_keys.push((k, v));
+                existing_keys.push((k, v, Vec::new()));
+                trailing_blank_lines = 0;
             }
         }
     }
@@ -1066,16 +1451,26 @@ fn build_profile_block(
     block.push('\n');
 
     let mut emitted_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for (key, existing_val) in &existing_keys {
+    for (key, existing_val, sub_properties) in &existing_keys {
         if remove.contains(key) {
             continue;
         }
 
-        let value = overrides
-            .get(key)
-            .map(String::as_str)
-            .unwrap_or(existing_val);
-        writeln!(block, "{key} = {value}").ok();
+        match overrides.get(key) {
+            Some(value) => {
+                writeln!(block, "{key} = {value}").ok();
+            }
+            None => {
+                if existing_val.is_empty() {
+                    writeln!(block, "{key} =").ok();
+                } else {
+                    writeln!(block, "{key} = {existing_val}").ok();
+                }
+                for line in sub_properties {
+                    writeln!(block, "{line}").ok();
+                }
+            }
+        }
         emitted_keys.insert(key.clone());
     }
 
@@ -1087,6 +1482,10 @@ fn build_profile_block(
         if !emitted_keys.contains(&key_lower) && !value.is_empty() {
             writeln!(block, "{key_lower} = {value}").ok();
         }
+    }
+
+    for _ in 0..trailing_blank_lines {
+        block.push('\n');
     }
 
     block
@@ -1204,6 +1603,174 @@ region = ap-southeast-1
         assert_eq!(session_ref.name, "sso-session-ref");
         assert!(session_ref.is_sso);
         assert!(session_ref.sso_start_url.is_none());
+    }
+
+    #[test]
+    fn parse_value_source_endpoint_from_services_section() {
+        let config = "[profile local]\nregion = us-east-1\nservices = local-stack\n\n\
+                      [services local-stack]\ns3 =\n  endpoint_url = http://s3.local\n\
+                      Secrets_Manager =\n  region = us-east-1\n  endpoint_url = http://sm.local\n\
+                      ssm =\n  endpoint_url = http://ssm.local\n\n\
+                      [profile ssm-only]\nservices = ssm-only\n\n\
+                      [services ssm-only]\nssm =\n  endpoint_url = http://ssm.local\n\n\
+                      [profile plain]\nregion = eu-west-1\nendpoint_url = http://ignored\n\n\
+                      [profile sdk-form]\nservices = sdk-form\n\n\
+                      [services sdk-form]\nssm =\n  endpoint_url = http://ssm.local\n\
+                      secrets-manager =\n  endpoint_url = http://sm.local\n";
+        let profiles = parse_aws_config_str(config);
+
+        assert_eq!(profiles.len(), 4);
+        assert_eq!(profiles[0].services.as_deref(), Some("local-stack"));
+        assert_eq!(
+            profiles[0].value_source_endpoint_url.as_deref(),
+            Some("http://sm.local")
+        );
+        assert_eq!(profiles[0].region.as_deref(), Some("us-east-1"));
+        assert_eq!(
+            profiles[1].value_source_endpoint_url.as_deref(),
+            Some("http://ssm.local")
+        );
+        assert!(profiles[2].services.is_none());
+        assert!(profiles[2].value_source_endpoint_url.is_none());
+        assert_eq!(
+            profiles[3].value_source_endpoint_url.as_deref(),
+            Some("http://sm.local")
+        );
+    }
+
+    #[test]
+    fn value_source_endpoint_creates_services_section_for_profile_without_one() {
+        let config = "[profile local]\nregion = us-east-1\n";
+        let after = apply_value_source_endpoint(config, "local", Some("http://localhost:4566"));
+
+        assert_eq!(
+            after,
+            "[profile local]\nregion = us-east-1\nservices = dbflux-local\n\n\
+             [services dbflux-local]\nsecrets_manager =\n  endpoint_url = http://localhost:4566\n\
+             secrets-manager =\n  endpoint_url = http://localhost:4566\n\
+             ssm =\n  endpoint_url = http://localhost:4566\n"
+        );
+    }
+
+    #[test]
+    fn value_source_endpoint_edits_exclusive_services_section_in_place() {
+        let config = "[profile local]\nregion = us-east-1\nservices = mine\n\n\
+                      [services mine]\n# keep me\ns3 =\n  endpoint_url = http://s3.local\n\
+                      secrets_manager =\n  region = eu-west-1\n  endpoint_url = http://old\n\n\
+                      [profile other]\nregion = us-east-1\n";
+        let after = apply_value_source_endpoint(config, "local", Some("http://new"));
+
+        assert_eq!(
+            after,
+            "[profile local]\nregion = us-east-1\nservices = mine\n\n\
+             [services mine]\n# keep me\ns3 =\n  endpoint_url = http://s3.local\n\
+             secrets_manager =\n  region = eu-west-1\n  endpoint_url = http://new\n\
+             secrets-manager =\n  endpoint_url = http://new\nssm =\n  endpoint_url = http://new\n\n\
+             [profile other]\nregion = us-east-1\n"
+        );
+    }
+
+    #[test]
+    fn value_source_endpoint_copies_shared_services_section() {
+        let config = "[profile local]\nregion = us-east-1\nservices = shared\n\n\
+                      [profile other]\nservices = shared\n\n\
+                      [services shared]\ns3 =\n  endpoint_url = http://s3.local\n";
+        let after = apply_value_source_endpoint(config, "local", Some("http://new"));
+
+        assert_eq!(
+            after,
+            "[profile local]\nregion = us-east-1\nservices = dbflux-local\n\n\
+             [profile other]\nservices = shared\n\n\
+             [services shared]\ns3 =\n  endpoint_url = http://s3.local\n\n\
+             [services dbflux-local]\ns3 =\n  endpoint_url = http://s3.local\n\
+             secrets_manager =\n  endpoint_url = http://new\nsecrets-manager =\n  endpoint_url = http://new\n\
+             ssm =\n  endpoint_url = http://new\n"
+        );
+    }
+
+    #[test]
+    fn value_source_endpoint_avoids_colliding_section_name() {
+        let config = "[profile local]\nservices = dbflux-local\n\n\
+                      [profile other]\nservices = dbflux-local\n\n\
+                      [services dbflux-local]\nssm =\n  endpoint_url = http://old\n";
+        let after = apply_value_source_endpoint(config, "local", Some("http://new"));
+
+        assert_eq!(
+            after,
+            "[profile local]\nservices = dbflux-local-2\n\n\
+             [profile other]\nservices = dbflux-local\n\n\
+             [services dbflux-local]\nssm =\n  endpoint_url = http://old\n\n\
+             [services dbflux-local-2]\nssm =\n  endpoint_url = http://new\n\
+             secrets_manager =\n  endpoint_url = http://new\nsecrets-manager =\n  endpoint_url = http://new\n"
+        );
+    }
+
+    #[test]
+    fn value_source_endpoint_removal_deletes_emptied_exclusive_section() {
+        let config = "[profile local]\nregion = us-east-1\nservices = dbflux-local\n\n\
+                      [services dbflux-local]\nsecrets_manager =\n  endpoint_url = http://old\n\
+                      ssm =\n  endpoint_url = http://old\n\n\
+                      [profile other]\nregion = us-east-1\n";
+        let after = apply_value_source_endpoint(config, "local", None);
+
+        assert_eq!(
+            after,
+            "[profile local]\nregion = us-east-1\n\n[profile other]\nregion = us-east-1\n"
+        );
+    }
+
+    #[test]
+    fn value_source_endpoint_removal_keeps_other_exclusive_properties() {
+        let config = "[profile local]\nservices = mine\n\n\
+                      [services mine]\nsecrets_manager =\n  region = eu-west-1\n  endpoint_url = http://old\n\
+                      ssm =\n  endpoint_url = http://old\ns3 =\n  endpoint_url = http://s3.local\n";
+        let after = apply_value_source_endpoint(config, "local", None);
+
+        assert_eq!(
+            after,
+            "[profile local]\nservices = mine\n\n\
+             [services mine]\nsecrets_manager =\n  region = eu-west-1\n\
+             s3 =\n  endpoint_url = http://s3.local\n"
+        );
+    }
+
+    #[test]
+    fn value_source_endpoint_removal_unlinks_profile_from_shared_section() {
+        let config = "[profile local]\nregion = us-east-1\nservices = shared\n\n\
+                      [profile other]\nservices = shared\n\n\
+                      [services shared]\nssm =\n  endpoint_url = http://old\n";
+        let after = apply_value_source_endpoint(config, "local", None);
+
+        assert_eq!(
+            after,
+            "[profile local]\nregion = us-east-1\n\n\
+             [profile other]\nservices = shared\n\n\
+             [services shared]\nssm =\n  endpoint_url = http://old\n"
+        );
+    }
+
+    #[test]
+    fn value_source_endpoint_removal_without_endpoint_leaves_file_unchanged() {
+        let config = "[profile local]\nservices = mine\n\n[services mine]\ns3 =\n  endpoint_url = http://s3.local\n";
+
+        assert_eq!(apply_value_source_endpoint(config, "local", None), config);
+        assert_eq!(
+            apply_value_source_endpoint("[profile local]\nregion = us-east-1\n", "local", None),
+            "[profile local]\nregion = us-east-1\n"
+        );
+    }
+
+    #[test]
+    fn replace_profile_block_preserves_nested_sub_properties() {
+        let config = "[profile local]\nregion = us-east-1\ns3 =\n  addressing_style = path\n\
+                      services = mine\n";
+        let after =
+            replace_or_append_profile_block(config, "local", &[("region", "eu-west-1")], &[]);
+
+        assert_eq!(
+            after,
+            "[profile local]\nregion = eu-west-1\ns3 =\n  addressing_style = path\nservices = mine\n"
+        );
     }
 
     #[test]
@@ -1335,7 +1902,7 @@ output=json
         block.push_str("sso_role_name = AdminAccess\n");
         block.push_str("region = us-east-1\n");
 
-        let written = append_config_block_if_absent(&path, "new-sso", &block).expect("write");
+        let written = append_config_block_if_absent(&path, "new-sso", &block, "").expect("write");
         assert!(written);
 
         let content = std::fs::read_to_string(&path).expect("read");
@@ -1360,7 +1927,7 @@ output=json
 
         let block = "\n[profile staging]\nregion = eu-west-1\n";
 
-        append_config_block_if_absent(&path, "staging", block).expect("write");
+        append_config_block_if_absent(&path, "staging", block, "").expect("write");
 
         let content = std::fs::read_to_string(&path).expect("read result");
         // The existing content had no trailing newline; the appender must add one.
@@ -1396,7 +1963,7 @@ output=json
             handles.push(thread::spawn(move || {
                 let name = format!("worker-{index}");
                 let block = format!("\n[profile {name}]\nregion = eu-west-1\n");
-                append_config_block_if_absent(path.as_ref(), &name, &block).expect("write");
+                append_config_block_if_absent(path.as_ref(), &name, &block, "").expect("write");
             }));
         }
 
