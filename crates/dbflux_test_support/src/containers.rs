@@ -124,7 +124,7 @@ pub fn with_mysql_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
 {
-    with_mysql_tag_url("8.4", run)
+    with_mysql_image_url(hub_image("mysql", "8.4"), run)
 }
 
 /// MySQL 5.7 predates `information_schema` tables such as `CHECK_CONSTRAINTS`,
@@ -133,7 +133,7 @@ pub fn with_mysql_57_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
 {
-    with_mysql_tag_url("5.7", run)
+    with_mysql_image_url(hub_image("mysql", "5.7"), run)
 }
 
 #[expect(
@@ -141,11 +141,11 @@ where
     clippy::unwrap_in_result,
     reason = "container startup and host-port lookup are hard test-infrastructure failures that must abort the run, distinct from the callback's `Err` contract"
 )]
-fn with_mysql_tag_url<T, E, F>(tag: &str, run: F) -> Result<T, E>
+fn with_mysql_image_url<T, E, F>(image: GenericImage, run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,
 {
-    let image = hub_image("mysql", tag)
+    let image = image
         .with_exposed_port(ContainerPort::Tcp(3306))
         .with_wait_for(WaitFor::message_on_stderr("ready for connections"))
         .with_env_var("MYSQL_ROOT_PASSWORD", "root")
