@@ -1413,6 +1413,7 @@ document:
         write_query_first: Write a query first to open it in a chart
         connecting: "Connecting to database '%{database}', please wait…"
         redis_flush_disabled: FLUSHALL / FLUSHDB is disabled in settings
+        read_only_profile: "This connection's profile is set to read-only. Only statements that read data run here."
       result_title:
         query_failed: Query failed
         script_failed: Script failed

@@ -1413,6 +1413,7 @@ document:
         write_query_first: Escreva uma consulta primeiro para abri-la em um gráfico
         connecting: "Conectando ao banco de dados '%{database}', aguarde…"
         redis_flush_disabled: FLUSHALL / FLUSHDB está desabilitado nas configurações
+        read_only_profile: "O perfil desta conexão está definido como somente leitura. Aqui só são executadas instruções que leem dados."
       result_title:
         query_failed: Falha na consulta
         script_failed: Falha no script

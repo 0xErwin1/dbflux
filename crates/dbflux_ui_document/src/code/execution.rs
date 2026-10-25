@@ -65,6 +65,37 @@ pub(crate) fn evaluate_dangerous_with_effective_settings(
     dbflux_core::DangerousAction::Confirm(kind)
 }
 
+/// Returns `true` when the connection's profile is set to read-only and
+/// `query` would do more than read data or metadata.
+///
+/// The query is classified with the connection's own language service, so
+/// driver-owned dialects are rated by their driver. Only the profile setting
+/// is enforced here; a server that rejects writes reports them itself.
+fn is_refused_by_read_only_profile(connected: &dbflux_core::ConnectedProfile, query: &str) -> bool {
+    if connected.read_only_reason != Some(dbflux_core::ReadOnlyReason::ProfileSetting) {
+        return false;
+    }
+
+    let classification = dbflux_core::classify_query_for_language_with_service(
+        &connected.connection.metadata().query_language,
+        query,
+        Some(connected.connection.language_service()),
+    );
+
+    !matches!(
+        classification,
+        dbflux_core::ExecutionClassification::Metadata | dbflux_core::ExecutionClassification::Read
+    )
+}
+
+fn show_read_only_profile_toast(cx: &mut App) {
+    let msg = dbflux_i18n::t!("document.code.execution.toast.read_only_profile");
+    Toast::error(msg.clone())
+        .meta_right(now_hms())
+        .action(copy_action(msg))
+        .push(cx);
+}
+
 fn task_target_for_execution(
     profile_id: Uuid,
     connected: &dbflux_core::ConnectedProfile,
@@ -394,6 +425,21 @@ impl CodeDocument {
             Toast::warning(dbflux_i18n::t!("document.code.execution.toast.enter_query"))
                 .meta_right(now_hms())
                 .push(cx);
+            return;
+        }
+
+        // Refusing before the dangerous-query check keeps a confirmation from
+        // being asked for a statement that cannot run anyway.
+        let refused_by_read_only_profile = self.connection_id.is_some_and(|conn_id| {
+            self.app_state
+                .read(cx)
+                .connections()
+                .get(&conn_id)
+                .is_some_and(|connected| is_refused_by_read_only_profile(connected, &query))
+        });
+
+        if refused_by_read_only_profile {
+            show_read_only_profile_toast(cx);
             return;
         }
 
@@ -736,6 +782,11 @@ impl CodeDocument {
                     .push(cx);
                 return;
             };
+
+            if is_refused_by_read_only_profile(connected, &query) {
+                show_read_only_profile_toast(cx);
+                return;
+            }
 
             if let Some(origin) = &rerun_origin {
                 let database = origin.context.database.clone();
@@ -4338,6 +4389,21 @@ mod auto_refresh_tests {
         Entity<ToastHost>,
         &'a mut VisualTestContext,
     ) {
+        open_connected_with_profile(cx, driver, content, false)
+    }
+
+    /// Opens a code document like [`open_connected`], on a profile whose
+    /// read-only setting is `read_only_flag`.
+    fn open_connected_with_profile<'a>(
+        cx: &'a mut TestAppContext,
+        driver: &FakeDriver,
+        content: &str,
+        read_only_flag: bool,
+    ) -> (
+        Entity<CodeDocument>,
+        Entity<ToastHost>,
+        &'a mut VisualTestContext,
+    ) {
         cx.update(theme::init);
         cx.update(dbflux_ui_base::keymap::init_keymap);
         let toasts = cx.update(|cx| {
@@ -4352,13 +4418,14 @@ mod auto_refresh_tests {
             .expect("app state")
         });
 
-        let profile = ConnectionProfile::new(
+        let mut profile = ConnectionProfile::new(
             "fake",
             DbConfig::SQLite {
                 path: ":memory:".into(),
                 connection_id: None,
             },
         );
+        profile.read_only_flag = read_only_flag;
         let connection = driver.connect_arc(&profile).expect("fake connection");
         let profile_id = profile.id;
         cx.update(|cx| {
@@ -4460,6 +4527,129 @@ mod auto_refresh_tests {
             vec![("SELECT 1".to_string(), ReadOnlyEnforcement::Required)]
         );
         assert!(refresh_policy(window, &document).is_auto());
+    }
+
+    fn run_query(window: &mut VisualTestContext, document: &Entity<CodeDocument>) {
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        settle(window);
+    }
+
+    fn showed_read_only_profile_toast(
+        window: &mut VisualTestContext,
+        toasts: &Entity<ToastHost>,
+    ) -> bool {
+        let expected = dbflux_i18n::t!("document.code.execution.toast.read_only_profile");
+        window.update(|_, cx| toasts.read(cx).last_toast_title()) == Some(expected)
+    }
+
+    fn has_pending_dangerous_query(
+        window: &mut VisualTestContext,
+        document: &Entity<CodeDocument>,
+    ) -> bool {
+        window.update(|_, cx| document.read(cx).pending.dangerous_query.is_some())
+    }
+
+    #[gpui::test]
+    fn a_read_only_profile_refuses_a_write_from_the_editor(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) = open_connected_with_profile(
+            cx,
+            &driver,
+            "UPDATE users SET name = 'a' WHERE id = 1",
+            true,
+        );
+
+        run_query(window, &document);
+
+        assert!(executed(&driver).is_empty(), "a write must not run");
+        assert!(showed_read_only_profile_toast(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn a_read_only_profile_refuses_ddl_from_the_editor(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) =
+            open_connected_with_profile(cx, &driver, "CREATE TABLE t (id INTEGER)", true);
+
+        run_query(window, &document);
+
+        assert!(executed(&driver).is_empty(), "DDL must not run");
+        assert!(showed_read_only_profile_toast(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn a_read_only_profile_still_runs_a_read_from_the_editor(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) = open_connected_with_profile(cx, &driver, "SELECT 1", true);
+
+        run_query(window, &document);
+
+        assert_eq!(
+            executed(&driver),
+            vec![("SELECT 1".to_string(), ReadOnlyEnforcement::None)]
+        );
+        assert!(!showed_read_only_profile_toast(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn a_read_only_profile_refuses_before_asking_to_confirm_a_dangerous_query(
+        cx: &mut TestAppContext,
+    ) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) =
+            open_connected_with_profile(cx, &driver, "DELETE FROM users", true);
+
+        run_query(window, &document);
+
+        assert!(!has_pending_dangerous_query(window, &document));
+        assert!(executed(&driver).is_empty());
+        assert!(showed_read_only_profile_toast(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn a_read_only_profile_refuses_a_confirmed_dangerous_query(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) =
+            open_connected_with_profile(cx, &driver, "DELETE FROM users", true);
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.pending.dangerous_query = Some(super::super::PendingDangerousQuery {
+                    query: "DELETE FROM users".to_string(),
+                    kind: dbflux_core::DangerousQueryKind::DeleteNoWhere,
+                    in_new_tab: false,
+                    suppress: false,
+                });
+                document.confirm_dangerous_query(false, window, cx);
+            });
+        });
+        settle(window);
+
+        assert!(
+            executed(&driver).is_empty(),
+            "a confirmed write must not run"
+        );
+        assert!(showed_read_only_profile_toast(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn a_writable_profile_still_runs_a_write_from_the_editor(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, toasts, window) =
+            open_connected(cx, &driver, "UPDATE users SET name = 'a' WHERE id = 1");
+
+        run_query(window, &document);
+
+        assert_eq!(
+            executed(&driver),
+            vec![(
+                "UPDATE users SET name = 'a' WHERE id = 1".to_string(),
+                ReadOnlyEnforcement::None
+            )]
+        );
+        assert!(!showed_read_only_profile_toast(window, &toasts));
     }
 
     #[gpui::test]

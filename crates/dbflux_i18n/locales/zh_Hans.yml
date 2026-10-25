@@ -1413,6 +1413,7 @@ document:
         write_query_first: 请先编写查询才能在图表中打开
         connecting: "正在连接数据库 %{database}，请稍候…"
         redis_flush_disabled: FLUSHALL / FLUSHDB 已在设置中禁用
+        read_only_profile: "此连接的配置文件设为只读。此处只执行读取数据的语句。"
       result_title:
         query_failed: 查询失败
         script_failed: 脚本失败

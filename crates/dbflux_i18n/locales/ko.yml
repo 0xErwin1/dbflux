@@ -1413,6 +1413,7 @@ document:
         write_query_first: 차트로 열려면 먼저 쿼리를 작성하세요
         connecting: "데이터베이스 '%{database}'에 연결하는 중입니다. 잠시 기다려 주세요…"
         redis_flush_disabled: 설정에서 FLUSHALL / FLUSHDB가 비활성화되어 있습니다
+        read_only_profile: "이 연결의 프로필이 읽기 전용으로 설정되어 있습니다. 여기서는 데이터를 읽는 문만 실행됩니다."
       result_title:
         query_failed: 쿼리 실패
         script_failed: 스크립트 실패
