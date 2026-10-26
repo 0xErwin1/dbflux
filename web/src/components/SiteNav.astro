@@ -17,7 +17,6 @@ const { current, locale = localeFromPathname(Astro.url.pathname) } = Astro.props
 const home = siteUrl('', locale);
 
 const LINKS = [
-  { href: `${home}#drivers`, label: t(locale, 'nav.drivers'), icon: 'database', key: 'drivers' },
   { href: `${home}#keyboard`, label: t(locale, 'nav.keyboard'), icon: 'keyboard', key: 'keyboard' },
   {
     href: `${home}#governance`,
@@ -25,6 +24,7 @@ const LINKS = [
     icon: 'bot',
     key: 'governance',
   },
+  { href: `${home}#drivers`, label: t(locale, 'nav.drivers'), icon: 'database', key: 'drivers' },
   {
     href: siteUrl('compare/', locale),
     label: t(locale, 'nav.compare'),
