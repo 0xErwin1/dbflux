@@ -932,8 +932,8 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     });
 }
 
-/// Every forced and orderly exit path goes through here, so a new managed host kind is
-/// stopped on all of them.
+/// Every GUI exit path, forced or orderly, goes through here, so a new managed host kind is
+/// stopped on all of them. `dbflux mcp` does not use it and leaves its hosts running.
 fn shutdown_all_managed_hosts() {
     let stopped = shutdown_managed_hosts();
     if stopped > 0 {

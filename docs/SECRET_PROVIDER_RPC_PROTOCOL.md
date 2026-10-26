@@ -19,9 +19,13 @@ with the [Driver RPC Protocol](DRIVER_RPC_PROTOCOL.md).
 | Optional forwarding of auth-profile credentials | |
 
 The contract is read-only: it has no method to create, update or delete a secret, and DBFlux
-never sends a provider the value it asks for. The one secret DBFlux can send is the
-connection's resolved auth-profile credentials, and only to a provider whose manifest declares
-`auth_profile_dependency` as `optional` or `required` (see [Credential dependency](#credential-dependency)).
+never sends a provider the value it asks for. DBFlux does send two other secrets:
+
+- the RPC auth token, in `Hello` and, for a managed host, through
+  `DBFLUX_SECRET_PROVIDER_RPC_AUTH_TOKEN`, so the provider can reject other local processes;
+- the connection's resolved auth-profile credentials, only to a provider whose manifest declares
+  `auth_profile_dependency` as `optional` or `required` (see
+  [Credential dependency](#credential-dependency)).
 
 ## Quick path
 
