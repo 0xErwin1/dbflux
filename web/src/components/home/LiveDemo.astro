@@ -247,7 +247,9 @@ const steps = DEMO_STEPS.map((step, index) => ({
 
   /**
    * Reads the boxes the cursor and camera aim at, in app coordinates. The chart
-   * and audit layers are shown for the read so their targets have a layout.
+   * and audit layers are shown for the read so their targets have a layout, and
+   * the Builder is folded to its stylesheet state, because an open Builder
+   * narrows the document and shifts every target in it.
    */
   function measure(nodes: WindowNodes): DemoAnchors {
     const anchors: DemoAnchors = { ...DEFAULT_DEMO_ANCHORS };
@@ -257,8 +259,14 @@ const steps = DEMO_STEPS.map((step, index) => ({
 
     const chartHidden = nodes.chart?.hidden ?? true;
     const auditHidden = nodes.audit?.hidden ?? true;
+    const builderWidth = nodes.builder?.style.width ?? '';
+    const builderMargin = nodes.builder?.style.marginLeft ?? '';
     if (nodes.chart) nodes.chart.hidden = false;
     if (nodes.audit) nodes.audit.hidden = false;
+    if (nodes.builder) {
+      nodes.builder.style.width = '';
+      nodes.builder.style.marginLeft = '';
+    }
 
     for (const element of nodes.app.querySelectorAll<HTMLElement>('[data-ld-anchor]')) {
       const key = element.dataset.ldAnchor as DemoAnchorKey;
@@ -275,6 +283,10 @@ const steps = DEMO_STEPS.map((step, index) => ({
 
     if (nodes.chart) nodes.chart.hidden = chartHidden;
     if (nodes.audit) nodes.audit.hidden = auditHidden;
+    if (nodes.builder) {
+      nodes.builder.style.width = builderWidth;
+      nodes.builder.style.marginLeft = builderMargin;
+    }
     return anchors;
   }
 
