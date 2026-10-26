@@ -3602,12 +3602,14 @@ dependencies = [
  "async-trait",
  "dbflux_core",
  "dbflux_storage",
+ "futures",
  "interprocess",
  "log",
  "postcard",
  "secrecy",
  "serde",
  "serde_json",
+ "tokio",
  "uuid",
 ]
 

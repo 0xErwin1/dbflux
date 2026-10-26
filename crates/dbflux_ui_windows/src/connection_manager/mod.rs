@@ -516,12 +516,44 @@ pub struct ConnectionManagerWindow {
     pending: PendingActions,
 }
 
+fn value_source_selector(
+    id_prefix: &'static str,
+    secret_providers: &[(String, String)],
+    window: &mut Window,
+    cx: &mut Context<ConnectionManagerWindow>,
+) -> Entity<ValueSourceSelector> {
+    cx.new(|cx| {
+        let mut selector = ValueSourceSelector::new(id_prefix, window, cx);
+        selector.set_external_secret_providers(secret_providers.to_vec(), cx);
+        selector
+    })
+}
+
 impl ConnectionManagerWindow {
+    fn sync_secret_providers(&mut self, cx: &mut Context<Self>) {
+        let secret_providers = self.app_state.read(cx).secret_providers();
+
+        for selector in [
+            &self.form.host_value_source_selector,
+            &self.form.database_value_source_selector,
+            &self.form.user_value_source_selector,
+            &self.form.password_value_source_selector,
+            &self.access.ssm_instance_id_value_source_selector,
+            &self.access.ssm_region_value_source_selector,
+            &self.access.ssm_remote_port_value_source_selector,
+        ] {
+            selector.update(cx, |selector, cx| {
+                selector.set_external_secret_providers(secret_providers.clone(), cx);
+            });
+        }
+    }
+
     pub fn new(
         app_state: Entity<AppStateEntity>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let secret_providers = app_state.read(cx).secret_providers();
         let available_drivers: Vec<DriverInfo> = app_state
             .read(cx)
             .drivers()
@@ -558,13 +590,13 @@ impl ConnectionManagerWindow {
                 .masked(true)
         });
         let host_value_source_selector =
-            cx.new(|cx| ValueSourceSelector::new("cm-host", window, cx));
+            value_source_selector("cm-host", &secret_providers, window, cx);
         let database_value_source_selector =
-            cx.new(|cx| ValueSourceSelector::new("cm-database", window, cx));
+            value_source_selector("cm-database", &secret_providers, window, cx);
         let user_value_source_selector =
-            cx.new(|cx| ValueSourceSelector::new("cm-user", window, cx));
+            value_source_selector("cm-user", &secret_providers, window, cx);
         let password_value_source_selector =
-            cx.new(|cx| ValueSourceSelector::new("cm-password", window, cx));
+            value_source_selector("cm-password", &secret_providers, window, cx);
 
         let input_ssh_host =
             cx.new(|cx| InputState::new(window, cx).placeholder("bastion.example.com"));
@@ -632,17 +664,17 @@ impl ConnectionManagerWindow {
         let input_ssm_instance_id =
             cx.new(|cx| InputState::new(window, cx).placeholder("i-0123456789abcdef0"));
         let ssm_instance_id_value_source_selector =
-            cx.new(|cx| ValueSourceSelector::new("cm-ssm-instance-id", window, cx));
+            value_source_selector("cm-ssm-instance-id", &secret_providers, window, cx);
         let input_ssm_region = cx.new(|cx| InputState::new(window, cx).placeholder("us-east-1"));
         let ssm_region_value_source_selector =
-            cx.new(|cx| ValueSourceSelector::new("cm-ssm-region", window, cx));
+            value_source_selector("cm-ssm-region", &secret_providers, window, cx);
         let input_ssm_remote_port = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("5432")
                 .default_value("5432")
         });
         let ssm_remote_port_value_source_selector =
-            cx.new(|cx| ValueSourceSelector::new("cm-ssm-remote-port", window, cx));
+            value_source_selector("cm-ssm-remote-port", &secret_providers, window, cx);
         let ssm_auth_profile_dropdown = cx.new(|_cx| {
             Dropdown::new("ssm-auth-profile-dropdown").placeholder(dbflux_i18n::t!(
                 "connection_manager.placeholder.use_connection_auth_profile"
@@ -3404,6 +3436,8 @@ impl ConnectionManagerWindow {
     }
 
     fn handle_app_state_changed(&mut self, cx: &mut Context<Self>) {
+        self.sync_secret_providers(cx);
+
         let current_profiles = self.app_state.read(cx).list_auth_profiles();
         let current_ids = current_profiles
             .iter()

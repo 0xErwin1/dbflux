@@ -115,7 +115,7 @@ flowchart TB
 - 界面：`gpui`、`gpui-component`（Cargo.toml）。
 - 数据库：`tokio-postgres`（PostgreSQL）、`rusqlite`（SQLite）、`mysql`（MySQL/MariaDB）、`mongodb`（MongoDB）、`redis`（Redis）、`aws-sdk-dynamodb`（DynamoDB），以及基于 `reqwest` 的 HTTP（ClickHouse）（Cargo.toml）。
 - AWS 认证/集成：`aws-config`、`aws-sdk-sso`、`aws-sdk-ssooidc`、`aws-sdk-sts`、`aws-sdk-secretsmanager`、`aws-sdk-ssm`（`dbflux_aws`）。
-- IPC/RPC：`interprocess` 本地 Socket + `bincode` 消息分帧（`dbflux_ipc`、`dbflux_driver_ipc`、`dbflux_driver_host`）。
+- IPC/RPC：`interprocess` 本地 Socket + `postcard` 消息分帧（`dbflux_ipc`、`dbflux_driver_ipc`、`dbflux_driver_host`）。
 - SSH：经由 `dbflux_ssh` 使用 `ssh2`（crates/dbflux_ssh/src/lib.rs）。
 - 导出：经由 `dbflux_export` 使用 `csv` + `hex` + `base64` + `serde_json`（crates/dbflux_export/src/lib.rs）。
 - 序列化/配置：`serde`、`serde_json`、`dirs`（Cargo.toml）。
@@ -439,7 +439,7 @@ crates/
     src/envelope.rs         # ProtocolVersion + 应用/驱动程序协议常量
     src/protocol.rs         # 单实例应用控制消息
     src/driver_protocol.rs  # 驱动程序 RPC 请求/响应结构（DTO + 错误）
-    src/framing.rs          # 长度前缀的 bincode 传输分帧
+    src/framing.rs          # 长度前缀的 postcard 传输分帧
     src/socket.rs           # 跨平台 Socket 命名辅助函数
   dbflux_driver_ipc/        # 面向外部 RPC 服务的 DbDriver 适配器
     src/driver.rs           # IpcDriver + 受管宿主进程生命周期
@@ -1007,7 +1007,7 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 - Amazon S3：`aws-sdk-s3` 驱动程序，支持 AWS 配置/SSO 或静态凭据，对兼容 S3 的端点（Cloudflare R2、MinIO）支持端点覆盖与路径风格寻址，并支持存储桶/对象 CRUD、预签名 URL 与复制/版本（crates/dbflux_driver_s3/src/driver.rs）。
 - AWS Secrets：`aws-sdk-secretsmanager` 与 `aws-sdk-ssm` 驱动程序，支持 AWS 配置/SSO 或静态凭据与端点覆盖、分页的密钥与参数列表、详情以及显式读取值（crates/dbflux_driver_aws_secrets/src/driver/mod.rs）。
 - AWS 认证栈：`dbflux_aws` 提供 AWS SSO/共享/静态认证提供程序、SSO 登录编排、账户/角色发现，以及新保存认证配置对 `~/.aws/config` 的回写。
-- 本地 IPC/RPC：`interprocess` Socket + 带版本号的消息信封，用于应用控制与 RPC 服务通信（`crates/dbflux_ipc/`、`crates/dbflux_driver_ipc/`、`crates/dbflux_driver_host/`）。`dbflux_app::rpc_services` 发现已持久化的服务描述符，把 `RpcServiceKind::Driver` 适配为运行时 `DbDriver`，并把 `RpcServiceKind::AuthProvider` 接入 `RpcAuthProvider`（它实现 `DynAuthProvider`）。保持 `rpc:<socket_id>` 的兼容性。认证提供程序的 IPC 协议为 v1.2：新增 `FetchDynamicOptions` / `DynamicOptions` 变体与 `secret_dependency_opt_in` 清单标志。认证令牌由 `dbflux_ipc/src/auth.rs` 管理。
+- 本地 IPC/RPC：`interprocess` Socket + 带版本号的消息信封，用于应用控制与 RPC 服务通信（`crates/dbflux_ipc/`、`crates/dbflux_driver_ipc/`、`crates/dbflux_driver_host/`）。`dbflux_app::rpc_services` 发现已持久化的服务描述符，把 `RpcServiceKind::Driver` 适配为运行时 `DbDriver`，并把 `RpcServiceKind::AuthProvider` 接入 `RpcAuthProvider`（它实现 `DynAuthProvider`），并把 `RpcServiceKind::SecretProvider` 接入 `RpcSecretProvider`（它实现 `DynSecretProvider`；参见 [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md)）。保持 `rpc:<socket_id>` 的兼容性。认证提供程序的 IPC 协议为 v1.2：新增 `FetchDynamicOptions` / `DynamicOptions` 变体与 `secret_dependency_opt_in` 清单标志。认证令牌由 `dbflux_ipc/src/auth.rs` 管理。
 - 代理：经由 `dbflux_tunnel_core::Tunnel` 的 SOCKS5/HTTP CONNECT 隧道（crates/dbflux_proxy/src/lib.rs）。
 - SSH：`ssh2` 会话，经由 `dbflux_tunnel_core::Tunnel` 做本地 TCP 转发（crates/dbflux_ssh/src/lib.rs）。
 - 操作系统密钥环：为密码、SSH 口令与代理凭据提供可选的密钥存储（crates/dbflux_core/src/storage/secrets.rs）。
@@ -1023,7 +1023,7 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
   - `cfg_ssh_tunnel_profiles`、`cfg_proxy_profiles`
   - `cfg_hooks`、`cfg_hook_bindings`
   - `cfg_script_roots`（在原位置列出的外部脚本文件夹；删除一行绝不会触碰该文件夹）
-  - `cfg_services`、`cfg_service_args`、`cfg_service_env`（RPC 服务描述符；`cfg_services.service_kind` 记录 `driver` 与 `auth_provider`）
+  - `cfg_services`、`cfg_service_args`、`cfg_service_env`（RPC 服务描述符；`cfg_services.service_kind` 记录 `driver`、`auth_provider` 或 `secret_provider`）
   - `cfg_governance_*` 表（角色、策略、受信客户端）
   - `cfg_drivers`（各驱动程序的设置覆盖项）
   - `cfg_folders`（连接树组织）

@@ -4903,6 +4903,7 @@ settings:
     kind:
       driver: Driver
       auth_provider: Provedor de autenticação
+      secret_provider: Provedor de segredos
     action:
       add_variable: "Adicionar variável"
       add_argument: "Adicionar argumento"

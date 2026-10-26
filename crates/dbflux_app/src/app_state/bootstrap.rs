@@ -79,8 +79,10 @@ use crate::config_loader::{EditableGlobalHook, HookLoadDiagnostic, ProtectedHook
 use crate::rpc_services::external_audit::{ExternalAuditSink, NoOpContextProvider};
 use crate::rpc_services::{
     AuthProviderServiceAdaptation, DriverServiceAdaptation, ExternalDriverDiagnostic,
-    RpcServiceDiscovery, adapt_auth_provider_service, adapt_driver_service, discover_services,
+    RpcServiceDiscovery, SecretProviderServiceAdaptation, adapt_auth_provider_service,
+    adapt_driver_service, adapt_secret_provider_service, discover_services,
 };
+use crate::secret_provider_registry::SecretProviderRegistry;
 
 #[cfg(test)]
 use crate::rpc_services::{
@@ -211,6 +213,7 @@ impl AppState {
             );
         }
 
+        let secret_provider_registry = Self::build_secret_provider_registry(services.clone());
         let auth_provider_registry = Self::build_auth_provider_registry(services, audit_emitter);
 
         let facade = Self::build_session_facade(
@@ -256,6 +259,7 @@ impl AppState {
             protected_hook_rows,
             detached_hook_tasks: HashMap::new(),
             auth_provider_registry,
+            secret_provider_registry,
             history_manager,
             scripts_directory,
             storage_runtime,
@@ -377,6 +381,19 @@ impl AppState {
         }
 
         auth_provider_registry
+    }
+
+    /// Builds the registry of external secret providers declared by `services`.
+    /// Built-in AWS secret providers are registered per connection by their auth
+    /// provider, so they are not part of this registry.
+    fn build_secret_provider_registry(services: Vec<ServiceConfig>) -> SecretProviderRegistry {
+        let mut secret_provider_registry = SecretProviderRegistry::new();
+
+        if !services.is_empty() {
+            Self::launch_rpc_secret_providers(&mut secret_provider_registry, services);
+        }
+
+        secret_provider_registry
     }
 
     /// Builds the `SessionFacade` from the profile/ssh/proxy/auth managers and
@@ -1068,6 +1085,65 @@ impl AppState {
                 | AuthProviderServiceAdaptation::ProbeFailed { diagnostic } => {
                     log::warn!(
                         "Skipping RPC auth-provider service '{}': {}",
+                        diagnostic.socket_id,
+                        diagnostic.summary
+                    );
+                }
+            }
+        }
+    }
+
+    fn launch_rpc_secret_providers(
+        registry: &mut SecretProviderRegistry,
+        services: Vec<ServiceConfig>,
+    ) {
+        for discovery in discover_services(services) {
+            let descriptor = match discovery {
+                RpcServiceDiscovery::Descriptor(descriptor) => descriptor,
+                RpcServiceDiscovery::InvalidConfig { diagnostic } => {
+                    log::warn!(
+                        "Skipping RPC secret-provider service '{}': invalid launch configuration: {}",
+                        diagnostic.socket_id,
+                        diagnostic.summary
+                    );
+                    continue;
+                }
+            };
+
+            match adapt_secret_provider_service(descriptor, |provider_id| {
+                registry.contains(provider_id)
+            }) {
+                SecretProviderServiceAdaptation::Registered {
+                    provider_id,
+                    service,
+                } => {
+                    log::info!("Registered external RPC secret provider '{}'", provider_id);
+                    registry.register(service);
+                }
+                SecretProviderServiceAdaptation::SkippedDisabled { socket_id } => {
+                    log::info!("Skipping disabled secret-provider service '{}'", socket_id);
+                }
+                SecretProviderServiceAdaptation::SkippedNonSecretProvider { socket_id, kind } => {
+                    log::info!(
+                        "Deferring non-secret RPC service '{}' of kind {:?}",
+                        socket_id,
+                        kind
+                    );
+                }
+                SecretProviderServiceAdaptation::SkippedDuplicate {
+                    socket_id,
+                    provider_id,
+                } => {
+                    log::warn!(
+                        "Skipping RPC secret-provider service '{}': provider id '{}' already exists",
+                        socket_id,
+                        provider_id
+                    );
+                }
+                SecretProviderServiceAdaptation::Incompatible { diagnostic }
+                | SecretProviderServiceAdaptation::ProbeFailed { diagnostic } => {
+                    log::warn!(
+                        "Skipping RPC secret-provider service '{}': {}",
                         diagnostic.socket_id,
                         diagnostic.summary
                     );
