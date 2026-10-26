@@ -140,7 +140,7 @@ flowchart TB
   (DynamoDB), y HTTP vía `reqwest` (ClickHouse) (Cargo.toml).
 - Auth/integración AWS: `aws-config`, `aws-sdk-sso`, `aws-sdk-ssooidc`,
   `aws-sdk-sts`, `aws-sdk-secretsmanager`, `aws-sdk-ssm` (`dbflux_aws`).
-- IPC/RPC: sockets locales `interprocess` + framing de mensajes `bincode`
+- IPC/RPC: sockets locales `interprocess` + framing de mensajes `postcard`
   (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
 - SSH: `ssh2` vía `dbflux_ssh` (crates/dbflux_ssh/src/lib.rs).
 - Export: `csv` + `hex` + `base64` + `serde_json` vía `dbflux_export`
@@ -466,7 +466,7 @@ crates/
     src/envelope.rs         # ProtocolVersion + app/driver protocol constants
     src/protocol.rs         # Single-instance app-control messages
     src/driver_protocol.rs  # Driver RPC request/response schema (DTOs + errors)
-    src/framing.rs          # Length-prefixed bincode transport framing
+    src/framing.rs          # Length-prefixed postcard transport framing
     src/socket.rs           # Cross-platform socket naming helpers
   dbflux_driver_ipc/        # DbDriver adapter for external RPC services
     src/driver.rs           # IpcDriver + managed host lifecycle

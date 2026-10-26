@@ -58,7 +58,7 @@ DBFlux usa sockets locales vía `interprocess`:
 Los mensajes se enmarcan como:
 
 - longitud little-endian de 4 bytes (`u32`)
-- payload en bincode
+- payload en postcard
 
 Tamaño máximo de mensaje: `16 MiB`.
 
