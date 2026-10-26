@@ -372,6 +372,12 @@ const steps = DEMO_STEPS.map((step, index) => ({
     let firstSync = true;
     let dispose: (() => void) | undefined;
     let jump: ((progress: number) => void) | undefined;
+    /**
+     * Moves the reader past the pinned demo in one step when a jump would
+     * otherwise scroll through it, then runs `finish` from the far edge.
+     * Returns false when the path does not cross the demo.
+     */
+    let cross: ((destination: number, finish: () => void) => boolean) | undefined;
 
     const markStep = (time: number) => {
       const current = demoStepAt(time);
@@ -415,12 +421,38 @@ const steps = DEMO_STEPS.map((step, index) => ({
       if (url.origin !== window.location.origin || url.pathname !== window.location.pathname)
         return;
       const target = demoStepTarget(url.hash);
-      if (!target) return;
+      if (target) {
+        event.preventDefault();
+        window.history.pushState(null, '', url.hash);
+        jump(target.progress);
+        return;
+      }
+
+      const element = url.hash
+        ? document.getElementById(decodeURIComponent(url.hash.slice(1)))
+        : null;
+      if (!element) return;
+      const destination = element.getBoundingClientRect().top + window.scrollY;
+      const crossed = cross?.(destination, () =>
+        element.scrollIntoView({ block: 'start', behavior: 'smooth' }),
+      );
+      if (!crossed) return;
       event.preventDefault();
       window.history.pushState(null, '', url.hash);
-      jump(target.progress);
     };
     document.addEventListener('click', onLinkClick);
+
+    // Back to top scrolls smoothly through the whole page; across the demo it jumps instead.
+    const onBackToTop = (event: MouseEvent) => {
+      const button =
+        event.target instanceof Element ? event.target.closest('[data-back-to-top]') : null;
+      if (!button) return;
+      const crossed = cross?.(0, () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+      if (!crossed) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    window.addEventListener('click', onBackToTop, { capture: true });
 
     const sync = async () => {
       const current = ++revision;
@@ -511,6 +543,21 @@ const steps = DEMO_STEPS.map((step, index) => ({
           settle(destination);
         };
 
+        cross = (destination, finish) => {
+          const from = window.scrollY;
+          const low = Math.min(from, destination);
+          const high = Math.max(from, destination);
+          if (high <= trigger.start || low >= trigger.end) return false;
+          const forward = destination > from;
+          window.scrollTo({
+            top: forward ? trigger.end + 1 : Math.max(0, trigger.start - 1),
+            behavior: 'instant',
+          });
+          settle(forward ? 1 : 0);
+          requestAnimationFrame(finish);
+          return true;
+        };
+
         const alignInitialHash = () => {
           const target = demoStepTarget(window.location.hash);
           if (target) jump?.(target.progress);
@@ -521,6 +568,7 @@ const steps = DEMO_STEPS.map((step, index) => ({
           if (tick) cancelAnimationFrame(tick);
           trigger.kill();
           jump = undefined;
+          cross = undefined;
           root.removeAttribute('data-ld-enhanced');
           stageWindow.hidden = true;
           steps.forEach((step) => step.removeAttribute('data-current'));
