@@ -794,6 +794,15 @@ fn value_ref_to_dto(
             key.to_string(),
             env_key.clone(),
         ),
+        ValueRef::Dotenv {
+            path,
+            key: dotenv_key,
+        } => ConnectionProfileValueRefDto::new_dotenv(
+            profile_id.to_string(),
+            key.to_string(),
+            path.clone(),
+            dotenv_key.clone(),
+        ),
         ValueRef::Secret {
             provider,
             locator,
@@ -1613,6 +1622,12 @@ fn load_profiles(
                         dbflux_storage::repositories::connection_profile_value_refs::RefKind::Env => {
                             ValueRef::Env {
                                 key: vr.env_key.unwrap_or(vr.ref_value),
+                            }
+                        }
+                        dbflux_storage::repositories::connection_profile_value_refs::RefKind::Dotenv => {
+                            ValueRef::Dotenv {
+                                path: vr.ref_value,
+                                key: vr.env_key?,
                             }
                         }
                         dbflux_storage::repositories::connection_profile_value_refs::RefKind::Secret => {
@@ -2443,6 +2458,38 @@ mod tests {
 
         assert!(find(locked.id).read_only_flag);
         assert!(!find(writable.id).read_only_flag);
+    }
+
+    #[test]
+    fn env_and_dotenv_value_refs_round_trip() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut profile = ConnectionProfile::new("sourced", DbConfig::default_postgres());
+        profile.value_refs.insert(
+            "password".to_string(),
+            dbflux_core::ValueRef::dotenv("~/.config/dbflux/prod.env", "DB_PASSWORD"),
+        );
+        profile
+            .value_refs
+            .insert("user".to_string(), dbflux_core::ValueRef::env("DB_USER"));
+
+        save_profiles(&runtime, std::slice::from_ref(&profile)).expect("save sourced profile");
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let reloaded = loaded
+            .iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("reloaded profile");
+
+        assert!(matches!(
+            reloaded.value_refs.get("password"),
+            Some(dbflux_core::ValueRef::Dotenv { path, key })
+                if path == "~/.config/dbflux/prod.env" && key == "DB_PASSWORD"
+        ));
+        assert!(matches!(
+            reloaded.value_refs.get("user"),
+            Some(dbflux_core::ValueRef::Env { key }) if key == "DB_USER"
+        ));
     }
 
     #[test]

@@ -15,6 +15,7 @@ use crate::error::StorageError;
 pub enum RefKind {
     Literal,
     Env,
+    Dotenv,
     Secret,
     Param,
     Auth,
@@ -25,6 +26,7 @@ impl RefKind {
         match self {
             RefKind::Literal => "literal",
             RefKind::Env => "env",
+            RefKind::Dotenv => "dotenv",
             RefKind::Secret => "secret",
             RefKind::Param => "param",
             RefKind::Auth => "auth",
@@ -35,6 +37,7 @@ impl RefKind {
         match s {
             "literal" => Some(RefKind::Literal),
             "env" => Some(RefKind::Env),
+            "dotenv" => Some(RefKind::Dotenv),
             "secret" => Some(RefKind::Secret),
             "param" => Some(RefKind::Param),
             "auth" => Some(RefKind::Auth),
@@ -282,6 +285,25 @@ impl ConnectionProfileValueRefDto {
             ref_json_key: None,
             literal_value: None,
             env_key: Some(env_key),
+            secret_locator: None,
+            param_name: None,
+            auth_field: None,
+        }
+    }
+
+    /// A dotenv ref stores the file path in `ref_value` and the key in
+    /// `env_key`, so it needs no column of its own.
+    pub fn new_dotenv(profile_id: String, ref_key: String, path: String, key: String) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            profile_id,
+            ref_key,
+            ref_kind: "dotenv".to_string(),
+            ref_value: path,
+            ref_provider: None,
+            ref_json_key: None,
+            literal_value: None,
+            env_key: Some(key),
             secret_locator: None,
             param_name: None,
             auth_field: None,

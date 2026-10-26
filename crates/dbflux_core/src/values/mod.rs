@@ -1,4 +1,5 @@
 mod cache;
+mod dotenv;
 mod resolver;
 
 use std::fmt;
@@ -11,6 +12,9 @@ use crate::DbError;
 use crate::auth::ResolvedCredentials;
 
 pub use cache::{CacheKey as ValueCacheKey, CachedValue, ValueCache};
+pub use dotenv::{
+    MAX_ENTRIES as DOTENV_MAX_ENTRIES, MAX_FILE_BYTES as DOTENV_MAX_FILE_BYTES, read_dotenv_value,
+};
 pub use resolver::CompositeValueResolver;
 
 /// Structured error from a value provider (Secrets Manager, SSM, etc.)
@@ -144,6 +148,11 @@ pub enum ValueRef {
     Env {
         key: String,
     },
+    /// One key of a user-owned dotenv file, read each time the value is used.
+    Dotenv {
+        path: String,
+        key: String,
+    },
     Secret {
         provider: String,
         locator: String,
@@ -170,6 +179,13 @@ impl ValueRef {
 
     pub fn env(key: impl Into<String>) -> Self {
         Self::Env { key: key.into() }
+    }
+
+    pub fn dotenv(path: impl Into<String>, key: impl Into<String>) -> Self {
+        Self::Dotenv {
+            path: path.into(),
+            key: key.into(),
+        }
     }
 
     pub fn secret(
@@ -263,6 +279,10 @@ pub enum ValueOrigin {
     EnvVar {
         name: String,
     },
+    DotenvFile {
+        path: String,
+        key: String,
+    },
     SecretProvider {
         provider: String,
         locator_summary: String,
@@ -332,6 +352,19 @@ mod tests {
         let fv: FieldValue = serde_json::from_str(r#""hello""#).expect("deserialize string");
         assert_eq!(fv.0.try_literal(), Some("hello"));
         assert!(!fv.0.needs_resolution());
+    }
+
+    #[test]
+    fn dotenv_ref_round_trips_through_serde() {
+        let json = r#"{"source":"dotenv","path":"~/.config/app.env","key":"DB_PASSWORD"}"#;
+        let fv: FieldValue = serde_json::from_str(json).expect("deserialize dotenv ref");
+
+        assert!(matches!(
+            &fv.0,
+            ValueRef::Dotenv { path, key } if path == "~/.config/app.env" && key == "DB_PASSWORD"
+        ));
+        assert!(fv.0.needs_resolution());
+        assert_eq!(serde_json::to_string(&fv.0).expect("serialize"), json);
     }
 
     #[test]

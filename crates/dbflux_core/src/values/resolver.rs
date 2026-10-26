@@ -58,11 +58,30 @@ impl CompositeValueResolver {
     /// [`ValueRef::Env`] ref.
     ///
     /// Shared with the synchronous switch-database path so both consumers use
-    /// the same lookup and the same "Environment variable ... not set" error.
+    /// the same lookup and the same errors. An unset, empty or non-Unicode
+    /// variable fails with its own message, and no message carries a value.
     pub(crate) fn resolve_env_ref(key: &str) -> Result<String, DbError> {
-        std::env::var(key).map_err(|_| {
-            DbError::value_resolution_failed(format!("Environment variable '{}' not set", key))
-        })
+        match std::env::var(key) {
+            Ok(value) if value.is_empty() => Err(DbError::value_resolution_failed(format!(
+                "Environment variable '{}' is empty",
+                key
+            ))),
+            Ok(value) => Ok(value),
+            Err(std::env::VarError::NotPresent) => Err(DbError::value_resolution_failed(format!(
+                "Environment variable '{}' not set",
+                key
+            ))),
+            Err(std::env::VarError::NotUnicode(_)) => Err(DbError::value_resolution_failed(
+                format!("Environment variable '{}' is not valid Unicode", key),
+            )),
+        }
+    }
+
+    /// Synchronously reads the dotenv key behind a [`ValueRef::Dotenv`] ref.
+    ///
+    /// Shared with the synchronous switch-database path.
+    pub(crate) fn resolve_dotenv_ref(path: &str, key: &str) -> Result<String, DbError> {
+        crate::values::read_dotenv_value(path, key).map(|value| value.expose_secret().to_string())
     }
 
     /// Resolve a single `ValueRef` to a concrete value.
@@ -82,6 +101,18 @@ impl CompositeValueResolver {
                 Ok(ResolvedValue::new(
                     value,
                     ValueOrigin::EnvVar { name: key.clone() },
+                ))
+            }
+
+            ValueRef::Dotenv { path, key } => {
+                let value = Self::resolve_dotenv_ref(path, key)?;
+
+                Ok(ResolvedValue::new(
+                    value,
+                    ValueOrigin::DotenvFile {
+                        path: path.clone(),
+                        key: key.clone(),
+                    },
                 ))
             }
 
@@ -402,6 +433,98 @@ mod tests {
             .resolve(&ValueRef::env("NONEXISTENT_VAR_12345"), &empty_ctx())
             .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn missing_env_var_error_names_the_variable() {
+        let resolver = test_resolver();
+        let Err(DbError::ValueResolutionFailed(message)) = resolver
+            .resolve(&ValueRef::env("NONEXISTENT_VAR_12345"), &empty_ctx())
+            .await
+        else {
+            panic!("missing variable must fail with a value resolution error");
+        };
+        assert_eq!(
+            message,
+            "Environment variable 'NONEXISTENT_VAR_12345' not set"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_env_var_fails_with_its_own_error() {
+        if crate::isolated_env::run_in_isolated_fixture(
+            "values::resolver::tests::empty_env_var_fails_with_its_own_error",
+            &[("TEST_DBFLUX_EMPTY_VAR", std::ffi::OsStr::new(""))],
+        ) {
+            return;
+        }
+        let resolver = test_resolver();
+        let Err(DbError::ValueResolutionFailed(message)) = resolver
+            .resolve(&ValueRef::env("TEST_DBFLUX_EMPTY_VAR"), &empty_ctx())
+            .await
+        else {
+            panic!("empty variable must fail with a value resolution error");
+        };
+        assert_eq!(
+            message,
+            "Environment variable 'TEST_DBFLUX_EMPTY_VAR' is empty"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn non_unicode_env_var_fails_without_echoing_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+
+        if crate::isolated_env::run_in_isolated_fixture(
+            "values::resolver::tests::non_unicode_env_var_fails_without_echoing_bytes",
+            &[(
+                "TEST_DBFLUX_BINARY_VAR",
+                std::ffi::OsStr::from_bytes(&[b'p', 0xff, b'w']),
+            )],
+        ) {
+            return;
+        }
+        let resolver = test_resolver();
+        let Err(DbError::ValueResolutionFailed(message)) = resolver
+            .resolve(&ValueRef::env("TEST_DBFLUX_BINARY_VAR"), &empty_ctx())
+            .await
+        else {
+            panic!("non-Unicode variable must fail with a value resolution error");
+        };
+        assert_eq!(
+            message,
+            "Environment variable 'TEST_DBFLUX_BINARY_VAR' is not valid Unicode"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_dotenv_reads_the_file_on_each_use() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("app.env");
+        let write = |content: &str| {
+            std::fs::write(&path, content).expect("write dotenv");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                    .expect("restrict dotenv");
+            }
+        };
+        let value_ref = ValueRef::dotenv(path.to_string_lossy(), "TOKEN");
+        let resolver = test_resolver();
+
+        write("TOKEN=first\n");
+        let first = resolver.resolve(&value_ref, &empty_ctx()).await.unwrap();
+        assert_eq!(first.expose_secret(), "first");
+        assert!(matches!(
+            first.origin(),
+            ValueOrigin::DotenvFile { key, .. } if key == "TOKEN"
+        ));
+
+        write("TOKEN=second\n");
+        let second = resolver.resolve(&value_ref, &empty_ctx()).await.unwrap();
+        assert_eq!(second.expose_secret(), "second");
     }
 
     #[tokio::test]
