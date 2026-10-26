@@ -799,6 +799,7 @@ pub enum RpcServiceKind {
     #[default]
     Driver,
     AuthProvider,
+    SecretProvider,
 }
 
 impl RpcServiceKind {
@@ -806,6 +807,9 @@ impl RpcServiceKind {
         match self {
             RpcServiceKind::Driver => ServiceRpcApiContract::new("driver_rpc", 1, 1),
             RpcServiceKind::AuthProvider => ServiceRpcApiContract::new("auth_provider_rpc", 1, 2),
+            RpcServiceKind::SecretProvider => {
+                ServiceRpcApiContract::new("secret_provider_rpc", 1, 0)
+            }
         }
     }
 }
@@ -1350,6 +1354,24 @@ mod tests {
         assert_eq!(
             restored.api_contract,
             Some(ServiceRpcApiContract::new("auth_provider_rpc", 1, 2))
+        );
+    }
+
+    #[test]
+    fn secret_provider_kind_serializes_as_snake_case() {
+        let json = serde_json::to_value(RpcServiceKind::SecretProvider).unwrap();
+
+        assert_eq!(json, serde_json::json!("secret_provider"));
+
+        let restored: RpcServiceKind = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, RpcServiceKind::SecretProvider);
+    }
+
+    #[test]
+    fn secret_provider_kind_defaults_to_secret_provider_contract() {
+        assert_eq!(
+            RpcServiceKind::SecretProvider.default_api_contract(),
+            ServiceRpcApiContract::new("secret_provider_rpc", 1, 0)
         );
     }
 

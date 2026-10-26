@@ -1345,6 +1345,7 @@ fn rpc_service_kind_to_storage(kind: RpcServiceKind) -> &'static str {
     match kind {
         RpcServiceKind::Driver => "driver",
         RpcServiceKind::AuthProvider => "auth_provider",
+        RpcServiceKind::SecretProvider => "secret_provider",
     }
 }
 
@@ -3145,6 +3146,39 @@ mod tests {
         assert_eq!(loaded.services.len(), 1);
         assert_eq!(loaded.services[0].socket_id, "legacy-socket");
         assert_eq!(loaded.services[0].kind, RpcServiceKind::Driver);
+    }
+
+    #[test]
+    fn save_services_persists_secret_provider_kind_for_roundtrip() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let services = vec![ServiceConfig {
+            socket_id: "secret-socket".to_string(),
+            enabled: true,
+            command: Some("dbflux-secret-host".to_string()),
+            args: Vec::new(),
+            env: std::collections::HashMap::new(),
+            startup_timeout_ms: None,
+            kind: RpcServiceKind::SecretProvider,
+            api_contract: None,
+        }];
+
+        save_services(&runtime, &services).expect("save services");
+
+        let dto = runtime
+            .services()
+            .get("secret-socket")
+            .expect("load service dto")
+            .expect("service row");
+
+        assert_eq!(dto.service_kind, "secret_provider");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.services.len(), 1);
+        assert_eq!(loaded.services[0].kind, RpcServiceKind::SecretProvider);
+        assert_eq!(
+            loaded.services[0].resolved_api_contract(),
+            dbflux_core::ServiceRpcApiContract::new("secret_provider_rpc", 1, 0)
+        );
     }
 
     #[test]
