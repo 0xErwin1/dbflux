@@ -846,7 +846,7 @@ fn sql_editor_diagnostics(query: &str) -> Vec<EditorDiagnostic> {
         return vec![];
     }
 
-    let parse_source = mask_on_commit_clauses(query);
+    let parse_source = mask_unparsed_clauses(query);
 
     let Some(tree) = parser.parse(parse_source.as_ref(), None) else {
         return vec![];
@@ -926,15 +926,33 @@ fn should_skip_sql_parse_diagnostics(query: &str) -> bool {
 
 const ON_COMMIT_ACTIONS: [&[&str]; 3] = [&["DROP"], &["DELETE", "ROWS"], &["PRESERVE", "ROWS"]];
 
-/// Blank out PostgreSQL `ON COMMIT { DROP | DELETE ROWS | PRESERVE ROWS }`
-/// clauses before the query reaches the tree-sitter grammar.
+/// Clauses that can follow a bare `GROUP BY ALL`.
+const CLAUSES_AFTER_GROUP_BY: [&str; 10] = [
+    "HAVING",
+    "WINDOW",
+    "QUALIFY",
+    "ORDER",
+    "LIMIT",
+    "OFFSET",
+    "FETCH",
+    "UNION",
+    "EXCEPT",
+    "INTERSECT",
+];
+
+/// Rewrite clauses the tree-sitter grammar cannot parse before the query
+/// reaches it:
 ///
-/// The bundled grammar has no rule for the clause and reports it as an ERROR
-/// node, even though the rest of the `CREATE TEMP TABLE` statement parses.
-/// Only the clause is replaced, byte for byte, with spaces (newlines are
-/// kept), so every other error keeps its row and column and the rest of the
-/// script is still validated. Text inside quoted strings, quoted identifiers,
-/// and comments is never touched.
+/// - PostgreSQL `ON COMMIT { DROP | DELETE ROWS | PRESERVE ROWS }` has no rule
+///   in the grammar and is blanked out with spaces.
+/// - DuckDB's bare `GROUP BY ALL` is read by the grammar as the `ALL` set
+///   quantifier, which then takes the next clause keyword as its grouping
+///   expression. `ALL` becomes the positional `1`, which parses the same way.
+///
+/// Rewrites keep every byte offset (newlines are kept), so every other error
+/// keeps its row and column and the rest of the script is still validated.
+/// Text inside quoted strings, quoted identifiers, and comments is never
+/// touched.
 ///
 /// Bounds proof: `bytes[index]` is read under `while index < bytes.len()` and
 /// `bytes[index - 1]` behind `index == 0 ||` short-circuit; the `buffer`
@@ -944,7 +962,7 @@ const ON_COMMIT_ACTIONS: [&[&str]; 3] = [&["DROP"], &["DELETE", "ROWS"], &["PRES
     clippy::indexing_slicing,
     reason = "bytes[index] under `while index < bytes.len()` with index - 1 behind the index == 0 short-circuit; buffer[index..end] bounded by on_commit_clause_end, whose returned positions are verified via bytes.get(..)"
 )]
-fn mask_on_commit_clauses(query: &str) -> Cow<'_, str> {
+fn mask_unparsed_clauses(query: &str) -> Cow<'_, str> {
     let bytes = query.as_bytes();
     let mut masked: Option<Vec<u8>> = None;
     let mut index = 0;
@@ -984,10 +1002,20 @@ fn mask_on_commit_clauses(query: &str) -> Cow<'_, str> {
             continue;
         }
 
+        if let Some(all_start) = starts_word
+            .then(|| bare_group_by_all_start(bytes, index))
+            .flatten()
+        {
+            let buffer = masked.get_or_insert_with(|| bytes.to_vec());
+            buffer[all_start..all_start + 3].copy_from_slice(b"1  ");
+            index = all_start + 3;
+            continue;
+        }
+
         index += 1;
     }
 
-    // Only ASCII keyword and whitespace bytes were replaced with ASCII spaces,
+    // Only ASCII keyword and whitespace bytes were replaced with ASCII bytes,
     // so the buffer is still valid UTF-8.
     match masked.map(String::from_utf8) {
         Some(Ok(text)) => Cow::Owned(text),
@@ -1003,6 +1031,19 @@ fn on_commit_clause_end(bytes: &[u8], start: usize) -> Option<usize> {
     ON_COMMIT_ACTIONS
         .iter()
         .find_map(|action| match_words(bytes, action_start, action))
+}
+
+/// Returns where `ALL` starts in a `GROUP BY ALL` starting at `start` when
+/// another clause, not a grouping expression, follows it. Comments may sit
+/// between `ALL` and that clause.
+fn bare_group_by_all_start(bytes: &[u8], start: usize) -> Option<usize> {
+    let after_all = match_words(bytes, start, &["GROUP", "BY", "ALL"])?;
+    let next_word = skip_whitespace_and_comments(bytes, after_all);
+
+    CLAUSES_AFTER_GROUP_BY
+        .iter()
+        .any(|clause| match_words(bytes, next_word, &[clause]).is_some())
+        .then_some(after_all - 3)
 }
 
 /// Matches `words` case-insensitively, separated by whitespace, and returns
@@ -1041,6 +1082,24 @@ fn skip_separator(bytes: &[u8], start: usize) -> Option<usize> {
         .count();
 
     (whitespace > 0).then_some(start + whitespace)
+}
+
+/// Skips whitespace, `--` line comments and `/* */` block comments.
+fn skip_whitespace_and_comments(bytes: &[u8], start: usize) -> usize {
+    let mut index = start;
+
+    loop {
+        match (bytes.get(index), bytes.get(index + 1)) {
+            (Some(byte), _) if byte.is_ascii_whitespace() => index += 1,
+            (Some(b'-'), Some(b'-')) => {
+                index = find_from(bytes, index, b"\n").map_or(bytes.len(), |end| end + 1);
+            }
+            (Some(b'/'), Some(b'*')) => {
+                index = find_from(bytes, index + 2, b"*/").map_or(bytes.len(), |end| end + 2);
+            }
+            _ => return index,
+        }
+    }
 }
 
 /// Returns the position after the quoted run opened at `start`. A doubled
@@ -1876,7 +1935,7 @@ mod tests {
     #[test]
     fn mask_on_commit_clauses_preserves_length_and_newlines() {
         let query = "CREATE TEMP TABLE t ON\nCOMMIT DROP AS SELECT 1";
-        let masked = mask_on_commit_clauses(query);
+        let masked = mask_unparsed_clauses(query);
 
         assert_eq!(masked.len(), query.len());
         assert_eq!(masked, "CREATE TEMP TABLE t   \n            AS SELECT 1");
@@ -1895,7 +1954,51 @@ mod tests {
 
         for query in queries {
             assert!(
-                matches!(mask_on_commit_clauses(query), Cow::Borrowed(_)),
+                matches!(mask_unparsed_clauses(query), Cow::Borrowed(_)),
+                "{query:?} was masked"
+            );
+        }
+    }
+
+    #[test]
+    fn duckdb_group_by_all_before_another_clause_has_no_diagnostics() {
+        let queries = [
+            "SELECT a, count(*) FROM t GROUP BY ALL ORDER BY a, b;",
+            "select a, count(*) from t\ngroup by all\norder by a;",
+            "SELECT a FROM t GROUP BY ALL HAVING count(*) > 1;",
+            "SELECT a FROM t GROUP BY ALL LIMIT 5;",
+            "SELECT a FROM t GROUP BY ALL;",
+            "SELECT a FROM t GROUP BY ALL a, b ORDER BY a;",
+            "SELECT a FROM t GROUP BY ALL -- note\nORDER BY a;",
+            "SELECT a FROM t GROUP BY ALL /* note */ ORDER BY a;",
+            "SELECT a FROM t GROUP BY ALL/* note */ORDER BY a;",
+            "(SELECT a FROM t GROUP BY ALL)",
+            "SELECT * FROM (SELECT a FROM t GROUP BY ALL) s ORDER BY a;",
+        ];
+
+        for query in queries {
+            assert!(
+                sql_editor_diagnostics(query).is_empty(),
+                "{query:?} reported a diagnostic"
+            );
+        }
+    }
+
+    #[test]
+    fn mask_unparsed_clauses_rewrites_only_a_bare_group_by_all() {
+        let query = "SELECT a FROM t GROUP BY ALL ORDER BY a";
+        assert_eq!(
+            mask_unparsed_clauses(query),
+            "SELECT a FROM t GROUP BY 1   ORDER BY a"
+        );
+
+        for query in [
+            "SELECT a FROM t GROUP BY ALL a, b",
+            "SELECT 'group by all order' FROM t",
+            "SELECT a FROM t GROUP BY all_rows ORDER BY a",
+        ] {
+            assert!(
+                matches!(mask_unparsed_clauses(query), Cow::Borrowed(_)),
                 "{query:?} was masked"
             );
         }
