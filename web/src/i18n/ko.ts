@@ -106,6 +106,60 @@ export const ko: Dictionary = {
     },
     drivers_label: '내장 드라이버',
     and_more: '그 외',
+    journey: {
+      eyebrow: '시각적 워크플로',
+      title: '데이터에서 결과까지. 우회 없이.',
+      body: 'DBFlux 워크플로를 스크롤해 보세요. SQL 편집기를 열지 않고 쿼리를 만들고, 결과를 편집하고, 보기 좋은 화면으로 바꿀 수 있습니다.',
+      scroll_hint: '스크롤하여 살펴 보기',
+      nav_label: '제품 둘러보기 챕터',
+      chapters: {
+        explore: {
+          nav: '탐색',
+          eyebrow: '자연스러운 탐색',
+          title: '데이터가 바로 눈앞에.',
+          body: '연결을 열고 스키마에서 행으로 이동하세요. 별도의 도구가 아니라 드라이버의 기능에 맞는 뷰가 제공됩니다.',
+          feature: '멀티 드라이버 · 하나의 네이티브 워크스페이스',
+        },
+        builder: {
+          nav: '쿼리 작성',
+          eyebrow: '필터 + 빌더 진입',
+          title: '쿼리를 구성하고 구문은 생략.',
+          body: '결과 도구 모음에서 행을 바로 필터링하거나 같은 도구 모음의 Builder 버튼으로 열, 필터, 정렬을 SQL 없이 구성하세요.',
+          feature: 'WHERE 도구 모음 · Builder 진입',
+        },
+        edit: {
+          nav: '편집',
+          eyebrow: '인라인 편집',
+          title: '그리드는 끝이 아닙니다.',
+          body: '보이는 곳에서 값을 변경하고, 보류 중인 편집을 검토하고, 함께 적용하세요. 쿼리 편집기가 필요 없습니다.',
+          feature: '그 자리에서 편집 · 한 번에 적용',
+        },
+        visualize: {
+          nav: '시각화',
+          eyebrow: '차트 + 대시보드',
+          title: '결과에 형태를 부여.',
+          body: '행에서 차트와 대시보드로 전환해 변화, 합계, 이상치를 더 쉽게 읽으세요.',
+          feature: '행에서 답을 한눈에',
+        },
+        governance: {
+          nav: '감사',
+          eyebrow: '로컬 감사 뷰어',
+          title: '모든 작업에 기록이 남습니다.',
+          body: '쿼리, 연결, 훅, 스크립트, 에이전트 호출을 하나의 로컬 감사 뷰어에서 확인하세요. 기간, 수준, 범주, 결과로 검색하고 필터링한 뒤 기록된 이벤트를 파일로 저장할 수 있습니다.',
+          feature: '로컬 기록 · 검색 · 파일 저장',
+        },
+      },
+      ui: {
+        alt: {
+          explore: 'Shop 연결 트리와 public.customers 테이블이 열린 DBFlux 기본 창.',
+          builder: "country = 'Japan' 필터가 적용된 DBFlux 결과와 WHERE 도구 모음 및 Builder 버튼.",
+          edit: '국가 값을 인라인으로 편집한 DBFlux 고객 그리드. 저장하지 않은 변경 1개와 Save, Revert 컨트롤이 보입니다.',
+          visualize: '차트 유형, 축, 집계, 기간 컨트롤이 있는 DBFlux 월별 수익 선 차트.',
+          governance:
+            '검색 및 기간, 수준, 범주, 결과 필터가 있는 DBFlux 감사 뷰어의 쿼리, 연결, 구성, 시스템 이벤트.',
+        },
+      },
+    },
     core: {
       eyebrow: '드라이버 중립 코어',
       title: 'UI는 드라이버의 이름을 배우지 않습니다.',

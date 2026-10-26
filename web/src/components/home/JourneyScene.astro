@@ -1,0 +1,96 @@
+---
+import type { Dictionary } from '../../i18n';
+import exploreDark from '../../../../docs/images/usage/main-window-dark.webp';
+import exploreLight from '../../../../docs/images/usage/main-window-light.webp';
+import builderDark from '../../../../docs/images/results/filtering-dark.webp';
+import builderLight from '../../../../docs/images/results/filtering-light.webp';
+import editDark from '../../../../docs/images/results/editing-dark.webp';
+import editLight from '../../../../docs/images/results/editing-light.webp';
+import visualizeDark from '../../../../docs/images/charts/chart-view-dark.webp';
+import visualizeLight from '../../../../docs/images/charts/chart-view-light.webp';
+import governanceDark from '../../../../docs/images/audit/viewer-dark.webp';
+import governanceLight from '../../../../docs/images/audit/viewer-light.webp';
+
+interface Props {
+  scene: 'explore' | 'builder' | 'edit' | 'visualize' | 'governance';
+  strings: Dictionary['landing']['journey']['ui'];
+}
+
+const { scene, strings } = Astro.props;
+const captures = {
+  explore: { dark: exploreDark, light: exploreLight },
+  builder: { dark: builderDark, light: builderLight },
+  edit: { dark: editDark, light: editLight },
+  visualize: { dark: visualizeDark, light: visualizeLight },
+  governance: { dark: governanceDark, light: governanceLight },
+};
+const capture = captures[scene];
+---
+
+<div class="scene" data-journey-capture={scene}>
+  <img
+    src={capture.dark.src}
+    width={capture.dark.width}
+    height={capture.dark.height}
+    alt={strings.alt[scene]}
+    class="scene__capture scene__capture--dark"
+    loading="lazy"
+    decoding="async"
+  />
+  <img
+    src={capture.light.src}
+    width={capture.light.width}
+    height={capture.light.height}
+    alt={strings.alt[scene]}
+    class="scene__capture scene__capture--light"
+    loading="lazy"
+    decoding="async"
+  />
+</div>
+
+<style>
+  .scene {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    background: var(--band);
+    box-shadow:
+      0 0 0 1px var(--console-edge),
+      var(--shadow-float);
+  }
+
+  .scene__capture {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .scene__capture--dark {
+    display: block;
+  }
+
+  .scene__capture--light {
+    display: none;
+  }
+
+  :global(html[data-theme='light']) .scene__capture--dark {
+    display: none;
+  }
+
+  :global(html[data-theme='light']) .scene__capture--light {
+    display: block;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :global(html:not([data-theme])) .scene__capture--dark {
+      display: none;
+    }
+
+    :global(html:not([data-theme])) .scene__capture--light {
+      display: block;
+    }
+  }
+</style>

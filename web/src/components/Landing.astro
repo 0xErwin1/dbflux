@@ -1,9 +1,6 @@
 ---
 import HomeHero from './home/HomeHero.astro';
-import DriverCore from './home/DriverCore.astro';
-import KeyboardSection from './home/KeyboardSection.astro';
-import GovernanceSection from './home/GovernanceSection.astro';
-import AuditSection from './home/AuditSection.astro';
+import ProductJourney from './home/ProductJourney.astro';
 import CompareTeaser from './home/CompareTeaser.astro';
 import RulesSection from './home/RulesSection.astro';
 import InstallTabs from './InstallTabs.astro';
@@ -55,10 +52,7 @@ const APPLICATION = {
 <script type="application/ld+json" is:inline set:html={JSON.stringify(APPLICATION)} />
 
 <HomeHero locale={locale} />
-<DriverCore locale={locale} />
-<KeyboardSection locale={locale} />
-<GovernanceSection locale={locale} />
-<AuditSection locale={locale} />
+<ProductJourney locale={locale} />
 <CompareTeaser locale={locale} />
 <RulesSection locale={locale} />
 <InstallTabs locale={locale} />

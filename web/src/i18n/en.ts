@@ -106,6 +106,63 @@ export const en = {
     },
     drivers_label: 'Built-in drivers',
     and_more: 'and more',
+    journey: {
+      eyebrow: 'A visual workflow',
+      title: 'From data to done. Without the detour.',
+      body: 'Scroll through a DBFlux workflow. Shape a query, edit the result and turn it into a view without opening the SQL editor.',
+      scroll_hint: 'Scroll to explore',
+      nav_label: 'Product journey chapters',
+      chapters: {
+        explore: {
+          nav: 'Explore',
+          eyebrow: 'Explore naturally',
+          title: 'Your data, already in view.',
+          body: 'Open a connection and move from schema to rows. The right view comes from the driver’s capabilities, not a separate tool.',
+          feature: 'Multi-driver · one native workspace',
+        },
+        builder: {
+          nav: 'Build',
+          eyebrow: 'Filtering + builder entry',
+          title: 'Shape the query. Skip the syntax.',
+          body: 'Filter rows directly in the result toolbar, or use its Builder button to choose columns, add filters and sort without writing SQL.',
+          feature: 'WHERE toolbar · Builder entry',
+        },
+        edit: {
+          nav: 'Edit',
+          eyebrow: 'Inline editing',
+          title: 'The grid is not a dead end.',
+          body: 'Change values where you see them, review pending edits and apply them together. No query editor required.',
+          feature: 'Edit in place · apply together',
+        },
+        visualize: {
+          nav: 'Visualize',
+          eyebrow: 'Charts + dashboards',
+          title: 'Give the result a shape.',
+          body: 'Move from rows to charts and dashboards that make movement, totals and outliers easier to read.',
+          feature: 'Rows to answers, at a glance',
+        },
+        governance: {
+          nav: 'Audit',
+          eyebrow: 'Local audit viewer',
+          title: 'Every action leaves a trail.',
+          body: 'Inspect queries, connections, hooks, scripts and agent calls in one local audit viewer. Search and filter by time, level, category or outcome, then export the recorded events.',
+          feature: 'Local history · search · export',
+        },
+      },
+      ui: {
+        alt: {
+          explore:
+            'DBFlux main window with the Shop connection tree and the public.customers table open.',
+          builder:
+            "DBFlux results with the country = 'Japan' filter, the WHERE toolbar and the Builder button visible.",
+          edit: 'DBFlux customers grid with an inline country edit, one unsaved change, and Save and Revert controls.',
+          visualize:
+            'DBFlux line chart of monthly revenue with chart type, axis, aggregation, and time range controls.',
+          governance:
+            'DBFlux audit viewer listing query, connection, configuration, and system events with search and filters.',
+        },
+      },
+    },
     core: {
       eyebrow: 'Driver-neutral core',
       title: 'The UI never learns a driver’s name.',

@@ -105,6 +105,60 @@ export const zh_Hans: Dictionary = {
     },
     drivers_label: '内置驱动',
     and_more: '更多',
+    journey: {
+      eyebrow: '可视化工作流',
+      title: '从数据到完成。无需绕路。',
+      body: '滚动体验 DBFlux 工作流。无需打开 SQL 编辑器，即可构建查询、编辑结果并将其转换为直观视图。',
+      scroll_hint: '滚动探索',
+      nav_label: '产品之旅章节',
+      chapters: {
+        explore: {
+          nav: '探索',
+          eyebrow: '自然探索',
+          title: '数据，尽在眼前。',
+          body: '打开连接，从架构直达数据行。合适的视图由驱动能力决定，无需借助其他工具。',
+          feature: '多驱动 · 一个原生工作区',
+        },
+        builder: {
+          nav: '构建',
+          eyebrow: '筛选与构建器入口',
+          title: '构建查询。跳过语法。',
+          body: '直接在结果工具栏中筛选数据行，或使用同一工具栏的 Builder 按钮选择列、添加筛选和排序，无需编写 SQL。',
+          feature: 'WHERE 工具栏 · Builder 入口',
+        },
+        edit: {
+          nav: '编辑',
+          eyebrow: '内联编辑',
+          title: '网格不是终点。',
+          body: '直接在所见位置修改值，检查待处理的编辑并一起应用。无需查询编辑器。',
+          feature: '就地编辑 · 一起应用',
+        },
+        visualize: {
+          nav: '可视化',
+          eyebrow: '图表 + 仪表板',
+          title: '让结果呈现形状。',
+          body: '从数据行切换到图表和仪表板，更轻松地读懂趋势、总计和异常值。',
+          feature: '从数据行到答案，一目了然',
+        },
+        governance: {
+          nav: '审计',
+          eyebrow: '本地审计查看器',
+          title: '每个操作都有记录。',
+          body: '在一个本地审计查看器中检查查询、连接、Hook、脚本和智能体调用。按时间、级别、类别或结果搜索和筛选，并导出已记录的事件。',
+          feature: '本地记录 · 搜索 · 导出',
+        },
+      },
+      ui: {
+        alt: {
+          explore: 'DBFlux 主窗口，显示 Shop 连接树和打开的 public.customers 表。',
+          builder: "DBFlux 结果网格应用 country = 'Japan' 筛选，可见 WHERE 工具栏和 Builder 按钮。",
+          edit: 'DBFlux 客户网格中的国家/地区内联编辑，显示一项未保存更改以及 Save 和 Revert 控件。',
+          visualize: 'DBFlux 月度收入折线图，带有图表类型、坐标轴、聚合和时间范围控件。',
+          governance:
+            'DBFlux 审计查看器，列出查询、连接、配置和系统事件，并提供搜索与时间、级别、类别和结果筛选。',
+        },
+      },
+    },
     core: {
       eyebrow: '驱动中立的内核',
       title: '界面永远不会知道驱动的名字。',
