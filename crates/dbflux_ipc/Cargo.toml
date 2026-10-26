@@ -19,6 +19,11 @@ serde_json.workspace = true
 secrecy = "0.10"
 async-trait = { workspace = true }
 log.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+futures = "0.3"
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [lints]
 workspace = true
