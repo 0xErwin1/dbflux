@@ -1904,7 +1904,10 @@ IA con una capa completa de gobernanza:
   `dbflux_app::rpc_services` descubre los service descriptors persistidos,
   adapta `RpcServiceKind::Driver` en `DbDriver`s de runtime, y conecta
   `RpcServiceKind::AuthProvider` a `RpcAuthProvider` (que implementa
-  `DynAuthProvider`). Preserva la compatibilidad con `rpc:<socket_id>`. El
+  `DynAuthProvider`), y `RpcServiceKind::SecretProvider` a `RpcSecretProvider`
+  (que implementa `DynSecretProvider`; ver
+  [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md)). Preserva
+  la compatibilidad con `rpc:<socket_id>`. El
   protocolo IPC de auth-provider está en v1.2: agrega las variantes
   `FetchDynamicOptions` / `DynamicOptions` y el manifest flag
   `secret_dependency_opt_in`. Los auth tokens los gestiona
@@ -1936,8 +1939,8 @@ IA con una capa completa de gobernanza:
   - `cfg_hooks`, `cfg_hook_bindings`
   - `cfg_script_roots` (carpetas externas de scripts listadas en su lugar; quitar una fila nunca toca la carpeta)
   - `cfg_services`, `cfg_service_args`, `cfg_service_env` (descriptores de
-    servicio RPC; `cfg_services.service_kind` registra `driver` vs
-    `auth_provider`)
+    servicio RPC; `cfg_services.service_kind` registra `driver`,
+    `auth_provider` o `secret_provider`)
   - tablas `cfg_governance_*` (roles, policies, trusted clients)
   - `cfg_drivers` (overrides de settings por driver)
   - `cfg_folders` (organización del connection tree)

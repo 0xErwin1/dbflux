@@ -2,10 +2,11 @@
 
 이 문서는 DBFlux가 로컬 IPC를 통해 RPC 서비스를 발견하고, 실행하고, 통신하는 방법을 정의합니다.
 
-DBFlux는 현재 두 개의 런타임 서비스 패밀리를 활성화합니다:
+DBFlux는 현재 세 개의 런타임 서비스 패밀리를 활성화합니다:
 
 - `RpcServiceKind::Driver` -> 런타임 데이터베이스 드라이버
 - `RpcServiceKind::AuthProvider` -> 앱과 MCP 서버의 런타임 인증 프로바이더 레지스트리
+- `RpcServiceKind::SecretProvider` -> 모든 연결의 값 리졸버에 등록되는 런타임 시크릿 프로바이더. [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md) 참고
 
 ## 진실의 원천
 

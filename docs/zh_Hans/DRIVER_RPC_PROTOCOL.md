@@ -2,10 +2,11 @@
 
 本文档定义 DBFlux 如何通过本地 IPC 发现、启动 RPC 服务并与之通信。
 
-DBFlux 当前启用两类运行时服务族：
+DBFlux 当前启用三类运行时服务族：
 
 - `RpcServiceKind::Driver` → 运行时数据库驱动
 - `RpcServiceKind::AuthProvider` → 应用与 MCP 服务器中的运行时认证提供程序注册表
+- `RpcServiceKind::SecretProvider` → 每个连接值解析器中的运行时密钥提供程序；参见 [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md)
 
 ## 权威来源
 
