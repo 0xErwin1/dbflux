@@ -11,6 +11,7 @@ const SECRET_PROVIDER_VALUE_PREFIX: &str = "value-source-secret-";
 enum ValueSourceKind {
     Literal,
     Env,
+    Dotenv,
     Secret,
     Parameter,
     Auth,
@@ -27,6 +28,7 @@ impl ValueSourceKind {
 
         match value {
             "env" => Self::Env,
+            "dotenv" => Self::Dotenv,
             "secret" => Self::Secret,
             "parameter" => Self::Parameter,
             "auth" => Self::Auth,
@@ -38,6 +40,7 @@ impl ValueSourceKind {
         match value_ref {
             Some(ValueRef::Literal { .. }) | None => Self::Literal,
             Some(ValueRef::Env { .. }) => Self::Env,
+            Some(ValueRef::Dotenv { .. }) => Self::Dotenv,
             Some(ValueRef::Secret { provider, .. }) if provider == AWS_SECRETS_MANAGER_PROVIDER => {
                 Self::Secret
             }
@@ -66,6 +69,7 @@ fn source_items(
             "literal",
         ),
         DropdownItem::with_value(dbflux_i18n::t!("components.value_source.env"), "env"),
+        DropdownItem::with_value(dbflux_i18n::t!("components.value_source.dotenv"), "dotenv"),
         DropdownItem::with_value(dbflux_i18n::t!("components.value_source.secret"), "secret"),
         DropdownItem::with_value(
             dbflux_i18n::t!("components.value_source.parameter"),
@@ -104,6 +108,11 @@ fn value_ref_for_source(source_kind: &ValueSourceKind, primary_value: &str) -> O
     match source_kind {
         ValueSourceKind::Literal => None,
         ValueSourceKind::Env => Some(ValueRef::env(primary_value)),
+        ValueSourceKind::Dotenv => {
+            let (path, key) = parse_dotenv_inline_reference(primary_value);
+
+            Some(ValueRef::dotenv(path, key))
+        }
         ValueSourceKind::Secret => {
             let (locator, json_key) = parse_secret_inline_reference(primary_value);
 
@@ -135,6 +144,7 @@ fn primary_value_for_ref(value_ref: Option<&ValueRef>) -> String {
     match value_ref {
         Some(ValueRef::Literal { .. }) | None => String::new(),
         Some(ValueRef::Env { key }) => key.clone(),
+        Some(ValueRef::Dotenv { path, key }) => format_inline_reference(path, Some(key)),
         Some(ValueRef::Secret {
             locator, json_key, ..
         }) => format_inline_reference(locator, json_key.as_deref()),
@@ -149,6 +159,7 @@ fn selected_index_for(items: &[DropdownItem], source_kind: &ValueSourceKind) -> 
     let wanted = match source_kind {
         ValueSourceKind::Literal => "literal".to_string(),
         ValueSourceKind::Env => "env".to_string(),
+        ValueSourceKind::Dotenv => "dotenv".to_string(),
         ValueSourceKind::Secret => "secret".to_string(),
         ValueSourceKind::Parameter => "parameter".to_string(),
         ValueSourceKind::Auth => "auth".to_string(),
@@ -272,6 +283,19 @@ impl ValueSourceSelector {
         self.selected_source(cx) == ValueSourceKind::Literal
     }
 
+    /// Example of what the field's input holds for an environment or dotenv
+    /// source, or `None` for any other source.
+    pub fn source_placeholder(&self, cx: &App) -> Option<String> {
+        source_placeholder(self.selected_source(cx))
+    }
+
+    /// One line telling the user where an environment or dotenv value is read
+    /// from and when, built from the reference typed in the field's input.
+    /// `None` for any other source or an empty reference.
+    pub fn source_hint(&self, primary_value: &str, cx: &App) -> Option<String> {
+        source_hint(self.selected_source(cx), primary_value)
+    }
+
     pub fn is_source_dropdown_open(&self, cx: &App) -> bool {
         self.source_dropdown.read(cx).is_open()
     }
@@ -337,6 +361,65 @@ fn format_inline_reference(locator: &str, json_key: Option<&str>) -> String {
     }
 }
 
+/// Splits `path#KEY` at the last `#`. A reference without one keeps the
+/// whole text as the path and an empty key, so the connection fails with a
+/// visible "not a valid variable name" error instead of dropping the source.
+fn parse_dotenv_inline_reference(value: &str) -> (String, String) {
+    match value.trim().rsplit_once('#') {
+        Some((path, key)) => (path.trim().to_string(), key.trim().to_string()),
+        None => (value.trim().to_string(), String::new()),
+    }
+}
+
+fn source_placeholder(kind: ValueSourceKind) -> Option<String> {
+    let key = match kind {
+        ValueSourceKind::Env => "components.value_source.placeholder.env",
+        ValueSourceKind::Dotenv => "components.value_source.placeholder.dotenv",
+        ValueSourceKind::Literal
+        | ValueSourceKind::Secret
+        | ValueSourceKind::SecretProvider(_)
+        | ValueSourceKind::Parameter
+        | ValueSourceKind::Auth => return None,
+    };
+
+    Some(dbflux_i18n::t!(key))
+}
+
+fn source_hint(kind: ValueSourceKind, primary_value: &str) -> Option<String> {
+    let primary_value = primary_value.trim();
+
+    if primary_value.is_empty() {
+        return None;
+    }
+
+    match kind {
+        ValueSourceKind::Env => Some(dbflux_i18n::t!(
+            "components.value_source.hint.env",
+            name = primary_value
+        )),
+        ValueSourceKind::Dotenv => {
+            let (path, key) = parse_dotenv_inline_reference(primary_value);
+
+            if key.is_empty() {
+                return Some(dbflux_i18n::t!(
+                    "components.value_source.hint.dotenv_missing_key"
+                ));
+            }
+
+            Some(dbflux_i18n::t!(
+                "components.value_source.hint.dotenv",
+                key = key,
+                path = path
+            ))
+        }
+        ValueSourceKind::Literal
+        | ValueSourceKind::Secret
+        | ValueSourceKind::SecretProvider(_)
+        | ValueSourceKind::Parameter
+        | ValueSourceKind::Auth => None,
+    }
+}
+
 fn parse_secret_inline_reference(value: &str) -> (String, Option<String>) {
     let trimmed = value.trim();
 
@@ -375,10 +458,52 @@ impl Render for ValueSourceSelector {
 #[cfg(test)]
 mod tests {
     use super::{
-        ValueSourceKind, primary_value_for_ref, selected_index_for, source_items,
+        ValueSourceKind, format_inline_reference, parse_dotenv_inline_reference,
+        primary_value_for_ref, selected_index_for, source_hint, source_items, source_placeholder,
         value_ref_for_source,
     };
     use dbflux_core::values::ValueRef;
+
+    #[test]
+    fn dotenv_inline_reference_splits_at_the_last_hash() {
+        assert_eq!(
+            parse_dotenv_inline_reference(" ~/dir#1/prod.env#DB_PASSWORD "),
+            ("~/dir#1/prod.env".to_string(), "DB_PASSWORD".to_string())
+        );
+        assert_eq!(
+            parse_dotenv_inline_reference("~/prod.env"),
+            ("~/prod.env".to_string(), String::new())
+        );
+        assert_eq!(
+            format_inline_reference("~/prod.env", Some("DB_PASSWORD")),
+            "~/prod.env#DB_PASSWORD"
+        );
+    }
+
+    #[test]
+    fn hints_name_the_source_and_never_apply_to_literals() {
+        assert_eq!(source_hint(ValueSourceKind::Literal, "secret"), None);
+        assert_eq!(source_hint(ValueSourceKind::Env, "  "), None);
+        assert_eq!(source_placeholder(ValueSourceKind::Literal), None);
+        assert_eq!(source_hint(ValueSourceKind::Secret, "prod/db"), None);
+
+        let env = source_hint(ValueSourceKind::Env, "DB_PASSWORD").expect("env hint");
+        assert!(env.contains("DB_PASSWORD"), "{env}");
+
+        let dotenv =
+            source_hint(ValueSourceKind::Dotenv, "~/prod.env#DB_PASSWORD").expect("dotenv hint");
+        assert!(
+            dotenv.contains("DB_PASSWORD") && dotenv.contains("~/prod.env"),
+            "{dotenv}"
+        );
+
+        assert_eq!(
+            source_hint(ValueSourceKind::Dotenv, "~/prod.env"),
+            Some(dbflux_i18n::t!(
+                "components.value_source.hint.dotenv_missing_key"
+            ))
+        );
+    }
 
     fn assert_same_ref(actual: Option<ValueRef>, expected: Option<ValueRef>) {
         assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
@@ -436,7 +561,7 @@ mod tests {
         let items = source_items(&vault_providers(), None);
         let index = selected_index_for(&items, &ValueSourceKind::for_value_ref(Some(&value_ref)));
 
-        assert_eq!(index, Some(5));
+        assert_eq!(index, Some(6));
         assert_same_ref(round_trip(&value_ref, &vault_providers()), Some(value_ref));
     }
 
@@ -463,7 +588,7 @@ mod tests {
         );
         assert_same_ref(round_trip(&secret, &vault_providers()), Some(secret));
         assert_same_ref(round_trip(&parameter, &[]), Some(parameter));
-        assert_eq!(source_items(&[], None).len(), 5);
+        assert_eq!(source_items(&[], None).len(), 6);
     }
 
     #[test]
@@ -471,10 +596,16 @@ mod tests {
         let keys = [
             "components.value_source.literal",
             "components.value_source.env",
+            "components.value_source.dotenv",
             "components.value_source.secret",
             "components.value_source.parameter",
             "components.value_source.auth",
             "components.value_source.json_key_placeholder",
+            "components.value_source.placeholder.env",
+            "components.value_source.placeholder.dotenv",
+            "components.value_source.hint.env",
+            "components.value_source.hint.dotenv",
+            "components.value_source.hint.dotenv_missing_key",
         ];
 
         for key in keys {

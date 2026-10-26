@@ -196,6 +196,7 @@ SSM 需要 `PATH` 中有 AWS CLI 和 Session Manager 插件。在 macOS 和 Linu
 | --- | --- |
 | **字符**（Literal） | 直接输入的值（默认）。 |
 | **环境变量**（Environment Variable） | 按名称从环境变量读取。 |
+| **Dotenv 文件**（Dotenv File） | 从你拥有的 `.env` 文件中读取一个键，写作 `路径#键`。 |
 | **AWS 云密钥管理**（Secret Manager） | 从密钥提供程序（AWS Secrets Manager）获取。 |
 | **AWS 参数存储**（Parameter Store） | 从参数提供程序（AWS SSM Parameter Store）获取。 |
 | **认证会话字段**（Auth Session Field） | 从已解析的认证配置文件会话或凭据中提取指定字段。 |
@@ -208,6 +209,37 @@ SSM 需要 `PATH` 中有 AWS CLI 和 Session Manager 插件。在 macOS 和 Linu
 - 要访问 LocalStack 或 VPC 终端节点，请在 AWS 认证配置文件中设置 **Endpoint URL**。AWS SDK 也会读取 `AWS_ENDPOINT_URL_SECRETS_MANAGER` 和 `AWS_ENDPOINT_URL_SSM`。
 
 > **注意：**DBFlux 将终端节点写入配置文件引用的 `[services]` 节，因此只作用于 Secrets Manager 和 SSM，包括使用该配置文件运行的 AWS CLI `secretsmanager`、`ssm` 命令以及 SSM 端口转发。DynamoDB、S3 和 CloudWatch 保持默认终端节点。与其他配置文件共享的 `[services]` 节不会被修改，DBFlux 会为此配置文件创建单独的副本。
+
+### 环境变量与 dotenv 文件
+
+这两种来源在 DBFlux 每次连接时读取，因此轮换后的值无需重启 DBFlux 即可在下一次连接中生效。DBFlux 只保存引用（变量名，或文件路径和键），从不保存值，两种来源都不会缓存。
+
+| 字段输入 | 来源 | 读取 |
+| --- | --- | --- |
+| `DB_PASSWORD` | 环境变量 | 启动 DBFlux 时环境中的 `DB_PASSWORD` |
+| `~/.config/dbflux/prod.env#DB_PASSWORD` | Dotenv 文件 | 该文件中的 `DB_PASSWORD` |
+
+dotenv 文件必须满足以下规则，否则连接会失败，错误信息会指出文件和键，但绝不会显示值：
+
+- 路径为绝对路径或以 `~/` 开头。
+- 是不超过 64 KiB、1024 个条目的 UTF-8 普通文件（指向普通文件的符号链接会被跟随）。
+- 在 Linux 和 macOS 上，只有文件所有者可以读写（`chmod 600`）。
+- 每一行是空行、`#` 注释，或 `KEY=value`（可带 `export` 前缀）。值可以不加引号（末尾的 ` # 注释` 会被去掉）、使用单引号（按原样读取）或使用双引号（解析 `\n`、`\t`、`\"`、`\\` 和 `\$`）。值只占一行，`${VAR}` 不会展开。同一个键出现两次时，以最后一次定义为准。
+
+| 问题 | 错误 |
+| --- | --- |
+| 变量未设置 | `Environment variable 'DB_PASSWORD' not set` |
+| 变量为空字符串 | `Environment variable 'DB_PASSWORD' is empty` |
+| 文件不存在 | `Dotenv file '~/prod.env' does not exist` |
+| 文件不可读 | `Dotenv file '~/prod.env' cannot be read: permission denied` |
+| 其他用户可访问该文件 | `Dotenv file '~/prod.env' can be read or changed by other users (mode 644); restrict it with chmod 600` |
+| 某一行不是条目 | `Dotenv file '~/prod.env' has a malformed entry on line 4` |
+| 文件中没有该键 | `Key 'DB_PASSWORD' is not defined in dotenv file '~/prod.env'` |
+| 键的值为空 | `Key 'DB_PASSWORD' in dotenv file '~/prod.env' is empty` |
+
+读取失败会中止连接。DBFlux 绝不会为该字段改用密钥环中保存的密码。
+
+> **注意：**桌面启动器使用会话环境而不是 shell 环境启动 DBFlux。仅在 `~/.zshrc` 或 `~/.bashrc` 中导出的变量，对从应用菜单启动的 DBFlux 不可见；请改用 dotenv 文件，或在会话环境中设置该变量。
 
 ---
 

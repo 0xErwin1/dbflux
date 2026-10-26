@@ -98,7 +98,7 @@ flowchart TB
     start["从连接管理器 / 侧边栏<br/>发起连接"] --> prep["AppState::prepare_pipeline_input<br/>（与提供程序无关的输入）"]
     prep --> pre{{"连接前 Hook"}}
     pre --> auth["流水线：认证<br/>（DynAuthProvider，例如 AWS SSO）"]
-    auth --> values["流水线：解析取值<br/>（ValueRef → env/secret/param/auth）"]
+    auth --> values["流水线：解析取值<br/>（ValueRef → env/dotenv/secret/param/auth）"]
     values --> access["流水线：开通访问"]
     access --> tunnel{"访问方式？"}
     tunnel -->|Direct| connect

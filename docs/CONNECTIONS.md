@@ -288,6 +288,7 @@ field and choose:
 |--------|--------------|
 | **Literal** | The value you type (default). |
 | **Environment Variable** | Read from an env var by name. |
+| **Dotenv File** | Read one key from a `.env` file you own, written as `path#KEY`. |
 | **Secret Manager** | Fetch from a secret provider (AWS Secrets Manager). |
 | **Parameter Store** | Fetch from a parameter provider (AWS SSM Parameter Store). |
 | **Auth Session Field** | Pull a field from the resolved Auth Profile's session/credentials. |
@@ -310,6 +311,50 @@ Notes:
 > forwarding run with that profile. DynamoDB, S3 and CloudWatch keep their
 > default endpoints. A `[services]` section shared with another profile is
 > never edited: DBFlux gives this profile its own copy.
+
+### Environment variables and dotenv files
+
+Both sources are read each time DBFlux connects, so a rotated value is used on
+the next connection without restarting DBFlux. DBFlux stores only the
+reference (the variable name, or the file path and key), never the value, and
+neither source is cached.
+
+| Field input | Source | Reads |
+|-------------|--------|-------|
+| `DB_PASSWORD` | Environment Variable | `DB_PASSWORD` from the environment DBFlux was started with |
+| `~/.config/dbflux/prod.env#DB_PASSWORD` | Dotenv File | `DB_PASSWORD` from that file |
+
+A dotenv file must meet these rules, or the connection fails with an error that
+names the file and the key but never shows a value:
+
+- The path is absolute or starts with `~/`.
+- It is a regular file (a symlink to one is followed) of at most 64 KiB and
+  1024 entries, encoded as UTF-8.
+- On Linux and macOS, only its owner can read or write it (`chmod 600`).
+- Every line is blank, a `#` comment, or `KEY=value`, optionally prefixed with
+  `export`. A value can be unquoted (a trailing ` # comment` is removed), in
+  single quotes (taken as written) or in double quotes (`\n`, `\t`, `\"`, `\\`
+  and `\$` are unescaped). Values span one line and `${VAR}` is not expanded.
+  When a key appears twice, the last definition wins.
+
+| Problem | Error |
+|---------|-------|
+| Variable not set | `Environment variable 'DB_PASSWORD' not set` |
+| Variable set to an empty string | `Environment variable 'DB_PASSWORD' is empty` |
+| File missing | `Dotenv file '~/prod.env' does not exist` |
+| File not readable | `Dotenv file '~/prod.env' cannot be read: permission denied` |
+| File open to other users | `Dotenv file '~/prod.env' can be read or changed by other users (mode 644); restrict it with chmod 600` |
+| Line that is not an entry | `Dotenv file '~/prod.env' has a malformed entry on line 4` |
+| Key not in the file | `Key 'DB_PASSWORD' is not defined in dotenv file '~/prod.env'` |
+| Key with an empty value | `Key 'DB_PASSWORD' in dotenv file '~/prod.env' is empty` |
+
+A failed read stops the connection. DBFlux never falls back to a password saved
+in the keyring for that field.
+
+> **Heads-up:** a desktop launcher starts DBFlux with the session's
+> environment, not your shell's. A variable exported only in `~/.zshrc` or
+> `~/.bashrc` is not visible to DBFlux started from the application menu; use a
+> dotenv file instead, or set the variable in your session environment.
 
 ---
 

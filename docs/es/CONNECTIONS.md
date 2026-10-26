@@ -304,6 +304,7 @@ selector de fuente junto a un campo y elige:
 | ------------------------ | ------------------------------------------------------------------ |
 | **Literal**              | El valor que escribes (por defecto).                               |
 | **Environment Variable** | Se lee de una variable de entorno por nombre.                      |
+| **Dotenv File**          | Se lee una clave de un archivo `.env` tuyo, escrito como `ruta#CLAVE`. |
 | **Secret Manager**       | Se obtiene de un secret provider (AWS Secrets Manager).            |
 | **Parameter Store**      | Se obtiene de un parameter provider (AWS SSM Parameter Store).     |
 | **Auth Session Field**   | Toma un campo de la sesión/credenciales resuelta del Auth Profile. |
@@ -327,6 +328,50 @@ Notas:
 > forwarding de SSM que usen ese perfil. DynamoDB, S3 y CloudWatch mantienen sus
 > endpoints por defecto. Una sección `[services]` compartida con otro perfil
 > nunca se edita: DBFlux le da a este perfil su propia copia.
+
+### Variables de entorno y archivos dotenv
+
+Ambas fuentes se leen cada vez que DBFlux se conecta, así que un valor rotado se
+usa en la siguiente conexión sin reiniciar DBFlux. DBFlux guarda solo la
+referencia (el nombre de la variable, o la ruta del archivo y la clave), nunca
+el valor, y ninguna de las dos fuentes se cachea.
+
+| Entrada del campo | Fuente | Lee |
+|-------------------|--------|-----|
+| `DB_PASSWORD` | Environment Variable | `DB_PASSWORD` del entorno con el que se inició DBFlux |
+| `~/.config/dbflux/prod.env#DB_PASSWORD` | Dotenv File | `DB_PASSWORD` de ese archivo |
+
+Un archivo dotenv debe cumplir estas reglas; si no, la conexión falla con un
+error que nombra el archivo y la clave pero nunca muestra un valor:
+
+- La ruta es absoluta o empieza con `~/`.
+- Es un archivo regular (se sigue un symlink a uno) de hasta 64 KiB y 1024
+  entradas, codificado en UTF-8.
+- En Linux y macOS, solo su dueño puede leerlo o escribirlo (`chmod 600`).
+- Cada línea está vacía, es un comentario `#` o es `CLAVE=valor`, con un prefijo
+  `export` opcional. Un valor puede ir sin comillas (se quita un ` # comentario`
+  final), entre comillas simples (se toma tal cual) o entre comillas dobles (se
+  interpretan `\n`, `\t`, `\"`, `\\` y `\$`). Los valores ocupan una línea y `${VAR}` no se expande.
+  Si una clave aparece dos veces, gana la última definición.
+
+| Problema | Error |
+|----------|-------|
+| Variable no definida | `Environment variable 'DB_PASSWORD' not set` |
+| Variable definida como cadena vacía | `Environment variable 'DB_PASSWORD' is empty` |
+| Archivo inexistente | `Dotenv file '~/prod.env' does not exist` |
+| Archivo sin permiso de lectura | `Dotenv file '~/prod.env' cannot be read: permission denied` |
+| Archivo abierto a otros usuarios | `Dotenv file '~/prod.env' can be read or changed by other users (mode 644); restrict it with chmod 600` |
+| Línea que no es una entrada | `Dotenv file '~/prod.env' has a malformed entry on line 4` |
+| Clave ausente en el archivo | `Key 'DB_PASSWORD' is not defined in dotenv file '~/prod.env'` |
+| Clave con valor vacío | `Key 'DB_PASSWORD' in dotenv file '~/prod.env' is empty` |
+
+Una lectura fallida detiene la conexión. DBFlux nunca recurre a una contraseña
+guardada en el keyring para ese campo.
+
+> **Atención:** un lanzador de escritorio inicia DBFlux con el entorno de la
+> sesión, no con el de tu shell. Una variable exportada solo en `~/.zshrc` o
+> `~/.bashrc` no es visible para DBFlux abierto desde el menú de aplicaciones;
+> usa un archivo dotenv, o define la variable en el entorno de tu sesión.
 
 ---
 

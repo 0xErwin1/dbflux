@@ -120,7 +120,7 @@ flowchart TB
     start["Conectar desde<br/>Connection Manager / sidebar"] --> prep["AppState::prepare_pipeline_input<br/>(input agnóstico del provider)"]
     prep --> pre{{"PreConnect hooks"}}
     pre --> auth["Pipeline: Authenticating<br/>(DynAuthProvider, p. ej. AWS SSO)"]
-    auth --> values["Pipeline: ResolvingValues<br/>(ValueRef → env/secret/param/auth)"]
+    auth --> values["Pipeline: ResolvingValues<br/>(ValueRef → env/dotenv/secret/param/auth)"]
     values --> access["Pipeline: OpeningAccess"]
     access --> tunnel{"¿Tipo de access?"}
     tunnel -->|Direct| connect

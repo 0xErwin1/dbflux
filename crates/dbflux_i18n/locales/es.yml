@@ -175,10 +175,18 @@ components:
   value_source:
     literal: Literal
     env: Variable de entorno
+    dotenv: "Archivo dotenv"
     secret: Secret Manager
     parameter: Parameter Store
     auth: Campo de sesión de autenticación
     json_key_placeholder: Clave JSON (opcional)
+    placeholder:
+      env: "NOMBRE_VARIABLE"
+      dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+    hint:
+      env: "Se lee de la variable de entorno %{name} cada vez que DBFlux se conecta. DBFlux no guarda el valor."
+      dotenv: "Se lee de %{key} en %{path} cada vez que DBFlux se conecta. Solo tú debes poder leer el archivo."
+      dotenv_missing_key: "Agrega la clave después de la ruta: ~/ruta/al/archivo.env#CLAVE"
   file_picker:
     browse: "Explorar…"
   column_projection:

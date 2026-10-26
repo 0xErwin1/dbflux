@@ -1113,6 +1113,14 @@ fn load_profile_value_refs(
                     key: entry.env_key.unwrap_or(entry.ref_value),
                 }
             }
+            dbflux_storage::repositories::connection_profile_value_refs::RefKind::Dotenv => {
+                ValueRef::Dotenv {
+                    key: entry.env_key.ok_or_else(|| {
+                        format!("Dotenv value ref '{}' is missing its key", entry.ref_key)
+                    })?,
+                    path: entry.ref_value,
+                }
+            }
             dbflux_storage::repositories::connection_profile_value_refs::RefKind::Secret => {
                 ValueRef::Secret {
                     provider: entry.ref_provider.ok_or_else(|| {
