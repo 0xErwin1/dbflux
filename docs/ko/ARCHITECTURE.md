@@ -98,7 +98,7 @@ flowchart TB
     start["연결 관리자 / 사이드바에서<br/>연결"] --> prep["AppState::prepare_pipeline_input<br/>(프로바이더 중립 입력)"]
     prep --> pre{{"PreConnect 훅"}}
     pre --> auth["파이프라인: Authenticating<br/>(DynAuthProvider, 예: AWS SSO)"]
-    auth --> values["파이프라인: ResolvingValues<br/>(ValueRef → env/secret/param/auth)"]
+    auth --> values["파이프라인: ResolvingValues<br/>(ValueRef → env/dotenv/secret/param/auth)"]
     values --> access["파이프라인: OpeningAccess"]
     access --> tunnel{"액세스 종류?"}
     tunnel -->|직접| connect

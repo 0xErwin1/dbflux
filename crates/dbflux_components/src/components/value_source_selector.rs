@@ -7,6 +7,7 @@ use gpui::*;
 enum ValueSourceKind {
     Literal,
     Env,
+    Dotenv,
     Secret,
     Parameter,
     Auth,
@@ -16,6 +17,7 @@ impl ValueSourceKind {
     fn from_value(value: &str) -> Self {
         match value {
             "env" => Self::Env,
+            "dotenv" => Self::Dotenv,
             "secret" => Self::Secret,
             "parameter" => Self::Parameter,
             "auth" => Self::Auth,
@@ -27,9 +29,10 @@ impl ValueSourceKind {
         match self {
             Self::Literal => 0,
             Self::Env => 1,
-            Self::Secret => 2,
-            Self::Parameter => 3,
-            Self::Auth => 4,
+            Self::Dotenv => 2,
+            Self::Secret => 3,
+            Self::Parameter => 4,
+            Self::Auth => 5,
         }
     }
 }
@@ -51,6 +54,10 @@ impl ValueSourceSelector {
                         "literal",
                     ),
                     DropdownItem::with_value(dbflux_i18n::t!("components.value_source.env"), "env"),
+                    DropdownItem::with_value(
+                        dbflux_i18n::t!("components.value_source.dotenv"),
+                        "dotenv",
+                    ),
                     DropdownItem::with_value(
                         dbflux_i18n::t!("components.value_source.secret"),
                         "secret",
@@ -98,6 +105,11 @@ impl ValueSourceSelector {
                 (ValueSourceKind::Literal, String::new(), String::new())
             }
             Some(ValueRef::Env { key }) => (ValueSourceKind::Env, key.clone(), String::new()),
+            Some(ValueRef::Dotenv { path, key }) => (
+                ValueSourceKind::Dotenv,
+                format_inline_reference(path, Some(key)),
+                String::new(),
+            ),
             Some(ValueRef::Secret {
                 locator, json_key, ..
             }) => (
@@ -131,6 +143,11 @@ impl ValueSourceSelector {
         match source_kind {
             ValueSourceKind::Literal => None,
             ValueSourceKind::Env if !primary_value.is_empty() => Some(ValueRef::env(primary_value)),
+            ValueSourceKind::Dotenv if !primary_value.is_empty() => {
+                let (path, key) = parse_dotenv_inline_reference(&primary_value);
+
+                Some(ValueRef::dotenv(path, key))
+            }
             ValueSourceKind::Secret if !primary_value.is_empty() => {
                 let (locator, json_key) = parse_secret_inline_reference(&primary_value);
 
@@ -150,6 +167,19 @@ impl ValueSourceSelector {
 
     pub fn is_literal(&self, cx: &App) -> bool {
         self.selected_source(cx) == ValueSourceKind::Literal
+    }
+
+    /// Example of what the field's input holds for an environment or dotenv
+    /// source, or `None` for any other source.
+    pub fn source_placeholder(&self, cx: &App) -> Option<String> {
+        source_placeholder(self.selected_source(cx))
+    }
+
+    /// One line telling the user where an environment or dotenv value is read
+    /// from and when, built from the reference typed in the field's input.
+    /// `None` for any other source or an empty reference.
+    pub fn source_hint(&self, primary_value: &str, cx: &App) -> Option<String> {
+        source_hint(self.selected_source(cx), primary_value)
     }
 
     pub fn is_source_dropdown_open(&self, cx: &App) -> bool {
@@ -217,6 +247,63 @@ fn format_inline_reference(locator: &str, json_key: Option<&str>) -> String {
     }
 }
 
+/// Splits `path#KEY` at the last `#`. A reference without one keeps the
+/// whole text as the path and an empty key, so the connection fails with a
+/// visible "not a valid variable name" error instead of dropping the source.
+fn parse_dotenv_inline_reference(value: &str) -> (String, String) {
+    match value.trim().rsplit_once('#') {
+        Some((path, key)) => (path.trim().to_string(), key.trim().to_string()),
+        None => (value.trim().to_string(), String::new()),
+    }
+}
+
+fn source_placeholder(kind: ValueSourceKind) -> Option<String> {
+    let key = match kind {
+        ValueSourceKind::Env => "components.value_source.placeholder.env",
+        ValueSourceKind::Dotenv => "components.value_source.placeholder.dotenv",
+        ValueSourceKind::Literal
+        | ValueSourceKind::Secret
+        | ValueSourceKind::Parameter
+        | ValueSourceKind::Auth => return None,
+    };
+
+    Some(dbflux_i18n::t!(key))
+}
+
+fn source_hint(kind: ValueSourceKind, primary_value: &str) -> Option<String> {
+    let primary_value = primary_value.trim();
+
+    if primary_value.is_empty() {
+        return None;
+    }
+
+    match kind {
+        ValueSourceKind::Env => Some(dbflux_i18n::t!(
+            "components.value_source.hint.env",
+            name = primary_value
+        )),
+        ValueSourceKind::Dotenv => {
+            let (path, key) = parse_dotenv_inline_reference(primary_value);
+
+            if key.is_empty() {
+                return Some(dbflux_i18n::t!(
+                    "components.value_source.hint.dotenv_missing_key"
+                ));
+            }
+
+            Some(dbflux_i18n::t!(
+                "components.value_source.hint.dotenv",
+                key = key,
+                path = path
+            ))
+        }
+        ValueSourceKind::Literal
+        | ValueSourceKind::Secret
+        | ValueSourceKind::Parameter
+        | ValueSourceKind::Auth => None,
+    }
+}
+
 fn parse_secret_inline_reference(value: &str) -> (String, Option<String>) {
     let trimmed = value.trim();
 
@@ -254,15 +341,67 @@ impl Render for ValueSourceSelector {
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        ValueSourceKind, format_inline_reference, parse_dotenv_inline_reference, source_hint,
+        source_placeholder,
+    };
+
+    #[test]
+    fn dotenv_inline_reference_splits_at_the_last_hash() {
+        assert_eq!(
+            parse_dotenv_inline_reference(" ~/dir#1/prod.env#DB_PASSWORD "),
+            ("~/dir#1/prod.env".to_string(), "DB_PASSWORD".to_string())
+        );
+        assert_eq!(
+            parse_dotenv_inline_reference("~/prod.env"),
+            ("~/prod.env".to_string(), String::new())
+        );
+        assert_eq!(
+            format_inline_reference("~/prod.env", Some("DB_PASSWORD")),
+            "~/prod.env#DB_PASSWORD"
+        );
+    }
+
+    #[test]
+    fn hints_name_the_source_and_never_apply_to_literals() {
+        assert_eq!(source_hint(ValueSourceKind::Literal, "secret"), None);
+        assert_eq!(source_hint(ValueSourceKind::Env, "  "), None);
+        assert_eq!(source_placeholder(ValueSourceKind::Literal), None);
+        assert_eq!(source_hint(ValueSourceKind::Secret, "prod/db"), None);
+
+        let env = source_hint(ValueSourceKind::Env, "DB_PASSWORD").expect("env hint");
+        assert!(env.contains("DB_PASSWORD"), "{env}");
+
+        let dotenv =
+            source_hint(ValueSourceKind::Dotenv, "~/prod.env#DB_PASSWORD").expect("dotenv hint");
+        assert!(
+            dotenv.contains("DB_PASSWORD") && dotenv.contains("~/prod.env"),
+            "{dotenv}"
+        );
+
+        assert_eq!(
+            source_hint(ValueSourceKind::Dotenv, "~/prod.env"),
+            Some(dbflux_i18n::t!(
+                "components.value_source.hint.dotenv_missing_key"
+            ))
+        );
+    }
+
     #[test]
     fn value_source_keys_resolve_in_both_locales() {
         let keys = [
             "components.value_source.literal",
             "components.value_source.env",
+            "components.value_source.dotenv",
             "components.value_source.secret",
             "components.value_source.parameter",
             "components.value_source.auth",
             "components.value_source.json_key_placeholder",
+            "components.value_source.placeholder.env",
+            "components.value_source.placeholder.dotenv",
+            "components.value_source.hint.env",
+            "components.value_source.hint.dotenv",
+            "components.value_source.hint.dotenv_missing_key",
         ];
 
         for key in keys {

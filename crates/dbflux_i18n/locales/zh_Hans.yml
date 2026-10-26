@@ -175,10 +175,18 @@ components:
   value_source:
     literal: 字符
     env: 环境变量
+    dotenv: "Dotenv 文件"
     secret: AWS 云密钥管理
     parameter: AWS 参数存储
     auth: 认证会话字段
     json_key_placeholder: JSON 键（可选）
+    placeholder:
+      env: "VARIABLE_NAME"
+      dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+    hint:
+      env: "DBFlux 每次连接时从环境变量 %{name} 读取。DBFlux 不保存该值。"
+      dotenv: "DBFlux 每次连接时从 %{path} 中的 %{key} 读取。该文件必须只有您能读取。"
+      dotenv_missing_key: "在路径后添加键：~/path/to/file.env#KEY"
   file_picker:
     browse: 浏览…
   column_projection:
