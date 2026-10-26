@@ -3,17 +3,28 @@ use dbflux_core::values::ValueRef;
 use gpui::prelude::*;
 use gpui::*;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+const AWS_SECRETS_MANAGER_PROVIDER: &str = "aws-secrets-manager";
+const AWS_SSM_PROVIDER: &str = "aws-ssm";
+const SECRET_PROVIDER_VALUE_PREFIX: &str = "value-source-secret-";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum ValueSourceKind {
     Literal,
     Env,
     Secret,
     Parameter,
     Auth,
+    /// A secret provider other than the built-in Secrets Manager option,
+    /// identified by its registered provider id.
+    SecretProvider(String),
 }
 
 impl ValueSourceKind {
     fn from_value(value: &str) -> Self {
+        if let Some(provider_id) = value.strip_prefix(SECRET_PROVIDER_VALUE_PREFIX) {
+            return Self::SecretProvider(provider_id.to_string());
+        }
+
         match value {
             "env" => Self::Env,
             "secret" => Self::Secret,
@@ -23,20 +34,135 @@ impl ValueSourceKind {
         }
     }
 
-    fn dropdown_index(self) -> usize {
-        match self {
-            Self::Literal => 0,
-            Self::Env => 1,
-            Self::Secret => 2,
-            Self::Parameter => 3,
-            Self::Auth => 4,
+    fn for_value_ref(value_ref: Option<&ValueRef>) -> Self {
+        match value_ref {
+            Some(ValueRef::Literal { .. }) | None => Self::Literal,
+            Some(ValueRef::Env { .. }) => Self::Env,
+            Some(ValueRef::Secret { provider, .. }) if provider == AWS_SECRETS_MANAGER_PROVIDER => {
+                Self::Secret
+            }
+            Some(ValueRef::Secret { provider, .. }) => Self::SecretProvider(provider.clone()),
+            Some(ValueRef::Parameter { .. }) => Self::Parameter,
+            Some(ValueRef::Auth { .. }) => Self::Auth,
         }
     }
+}
+
+fn secret_provider_item_value(provider_id: &str) -> String {
+    format!("{SECRET_PROVIDER_VALUE_PREFIX}{provider_id}")
+}
+
+/// Builds the source options: the built-in sources, then one option per
+/// registered external secret provider, then `unregistered_provider` when a
+/// loaded reference names a provider that is not registered, so the reference
+/// stays selectable and round-trips unchanged.
+fn source_items(
+    external_providers: &[(String, String)],
+    unregistered_provider: Option<&str>,
+) -> Vec<DropdownItem> {
+    let mut items = vec![
+        DropdownItem::with_value(
+            dbflux_i18n::t!("components.value_source.literal"),
+            "literal",
+        ),
+        DropdownItem::with_value(dbflux_i18n::t!("components.value_source.env"), "env"),
+        DropdownItem::with_value(dbflux_i18n::t!("components.value_source.secret"), "secret"),
+        DropdownItem::with_value(
+            dbflux_i18n::t!("components.value_source.parameter"),
+            "parameter",
+        ),
+        DropdownItem::with_value(dbflux_i18n::t!("components.value_source.auth"), "auth"),
+    ];
+
+    items.extend(
+        external_providers
+            .iter()
+            .map(|(provider_id, display_name)| {
+                DropdownItem::with_value(
+                    display_name.clone(),
+                    secret_provider_item_value(provider_id),
+                )
+            }),
+    );
+
+    if let Some(provider_id) = unregistered_provider {
+        items.push(DropdownItem::with_value(
+            provider_id.to_string(),
+            secret_provider_item_value(provider_id),
+        ));
+    }
+
+    items
+}
+
+fn value_ref_for_source(source_kind: &ValueSourceKind, primary_value: &str) -> Option<ValueRef> {
+    let primary_value = primary_value.trim();
+    if primary_value.is_empty() {
+        return None;
+    }
+
+    match source_kind {
+        ValueSourceKind::Literal => None,
+        ValueSourceKind::Env => Some(ValueRef::env(primary_value)),
+        ValueSourceKind::Secret => {
+            let (locator, json_key) = parse_secret_inline_reference(primary_value);
+
+            Some(ValueRef::secret(
+                AWS_SECRETS_MANAGER_PROVIDER,
+                locator,
+                json_key,
+            ))
+        }
+        ValueSourceKind::SecretProvider(provider_id) => {
+            let (locator, json_key) = parse_secret_inline_reference(primary_value);
+
+            Some(ValueRef::secret(provider_id.as_str(), locator, json_key))
+        }
+        ValueSourceKind::Parameter => {
+            let (name, json_key) = parse_secret_inline_reference(primary_value);
+
+            Some(ValueRef::parameter_with_key(
+                AWS_SSM_PROVIDER,
+                name,
+                json_key,
+            ))
+        }
+        ValueSourceKind::Auth => Some(ValueRef::auth(primary_value)),
+    }
+}
+
+fn primary_value_for_ref(value_ref: Option<&ValueRef>) -> String {
+    match value_ref {
+        Some(ValueRef::Literal { .. }) | None => String::new(),
+        Some(ValueRef::Env { key }) => key.clone(),
+        Some(ValueRef::Secret {
+            locator, json_key, ..
+        }) => format_inline_reference(locator, json_key.as_deref()),
+        Some(ValueRef::Parameter { name, json_key, .. }) => {
+            format_inline_reference(name, json_key.as_deref())
+        }
+        Some(ValueRef::Auth { field }) => field.clone(),
+    }
+}
+
+fn selected_index_for(items: &[DropdownItem], source_kind: &ValueSourceKind) -> Option<usize> {
+    let wanted = match source_kind {
+        ValueSourceKind::Literal => "literal".to_string(),
+        ValueSourceKind::Env => "env".to_string(),
+        ValueSourceKind::Secret => "secret".to_string(),
+        ValueSourceKind::Parameter => "parameter".to_string(),
+        ValueSourceKind::Auth => "auth".to_string(),
+        ValueSourceKind::SecretProvider(provider_id) => secret_provider_item_value(provider_id),
+    };
+
+    items.iter().position(|item| item.value.as_ref() == wanted)
 }
 
 pub struct ValueSourceSelector {
     source_dropdown: Entity<Dropdown>,
     secondary_input: Entity<InputState>,
+    external_providers: Vec<(String, String)>,
+    unregistered_provider: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -45,25 +171,7 @@ impl ValueSourceSelector {
         let source_dropdown = cx.new(|_cx| {
             Dropdown::new(id_prefix)
                 .placeholder(dbflux_i18n::t!("components.value_source.literal"))
-                .items(vec![
-                    DropdownItem::with_value(
-                        dbflux_i18n::t!("components.value_source.literal"),
-                        "literal",
-                    ),
-                    DropdownItem::with_value(dbflux_i18n::t!("components.value_source.env"), "env"),
-                    DropdownItem::with_value(
-                        dbflux_i18n::t!("components.value_source.secret"),
-                        "secret",
-                    ),
-                    DropdownItem::with_value(
-                        dbflux_i18n::t!("components.value_source.parameter"),
-                        "parameter",
-                    ),
-                    DropdownItem::with_value(
-                        dbflux_i18n::t!("components.value_source.auth"),
-                        "auth",
-                    ),
-                ])
+                .items(source_items(&[], None))
                 .selected_index(Some(0))
         });
 
@@ -83,6 +191,8 @@ impl ValueSourceSelector {
         Self {
             source_dropdown,
             secondary_input,
+            external_providers: Vec::new(),
+            unregistered_provider: None,
             _subscriptions: vec![dropdown_subscription],
         }
     }
@@ -93,59 +203,69 @@ impl ValueSourceSelector {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> String {
-        let (source_kind, primary_value, secondary_value) = match value_ref {
-            Some(ValueRef::Literal { .. }) | None => {
-                (ValueSourceKind::Literal, String::new(), String::new())
-            }
-            Some(ValueRef::Env { key }) => (ValueSourceKind::Env, key.clone(), String::new()),
-            Some(ValueRef::Secret {
-                locator, json_key, ..
-            }) => (
-                ValueSourceKind::Secret,
-                format_inline_reference(locator, json_key.as_deref()),
-                String::new(),
-            ),
-            Some(ValueRef::Parameter { name, json_key, .. }) => (
-                ValueSourceKind::Parameter,
-                format_inline_reference(name, json_key.as_deref()),
-                String::new(),
-            ),
-            Some(ValueRef::Auth { field }) => (ValueSourceKind::Auth, field.clone(), String::new()),
-        };
+        let source_kind = ValueSourceKind::for_value_ref(value_ref);
+        let primary_value = primary_value_for_ref(value_ref);
 
-        self.source_dropdown.update(cx, |dropdown, cx| {
-            dropdown.set_selected_index(Some(source_kind.dropdown_index()), cx);
-        });
+        self.unregistered_provider = match &source_kind {
+            ValueSourceKind::SecretProvider(provider_id)
+                if !self.is_registered_provider(provider_id) =>
+            {
+                Some(provider_id.clone())
+            }
+            _ => None,
+        };
+        self.select_source(&source_kind, cx);
 
         self.secondary_input.update(cx, |input, cx| {
-            input.set_value(secondary_value.clone(), window, cx);
+            input.set_value(String::new(), window, cx);
         });
 
         primary_value
     }
 
     pub fn value_ref(&self, primary_value: &str, cx: &App) -> Option<ValueRef> {
-        let source_kind = self.selected_source(cx);
+        value_ref_for_source(&self.selected_source(cx), primary_value)
+    }
 
-        let primary_value = primary_value.trim().to_string();
-        match source_kind {
-            ValueSourceKind::Literal => None,
-            ValueSourceKind::Env if !primary_value.is_empty() => Some(ValueRef::env(primary_value)),
-            ValueSourceKind::Secret if !primary_value.is_empty() => {
-                let (locator, json_key) = parse_secret_inline_reference(&primary_value);
-
-                Some(ValueRef::secret("aws-secrets-manager", locator, json_key))
-            }
-            ValueSourceKind::Parameter if !primary_value.is_empty() => {
-                let (name, json_key) = parse_secret_inline_reference(&primary_value);
-
-                Some(ValueRef::parameter_with_key("aws-ssm", name, json_key))
-            }
-            ValueSourceKind::Auth if !primary_value.is_empty() => {
-                Some(ValueRef::auth(primary_value))
-            }
-            _ => None,
+    /// Offers each `(provider_id, display_name)` as a secret source option,
+    /// keeping the current selection when its provider is still offered.
+    pub fn set_external_secret_providers(
+        &mut self,
+        providers: Vec<(String, String)>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.external_providers == providers {
+            return;
         }
+
+        let source_kind = self.selected_source(cx);
+        self.external_providers = providers;
+
+        if let ValueSourceKind::SecretProvider(provider_id) = &source_kind {
+            self.unregistered_provider =
+                (!self.is_registered_provider(provider_id)).then(|| provider_id.clone());
+        }
+
+        self.select_source(&source_kind, cx);
+    }
+
+    fn is_registered_provider(&self, provider_id: &str) -> bool {
+        self.external_providers
+            .iter()
+            .any(|(registered_id, _)| registered_id == provider_id)
+    }
+
+    fn select_source(&mut self, source_kind: &ValueSourceKind, cx: &mut Context<Self>) {
+        let items = source_items(
+            &self.external_providers,
+            self.unregistered_provider.as_deref(),
+        );
+        let selected_index = selected_index_for(&items, source_kind).or(Some(0));
+
+        self.source_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_items(items, cx);
+            dropdown.set_selected_index(selected_index, cx);
+        });
     }
 
     pub fn is_literal(&self, cx: &App) -> bool {
@@ -254,6 +374,98 @@ impl Render for ValueSourceSelector {
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        ValueSourceKind, primary_value_for_ref, selected_index_for, source_items,
+        value_ref_for_source,
+    };
+    use dbflux_core::values::ValueRef;
+
+    fn assert_same_ref(actual: Option<ValueRef>, expected: Option<ValueRef>) {
+        assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+    }
+
+    fn vault_providers() -> Vec<(String, String)> {
+        vec![("vault".to_string(), "HashiCorp Vault".to_string())]
+    }
+
+    fn round_trip(value_ref: &ValueRef, providers: &[(String, String)]) -> Option<ValueRef> {
+        let source_kind = ValueSourceKind::for_value_ref(Some(value_ref));
+        let unregistered = match &source_kind {
+            ValueSourceKind::SecretProvider(id) if !providers.iter().any(|(p, _)| p == id) => {
+                Some(id.as_str())
+            }
+            _ => None,
+        };
+        let items = source_items(providers, unregistered);
+        let index = selected_index_for(&items, &source_kind)?;
+        let selected = ValueSourceKind::from_value(items.get(index)?.value.as_ref());
+
+        value_ref_for_source(&selected, &primary_value_for_ref(Some(value_ref)))
+    }
+
+    #[test]
+    fn value_source_external_provider_option_produces_secret_ref() {
+        let items = source_items(&vault_providers(), None);
+        let vault = items
+            .last()
+            .map(|item| (item.label.to_string(), item.value.to_string()));
+
+        assert_eq!(
+            vault,
+            Some((
+                "HashiCorp Vault".to_string(),
+                "value-source-secret-vault".to_string()
+            ))
+        );
+        assert_same_ref(
+            value_ref_for_source(
+                &ValueSourceKind::from_value("value-source-secret-vault"),
+                " kv/db#password ",
+            ),
+            Some(ValueRef::secret(
+                "vault",
+                "kv/db",
+                Some("password".to_string()),
+            )),
+        );
+    }
+
+    #[test]
+    fn value_source_external_secret_ref_selects_its_provider_option() {
+        let value_ref = ValueRef::secret("vault", "kv/db", None);
+        let items = source_items(&vault_providers(), None);
+        let index = selected_index_for(&items, &ValueSourceKind::for_value_ref(Some(&value_ref)));
+
+        assert_eq!(index, Some(5));
+        assert_same_ref(round_trip(&value_ref, &vault_providers()), Some(value_ref));
+    }
+
+    #[test]
+    fn value_source_unknown_provider_round_trips_and_shows_raw_id() {
+        let value_ref = ValueRef::secret("acme.secrets", "app/db", Some("user".to_string()));
+        let items = source_items(&vault_providers(), Some("acme.secrets"));
+
+        assert_eq!(
+            items.last().map(|item| item.label.to_string()),
+            Some("acme.secrets".to_string())
+        );
+        assert_same_ref(round_trip(&value_ref, &vault_providers()), Some(value_ref));
+    }
+
+    #[test]
+    fn value_source_aws_refs_keep_builtin_options() {
+        let secret = ValueRef::secret("aws-secrets-manager", "prod/db", Some("pw".to_string()));
+        let parameter = ValueRef::parameter_with_key("aws-ssm", "/prod/db", None);
+
+        assert_eq!(
+            ValueSourceKind::for_value_ref(Some(&secret)),
+            ValueSourceKind::Secret
+        );
+        assert_same_ref(round_trip(&secret, &vault_providers()), Some(secret));
+        assert_same_ref(round_trip(&parameter, &[]), Some(parameter));
+        assert_eq!(source_items(&[], None).len(), 5);
+    }
+
     #[test]
     fn value_source_keys_resolve_in_both_locales() {
         let keys = [

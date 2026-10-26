@@ -4895,6 +4895,7 @@ settings:
     kind:
       driver: Driver
       auth_provider: Auth Provider
+      secret_provider: Secret Provider
     action:
       add_variable: "Add variable"
       add_argument: "Add argument"

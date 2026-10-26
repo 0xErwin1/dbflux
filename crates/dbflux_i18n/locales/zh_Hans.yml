@@ -4895,6 +4895,7 @@ settings:
     kind:
       driver: 驱动
       auth_provider: 认证提供程序
+      secret_provider: 密钥提供程序
     action:
       add_variable: "添加变量"
       add_argument: "添加参数"
