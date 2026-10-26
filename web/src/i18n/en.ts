@@ -109,57 +109,39 @@ export const en = {
     journey: {
       eyebrow: 'A visual workflow',
       title: 'From data to done. Without the detour.',
-      body: 'Scroll through a DBFlux workflow. Shape a query, edit the result and turn it into a view without opening the SQL editor.',
+      body: 'Scroll to drive DBFlux. Open a table, filter it, edit a value, chart it and find the change in the audit log, all without opening the SQL editor.',
       scroll_hint: 'Scroll to explore',
       nav_label: 'Product journey chapters',
       chapters: {
         explore: {
           nav: 'Explore',
-          eyebrow: 'Explore naturally',
-          title: 'Your data, already in view.',
-          body: 'Open a connection and move from schema to rows. The right view comes from the driver’s capabilities, not a separate tool.',
-          feature: 'Multi-driver · one native workspace',
+          title: 'Open a table in two clicks.',
+          body: 'Expand a connection, pick a table and the grid loads. There is no query to write first.',
+        },
+        filter: {
+          nav: 'Filter',
+          title: 'Filter without leaving the grid.',
+          body: 'Type a WHERE clause in the filter bar and refresh. The rows narrow in place.',
         },
         builder: {
           nav: 'Build',
-          eyebrow: 'Filtering + builder entry',
-          title: 'Shape the query. Skip the syntax.',
-          body: 'Filter rows directly in the result toolbar, or use its Builder button to choose columns, add filters and sort without writing SQL.',
-          feature: 'WHERE toolbar · Builder entry',
+          title: 'See the query you are building.',
+          body: 'The Builder shows the same filter as columns, conditions and a live SQL preview.',
         },
         edit: {
           nav: 'Edit',
-          eyebrow: 'Inline editing',
-          title: 'The grid is not a dead end.',
-          body: 'Change values where you see them, review pending edits and apply them together. No query editor required.',
-          feature: 'Edit in place · apply together',
+          title: 'Edit a cell, then save.',
+          body: 'Double-click a value to change it. The change waits until you save, so nothing is written by accident.',
         },
-        visualize: {
-          nav: 'Visualize',
-          eyebrow: 'Charts + dashboards',
-          title: 'Give the result a shape.',
-          body: 'Move from rows to charts and dashboards that make movement, totals and outliers easier to read.',
-          feature: 'Rows to answers, at a glance',
+        chart: {
+          nav: 'Chart',
+          title: 'Chart it without exporting.',
+          body: 'Switch the result to a chart and DBFlux plots it next to your data.',
         },
-        governance: {
+        audit: {
           nav: 'Audit',
-          eyebrow: 'Local audit viewer',
-          title: 'Every action leaves a trail.',
-          body: 'Inspect queries, connections, hooks, scripts and agent calls in one local audit viewer. Search and filter by time, level, category or outcome, then export the recorded events.',
-          feature: 'Local history · search · export',
-        },
-      },
-      ui: {
-        alt: {
-          explore:
-            'DBFlux main window with the Shop connection tree and the public.customers table open.',
-          builder:
-            "DBFlux results with the country = 'Japan' filter, the WHERE toolbar and the Builder button visible.",
-          edit: 'DBFlux customers grid with an inline country edit, one unsaved change, and Save and Revert controls.',
-          visualize:
-            'DBFlux line chart of monthly revenue with chart type, axis, aggregation, and time range controls.',
-          governance:
-            'DBFlux audit viewer listing query, connection, configuration, and system events with search and filters.',
+          title: 'Every change leaves a record.',
+          body: 'The audit viewer lists the update you just saved, who ran it and how long it took.',
         },
       },
     },

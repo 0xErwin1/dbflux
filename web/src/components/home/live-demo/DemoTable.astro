@@ -1,0 +1,162 @@
+---
+/** The `public.orders` table document from the IslTable board. */
+import Glyph from '../../Glyph.astro';
+import { DEMO_ROWS } from '../../../lib/live-demo-data';
+
+const columns = [
+  { key: 'id', name: 'id', type: 'int8', icon: 'key-round', tone: 'ld-pending' },
+  { key: 'customer', name: 'customer_id', type: 'int8', icon: 'cable', tone: 'ld-link' },
+  { key: 'status', name: 'status', type: 'text' },
+  { key: 'currency', name: 'currency', type: 'bpchar' },
+  { key: 'total', name: 'total', type: 'numeric' },
+  { key: 'placed', name: 'placed_at', type: 'timestamptz' },
+];
+---
+
+<div class="ld-island ld-island--grow c14" data-ld-table>
+  <div class="ld-pane">
+    <div class="ld-tabs">
+      <span class="ld-tab"><Glyph name="file-text" size={14} />orders-report.sql</span>
+      <span class="ld-tab is-on c6" data-ld-tab>
+        <Glyph name="table" size={14} class="ld-accent" />public.orders<Glyph
+          name="circle-x"
+          size={12}
+          class="ld-muted"
+        />
+      </span>
+      <span class="ld-tab"><Glyph name="key-round" size={14} />cache-redis · db 0</span>
+      <span class="ld-muted" style="display: flex; margin-left: 4px"
+        ><Glyph name="plus" size={14} /></span
+      >
+    </div>
+
+    <div class="ld-body" data-ld-body>
+      <div class="ld-toolbar">
+        <Glyph name="brand/postgresql" size={15} class="ld-link" />
+        <span>shop-pg</span>
+        <Glyph name="chevron-right" size={12} class="ld-faint" />
+        <span>shop</span>
+        <Glyph name="chevron-right" size={12} class="ld-faint" />
+        <span>public</span>
+        <Glyph name="chevron-right" size={12} class="ld-faint" />
+        <Glyph name="table" size={15} class="ld-accent" />
+        <span class="ld-strong" style="font-weight: 700">orders</span>
+        <span class="ld-toolbar__count c4">6 columns · 4,212 rows</span>
+        <span class="ld-grow"></span>
+        <span class="ld-changes">
+          <span class="ld-changes__clean ld-outcome">
+            <Glyph name="check" size={14} class="ld-success" />No unsaved changes
+          </span>
+          <span class="ld-changes__dirty"><span class="ld-diamond"></span>1 unsaved change</span>
+        </span>
+        <span class="ld-divider"></span>
+        <span class="ld-icon-button c6"><Glyph name="undo" size={14} /></span>
+        <span class="ld-icon-button c6"><Glyph name="redo" size={14} /></span>
+        <span class="ld-button ld-save ld-save--primary c6" data-ld-anchor="save">
+          <Glyph name="save" size={15} />Save<span class="ld-key c4">Ctrl ↵</span>
+        </span>
+        <span class="ld-button ld-save ld-save--secondary c6">
+          <Glyph name="rotate-ccw" size={15} />Revert
+        </span>
+      </div>
+
+      <div class="ld-filters">
+        <div class="ld-field ld-where c6" data-ld-where data-ld-anchor="where">
+          <span class="ld-where__keyword">WHERE</span>
+          <span class="ld-where__input">
+            <span class="ld-where__placeholder" data-ld-where-placeholder
+              >e.g. id &gt; 10 AND name LIKE '%test%'</span
+            ><span class="ld-where__selected" data-ld-where-selected></span><span data-ld-where-text
+            ></span><span class="ld-caret"></span>
+          </span>
+        </div>
+        <div class="ld-field ld-mono c6">
+          <span class="ld-where__keyword">LIMIT</span>
+          <span class="ld-strong">100</span>
+        </div>
+        <span
+          class="ld-button ld-builder-button c6"
+          data-ld-builder-button
+          data-ld-anchor="builder-button"
+        >
+          <Glyph name="list-filter" size={15} />Builder
+        </span>
+        <span class="ld-button ld-button--primary c6" data-ld-anchor="refresh">
+          <Glyph name="refresh-ccw" size={14} />Refresh<span class="ld-key ld-key--on-fill">F5</span
+          >
+        </span>
+      </div>
+
+      <div class="ld-grid-head">
+        <span class="ld-col ld-col--number"></span>
+        {
+          columns.map((column) => (
+            <span
+              class={`ld-col ld-col--${column.key}`}
+              data-ld-anchor={column.key === 'status' ? 'status-header' : undefined}
+            >
+              {column.icon && <Glyph name={column.icon} size={12} class={column.tone} />}
+              <span class="ld-col__name">{column.name}</span>
+              <span class="ld-col__type">{column.type}</span>
+            </span>
+          ))
+        }
+      </div>
+
+      <div class="ld-rows" data-ld-anchor="rows">
+        {
+          DEMO_ROWS.map((row, index) => (
+            <div class="ld-row" data-ld-row={index}>
+              <div class="ld-row__line">
+                <span class="ld-col ld-col--number">{index + 1}</span>
+                <span class="ld-col ld-col--id">{row.id}</span>
+                <span class="ld-col ld-col--customer">{row.customer}</span>
+                <span
+                  class="ld-col ld-col--status ld-cell"
+                  data-cell="normal"
+                  data-tone={row.status}
+                >
+                  <span class="ld-diamond" />
+                  <span class="ld-cell__text">{row.status}</span>
+                  <span class="ld-caret" />
+                </span>
+                <span class="ld-col ld-col--currency">{row.currency}</span>
+                <span class="ld-col ld-col--total">{row.total}</span>
+                <span class="ld-col ld-col--placed">{row.placed}</span>
+              </div>
+            </div>
+          ))
+        }
+      </div>
+
+      <div class="ld-grid-foot">
+        <div style="display: flex; align-items: center; gap: 12px">
+          <span class="ld-segments ld-segments--tall c6">
+            <span class="ld-segment is-on c4"><Glyph name="table" size={13} />Grid</span>
+            <span class="ld-segment"><Glyph name="braces" size={13} />JSON</span>
+            <span
+              class="ld-segment ld-chart-toggle c4"
+              data-ld-chart-toggle
+              data-ld-anchor="chart-toggle"
+            >
+              <Glyph name="chart-column-big" size={13} />Chart
+            </span>
+          </span>
+          <span class="ld-grid-foot__count">
+            <span data-all-text>100 of 4,212 rows</span><span data-filtered-text
+              >100 of 1,384 rows</span
+            >
+          </span>
+        </div>
+        <div class="ld-pager">
+          <span class="ld-pager__button c4"><Glyph name="chevron-left" size={13} /></span>
+          <span><span class="ld-strong">1</span> / 43</span>
+          <span class="ld-pager__button c4"><Glyph name="chevron-right" size={13} /></span>
+        </div>
+        <div style="display: flex; justify-content: flex-end">
+          <span class="ld-button c6"><Glyph name="file-down" size={15} />Export</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

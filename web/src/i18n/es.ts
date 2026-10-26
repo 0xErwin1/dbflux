@@ -109,57 +109,39 @@ export const es: Dictionary = {
     journey: {
       eyebrow: 'Un flujo visual',
       title: 'De los datos al resultado. Sin rodeos.',
-      body: 'Recorre un flujo de trabajo de DBFlux. Define una consulta, edita el resultado y conviértelo en una vista sin abrir el editor SQL.',
+      body: 'Desplázate para manejar DBFlux. Abre una tabla, fíltrala, edita un valor, grafícala y encuentra el cambio en el registro de auditoría, todo sin abrir el editor SQL.',
       scroll_hint: 'Desplázate para explorar',
       nav_label: 'Capítulos del recorrido por el producto',
       chapters: {
         explore: {
           nav: 'Explorar',
-          eyebrow: 'Exploración natural',
-          title: 'Tus datos, ya a la vista.',
-          body: 'Abre una conexión y pasa del esquema a las filas. La vista adecuada surge de las capacidades del driver, no de una herramienta separada.',
-          feature: 'Multidriver · un entorno nativo',
+          title: 'Abre una tabla en dos clics.',
+          body: 'Expande una conexión, elige una tabla y la grilla se carga. No hace falta escribir una consulta antes.',
+        },
+        filter: {
+          nav: 'Filtrar',
+          title: 'Filtra sin salir de la grilla.',
+          body: 'Escribe una cláusula WHERE en la barra de filtros y actualiza. Las filas se reducen en el mismo lugar.',
         },
         builder: {
           nav: 'Construir',
-          eyebrow: 'Filtros + acceso al constructor',
-          title: 'Define la consulta. Olvida la sintaxis.',
-          body: 'Filtra filas directamente desde la barra de resultados o usa su botón Builder para elegir columnas, añadir filtros y ordenar sin escribir SQL.',
-          feature: 'Barra WHERE · acceso a Builder',
+          title: 'Mira la consulta que estás armando.',
+          body: 'El Builder muestra el mismo filtro como columnas, condiciones y una vista previa del SQL en vivo.',
         },
         edit: {
           nav: 'Editar',
-          eyebrow: 'Edición inline',
-          title: 'La grilla no es el final del camino.',
-          body: 'Cambia valores donde los ves, revisa las ediciones pendientes y aplícalas juntas. No necesitas el editor de consultas.',
-          feature: 'Editar en contexto · aplicar en conjunto',
+          title: 'Edita una celda y guarda.',
+          body: 'Haz doble clic en un valor para cambiarlo. El cambio espera hasta que guardas, así nada se escribe por accidente.',
         },
-        visualize: {
-          nav: 'Visualizar',
-          eyebrow: 'Gráficos + dashboards',
-          title: 'Da forma al resultado.',
-          body: 'Pasa de las filas a gráficos y dashboards que facilitan la lectura de tendencias, totales y valores atípicos.',
-          feature: 'De filas a respuestas, de un vistazo',
+        chart: {
+          nav: 'Graficar',
+          title: 'Grafícalo sin exportar.',
+          body: 'Cambia el resultado a un gráfico y DBFlux lo dibuja junto a tus datos.',
         },
-        governance: {
+        audit: {
           nav: 'Auditoría',
-          eyebrow: 'Visor de auditoría local',
-          title: 'Cada acción deja un rastro.',
-          body: 'Inspecciona consultas, conexiones, hooks, scripts y llamadas de agentes en un único visor de auditoría local. Busca y filtra por tiempo, nivel, categoría o resultado, y exporta los eventos registrados.',
-          feature: 'Historial local · búsqueda · exportación',
-        },
-      },
-      ui: {
-        alt: {
-          explore:
-            'Ventana principal de DBFlux con el árbol de conexiones de Shop y la tabla public.customers abierta.',
-          builder:
-            "Resultados de DBFlux con el filtro country = 'Japan', la barra WHERE y el botón Builder visibles.",
-          edit: 'Grilla de clientes de DBFlux con una edición inline del país, un cambio sin guardar y los controles Save y Revert.',
-          visualize:
-            'Gráfico de líneas de DBFlux para ingresos mensuales, con controles de tipo de gráfico, ejes, agregación y rango de tiempo.',
-          governance:
-            'Visor de auditoría de DBFlux con eventos de consultas, conexiones, configuración y sistema, además de búsqueda y filtros.',
+          title: 'Cada cambio deja un registro.',
+          body: 'El visor de auditoría muestra la actualización que acabas de guardar, quién la ejecutó y cuánto tardó.',
         },
       },
     },

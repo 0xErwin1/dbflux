@@ -106,10 +106,8 @@ export interface VsSharedStrings {
 
 interface LandingJourneyChapterStrings {
   nav: string;
-  eyebrow: string;
   title: string;
   body: string;
-  feature: string;
 }
 
 /** Strings one per-client comparison page owns. */
@@ -246,19 +244,11 @@ export interface Dictionary {
       nav_label: string;
       chapters: {
         explore: LandingJourneyChapterStrings;
+        filter: LandingJourneyChapterStrings;
         builder: LandingJourneyChapterStrings;
         edit: LandingJourneyChapterStrings;
-        visualize: LandingJourneyChapterStrings;
-        governance: LandingJourneyChapterStrings;
-      };
-      ui: {
-        alt: {
-          explore: string;
-          builder: string;
-          edit: string;
-          visualize: string;
-          governance: string;
-        };
+        chart: LandingJourneyChapterStrings;
+        audit: LandingJourneyChapterStrings;
       };
     };
     core: {

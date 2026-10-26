@@ -108,54 +108,39 @@ export const zh_Hans: Dictionary = {
     journey: {
       eyebrow: '可视化工作流',
       title: '从数据到完成。无需绕路。',
-      body: '滚动体验 DBFlux 工作流。无需打开 SQL 编辑器，即可构建查询、编辑结果并将其转换为直观视图。',
+      body: '滚动即可操作 DBFlux。打开表、筛选、编辑值、生成图表，并在审计日志中找到这次更改，全程无需打开 SQL 编辑器。',
       scroll_hint: '滚动探索',
       nav_label: '产品之旅章节',
       chapters: {
         explore: {
           nav: '探索',
-          eyebrow: '自然探索',
-          title: '数据，尽在眼前。',
-          body: '打开连接，从架构直达数据行。合适的视图由驱动能力决定，无需借助其他工具。',
-          feature: '多驱动 · 一个原生工作区',
+          title: '两次点击打开一张表。',
+          body: '展开连接，选中一张表，网格随即加载。无需先写查询。',
+        },
+        filter: {
+          nav: '筛选',
+          title: '不离开网格即可筛选。',
+          body: '在筛选栏输入 WHERE 子句并刷新，数据行就地收窄。',
         },
         builder: {
           nav: '构建',
-          eyebrow: '筛选与构建器入口',
-          title: '构建查询。跳过语法。',
-          body: '直接在结果工具栏中筛选数据行，或使用同一工具栏的 Builder 按钮选择列、添加筛选和排序，无需编写 SQL。',
-          feature: 'WHERE 工具栏 · Builder 入口',
+          title: '看清正在构建的查询。',
+          body: 'Builder 以列、条件和实时 SQL 预览展示同一个筛选。',
         },
         edit: {
           nav: '编辑',
-          eyebrow: '内联编辑',
-          title: '网格不是终点。',
-          body: '直接在所见位置修改值，检查待处理的编辑并一起应用。无需查询编辑器。',
-          feature: '就地编辑 · 一起应用',
+          title: '编辑单元格，然后保存。',
+          body: '双击一个值即可修改。更改会一直等待到你保存，不会意外写入。',
         },
-        visualize: {
-          nav: '可视化',
-          eyebrow: '图表 + 仪表板',
-          title: '让结果呈现形状。',
-          body: '从数据行切换到图表和仪表板，更轻松地读懂趋势、总计和异常值。',
-          feature: '从数据行到答案，一目了然',
+        chart: {
+          nav: '图表',
+          title: '无需导出即可绘图。',
+          body: '将结果切换为图表，DBFlux 会在数据旁边直接绘制。',
         },
-        governance: {
+        audit: {
           nav: '审计',
-          eyebrow: '本地审计查看器',
-          title: '每个操作都有记录。',
-          body: '在一个本地审计查看器中检查查询、连接、Hook、脚本和智能体调用。按时间、级别、类别或结果搜索和筛选，并导出已记录的事件。',
-          feature: '本地记录 · 搜索 · 导出',
-        },
-      },
-      ui: {
-        alt: {
-          explore: 'DBFlux 主窗口，显示 Shop 连接树和打开的 public.customers 表。',
-          builder: "DBFlux 结果网格应用 country = 'Japan' 筛选，可见 WHERE 工具栏和 Builder 按钮。",
-          edit: 'DBFlux 客户网格中的国家/地区内联编辑，显示一项未保存更改以及 Save 和 Revert 控件。',
-          visualize: 'DBFlux 月度收入折线图，带有图表类型、坐标轴、聚合和时间范围控件。',
-          governance:
-            'DBFlux 审计查看器，列出查询、连接、配置和系统事件，并提供搜索与时间、级别、类别和结果筛选。',
+          title: '每次更改都有记录。',
+          body: '审计查看器会列出你刚保存的更新、执行者以及耗时。',
         },
       },
     },
