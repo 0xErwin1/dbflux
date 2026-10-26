@@ -133,6 +133,10 @@ Controls and cards are chamfered, not rounded: the `.c4` to `.c18` classes cut t
 
 Entrances rise 14px over 700ms. The driver band scrolls continuously, the audit log tails, and the demos replay rows when their state changes. Everything stops under `prefers-reduced-motion`.
 
+The home product journey keeps its five localized chapters and real DBFlux captures in the HTML. Above 1180px, when reduced motion is not requested, GSAP ScrollTrigger maps native document scroll to deterministic forward and reverse wipes. Complementary chapter clips keep copy and captures opaque and separated instead of crossfading or ghosting them. The capture plane has no rotate, scale, z or other 3D transforms and no filters; the original WebP pixels stay contained, with perspective reserved for the external ambient glow. Chapter navigation uses the app's monospace tab treatment, and chapter links scroll directly to their corresponding positions while `#governance` and `#keyboard` remain document anchors.
+
+At 1180px and below, under `prefers-reduced-motion: reduce`, without JavaScript, or if the optional animation modules cannot load, the journey is the ordinary stacked, readable document with no scrub, pin, timer or forced animation. Eligibility changes dispose of the ScrollTrigger and its inline transforms before restoring that static layout.
+
 ## Responsive
 
 Above 1180px the layouts follow the 1440px boards. Between 640px and 1180px two-column sections stack and the nav collapses into a sheet. At 640px and below the home page follows the phone board: the keyboard, audit and rules sections are left out, the comparison becomes a five-row table against DBeaver Community, and install shows the one-line Linux command.

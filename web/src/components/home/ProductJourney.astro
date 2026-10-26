@@ -4,6 +4,7 @@ import JourneyScene from './JourneyScene.astro';
 import { docsUrl } from '../../data/site';
 import { DEFAULT_LOCALE, dictionary } from '../../i18n';
 import type { Locale } from '../../i18n';
+import { JOURNEY_CHAPTERS } from '../../lib/product-journey';
 
 interface Props {
   locale?: Locale;
@@ -12,19 +13,10 @@ interface Props {
 const { locale = DEFAULT_LOCALE } = Astro.props;
 const landing = dictionary(locale).landing;
 const strings = landing.journey;
-const scenes = ['explore', 'builder', 'edit', 'visualize', 'governance'] as const;
-const ids = {
-  explore: 'journey-explore',
-  builder: 'journey-builder',
-  edit: 'journey-edit',
-  visualize: 'journey-visualize',
-  governance: 'governance',
-} as const;
-const chapters = scenes.map((scene, index) => ({
-  scene,
+const chapters = JOURNEY_CHAPTERS.map((chapter, index) => ({
+  ...chapter,
   index,
-  id: ids[scene],
-  ...strings.chapters[scene],
+  ...strings.chapters[chapter.scene],
 }));
 ---
 
@@ -116,6 +108,239 @@ const chapters = scenes.map((scene, index) => ({
   </aside>
 </section>
 
+<script>
+  import {
+    journeyChapterTarget,
+    journeyEligibility,
+    journeyProgress,
+    type JourneyChapterTarget,
+  } from '../../lib/product-journey';
+
+  for (const root of document.querySelectorAll<HTMLElement>('[data-journey]')) {
+    const track = root.querySelector<HTMLElement>('[data-journey-track]');
+    const progressElement = root.querySelector<HTMLElement>('[data-journey-progress]');
+    const chapterElements = Array.from(
+      root.querySelectorAll<HTMLElement>('[data-journey-chapter]'),
+    );
+    const navigationLinks = Array.from(
+      root.querySelectorAll<HTMLAnchorElement>('[data-journey-nav]'),
+    );
+    if (!track || !progressElement || chapterElements.length === 0) {
+      continue;
+    }
+
+    const desktopMedia = window.matchMedia('(min-width: 1181px)');
+    const reducedMotionMedia = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let activeIndex = 0;
+    let syncRevision = 0;
+    let initialAlignmentPending = true;
+    let disposeEnhancement: (() => void) | undefined;
+    let enhancedNavigation:
+      ((target: JourneyChapterTarget, behavior?: ScrollBehavior) => void) | undefined;
+
+    const updateNavigation = (progress: number) => {
+      const state = journeyProgress(progress);
+      activeIndex = state.activeIndex;
+      root.dataset.journeyScene = state.activeScene;
+      progressElement.style.transform = `scaleX(${state.progress})`;
+
+      navigationLinks.forEach((link, index) => {
+        if (index === activeIndex) link.setAttribute('aria-current', 'step');
+        else link.removeAttribute('aria-current');
+      });
+      chapterElements.forEach((chapter, index) => {
+        chapter.toggleAttribute('data-journey-current', index === activeIndex);
+      });
+    };
+
+    const clearEnhancedState = () => {
+      enhancedNavigation = undefined;
+      root.removeAttribute('data-journey-enhanced');
+      delete root.dataset.journeyScene;
+      progressElement.style.removeProperty('transform');
+      navigationLinks.forEach((link) => link.removeAttribute('aria-current'));
+      chapterElements.forEach((chapter) => chapter.removeAttribute('data-journey-current'));
+    };
+
+    const onChapterLink = (event: MouseEvent) => {
+      if (
+        !enhancedNavigation ||
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+
+      const anchor =
+        event.target instanceof Element ? event.target.closest<HTMLAnchorElement>('a[href]') : null;
+      if (!anchor) return;
+
+      const url = new URL(anchor.href, window.location.href);
+      if (
+        url.origin !== window.location.origin ||
+        url.pathname !== window.location.pathname ||
+        url.search !== window.location.search
+      ) {
+        return;
+      }
+
+      const target = journeyChapterTarget(url.hash);
+      if (!target) return;
+
+      event.preventDefault();
+      window.history.pushState(null, '', url.hash);
+      enhancedNavigation(target);
+    };
+
+    document.addEventListener('click', onChapterLink);
+
+    const syncEnhancement = async () => {
+      const revision = ++syncRevision;
+      const shouldAlignInitialHash = initialAlignmentPending;
+      const wasEnhanced = disposeEnhancement !== undefined;
+      const previousIndex = activeIndex;
+      initialAlignmentPending = false;
+      disposeEnhancement?.();
+      disposeEnhancement = undefined;
+
+      if (journeyEligibility(window.innerWidth, reducedMotionMedia.matches).mode === 'static') {
+        if (wasEnhanced) {
+          chapterElements[previousIndex]?.scrollIntoView({
+            block: 'start',
+            behavior: 'instant',
+          });
+        }
+        return;
+      }
+
+      try {
+        const [{ gsap }, { ScrollTrigger }] = await Promise.all([
+          import('gsap'),
+          import('gsap/ScrollTrigger'),
+        ]);
+        if (
+          revision !== syncRevision ||
+          journeyEligibility(window.innerWidth, reducedMotionMedia.matches).mode === 'static'
+        ) {
+          return;
+        }
+
+        gsap.registerPlugin(ScrollTrigger);
+        root.setAttribute('data-journey-enhanced', '');
+
+        let alignInitialHash = () => {};
+
+        const context = gsap.context(() => {
+          gsap.set(chapterElements, {
+            autoAlpha: 0,
+            clipPath: 'inset(0% 0% 0% 0%)',
+          });
+          const firstChapter = chapterElements[0];
+          if (firstChapter) gsap.set(firstChapter, { autoAlpha: 1 });
+
+          const timeline = gsap.timeline({
+            defaults: { duration: 1, ease: 'none' },
+            paused: true,
+          });
+          // The hold keeps direct stops clear after native scroll rounds fractional pixels.
+          const wipeDuration = 0.998;
+
+          for (let index = 1; index < chapterElements.length; index += 1) {
+            const previousChapter = chapterElements[index - 1];
+            const currentChapter = chapterElements[index];
+            if (!previousChapter || !currentChapter) continue;
+
+            const at = index - 1;
+            timeline
+              .fromTo(
+                previousChapter,
+                { clipPath: 'inset(0% 0% 0% 0%)' },
+                {
+                  clipPath: 'inset(0% 100% 0% 0%)',
+                  duration: wipeDuration,
+                  immediateRender: false,
+                },
+                at,
+              )
+              .fromTo(
+                currentChapter,
+                { clipPath: 'inset(0% 0% 0% 100%)' },
+                { clipPath: 'inset(0% 0% 0% 0%)', duration: wipeDuration, immediateRender: false },
+                at,
+              )
+              .to(currentChapter, { autoAlpha: 1, duration: 0, immediateRender: false }, at + 0.001)
+              .to(
+                previousChapter,
+                { autoAlpha: 0, duration: 0, immediateRender: false },
+                at + wipeDuration,
+              );
+          }
+
+          const scrollTrigger = ScrollTrigger.create({
+            animation: timeline,
+            trigger: track,
+            start: () => {
+              const navigation = document.querySelector<HTMLElement>('[data-nav]');
+              return `top top+=${navigation?.offsetHeight ?? 0}`;
+            },
+            end: 'bottom bottom',
+            scrub: true,
+            invalidateOnRefresh: true,
+            onRefresh: (self) => updateNavigation(self.progress),
+            onUpdate: (self) => updateNavigation(self.progress),
+          });
+
+          enhancedNavigation = (target, behavior = 'instant') => {
+            const distance = scrollTrigger.end - scrollTrigger.start;
+            window.scrollTo({
+              top: scrollTrigger.start + distance * target.progress,
+              behavior,
+            });
+          };
+        }, root);
+
+        alignInitialHash = () => {
+          const hash = window.location.hash;
+          if (!hash) return;
+
+          const target = journeyChapterTarget(hash);
+          if (target) {
+            enhancedNavigation?.(target);
+            return;
+          }
+          document
+            .getElementById(hash.slice(1))
+            ?.scrollIntoView({ block: 'start', behavior: 'instant' });
+        };
+
+        disposeEnhancement = () => {
+          window.removeEventListener('load', alignInitialHash);
+          context.revert();
+          clearEnhancedState();
+        };
+
+        ScrollTrigger.refresh();
+        if (shouldAlignInitialHash) {
+          if (document.readyState === 'complete') alignInitialHash();
+          else window.addEventListener('load', alignInitialHash, { once: true });
+        }
+      } catch {
+        // A failed optional enhancement leaves the semantic static document usable.
+        clearEnhancedState();
+      }
+    };
+
+    const onEligibilityChange = () => void syncEnhancement();
+    desktopMedia.addEventListener('change', onEligibilityChange);
+    reducedMotionMedia.addEventListener('change', onEligibilityChange);
+    void syncEnhancement();
+  }
+</script>
+
 <style>
   .journey {
     position: relative;
@@ -194,7 +419,10 @@ const chapters = scenes.map((scene, index) => ({
     min-height: 56px;
     padding: 0 14px;
     color: var(--text-muted);
-    font-size: 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
   }
 
   .journey__nav-link + .journey__nav-link {
@@ -203,7 +431,8 @@ const chapters = scenes.map((scene, index) => ({
 
   .journey__nav-link .mono {
     color: var(--text-faint);
-    font-size: 9px;
+    font-size: 10px;
+    font-weight: 500;
   }
 
   .journey__nav-link > span:last-child {
@@ -280,8 +509,6 @@ const chapters = scenes.map((scene, index) => ({
   .journey__visual {
     position: relative;
     min-width: 0;
-    transform: perspective(1400px) rotateY(-3deg) rotateX(1deg);
-    transform-style: preserve-3d;
   }
 
   .journey__visual::before {
@@ -296,10 +523,6 @@ const chapters = scenes.map((scene, index) => ({
     filter: blur(36px);
     content: '';
     pointer-events: none;
-  }
-
-  .journey__chapter:nth-child(even) .journey__visual {
-    transform: perspective(1400px) rotateY(3deg) rotateX(1deg);
   }
 
   .journey__keyboard {
@@ -366,6 +589,50 @@ const chapters = scenes.map((scene, index) => ({
     line-height: 1.55;
   }
 
+  @media (min-width: 1181px) and (prefers-reduced-motion: no-preference) {
+    .journey[data-journey-enhanced] .journey__track {
+      height: calc(var(--journey-chapters) * 100vh);
+      height: calc(var(--journey-chapters) * 100dvh);
+    }
+
+    .journey[data-journey-enhanced] .journey__sticky {
+      position: sticky;
+      top: var(--nav-h);
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - var(--nav-h));
+      height: calc(100dvh - var(--nav-h));
+      overflow: hidden;
+      background: var(--bg);
+    }
+
+    .journey[data-journey-enhanced] .journey__nav {
+      z-index: 2;
+      flex: none;
+      background: var(--bg);
+    }
+
+    .journey[data-journey-enhanced] .journey__chapters {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .journey[data-journey-enhanced] .journey__chapter {
+      position: absolute;
+      inset: 0;
+      height: 100%;
+      min-height: 0;
+      padding: clamp(24px, 4vh, 52px) 0;
+      border: 0;
+    }
+
+    /* Projected, the glow outgrows its box; only the clipped sticky stage can contain it. */
+    .journey[data-journey-enhanced] .journey__visual::before {
+      transform: perspective(900px) rotateX(58deg) translateZ(-40px);
+    }
+  }
+
   @media (max-width: 1180px) {
     .journey__head {
       grid-template-columns: minmax(0, 1fr);
@@ -386,9 +653,9 @@ const chapters = scenes.map((scene, index) => ({
       max-width: 650px;
     }
 
-    .journey__visual,
-    .journey__chapter:nth-child(even) .journey__visual {
-      transform: none;
+    /* The stacked capture reaches the gutter, so a glow past its right edge widens the page. */
+    .journey__visual::before {
+      right: 0;
     }
 
     .journey__keyboard {
