@@ -98,7 +98,7 @@ flowchart TB
     start["연결 관리자 / 사이드바에서<br/>연결"] --> prep["AppState::prepare_pipeline_input<br/>(프로바이더 중립 입력)"]
     prep --> pre{{"PreConnect 훅"}}
     pre --> auth["파이프라인: Authenticating<br/>(DynAuthProvider, 예: AWS SSO)"]
-    auth --> values["파이프라인: ResolvingValues<br/>(ValueRef → env/secret/param/auth)"]
+    auth --> values["파이프라인: ResolvingValues<br/>(ValueRef → env/dotenv/secret/param/auth)"]
     values --> access["파이프라인: OpeningAccess"]
     access --> tunnel{"액세스 종류?"}
     tunnel -->|직접| connect
@@ -115,7 +115,7 @@ flowchart TB
 - UI: `gpui`, `gpui-component` (Cargo.toml).
 - 데이터베이스: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis), `aws-sdk-dynamodb` (DynamoDB), 그리고 `reqwest`를 통한 HTTP (ClickHouse) (Cargo.toml).
 - AWS 인증/통합: `aws-config`, `aws-sdk-sso`, `aws-sdk-ssooidc`, `aws-sdk-sts`, `aws-sdk-secretsmanager`, `aws-sdk-ssm` (`dbflux_aws`).
-- IPC/RPC: `interprocess` 로컬 소켓 + `bincode` 메시지 프레이밍 (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
+- IPC/RPC: `interprocess` 로컬 소켓 + `postcard` 메시지 프레이밍 (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
 - SSH: `dbflux_ssh`를 통한 `ssh2` (crates/dbflux_ssh/src/lib.rs).
 - 내보내기: `dbflux_export`를 통한 `csv` + `hex` + `base64` + `serde_json` (crates/dbflux_export/src/lib.rs).
 - 직렬화/설정: `serde`, `serde_json`, `dirs` (Cargo.toml).
@@ -438,7 +438,7 @@ crates/
     src/envelope.rs         # ProtocolVersion + 앱/드라이버 프로토콜 상수
     src/protocol.rs         # 단일 인스턴스 앱 제어 메시지
     src/driver_protocol.rs  # 드라이버 RPC 요청/응답 스키마 (DTO + 오류)
-    src/framing.rs          # 길이 접두사 bincode 전송 프레이밍
+    src/framing.rs          # 길이 접두사 postcard 전송 프레이밍
     src/socket.rs           # 크로스 플랫폼 소켓 이름 지정 헬퍼
   dbflux_driver_ipc/        # 외부 RPC 서비스를 위한 DbDriver 어댑터
     src/driver.rs           # IpcDriver + 관리형 호스트 수명 주기
@@ -480,6 +480,9 @@ crates/
     src/driver.rs           # 로그 그룹/스트림 탐색, EventStreamTarget, CollectionPresentation::EventStream
   dbflux_driver_s3/         # AWS S3 개체 스토리지 드라이버 (DatabaseCategory::ObjectStorage)
     src/driver.rs           # 버킷/개체 탐색, ObjectStoreConnection 구현, presign/copy/versions
+  dbflux_driver_aws_secrets/ # AWS Secrets Manager + Parameter Store 드라이버 (DatabaseCategory::SecretStore)
+    src/secrets_manager/    # ListSecrets/DescribeSecret/GetSecretValue 위의 SecretStoreSource
+    src/parameter_store/    # DescribeParameters/GetParameter 위의 SecretStoreSource, 클라이언트 측 경로 그룹화
   dbflux_aws/               # AWS 인증 공급자 + Secrets Manager/SSM 값 공급자
     src/auth.rs             # AWS SSO/shared/static 공급자 및 SSO 로그인 흐름
     src/config.rs           # ~/.aws/config 파서/캐시 및 프로필 쓰기 반환 헬퍼
@@ -608,6 +611,7 @@ crates/
 - `BucketsTableDocument` (`crates/dbflux_ui_document/src/buckets_table/`) — 연결 루트 개체 스토리지 뷰(이름, 리전, 개체 수, 크기, 버저닝, 생성일)이며, `DataGridPanel` 대신 `dbflux_components::data_table`을 재사용합니다. `DocumentKey::ObjectStoreBucketsRoot`로 키가 지정됩니다.
 - `ObjectBrowserDocument` (`crates/dbflux_ui_document/src/object_browser/`) — 페이지 나누기와 지연 트리 탐색, 미리보기, 메타데이터, 업로드, 삭제, 이름 바꾸기, 사전 서명(presign)을 갖춘 분할 트리/미리보기 개체 스토리지 브라우저입니다. `DocumentKey::ObjectBrowser`로 키가 지정됩니다.
 - `ObjectEditorDocument` (`crates/dbflux_ui_document/src/object_editor/`) — S3 텍스트 개체를 위한 독립형 "open in editor" 탭이며, `ObjectBrowserDocument`의 인라인 편집기와 `object_text` 모듈(줄바꿈 감지, 언어 강조, 저장 감사)을 공유합니다. `DocumentKey::ObjectEditor`로 키가 지정됩니다.
+- `SecretStoreDocument` (`crates/dbflux_ui_document/src/secret_store/`) — 하나의 `SecretStoreSource`에 대해 이름 검색이 있는 페이지 나누기 시크릿 목록, 세부 정보 패널, 명시적이고 감사되는 값 조회를 제공합니다. 값은 `secrecy` 타입으로 보관되고 시크릿 입력으로만 그려지므로 UI 자동화 트리에 절대 도달하지 않습니다. `DocumentKey::SecretStore`로 키가 지정됩니다.
 
 **새 문서 타입 추가** (새 모듈 외부에서는 변경이 필요 없습니다):
 1. 엔티티를 담은 `crates/dbflux_ui_document/src/<name>/mod.rs`를 만듭니다.
@@ -691,9 +695,9 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 ### 드라이버 체계
 
 - **드라이버 기능**: `crates/dbflux_core/src/driver/capabilities.rs`는 다음을 정의합니다:
-  - `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream, ObjectStorage
+  - `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream, ObjectStorage, SecretStore
   - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl, OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql, Lua, Python, Bash (각각 편집기 모드, 자리 표시자, 주석 접두어를 전달합니다)
-  - `DriverCapabilities`: PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC 등의 기능을 위한 `u64` 비트플래그
+  - `DriverCapabilities`: PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC 등의 기능을 위한 `u128` 비트플래그
   - `DriverMetadata`: 정적 드라이버 정보(id, name, category, query_language, capabilities, icon)
 - **드라이버 소유 연결 폼**: 각 `DbDriver`는 `form_definition()`에서 자신의 `&DriverFormDef`를 반환합니다. 폼 정의는 코어가 아닌 드라이버 크레이트(예: `dbflux_driver_cloudwatch::driver::CLOUDWATCH_FORM`)에 있습니다. `DriverFormDef`는 탭 → 섹션 → 필드를 전달하며, `FormFieldKind`는 `Text`, `Password`, `WriteOnly`(시크릿), `FilePath`, `Select`, `DynamicSelect`(런타임에 가져오는 옵션, `depends_on` + `RefreshTrigger`), `AuthProfileRef { provider_id }`를 다룹니다.
 - **오류 포맷팅**: `crates/dbflux_core/src/core/error_formatter.rs`는 상세(detail), 힌트, 열, 테이블, 제약 조건 컨텍스트가 있는 드라이버별 오류 메시지를 위한 `ErrorFormatter` 트레잇을 제공합니다.
@@ -871,6 +875,10 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
   - `ObjectStoreConnection` 구현은 업로드, 삭제, 재귀적 접두사/버킷 삭제(일괄 처리된 `DeleteObjects`), 복사, 사전 서명, 버킷 세부 정보/버전 관리, 개체 버전을 다룹니다
   - UI의 전체 CRUD: 업로드, 확인 입력 방식의 재귀 삭제, 엔드포인트별 단계적 기능 저하가 있는 폴더/버킷 만들기, 이름 바꾸기(복사 후 삭제), 사전 서명된 URL
   - 모든 변경은 `EventCategory::ObjectStorage` 아래로 감사 기록됩니다; 자격 증명과 사전 서명된 URL은 절대 로깅되거나 저장되지 않습니다
+- **AWS Secrets**: `crates/dbflux_driver_aws_secrets/` — `aws-sdk-secretsmanager` + `aws-sdk-ssm` 드라이버(`DatabaseCategory::SecretStore`)입니다:
+  - `Connection::secret_stores()`와 공급자 중립적인 `SecretStoreSource` seam(`dbflux_core/src/connection/secret_store/`)으로 두 저장소를 노출하며, `DriverCapabilities::SECRET_STORE`로 게이트됩니다. 저장소별 `SecretStoreCapabilities`가 UI 동작을 게이트합니다
+  - 목록(`ListSecrets`, `DescribeParameters`)은 값을 절대 가져오지 않습니다. Parameter Store 경로는 클라이언트 측에서 직접 항목과 하위 경로로 묶입니다
+  - 값은 명시적인 조회로만 읽히며, 값 없이 `EventCategory::SecretStore` 아래로 감사 기록됩니다. 거부된 `kms:Decrypt`는 `DbError::PermissionDenied`로 매핑됩니다
 
 ### 드라이버 README 정책
 
@@ -979,8 +987,9 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
 - ClickHouse: `reqwest`를 사용하는 HTTP(S) 드라이버로, 동적 JSON 디코딩, 데이터베이스/테이블 탐색, 셀프호스티드 ClickHouse와 ClickHouse Cloud를 위한 읽기 중심 SQL 지원을 제공합니다 (crates/dbflux_driver_clickhouse/src/driver.rs).
 - TursoDB: Hrana HTTP 위의 `turso_serverless` 드라이버로, 프로필별 Tokio 브리징, PRAGMA 기반 스키마 탐색, 타입이 지정된 CRUD, 대화형 트랜잭션을 위한 스트림별 실행 세션을 제공합니다 (crates/dbflux_driver_turso/src/connection.rs).
 - Amazon S3: `aws-sdk-s3` 드라이버로, AWS 프로필/SSO 또는 정적 자격 증명, S3 호환 엔드포인트(Cloudflare R2, MinIO)를 위한 엔드포인트 재정의와 경로 스타일 주소 지정, 버킷/개체 CRUD, presigned URL, 복사/버전 지원을 제공합니다 (crates/dbflux_driver_s3/src/driver.rs).
+- AWS Secrets: `aws-sdk-secretsmanager`와 `aws-sdk-ssm` 드라이버로, AWS 프로필/SSO 또는 정적 자격 증명과 엔드포인트 재정의, 페이지 나누기 시크릿 및 파라미터 목록, 세부 정보, 명시적 값 조회를 제공합니다 (crates/dbflux_driver_aws_secrets/src/driver/mod.rs).
 - AWS 인증 스택: `dbflux_aws`는 AWS SSO/공유/정적 인증 제공자, SSO 로그인 오케스트레이션, 계정/역할 탐색, 새로 저장된 인증 프로필을 위한 `~/.aws/config` 프로필 쓰기 되돌리기를 제공합니다.
-- 로컬 IPC/RPC: 앱 제어와 RPC 서비스 통신을 위한 `interprocess` 소켓 + 버전이 지정된 엔벨로프 (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). `dbflux_app::rpc_services`는 영속화된 서비스 디스크립터를 탐색하고, `RpcServiceKind::Driver`를 런타임 `DbDriver`로 변환하며, `RpcServiceKind::AuthProvider`를 `RpcAuthProvider`(`DynAuthProvider`를 구현)에 연결합니다. `rpc:<socket_id>` 호환성을 유지합니다. 인증 제공자 IPC 프로토콜은 v1.2입니다: `FetchDynamicOptions` / `DynamicOptions` 변형과 `secret_dependency_opt_in` 매니페스트 플래그를 추가합니다. 인증 토큰은 `dbflux_ipc/src/auth.rs`가 관리합니다.
+- 로컬 IPC/RPC: 앱 제어와 RPC 서비스 통신을 위한 `interprocess` 소켓 + 버전이 지정된 엔벨로프 (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). `dbflux_app::rpc_services`는 영속화된 서비스 디스크립터를 탐색하고, `RpcServiceKind::Driver`를 런타임 `DbDriver`로 변환하며, `RpcServiceKind::AuthProvider`를 `RpcAuthProvider`(`DynAuthProvider`를 구현)에, `RpcServiceKind::SecretProvider`를 `RpcSecretProvider`(`DynSecretProvider`를 구현, [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md) 참고)에 연결합니다. `rpc:<socket_id>` 호환성을 유지합니다. 인증 제공자 IPC 프로토콜은 v1.2입니다: `FetchDynamicOptions` / `DynamicOptions` 변형과 `secret_dependency_opt_in` 매니페스트 플래그를 추가합니다. 인증 토큰은 `dbflux_ipc/src/auth.rs`가 관리합니다.
 - 프록시: `dbflux_tunnel_core::Tunnel`을 통한 SOCKS5/HTTP CONNECT 터널 (crates/dbflux_proxy/src/lib.rs).
 - SSH: `dbflux_tunnel_core::Tunnel`을 통한 로컬 TCP 포워딩이 있는 `ssh2` 세션 (crates/dbflux_ssh/src/lib.rs).
 - OS 키링: 비밀번호, SSH 패스프레이즈, 프록시 자격 증명을 위한 선택적 비밀 저장소 (crates/dbflux_core/src/storage/secrets.rs).
@@ -989,14 +998,14 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
 ## 구성
 
 - 워크스페이스 설정: `Cargo.toml`은 워크스페이스 멤버와 공유 종속성을 정의합니다.
-- 앱 기능: `crates/dbflux/Cargo.toml`은 `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`, `redshift`, `clickhouse`, `s3`, `lua`, `aws`, `mcp` 기능 플래그를 게이트합니다 (이 브랜치에서 기본 활성화).
+- 앱 기능: `crates/dbflux/Cargo.toml`은 `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`, `redshift`, `clickhouse`, `s3`, `aws_secrets`, `lua`, `aws`, `mcp` 기능 플래그를 게이트합니다 (이 브랜치에서 기본 활성화).
 - 런타임 데이터: 모든 런타임 구성은 `~/.local/share/dbflux/dbflux.db`(단일 SQLite 파일)에 저장됩니다.
   - `cfg_connection_profiles` + 하위 테이블 (인증, 프록시, SSH 바인딩)
   - `cfg_auth_profiles` (제공자에 구애받지 않는 인증 프로필 저장소)
   - `cfg_ssh_tunnel_profiles`, `cfg_proxy_profiles`
   - `cfg_hooks`, `cfg_hook_bindings`
   - `cfg_script_roots` (제자리에서 나열되는 외부 스크립트 폴더. 행을 삭제해도 폴더는 건드리지 않음)
-  - `cfg_services`, `cfg_service_args`, `cfg_service_env` (RPC 서비스 디스크립터; `cfg_services.service_kind`은 `driver`와 `auth_provider` 중 무엇인지 기록)
+  - `cfg_services`, `cfg_service_args`, `cfg_service_env` (RPC 서비스 디스크립터; `cfg_services.service_kind`은 `driver`, `auth_provider`, `secret_provider` 중 무엇인지 기록)
   - `cfg_governance_*` 테이블 (역할, 정책, 신뢰할 수 있는 클라이언트)
   - `cfg_drivers` (드라이버별 설정 재정의)
   - `cfg_folders` (연결 트리 조직화)

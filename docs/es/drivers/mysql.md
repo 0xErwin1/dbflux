@@ -97,6 +97,15 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   acota bytes, trabajo del servidor, asignación de memoria del motor ni tiempo
   transcurrido. No se verificó MariaDB alojado.
 - Driver solo SQL; no expone APIs de documentos ni de key-value.
+- En MariaDB, que no tiene `information_schema.VIEW_TABLE_USAGE`, la confirmación
+  de eliminar tabla busca las vistas dependientes en las definiciones de vista
+  por el nombre `` `base`.`tabla` ``, así que una vista que llega a la tabla solo
+  a través de otra vista no aparece.
+- MySQL anterior a 8.0.16 no guarda las restricciones `CHECK`, así que los
+  detalles de tabla no muestran ninguna. MariaDB anterior a 10.2.22 (10.3.10 en
+  la serie 10.3) las guarda pero no tiene `information_schema.CHECK_CONSTRAINTS`,
+  así que los detalles de tabla muestran sus restricciones de verificación sin
+  la cláusula.
 - Las columnas `DECIMAL` se reportan como `ColumnKind::Float`, porque no existe
   un tipo de columna decimal: los gráficos y otros usos del tipo de columna las
   tratan como números de punto flotante, aunque los valores en sí se mantienen

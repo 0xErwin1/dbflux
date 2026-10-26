@@ -55,6 +55,7 @@ Every audit event is an `EventRecord` (`dbflux_core/src/observability/types.rs`)
 | `Config` | `config` | Profile changes, settings modifications |
 | `System` | `system` | Application startup, panics, migrations |
 | `ObjectStorage` | `object_storage` | Object-storage CRUD/mutation events (upload, download, delete, presign, rename, create bucket/folder, save-back edit) |
+| `SecretStore` | `secret_store` | Secret value retrievals (`secret_value_retrieved`, `secret_value_retrieve_failed`); the value itself is never recorded |
 
 ### Actor Types
 
@@ -80,6 +81,7 @@ Validation is enforced by `AuditService::validate_event()` before storage:
 | `Mcp` | `actor_id`, `object_id` (tool name) |
 | `Config` | `object_type`, `object_id` |
 | `ObjectStorage` | `connection_id`, `object_type`, `object_id` |
+| `SecretStore` | `connection_id`, `object_type` (store id), `object_id` (secret name) |
 | `Governance`, `System` | No additional fields |
 
 ## Privacy and Redaction

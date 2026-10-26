@@ -191,6 +191,10 @@ pub enum DatabaseCategory {
     /// Object storage services with buckets and key-addressed binary objects.
     /// Examples: AWS S3, Cloudflare R2, MinIO
     ObjectStorage,
+
+    /// Secret managers with named, versioned secret values.
+    /// Examples: AWS Secrets Manager, AWS Systems Manager Parameter Store
+    SecretStore,
 }
 
 impl DatabaseCategory {
@@ -202,6 +206,7 @@ impl DatabaseCategory {
             DatabaseCategory::TimeSeries => "Time Series",
             DatabaseCategory::LogStream => "Log Stream",
             DatabaseCategory::ObjectStorage => "Object Storage",
+            DatabaseCategory::SecretStore => "Secret Store",
             DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => "Unknown",
         }
     }
@@ -216,6 +221,7 @@ impl DatabaseCategory {
             DatabaseCategory::TimeSeries => "Measurements",
             DatabaseCategory::LogStream => "Log Groups",
             DatabaseCategory::ObjectStorage => "Buckets",
+            DatabaseCategory::SecretStore => "Stores",
             DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => "Objects",
         }
     }
@@ -229,6 +235,7 @@ impl DatabaseCategory {
             DatabaseCategory::TimeSeries => "Measurement",
             DatabaseCategory::LogStream => "Log Group",
             DatabaseCategory::ObjectStorage => "Bucket",
+            DatabaseCategory::SecretStore => "Store",
             DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => "Object",
         }
     }
@@ -242,6 +249,7 @@ impl DatabaseCategory {
             DatabaseCategory::TimeSeries => "Points",
             DatabaseCategory::LogStream => "Log events",
             DatabaseCategory::ObjectStorage => "Objects",
+            DatabaseCategory::SecretStore => "Secrets",
             DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => "Records",
         }
     }
@@ -255,6 +263,7 @@ impl DatabaseCategory {
             DatabaseCategory::TimeSeries => "Point",
             DatabaseCategory::LogStream => "Log event",
             DatabaseCategory::ObjectStorage => "Object",
+            DatabaseCategory::SecretStore => "Secret",
             DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => "Record",
         }
     }
@@ -346,6 +355,8 @@ impl DatabaseCategory {
                 DriverCapabilities::OBJECT_STORAGE.bits()
                     | DriverCapabilities::OBJECT_PREFIX_DELETE.bits(),
             ),
+
+            DatabaseCategory::SecretStore => DriverCapabilities::SECRET_STORE,
         };
 
         common.union(category_specific)
@@ -390,7 +401,7 @@ bitflags! {
     /// The UI queries these flags to determine which features to enable.
     /// Drivers declare their capabilities at registration time.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct DriverCapabilities: u64 {
+    pub struct DriverCapabilities: u128 {
         // === Connection features ===
 
         /// Driver supports multiple databases per server.
@@ -659,6 +670,11 @@ bitflags! {
         /// of refusing the request. The native console sends the editor row
         /// limit only to drivers that advertise this.
         const REQUEST_ROW_LIMIT = 1 << 63;
+
+        /// Connection exposes one or more secret stores through
+        /// `Connection::secret_stores`. A driver whose connections return no
+        /// stores MUST NOT advertise this flag.
+        const SECRET_STORE = 1 << 64;
     }
 }
 
@@ -668,52 +684,57 @@ mod capability_bits_tests {
 
     #[test]
     fn instance_metrics_bit_value() {
-        assert_eq!(DriverCapabilities::INSTANCE_METRICS.bits(), 1u64 << 54);
+        assert_eq!(DriverCapabilities::INSTANCE_METRICS.bits(), 1u128 << 54);
     }
 
     #[test]
     fn instance_inspector_bit_value() {
-        assert_eq!(DriverCapabilities::INSTANCE_INSPECTOR.bits(), 1u64 << 55);
+        assert_eq!(DriverCapabilities::INSTANCE_INSPECTOR.bits(), 1u128 << 55);
     }
 
     #[test]
     fn bulk_insert_bit_value() {
-        assert_eq!(DriverCapabilities::BULK_INSERT.bits(), 1u64 << 56);
+        assert_eq!(DriverCapabilities::BULK_INSERT.bits(), 1u128 << 56);
     }
 
     #[test]
     fn truncate_table_bit_value() {
-        assert_eq!(DriverCapabilities::TRUNCATE_TABLE.bits(), 1u64 << 57);
+        assert_eq!(DriverCapabilities::TRUNCATE_TABLE.bits(), 1u128 << 57);
     }
 
     #[test]
     fn disable_fk_checks_bit_value() {
-        assert_eq!(DriverCapabilities::DISABLE_FK_CHECKS.bits(), 1u64 << 58);
+        assert_eq!(DriverCapabilities::DISABLE_FK_CHECKS.bits(), 1u128 << 58);
     }
 
     #[test]
     fn object_storage_bit_value() {
-        assert_eq!(DriverCapabilities::OBJECT_STORAGE.bits(), 1u64 << 59);
+        assert_eq!(DriverCapabilities::OBJECT_STORAGE.bits(), 1u128 << 59);
     }
 
     #[test]
     fn object_prefix_delete_bit_value() {
-        assert_eq!(DriverCapabilities::OBJECT_PREFIX_DELETE.bits(), 1u64 << 60);
+        assert_eq!(DriverCapabilities::OBJECT_PREFIX_DELETE.bits(), 1u128 << 60);
     }
 
     #[test]
     fn script_execution_bit_value() {
-        assert_eq!(DriverCapabilities::SCRIPT_EXECUTION.bits(), 1u64 << 61);
+        assert_eq!(DriverCapabilities::SCRIPT_EXECUTION.bits(), 1u128 << 61);
     }
 
     #[test]
     fn native_console_bit_value() {
-        assert_eq!(DriverCapabilities::NATIVE_CONSOLE.bits(), 1u64 << 62);
+        assert_eq!(DriverCapabilities::NATIVE_CONSOLE.bits(), 1u128 << 62);
     }
 
     #[test]
     fn request_row_limit_bit_value() {
-        assert_eq!(DriverCapabilities::REQUEST_ROW_LIMIT.bits(), 1u64 << 63);
+        assert_eq!(DriverCapabilities::REQUEST_ROW_LIMIT.bits(), 1u128 << 63);
+    }
+
+    #[test]
+    fn secret_store_bit_value() {
+        assert_eq!(DriverCapabilities::SECRET_STORE.bits(), 1u128 << 64);
     }
 
     #[test]
@@ -783,9 +804,10 @@ mod capability_bits_tests {
             DriverCapabilities::SCRIPT_EXECUTION,
             DriverCapabilities::NATIVE_CONSOLE,
             DriverCapabilities::REQUEST_ROW_LIMIT,
+            DriverCapabilities::SECRET_STORE,
         ];
 
-        let mut seen_bits: u64 = 0;
+        let mut seen_bits: u128 = 0;
         for cap in named {
             let bits = cap.bits();
             assert_eq!(
@@ -904,7 +926,7 @@ impl<'de> Deserialize<'de> for DriverCapabilities {
     where
         D: serde::Deserializer<'de>,
     {
-        let bits = u64::deserialize(deserializer)?;
+        let bits = u128::deserialize(deserializer)?;
         Ok(Self::from_bits(bits).unwrap_or_else(Self::empty))
     }
 }
@@ -2787,12 +2809,12 @@ mod tests {
     fn test_routines_capability_bit() {
         assert_eq!(
             DriverCapabilities::ROUTINES.bits(),
-            1u64 << 47,
+            1u128 << 47,
             "ROUTINES must be bit 47"
         );
         assert_eq!(
             DriverCapabilities::MULTI_STATEMENT.bits(),
-            1u64 << 48,
+            1u128 << 48,
             "MULTI_STATEMENT must be bit 48"
         );
         assert_eq!(
@@ -3468,7 +3490,7 @@ mod tests {
     fn metric_catalog_capability_bit_value_and_unique() {
         let bits = DriverCapabilities::METRIC_CATALOG.bits();
 
-        assert_eq!(bits, 1u64 << 50, "METRIC_CATALOG must equal 1 << 50");
+        assert_eq!(bits, 1u128 << 50, "METRIC_CATALOG must equal 1 << 50");
         assert_eq!(
             bits.count_ones(),
             1,
@@ -3572,7 +3594,7 @@ mod tests {
     fn test_dashboard_import_bit_value() {
         assert_eq!(
             DriverCapabilities::DASHBOARD_IMPORT.bits(),
-            1u64 << 51,
+            1u128 << 51,
             "DASHBOARD_IMPORT must equal 1 << 51"
         );
     }
@@ -3605,7 +3627,7 @@ mod tests {
     fn test_dashboard_sync_bit_value() {
         assert_eq!(
             DriverCapabilities::DASHBOARD_SYNC.bits(),
-            1u64 << 52,
+            1u128 << 52,
             "DASHBOARD_SYNC must equal 1 << 52"
         );
     }
@@ -3647,7 +3669,7 @@ mod tests {
     fn test_chart_authoring_bit_value() {
         assert_eq!(
             DriverCapabilities::CHART_AUTHORING.bits(),
-            1u64 << 53,
+            1u128 << 53,
             "CHART_AUTHORING must equal 1 << 53"
         );
     }

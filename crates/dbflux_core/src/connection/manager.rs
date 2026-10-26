@@ -1667,6 +1667,27 @@ impl ConnectionManager {
         })
     }
 
+    /// Applies a saved profile's read-only setting to its open session.
+    ///
+    /// Switching the setting on makes the session read-only at once. Switching
+    /// it off leaves the session read-only until it reconnects: the
+    /// write-privilege probe runs only at connect time, and while the profile
+    /// was read-only its result was not kept, so the session cannot tell
+    /// whether the server would still refuse writes.
+    pub fn apply_profile_read_only_flag(&mut self, profile_id: Uuid, read_only_flag: bool) {
+        if !read_only_flag {
+            return;
+        }
+
+        let Some(connected) = self.connections.get_mut(&profile_id) else {
+            return;
+        };
+
+        connected.profile.read_only_flag = true;
+        connected.mutation_policy = MutationPolicy::ReadOnly;
+        connected.read_only_reason = Some(ReadOnlyReason::ProfileSetting);
+    }
+
     pub fn apply_switch_database(
         &mut self,
         profile_id: Uuid,
@@ -2823,8 +2844,8 @@ impl SwitchDatabaseParams {
 
     /// Resolves the password for the switched connection.
     ///
-    /// The connect pipeline resolves a `password` value ref (literal or env)
-    /// before the driver sees the profile, so a profile connected that way may
+    /// The connect pipeline resolves a `password` value ref (literal, env or
+    /// dotenv) before the driver sees the profile, so a profile connected that way may
     /// have no stored keyring password. Resolve those refs again here instead
     /// of silently connecting without a password. Refs that need a provider or
     /// auth context cannot be resolved on this path and fail explicitly rather
@@ -2838,18 +2859,25 @@ impl SwitchDatabaseParams {
             Some(ValueRef::Literal { value }) => Ok(Some(SecretString::from(value.clone()))),
             Some(ValueRef::Env { key }) => CompositeValueResolver::resolve_env_ref(key)
                 .map(|value| Some(SecretString::from(value)))
-                .map_err(|error| {
-                    format!(
-                        "Failed to resolve password for database '{}': {}",
-                        self.database, error
-                    )
-                }),
+                .map_err(|error| self.password_resolution_error(error)),
+            Some(ValueRef::Dotenv { path, key }) => {
+                CompositeValueResolver::resolve_dotenv_ref(path, key)
+                    .map(|value| Some(SecretString::from(value)))
+                    .map_err(|error| self.password_resolution_error(error))
+            }
             Some(_) => Err(format!(
                 "Password for profile '{}' comes from a provider or auth reference, which \
                  cannot be resolved while switching to database '{}'.",
                 self.original_profile.name, self.database
             )),
         }
+    }
+
+    fn password_resolution_error(&self, error: DbError) -> String {
+        format!(
+            "Failed to resolve password for database '{}': {}",
+            self.database, error
+        )
     }
 
     fn get_password(&self) -> Option<SecretString> {
@@ -6634,6 +6662,65 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(error.contains("not set"), "unexpected error: {error}");
+        assert!(
+            recorded_connect_calls(&recorded).is_empty(),
+            "driver must not be called when the password cannot be resolved"
+        );
+    }
+
+    #[test]
+    fn switch_database_dotenv_password_reads_the_file() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("db.env");
+        std::fs::write(&path, "DB_PASSWORD=from-dotenv\n").expect("write dotenv");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .expect("restrict dotenv");
+        }
+
+        let (manager, profile, recorded) = switch_manager_with(
+            Some(ValueRef::dotenv(path.to_string_lossy(), "DB_PASSWORD")),
+            false,
+        );
+
+        let params = manager
+            .prepare_database_connection(profile.id, "analytics", &noop_secret_store())
+            .expect("prepare database connection should succeed");
+
+        params
+            .execute()
+            .expect("switch should resolve the password from the dotenv file");
+
+        assert_eq!(
+            recorded_connect_calls(&recorded),
+            vec![("analytics".to_string(), Some("from-dotenv".to_string()))]
+        );
+    }
+
+    #[test]
+    fn switch_database_missing_dotenv_key_fails_without_keyring_fallback() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("absent.env");
+
+        let (manager, profile, recorded) = switch_manager_with_password_ref(Some(
+            ValueRef::dotenv(path.to_string_lossy(), "DB_PASSWORD"),
+        ));
+
+        let params = manager
+            .prepare_switch_database(profile.id, "analytics", &fixed_secret_store())
+            .expect("prepare switch should succeed");
+
+        let Err(error) = params.execute() else {
+            panic!("a missing dotenv file must fail instead of using the keyring password");
+        };
+
+        assert!(
+            error.contains("does not exist"),
+            "unexpected error: {error}"
+        );
         assert!(
             recorded_connect_calls(&recorded).is_empty(),
             "driver must not be called when the password cannot be resolved"

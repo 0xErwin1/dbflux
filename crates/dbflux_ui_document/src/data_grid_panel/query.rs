@@ -67,6 +67,11 @@ impl DataGridPanel {
             return;
         }
 
+        // Cached labels name the rows read before this refresh — a rename in
+        // another tab left them stale, and a cached miss would hide a row
+        // inserted since. Page turns and other internal reloads keep the
+        // cache: their rows name the same referenced rows.
+        self.fk_display.clear();
         self.refresh(window, cx);
     }
 
@@ -100,6 +105,60 @@ impl DataGridPanel {
             .filter_input
             .update(cx, |input, cx| input.set_value(filter, window, cx));
         self.refresh(window, cx);
+    }
+
+    /// Positions the table on one record: replaces the filter with an
+    /// equality on `key_column = key_value`, rendered through the driver's
+    /// dialect, and reloads from the first page with the cursor dropped.
+    /// No-op on a source that is not a table or without a connected profile
+    /// for it — the navigation target is always a table.
+    pub(crate) fn focus_row_by_key(
+        &mut self,
+        key_column: &str,
+        key_value: &dbflux_core::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            _ => return,
+        };
+
+        let filter = {
+            let dialect = self
+                .app_state
+                .read(cx)
+                .connections()
+                .get(&profile_id)
+                .map(|connected| connected.connection.dialect());
+
+            let Some(dialect) = dialect else {
+                return;
+            };
+
+            format!(
+                "{} = {}",
+                dialect.quote_identifier(key_column),
+                dialect.value_to_literal(key_value)
+            )
+        };
+
+        // Guarded before any state changes, like the sort handlers: a
+        // blocked reload leaves the page and the cursor as they are.
+        if self.reload_blocked_by_pending_edits(cx) {
+            return;
+        }
+
+        // The equality must run from the first page (an offset held over
+        // from the previous view can answer with no rows), and the reload
+        // replaces the row set the cursor addresses — the same reset a page
+        // change marks before it queries.
+        if let DataSource::Table { pagination, .. } = &mut self.source {
+            *pagination = pagination.reset_offset();
+        }
+        self.grid_table.reload = TableReload::ResetRows;
+
+        self.replace_filter_and_reload(&filter, window, cx);
     }
 
     /// Refresh data from source.
@@ -322,6 +381,7 @@ impl DataGridPanel {
         );
 
         let estimate_request = browse_request.clone();
+        let applied_request = browse_request.clone();
 
         let task_target = TaskTarget {
             profile_id,
@@ -385,6 +445,8 @@ impl DataGridPanel {
                             panel.runner.complete_primary(task_id, cx);
                             panel.grid_table.reload = reload;
                             panel.grid_table.keep_edits_on_reload = keep_edits;
+                            panel.last_replayable_read =
+                                Some(dbflux_transfer::ReplayableRead::Table(applied_request));
                             panel.apply_table_result(
                                 profile_id,
                                 table_for_spawn,
@@ -534,6 +596,12 @@ impl DataGridPanel {
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
                             panel.builder.current_visual_spec = committed_spec.clone();
+                            panel.last_replayable_read = committed_spec.clone().map(|spec| {
+                                dbflux_transfer::ReplayableRead::VisualQuery {
+                                    spec,
+                                    database: database.clone(),
+                                }
+                            });
                             panel.result = query_result;
                             // Both orders describe the rows just replaced, not the
                             // new ones; keeping them would leave the grid indexing
@@ -744,6 +812,7 @@ impl DataGridPanel {
         let entity = cx.entity().clone();
         let conn_for_cleanup = conn.clone();
         let collection_for_spawn = collection.clone();
+        let applied_request = browse_request.clone();
         let pagination_for_spawn = pagination.clone();
 
         let task = cx
@@ -781,6 +850,11 @@ impl DataGridPanel {
                             panel.grid_table.reload = reload;
                             panel.grid_table.keep_edits_on_reload = keep_edits;
                             panel.collection.applied_skip = skip;
+                            panel.last_replayable_read =
+                                Some(dbflux_transfer::ReplayableRead::Collection {
+                                    request: applied_request,
+                                    skip,
+                                });
                             panel.apply_collection_result(
                                 profile_id,
                                 collection_for_spawn,
@@ -910,6 +984,12 @@ impl DataGridPanel {
         self.grid_table.local_sort_state = None;
         self.grid_table.original_row_order = None;
         self.rebuild_table(initial_sort, cx);
+        // Read per page load: turning grid_fk_labels on and paginating
+        // resolves without recreating the panel.
+        if self.fk_labels_enabled(cx) {
+            self.ensure_fk_cache_loaded(cx);
+        }
+        self.resolve_fk_display_values(cx);
         self.refresh.state = GridState::Ready;
         cx.notify();
     }

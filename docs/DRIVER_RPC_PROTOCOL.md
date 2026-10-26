@@ -2,10 +2,11 @@
 
 This document defines how DBFlux discovers, launches, and talks to RPC services over local IPC.
 
-DBFlux now activates two runtime service families:
+DBFlux now activates three runtime service families:
 
 - `RpcServiceKind::Driver` -> runtime database drivers
 - `RpcServiceKind::AuthProvider` -> runtime auth-provider registries in the app and MCP server
+- `RpcServiceKind::SecretProvider` -> runtime secret providers in every connection's value resolver; see [Secret Provider RPC Protocol](SECRET_PROVIDER_RPC_PROTOCOL.md)
 
 ## Source of truth
 
@@ -47,7 +48,7 @@ DBFlux uses local sockets via `interprocess`:
 Messages are framed as:
 
 - 4-byte little-endian length (`u32`)
-- bincode payload
+- postcard payload
 
 Maximum message size: `16 MiB`.
 

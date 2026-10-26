@@ -28,6 +28,7 @@ pub enum DbKind {
     ClickHouse,
     Turso,
     DuckDB,
+    AwsSecrets,
 }
 
 impl DbKind {
@@ -48,6 +49,7 @@ impl DbKind {
             DbKind::ClickHouse => "ClickHouse",
             DbKind::Turso => "TursoDB",
             DbKind::DuckDB => "DuckDB",
+            DbKind::AwsSecrets => "AWS Secrets",
         }
     }
 }
@@ -631,6 +633,29 @@ pub enum DbConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         init_sql: Option<String>,
     },
+    /// AWS Secrets Manager and Systems Manager Parameter Store, browsed as
+    /// two secret stores of one connection.
+    ///
+    /// Auth follows `S3`: an AWS profile/SSO `AuthProfileRef` (`profile`) or
+    /// static credentials (`access_key_id` plus the connection's
+    /// keyring-backed secret). When both are set, `profile` takes precedence.
+    AwsSecrets {
+        /// AWS region both services are reached in.
+        region: String,
+        /// Profile/SSO auth-profile reference (a profile UUID as a string),
+        /// bound to the `profile` `DRIVER_FORM` field declared as
+        /// `FormFieldKind::AuthProfileRef`.
+        #[serde(default)]
+        profile: Option<String>,
+        /// Static AWS access key id, stored in cleartext like `user` on
+        /// other drivers.
+        #[serde(default)]
+        access_key_id: Option<String>,
+        /// Custom endpoint URL (for example a LocalStack instance). `None`
+        /// uses the AWS SDK's default endpoint resolution.
+        #[serde(default)]
+        endpoint: Option<String>,
+    },
     /// Generic config for external RPC drivers.
     External {
         kind: DbKind,
@@ -660,6 +685,7 @@ impl DbConfig {
             DbConfig::ClickHouse { .. } => DbKind::ClickHouse,
             DbConfig::Turso { .. } => DbKind::Turso,
             DbConfig::DuckDB { .. } => DbKind::DuckDB,
+            DbConfig::AwsSecrets { .. } => DbKind::AwsSecrets,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -817,6 +843,15 @@ impl DbConfig {
         }
     }
 
+    pub fn default_aws_secrets() -> Self {
+        DbConfig::AwsSecrets {
+            region: "us-east-1".to_string(),
+            profile: None,
+            access_key_id: None,
+            endpoint: None,
+        }
+    }
+
     pub fn default_turso() -> Self {
         DbConfig::Turso { url: String::new() }
     }
@@ -852,6 +887,7 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::AwsSecrets { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
             | DbConfig::DuckDB { .. }
@@ -891,6 +927,7 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::AwsSecrets { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
             | DbConfig::DuckDB { .. }
@@ -943,6 +980,7 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::AwsSecrets { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
             | DbConfig::DuckDB { .. }
@@ -988,6 +1026,7 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::AwsSecrets { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
             | DbConfig::DuckDB { .. }
@@ -1009,6 +1048,7 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::AwsSecrets { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
             | DbConfig::DuckDB { .. }
@@ -1064,6 +1104,7 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::AwsSecrets { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
             | DbConfig::DuckDB { .. }
@@ -1099,6 +1140,7 @@ impl DbConfig {
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
+            | DbConfig::AwsSecrets { .. }
             | DbConfig::ClickHouse { .. }
             | DbConfig::Turso { .. }
             | DbConfig::DuckDB { .. }
@@ -1133,7 +1175,7 @@ impl DbConfig {
             DbConfig::SqlServer { database, .. } => database.clone(),
             DbConfig::Redshift { database, .. } => Some(database.clone()),
             DbConfig::SQLite { .. } => Some("main".to_string()),
-            DbConfig::DuckDB { .. } => None,
+            DbConfig::DuckDB { .. } | DbConfig::AwsSecrets { .. } => None,
             DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
             DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
             DbConfig::ClickHouse { database, .. } => Some(database.clone()),
@@ -1149,7 +1191,8 @@ impl DbConfig {
         match self {
             DbConfig::DynamoDB { region, .. }
             | DbConfig::CloudWatchLogs { region, .. }
-            | DbConfig::S3 { region, .. } => Some(region.as_str()),
+            | DbConfig::S3 { region, .. }
+            | DbConfig::AwsSecrets { region, .. } => Some(region.as_str()),
             _ => None,
         }
     }
@@ -1577,8 +1620,10 @@ pub struct ConnectionProfile {
 
     /// When `true`, the mutation policy resolves to read-only with
     /// `ReadOnlyReason::ProfileSetting`, which blocks data-grid edits, visual
-    /// query builder mutations and schema-diff apply. The SQL editor and MCP do
-    /// not consult it. Settable in Connection Manager. Defaults to `false`.
+    /// query builder mutations, schema-diff apply and SQL editor statements
+    /// above `Read`. The MCP server reads it directly and denies every call
+    /// above `Read` on the connection. Settable in Connection Manager.
+    /// Defaults to `false`.
     #[serde(default)]
     pub read_only_flag: bool,
 
@@ -1776,6 +1821,7 @@ impl ConnectionProfile {
             DbKind::ClickHouse => "clickhouse",
             DbKind::Turso => "turso",
             DbKind::DuckDB => "duckdb",
+            DbKind::AwsSecrets => "aws_secrets",
         }
     }
 

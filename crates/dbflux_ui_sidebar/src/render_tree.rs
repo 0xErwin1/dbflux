@@ -1418,6 +1418,8 @@ pub(crate) fn icon_for_node_kind(
         SchemaNodeKind::InstanceFolder => Some(AppIcon::Server),
         SchemaNodeKind::Bucket => Some(AppIcon::Box),
         SchemaNodeKind::BucketsFolder => Some(AppIcon::Box),
+        SchemaNodeKind::SecretStore => Some(AppIcon::Lock),
+        SchemaNodeKind::SecretPath => Some(AppIcon::Folder),
         _ => None,
     }
 }
@@ -1540,6 +1542,8 @@ fn resolve_node_icon(
         SchemaNodeKind::InstanceOverviewLeaf => (Some(AppIcon::Layers), "", params.color_orange),
         SchemaNodeKind::Bucket => (Some(AppIcon::Box), "", params.color_teal),
         SchemaNodeKind::BucketsFolder => (Some(AppIcon::Box), "", params.color_orange),
+        SchemaNodeKind::SecretStore => (Some(AppIcon::Lock), "", params.color_orange),
+        SchemaNodeKind::SecretPath => (Some(AppIcon::Folder), "", theme.muted_foreground),
         _ => (None, "", theme.muted_foreground),
     }
 }

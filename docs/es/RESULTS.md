@@ -85,13 +85,32 @@ tenga un cambio sin guardar.
 
 Pulsa `Ctrl+Space`, o haz clic derecho en una fila y elige **Inspeccionar
 fila**, para abrir la fila seleccionada en el panel inspector de la derecha.
-Lista cada columna de la fila con su valor, marca las columnas de clave
-primaria y foránea y, bajo **Referencias**, nombra la tabla a la que apunta cada
-clave foránea de una sola columna, con la fila referenciada cuando se resuelve.
-El inspector sigue la fila seleccionada al moverte por la cuadrícula; el botón
-de fijar de su cabecera lo mantiene en la fila actual. **Editar**, **Duplicar**
-y **Eliminar**, al pie, actúan sobre la fila inspeccionada cuando el resultado
-es editable. Pulsa `Ctrl+Space` de nuevo, o el botón de cerrar, para ocultarlo.
+Lista cada columna de la fila con su valor y marca las columnas de clave
+primaria y foránea. El inspector sigue la fila seleccionada al moverte por la
+cuadrícula; el botón de fijar de su cabecera lo mantiene en la fila actual.
+**Editar**, **Duplicar** y **Eliminar**, al pie, actúan sobre la fila
+inspeccionada cuando el resultado es editable. Pulsa `Ctrl+Space` de nuevo, o
+el botón de cerrar, para ocultarlo.
+
+Bajo **Referencias** el inspector lista las claves foráneas de la fila en ambas
+direcciones:
+
+- **Salientes** — una clave foránea de una sola columna de esta fila apunta a
+  otra tabla. La entrada nombra esa tabla y la fila a la que apunta, por su
+  valor legible una vez resuelto («María López · #8»), o por su clave hasta
+  entonces. Haz clic en ella para abrir la tabla referenciada en esa fila:
+  DBFlux reutiliza la pestaña existente de la tabla — abriendo una si no la
+  hay — y reemplaza su filtro por una igualdad de clave primaria, de modo que
+  la fila referenciada sea la visible.
+- **Entrantes** — otras tablas tienen claves foráneas que apuntan a esta fila.
+  Cada entrada nombra la tabla y cuenta cuántas de sus filas la referencian;
+  los conteos se cargan en segundo plano. Estas entradas son solo
+  informativas.
+
+Las celdas de clave foránea de la cuadrícula pueden mostrar el mismo valor del
+registro referenciado junto a su id: activa **Mostrar el valor del registro
+referenciado en celdas de clave foránea** en [Configuración](SETTINGS.md). El
+inspector de fila resuelve las referencias independientemente de ese ajuste.
 
 ## Filtrar resultados
 
@@ -220,3 +239,32 @@ resultado e incluyen:
 - **JSON (pretty)** y **JSON (compact)**
 - **Text**
 - **Binary** (para resultados con forma binaria)
+
+Las secciones **Guardar filas cargadas como archivo** y **Copiar filas cargadas
+al portapapeles** del menú escriben las filas que tiene la cuadrícula, que en una
+tabla son la página actual, y el aviso indica cuántas filas fueron al archivo o
+al portapapeles.
+
+Cuando la cuadrícula muestra una tabla o una colección leída página a página, el
+menú añade **Exportar todas las filas a un archivo**, en CSV o en JSON con un
+objeto por línea. Vuelve a leer la tabla o la colección completa con el filtro,
+el orden y la selección de columnas actuales de la cuadrícula, una página a la
+vez, y la escribe en el único archivo que elijas, de modo que los datos nunca
+tienen que caber en memoria. Una tabla mostrada mediante el constructor de
+consultas o un filtro relacional se lee con esa misma consulta, desde su
+desplazamiento y hasta su límite cuando lo define. La exportación se ejecuta
+como una tarea en el panel de tareas, que muestra su progreso y permite
+cancelarla; el aviso indica el total de filas y la ruta.
+
+Una colección de documentos exportada como JSON escribe cada documento
+completo, un objeto por línea, con todos sus campos. Como CSV se escribe con
+las columnas que la cuadrícula muestra para la primera página, incluidos los
+objetos expandidos. Los documentos de una colección no tienen por qué
+compartir sus campos, así que en un CSV un campo que aparece por primera vez en
+una página posterior no tiene columna, porque el encabezado ya está escrito; en
+ese caso la exportación nombra esos campos en una advertencia.
+
+Un resultado de consulta ofrece solo las filas cargadas, porque exportarlas
+todas implicaría volver a ejecutar la consulta. Lo mismo ocurre con una búsqueda
+de vecinos más cercanos: devuelve un número fijo de las filas más próximas, y la
+cuadrícula ya las tiene todas.

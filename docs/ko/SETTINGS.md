@@ -54,6 +54,12 @@ System은 운영체제의 로캘을 따르며, 함께 제공된 로캘이 명확
 | **Add an alias to table completions** | On | `FROM` 또는 `JOIN` 뒤에서 SQL 자동 완성의 테이블, 뷰 또는 CTE를 선택하면 이름의 머리글자로 만든 별칭과 함께 삽입합니다. `access_control`은 `access_control ac`가 되고 `public.order_items`는 `public.order_items oi`가 됩니다. 문에서 이미 쓰인 별칭, 예약어 또는 알려진 테이블 이름에는 숫자를 붙입니다(`ac2`). 커서 뒤에 별칭이 이미 있거나 `INSERT INTO` 뒤에서는 별칭을 추가하지 않습니다. `UPDATE`와 `DELETE FROM`의 대상 테이블은 그 위치에서 별칭을 허용하는 데이터베이스에서만 별칭을 받습니다: PostgreSQL과 DuckDB, 그리고 `AS`를 붙인 SQLite와 Turso입니다. |
 | **Write the alias with AS** | Off | `access_control ac` 대신 `access_control AS ac`를 삽입합니다. |
 
+### 데이터 그리드
+
+| 설정 | 기본값 | 설명 |
+|---------|---------|--------------|
+| **외래 키 셀에 참조된 행의 레이블 표시** | 끔 | 외래 키를 담은 셀은 참조된 행의 레이블을 id와 함께 확인해 표시합니다. 저장한 이후에 불러오는 페이지에 적용됩니다. 행 인스펙터는 항상 참조를 확인합니다. |
+
 ### 시작 및 세션
 
 | 설정 | 기본값 | 설명 |
@@ -70,7 +76,7 @@ System은 운영체제의 로캘을 따르며, 함께 제공된 로캘이 명확
 |---------|---------|--------------|
 | **Default refresh policy** | Manual | 데이터 뷰에 대한 수동 또는 간격 자동 새로고침. |
 | **Default refresh interval (seconds)** | 5 | 정책이 Interval일 때 사용되는 간격(최소 1). |
-| **Max concurrent background tasks** | 8 | 동시에 실행할 수 있는 백그라운드 작업의 상한(최소 1). |
+| **Max concurrent background tasks** | 8 | 연결과 스키마 작업의 상한(최소 1). 실행 중인 연결, 연결 해제, 연결 훅, 데이터베이스 전환, 스키마 로드·새로 고침·삭제, 키-값 스캔이 상한에 포함됩니다. 상한에 도달하면 실행 중인 작업이 끝날 때까지 새 연결, 데이터베이스 전환, 스키마나 테이블 세부 정보 로드, 키-값 페이지 이동은 알림과 함께 거부되며 대기열에 들어가지 않습니다. 쿼리, 데이터 그리드 로드, 내보내기, 대시보드, 변경 작업은 상한에 포함되지도 제한되지도 않습니다. |
 | **Pause auto-refresh on error** | On | 뷰에서 오류가 발생하면 자동 새로고침을 멈춥니다. |
 | **Auto-refresh only if tab is visible** | Off | 보고 있지 않은 탭은 새로고침을 건너뜁니다. |
 

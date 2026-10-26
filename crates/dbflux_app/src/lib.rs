@@ -17,6 +17,7 @@ pub mod portability;
 pub mod proxy;
 pub mod remote_dashboard_cache;
 pub mod rpc_services;
+pub mod secret_provider_registry;
 pub mod updates;
 
 pub use access_manager::AppAccessManager;
@@ -26,3 +27,4 @@ pub use hook_executor::CompositeExecutor;
 pub use metric_catalog_cache::{MetricCatalogCache, MetricsPageView};
 pub use remote_dashboard_cache::RemoteDashboardCache;
 pub use rpc_services::{ExternalDriverDiagnostic, ExternalDriverStage};
+pub use secret_provider_registry::SecretProviderRegistry;

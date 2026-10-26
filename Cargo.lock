@@ -3132,6 +3132,7 @@ dependencies = [
  "dbflux_audit",
  "dbflux_aws",
  "dbflux_core",
+ "dbflux_driver_aws_secrets",
  "dbflux_driver_clickhouse",
  "dbflux_driver_cloudwatch",
  "dbflux_driver_duckdb",
@@ -3198,6 +3199,7 @@ version = "0.10.0-dev.0"
 dependencies = [
  "async-trait",
  "aws-config",
+ "aws-runtime",
  "aws-sdk-secretsmanager",
  "aws-sdk-ssm",
  "aws-sdk-sso",
@@ -3263,6 +3265,7 @@ dependencies = [
  "futures",
  "hex",
  "keyring",
+ "libc",
  "log",
  "lz4_flex",
  "rmp-serde",
@@ -3296,6 +3299,21 @@ dependencies = [
  "dbflux_byte_source",
  "encoding_rs",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "dbflux_driver_aws_secrets"
+version = "0.10.0-dev.0"
+dependencies = [
+ "aws-config",
+ "aws-sdk-secretsmanager",
+ "aws-sdk-ssm",
+ "aws-smithy-types",
+ "chrono",
+ "dbflux_core",
+ "dbflux_test_support",
+ "log",
+ "tokio",
 ]
 
 [[package]]
@@ -3457,6 +3475,7 @@ dependencies = [
  "hex",
  "log",
  "mysql",
+ "rustls 0.23.45",
  "serde_json",
  "urlencoding",
 ]
@@ -3584,12 +3603,14 @@ dependencies = [
  "async-trait",
  "dbflux_core",
  "dbflux_storage",
+ "futures",
  "interprocess",
  "log",
  "postcard",
  "secrecy",
  "serde",
  "serde_json",
+ "tokio",
  "uuid",
 ]
 

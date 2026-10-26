@@ -79,13 +79,29 @@ as you move through the grid, except while it holds an unsaved change.
 
 Press `Ctrl+Space`, or right-click a row and choose **Inspect Row**, to open
 the selected row in the inspector rail on the right. It lists every column of
-the row with its value, marks primary and foreign key columns, and under
-**References** names the table each single-column foreign key points at, with
-the referenced row once it resolves. The inspector follows the selected row as
-you move through the grid; the pin button in its header keeps it on the current
-row instead. **Edit**, **Duplicate** and **Delete** at its foot act on the
-inspected row when the result is editable. Press `Ctrl+Space` again, or the
-close button, to dismiss it.
+the row with its value and marks primary and foreign key columns. The inspector
+follows the selected row as you move through the grid; the pin button in its
+header keeps it on the current row instead. **Edit**, **Duplicate** and
+**Delete** at its foot act on the inspected row when the result is editable.
+Press `Ctrl+Space` again, or the close button, to dismiss it.
+
+Under **References** the inspector lists the row's foreign keys in both
+directions:
+
+- **Outgoing** — a single-column foreign key of this row points at another
+  table. The entry names that table and the row it points at, by its readable
+  label once resolved ("María López · #8"), or by its key until then. Click it
+  to open the referenced table on that row: DBFlux reuses the table's existing
+  tab — opening one if none is open — and replaces its filter with a
+  primary-key equality, so the referenced row is the one in view.
+- **Incoming** — other tables hold foreign keys that point at this row. Each
+  entry names the table and counts how many of its rows reference this one;
+  counts load in the background. These entries are informational only.
+
+Foreign-key cells in the grid can show the same referenced-row label next to
+the id: turn on **Show referenced-row labels in foreign-key cells** in
+[Settings](SETTINGS.md). The row inspector resolves references regardless of
+that setting.
 
 ## Filtering results
 
@@ -204,3 +220,28 @@ command palette. The available formats depend on the result shape and include:
 - **JSON (pretty)** and **JSON (compact)**
 - **Text**
 - **Binary** (for binary-shaped results)
+
+The menu's **Save loaded rows as file** and **Copy loaded rows to clipboard**
+sections write the rows the grid holds, which for a table is the current page,
+and the toast states how many rows went into the file or the clipboard.
+
+When the grid shows a table or a collection read page by page, the menu adds
+**Export all rows to file**, in CSV or in JSON with one object per line. It
+reads the whole table or collection again with the grid's current filter, sort
+and column selection, one page at a time, and streams it into the one file you
+choose, so the data never has to fit in memory. A table shown through the query
+builder or a relational filter is read through the same query, starting at its
+offset and stopping at its limit when it sets one. The export runs as a task in
+the Tasks panel, which shows its progress and can cancel it; the toast states
+the total row count and the path.
+
+A document collection exported as JSON writes each document whole, one object
+per line, with every field it has. As CSV it is written with the columns the
+grid shows for the first page, including expanded objects. Documents of one
+collection need not share their fields, so in a CSV file a field that first
+appears on a later page has no column, because the header is already written;
+the export then names those fields in a warning.
+
+A query result offers only the loaded rows, because exporting all of them would
+mean running the query again. So does a nearest-neighbor search: it returns a
+fixed number of the closest rows, and the grid already holds all of them.

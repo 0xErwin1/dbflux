@@ -112,6 +112,7 @@ pub fn save_general_settings(
         grid_font_family: settings.grid_font_family.clone(),
         grid_font_size: f64::from(settings.grid_font_size),
         toast_auto_dismiss_secs: i64::from(settings.toast_auto_dismiss_secs),
+        grid_fk_labels: if settings.grid_fk_labels { 1 } else { 0 },
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -499,6 +500,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::ClickHouse => "ClickHouse",
         DbKind::Turso => "Turso",
         DbKind::DuckDB => "DuckDB",
+        DbKind::AwsSecrets => "AwsSecrets",
     }
     .to_string()
 }
@@ -520,6 +522,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "ClickHouse" => Some(DbKind::ClickHouse),
         "Turso" => Some(DbKind::Turso),
         "DuckDB" => Some(DbKind::DuckDB),
+        "AwsSecrets" => Some(DbKind::AwsSecrets),
         _ => None,
     }
 }
@@ -540,6 +543,7 @@ fn default_db_config_for_kind(kind: DbKind) -> dbflux_core::DbConfig {
         DbKind::ClickHouse => dbflux_core::DbConfig::default_clickhouse(),
         DbKind::Turso => dbflux_core::DbConfig::default_turso(),
         DbKind::DuckDB => dbflux_core::DbConfig::default_duckdb(),
+        DbKind::AwsSecrets => dbflux_core::DbConfig::default_aws_secrets(),
     }
 }
 
@@ -789,6 +793,15 @@ fn value_ref_to_dto(
             profile_id.to_string(),
             key.to_string(),
             env_key.clone(),
+        ),
+        ValueRef::Dotenv {
+            path,
+            key: dotenv_key,
+        } => ConnectionProfileValueRefDto::new_dotenv(
+            profile_id.to_string(),
+            key.to_string(),
+            path.clone(),
+            dotenv_key.clone(),
         ),
         ValueRef::Secret {
             provider,
@@ -1126,6 +1139,7 @@ fn load_general_settings(
         ),
         toast_auto_dismiss_secs: u32::try_from(dto.toast_auto_dismiss_secs)
             .unwrap_or(GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS),
+        grid_fk_labels: dto.grid_fk_labels != 0,
     }
 }
 
@@ -1340,6 +1354,7 @@ fn rpc_service_kind_to_storage(kind: RpcServiceKind) -> &'static str {
     match kind {
         RpcServiceKind::Driver => "driver",
         RpcServiceKind::AuthProvider => "auth_provider",
+        RpcServiceKind::SecretProvider => "secret_provider",
     }
 }
 
@@ -1561,6 +1576,15 @@ fn load_hook_bindings_from_dtos(
     result
 }
 
+/// `load_profiles` has no error channel, so a stored value reference that cannot be
+/// rebuilt is skipped while the rest of the profile still loads. The warning keeps that
+/// skip visible; it names the field but never a stored value.
+fn warn_dropped_value_ref(profile_id: &str, ref_key: &str, kind: &str, missing: &str) {
+    log::warn!(
+        "Skipping {kind} value reference for field '{ref_key}' of connection profile {profile_id}: the stored row has no {missing}"
+    );
+}
+
 fn load_profiles(
     repo: &dbflux_storage::repositories::connection_profiles::ConnectionProfileRepository,
 ) -> Vec<ConnectionProfile> {
@@ -1610,17 +1634,35 @@ fn load_profiles(
                                 key: vr.env_key.unwrap_or(vr.ref_value),
                             }
                         }
+                        dbflux_storage::repositories::connection_profile_value_refs::RefKind::Dotenv => {
+                            let Some(key) = vr.env_key else {
+                                warn_dropped_value_ref(profile_id, &vr.ref_key, "dotenv", "key");
+                                return None;
+                            };
+                            ValueRef::Dotenv {
+                                path: vr.ref_value,
+                                key,
+                            }
+                        }
                         dbflux_storage::repositories::connection_profile_value_refs::RefKind::Secret => {
+                            let Some(provider) = vr.ref_provider else {
+                                warn_dropped_value_ref(profile_id, &vr.ref_key, "secret", "provider");
+                                return None;
+                            };
                             ValueRef::Secret {
                                 locator: vr.secret_locator.unwrap_or(vr.ref_value),
-                                provider: vr.ref_provider?,
+                                provider,
                                 json_key: vr.ref_json_key,
                             }
                         }
                         dbflux_storage::repositories::connection_profile_value_refs::RefKind::Param => {
+                            let Some(provider) = vr.ref_provider else {
+                                warn_dropped_value_ref(profile_id, &vr.ref_key, "parameter", "provider");
+                                return None;
+                            };
                             ValueRef::Parameter {
                                 name: vr.param_name.unwrap_or(vr.ref_value),
-                                provider: vr.ref_provider?,
+                                provider,
                                 json_key: vr.ref_json_key,
                             }
                         }
@@ -2441,6 +2483,74 @@ mod tests {
     }
 
     #[test]
+    fn env_and_dotenv_value_refs_round_trip() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut profile = ConnectionProfile::new("sourced", DbConfig::default_postgres());
+        profile.value_refs.insert(
+            "password".to_string(),
+            dbflux_core::ValueRef::dotenv("~/.config/dbflux/prod.env", "DB_PASSWORD"),
+        );
+        profile
+            .value_refs
+            .insert("user".to_string(), dbflux_core::ValueRef::env("DB_USER"));
+
+        save_profiles(&runtime, std::slice::from_ref(&profile)).expect("save sourced profile");
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let reloaded = loaded
+            .iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("reloaded profile");
+
+        assert!(matches!(
+            reloaded.value_refs.get("password"),
+            Some(dbflux_core::ValueRef::Dotenv { path, key })
+                if path == "~/.config/dbflux/prod.env" && key == "DB_PASSWORD"
+        ));
+        assert!(matches!(
+            reloaded.value_refs.get("user"),
+            Some(dbflux_core::ValueRef::Env { key }) if key == "DB_USER"
+        ));
+    }
+
+    #[test]
+    fn dotenv_value_ref_without_a_key_is_skipped_and_the_profile_still_loads() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut profile = ConnectionProfile::new("sourced", DbConfig::default_postgres());
+        profile.value_refs.insert(
+            "password".to_string(),
+            dbflux_core::ValueRef::dotenv("~/.config/dbflux/prod.env", "DB_PASSWORD"),
+        );
+        profile
+            .value_refs
+            .insert("user".to_string(), dbflux_core::ValueRef::env("DB_USER"));
+        save_profiles(&runtime, std::slice::from_ref(&profile)).expect("save sourced profile");
+
+        let conn = runtime.open_dbflux_db().expect("open runtime database");
+        let updated = conn
+            .execute(
+                "UPDATE cfg_connection_profile_value_refs SET env_key = NULL WHERE profile_id = ?1 AND ref_key = 'password'",
+                [profile.id.to_string()],
+            )
+            .expect("corrupt the dotenv row");
+        assert_eq!(updated, 1);
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let reloaded = loaded
+            .iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("profile still loads");
+
+        assert!(!reloaded.value_refs.contains_key("password"));
+        assert!(matches!(
+            reloaded.value_refs.get("user"),
+            Some(dbflux_core::ValueRef::Env { key }) if key == "DB_USER"
+        ));
+    }
+
+    #[test]
     fn profile_hook_with_empty_command_round_trips_as_command_not_dropped() {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
         let mut profile = ConnectionProfile::new("empty-command", DbConfig::default_postgres());
@@ -2584,6 +2694,7 @@ mod tests {
             toast_auto_dismiss_secs: 8,
             table_alias_completion: 1,
             table_alias_use_as: 0,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
 
@@ -2681,6 +2792,7 @@ mod tests {
             toast_auto_dismiss_secs: 8,
             table_alias_completion: 1,
             table_alias_use_as: 0,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
         runtime
@@ -3029,6 +3141,7 @@ mod tests {
             toast_auto_dismiss_secs: 8,
             table_alias_completion: 1,
             table_alias_use_as: 0,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
         runtime
@@ -3137,6 +3250,39 @@ mod tests {
         assert_eq!(loaded.services.len(), 1);
         assert_eq!(loaded.services[0].socket_id, "legacy-socket");
         assert_eq!(loaded.services[0].kind, RpcServiceKind::Driver);
+    }
+
+    #[test]
+    fn save_services_persists_secret_provider_kind_for_roundtrip() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let services = vec![ServiceConfig {
+            socket_id: "secret-socket".to_string(),
+            enabled: true,
+            command: Some("dbflux-secret-host".to_string()),
+            args: Vec::new(),
+            env: std::collections::HashMap::new(),
+            startup_timeout_ms: None,
+            kind: RpcServiceKind::SecretProvider,
+            api_contract: None,
+        }];
+
+        save_services(&runtime, &services).expect("save services");
+
+        let dto = runtime
+            .services()
+            .get("secret-socket")
+            .expect("load service dto")
+            .expect("service row");
+
+        assert_eq!(dto.service_kind, "secret_provider");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.services.len(), 1);
+        assert_eq!(loaded.services[0].kind, RpcServiceKind::SecretProvider);
+        assert_eq!(
+            loaded.services[0].resolved_api_contract(),
+            dbflux_core::ServiceRpcApiContract::new("secret_provider_rpc", 1, 0)
+        );
     }
 
     #[test]

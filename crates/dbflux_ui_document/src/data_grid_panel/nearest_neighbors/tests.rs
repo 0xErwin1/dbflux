@@ -536,6 +536,30 @@ fn similar_rows_replace_the_page_with_the_neighbors_and_their_distance(cx: &mut 
 }
 
 #[gpui::test]
+fn similar_rows_offer_no_export_of_all_rows(cx: &mut TestAppContext) {
+    let (panel, _, _, window) = open_table(true, cx);
+    assert!(
+        window.update(|_, app| panel.read(app).can_export_all_rows()),
+        "the table page itself offers Export all rows"
+    );
+
+    select_second_row(&panel, window);
+    assert!(find_similar_rows(&panel, window));
+
+    window.update(|_, app| {
+        let panel = panel.read(app);
+        assert!(!panel.can_export_all_rows());
+        assert!(
+            !panel.export_menu_entries().iter().any(|entry| matches!(
+                entry,
+                crate::data_grid_panel::context_menu::ExportMenuEntry::SaveAll(_)
+            )),
+            "the neighbors loaded are the whole top-k result"
+        );
+    });
+}
+
+#[gpui::test]
 fn changing_the_distance_runs_the_search_again(cx: &mut TestAppContext) {
     let (panel, calls, _, window) = open_table(true, cx);
     select_second_row(&panel, window);

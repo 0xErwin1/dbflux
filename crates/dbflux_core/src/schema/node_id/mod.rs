@@ -390,6 +390,23 @@ pub enum SchemaNodeId {
     BucketsFolder {
         profile_id: Uuid,
     },
+
+    /// One store of a secret-store connection (`DatabaseCategory::SecretStore`),
+    /// keyed by its `SecretStoreDescriptor::id`. Activating it opens the
+    /// store's document.
+    SecretStore {
+        profile_id: Uuid,
+        store_id: String,
+    },
+
+    /// A path level of a hierarchical secret store, such as `/app/prod/`.
+    /// Expanding it lists its sub-paths; activating it opens the store's
+    /// document at that path.
+    SecretPath {
+        profile_id: Uuid,
+        store_id: String,
+        path: String,
+    },
 }
 
 /// Simple kind enum for cheap matching without data.
@@ -462,6 +479,8 @@ pub enum SchemaNodeKind {
     InstanceFolder,
     Bucket,
     BucketsFolder,
+    SecretStore,
+    SecretPath,
 }
 
 impl SchemaNodeId {
@@ -536,6 +555,8 @@ impl SchemaNodeId {
             Self::InstanceFolder { .. } => SchemaNodeKind::InstanceFolder,
             Self::Bucket { .. } => SchemaNodeKind::Bucket,
             Self::BucketsFolder { .. } => SchemaNodeKind::BucketsFolder,
+            Self::SecretStore { .. } => SchemaNodeKind::SecretStore,
+            Self::SecretPath { .. } => SchemaNodeKind::SecretPath,
         }
     }
 
@@ -607,7 +628,9 @@ impl SchemaNodeId {
             | Self::InstanceOverviewLeaf { profile_id, .. }
             | Self::InstanceFolder { profile_id, .. }
             | Self::Bucket { profile_id, .. }
-            | Self::BucketsFolder { profile_id } => Some(*profile_id),
+            | Self::BucketsFolder { profile_id }
+            | Self::SecretStore { profile_id, .. }
+            | Self::SecretPath { profile_id, .. } => Some(*profile_id),
         }
     }
 }
@@ -678,6 +701,9 @@ const P_INST_FOLDER: &str = "INSF";
 // Object-storage bucket leaf.
 const P_BUCKET: &str = "BKT";
 const P_BUCKETS_FOLDER: &str = "BKTF";
+// Secret-store store and path nodes.
+const P_SECRET_STORE: &str = "SST";
+const P_SECRET_PATH: &str = "SSP";
 // Dashboard and saved-chart sidebar node prefixes.
 // Note: P_SCRIPTS_FOLDER already uses "SCF", so we use distinct tags here.
 const P_DASHBOARDS_FOLDER: &str = "DBF";
@@ -1349,6 +1375,28 @@ mod tests {
             name: "media.assets.example".into(),
         });
         roundtrip(SchemaNodeId::BucketsFolder { profile_id: uuid });
+    }
+
+    /// Secret-store nodes round-trip, including a path that itself contains
+    /// the `|` separator.
+    #[test]
+    fn secret_store_nodes_round_trip_via_display_and_from_str() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+
+        roundtrip(SchemaNodeId::SecretStore {
+            profile_id: uuid,
+            store_id: "parameter-store".into(),
+        });
+        roundtrip(SchemaNodeId::SecretPath {
+            profile_id: uuid,
+            store_id: "parameter-store".into(),
+            path: "/app/prod/".into(),
+        });
+        roundtrip(SchemaNodeId::SecretPath {
+            profile_id: uuid,
+            store_id: "parameter-store".into(),
+            path: "/odd|name/".into(),
+        });
     }
 
     #[test]

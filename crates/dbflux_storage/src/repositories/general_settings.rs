@@ -43,6 +43,7 @@ impl GeneralSettingsRepository {
                        ui_font_family, ui_font_size, editor_font_family, editor_font_size,
                        grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                        table_alias_completion, table_alias_use_as,
+                       grid_fk_labels,
                        updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
@@ -86,7 +87,8 @@ impl GeneralSettingsRepository {
                 toast_auto_dismiss_secs: row.get(29)?,
                 table_alias_completion: row.get(30)?,
                 table_alias_use_as: row.get(31)?,
-                updated_at: row.get(32)?,
+                grid_fk_labels: row.get(32)?,
+                updated_at: row.get(33)?,
             })
         });
 
@@ -118,8 +120,9 @@ impl GeneralSettingsRepository {
                     ui_font_family, ui_font_size, editor_font_family, editor_font_size,
                     grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                     table_alias_completion, table_alias_use_as,
+                    grid_fk_labels,
                     updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, datetime('now'))
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -152,6 +155,7 @@ impl GeneralSettingsRepository {
                     toast_auto_dismiss_secs = excluded.toast_auto_dismiss_secs,
                     table_alias_completion = excluded.table_alias_completion,
                     table_alias_use_as = excluded.table_alias_use_as,
+                    grid_fk_labels = excluded.grid_fk_labels,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -186,6 +190,7 @@ impl GeneralSettingsRepository {
                     settings.toast_auto_dismiss_secs,
                     settings.table_alias_completion,
                     settings.table_alias_use_as,
+                    settings.grid_fk_labels,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -258,6 +263,9 @@ pub struct GeneralSettingsDto {
     pub table_alias_completion: i32,
     /// Whether that alias is written with `AS`: 1 on, 0 off.
     pub table_alias_use_as: i32,
+    /// Whether foreign-key grid cells resolve to the referenced row's label:
+    /// 1 on, 0 off.
+    pub grid_fk_labels: i32,
     pub updated_at: String,
 }
 
@@ -324,6 +332,7 @@ mod tests {
             toast_auto_dismiss_secs: 8,
             table_alias_completion: 1,
             table_alias_use_as: 0,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
 
@@ -385,6 +394,7 @@ mod tests {
                 toast_auto_dismiss_secs: 8,
                 table_alias_completion: 1,
                 table_alias_use_as: 0,
+                grid_fk_labels: 0,
                 updated_at: String::new(),
             };
 
@@ -466,6 +476,7 @@ mod tests {
             toast_auto_dismiss_secs: 8,
             table_alias_completion: 1,
             table_alias_use_as: 0,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
 
@@ -509,6 +520,10 @@ mod tests {
             "key_value_size_limit_mib column default should be 10"
         );
         assert_eq!(fetched.vim_mode, 0, "vim_mode column default should be 0");
+        assert_eq!(
+            fetched.grid_fk_labels, 0,
+            "grid_fk_labels column default should be 0"
+        );
         assert_eq!(
             fetched.vim_leader, "space",
             "vim_leader column default should be 'space'"
@@ -561,6 +576,7 @@ mod tests {
             toast_auto_dismiss_secs: 8,
             table_alias_completion: 1,
             table_alias_use_as: 0,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
 
@@ -616,6 +632,7 @@ mod tests {
             toast_auto_dismiss_secs: 8,
             table_alias_completion: 1,
             table_alias_use_as: 0,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
 
@@ -703,6 +720,7 @@ mod tests {
             toast_auto_dismiss_secs: 8,
             table_alias_completion: 1,
             table_alias_use_as: 0,
+            grid_fk_labels: 0,
             updated_at: String::new(),
         };
 
@@ -731,6 +749,63 @@ mod tests {
         assert_eq!(fetched.editor_font_family, None);
         assert_eq!(fetched.grid_font_family, None);
         assert_eq!(fetched.grid_font_size, 14.0);
+
+        drop(repo);
+        std::fs::remove_file(&path).expect("remove the test database");
+    }
+
+    #[test]
+    fn grid_fk_labels_round_trips_through_upsert() {
+        let path = temp_db("grid_fk_labels_roundtrip");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+
+        let dto = GeneralSettingsDto {
+            id: 1,
+            theme: "dark".to_string(),
+            restore_session_on_startup: 1,
+            reopen_last_connections: 0,
+            default_focus_on_startup: "sidebar".to_string(),
+            max_history_entries: 1000,
+            auto_save_interval_ms: 2000,
+            default_refresh_policy: "manual".to_string(),
+            default_refresh_interval_secs: 5,
+            max_concurrent_background_tasks: 8,
+            auto_refresh_pause_on_error: 1,
+            auto_refresh_only_if_visible: 0,
+            confirm_dangerous_queries: 1,
+            dangerous_requires_where: 1,
+            dangerous_requires_preview: 0,
+            style: "default".to_string(),
+            schema_snapshot_retention: 10,
+            object_preview_size_limit_mib: 10,
+            language: String::new(),
+            key_value_size_limit_mib: 10,
+            vim_mode: 0,
+            editor_row_limit: 10_000,
+            vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
+            table_alias_completion: 1,
+            table_alias_use_as: 0,
+            grid_fk_labels: 1,
+            updated_at: String::new(),
+        };
+
+        repo.upsert(&dto).expect("should upsert");
+
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.grid_fk_labels, 1);
 
         drop(repo);
         std::fs::remove_file(&path).expect("remove the test database");

@@ -9,7 +9,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
 
-use dbflux_core::{ColumnKind, ColumnMeta, TransferColumn};
+use dbflux_core::{ColumnKind, ColumnMeta, TransferColumn, Value};
 use dbflux_export::{CsvStreamWriter, JsonStreamWriter};
 
 use crate::pipeline::TransferReport;
@@ -67,9 +67,14 @@ pub struct FileSink {
     schema: Option<String>,
     table: String,
     format: FileFormat,
+    /// Set by [`FileSink::to_file`]; overrides the `schema.table.ext` name.
+    target_path: Option<PathBuf>,
     columns: Vec<ColumnMeta>,
     writer: Option<StreamWriter>,
     rows_written: u64,
+    /// JSON rows that are one `Value::Document` are written as that
+    /// document. CSV ignores it: its header is fixed.
+    whole_documents: bool,
 }
 
 impl FileSink {
@@ -84,10 +89,35 @@ impl FileSink {
             schema,
             table: table.into(),
             format,
+            target_path: None,
             columns: Vec::new(),
             writer: None,
             rows_written: 0,
+            whole_documents: false,
         }
+    }
+
+    /// Writes to exactly `path`, for a single-file export whose name the
+    /// user chose.
+    pub fn to_file(path: impl Into<PathBuf>, format: FileFormat) -> Self {
+        let path = path.into();
+        let table = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let dir = path.parent().map(PathBuf::from).unwrap_or_default();
+
+        Self {
+            target_path: Some(path),
+            ..Self::new(dir, None, table, format)
+        }
+    }
+
+    /// Writes each JSON row that is a single document with the document's
+    /// own fields, so a field the first page lacked still reaches the file.
+    pub fn writing_whole_documents(mut self) -> Self {
+        self.whole_documents = true;
+        self
     }
 
     /// The `schema.table.ext` file name this sink writes, matching the name
@@ -100,8 +130,35 @@ impl FileSink {
     }
 
     fn path(&self) -> PathBuf {
+        if let Some(path) = &self.target_path {
+            return path.clone();
+        }
+
         self.dir.join(self.file_name())
     }
+}
+
+/// A whole-document row as the columns and values of its own fields, so a
+/// JSON line carries every field the document has.
+fn whole_document(enabled: bool, row: &[Value]) -> Option<(Vec<ColumnMeta>, Vec<Value>)> {
+    if !enabled {
+        return None;
+    }
+    let [Value::Document(fields)] = row else {
+        return None;
+    };
+
+    let columns = fields
+        .keys()
+        .map(|name| ColumnMeta {
+            name: name.clone(),
+            type_name: String::new(),
+            kind: ColumnKind::Unknown,
+            nullable: true,
+            is_primary_key: false,
+        })
+        .collect();
+    Some((columns, fields.values().cloned().collect()))
 }
 
 fn to_column_meta(col: &TransferColumn) -> ColumnMeta {
@@ -157,9 +214,11 @@ impl RowSink for FileSink {
                 StreamWriter::Csv(w) => w
                     .write_row(row)
                     .map_err(|e| TransferError::Sink(e.to_string()))?,
-                StreamWriter::Json(w) => w
-                    .write_row(&self.columns, row)
-                    .map_err(|e| TransferError::Sink(e.to_string()))?,
+                StreamWriter::Json(w) => match whole_document(self.whole_documents, row) {
+                    Some((columns, values)) => w.write_row(&columns, &values),
+                    None => w.write_row(&self.columns, row),
+                }
+                .map_err(|e| TransferError::Sink(e.to_string()))?,
             }
         }
 
@@ -300,6 +359,47 @@ mod tests {
         assert_eq!(report.rows_transferred, 0);
         let contents = std::fs::read_to_string(dir.join("empty_table.csv")).unwrap();
         assert_eq!(contents, "id\n");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn whole_document_rows_keep_each_document_s_own_fields() {
+        let dir = temp_dir("whole_documents");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("events.json");
+        let mut sink = FileSink::to_file(&path, FileFormat::Json).writing_whole_documents();
+
+        sink.begin(&[column("_document")], TableMappingMode::Existing)
+            .expect("begin");
+        let first = Value::Document([("_id".to_string(), Value::Int(1))].into_iter().collect());
+        let later = Value::Document(
+            [
+                ("_id".to_string(), Value::Int(2)),
+                (
+                    "email".to_string(),
+                    Value::Text("b@example.com".to_string()),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        sink.write_chunk(&RowChunk(vec![vec![first], vec![later]]))
+            .expect("write");
+        sink.finish().expect("finish");
+
+        let text = std::fs::read_to_string(&path).expect("read back");
+        let lines: Vec<serde_json::Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("one object per line"))
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                serde_json::json!({"_id": 1}),
+                serde_json::json!({"_id": 2, "email": "b@example.com"}),
+            ]
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

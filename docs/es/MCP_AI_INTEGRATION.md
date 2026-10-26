@@ -85,6 +85,8 @@ hayas creado en la GUI de DBFlux, en **Settings → MCP → Clients**.
 **Nota**: si compilaste DBFlux sin el feature `mcp` (`--no-default-features`),
 el servidor MCP no estará disponible.
 
+El servidor carga los hooks de conexión en línea y las vinculaciones de hooks reutilizables desde la base de datos compartida. Ejecuta PreConnect y PostConnect al establecer una conexión, y PreDisconnect y PostDisconnect al desconectar una conexión abierta. Los resultados de los hooks se registran en el registro de auditoría. Un hook PreConnect independiente debe emitir su señal de preparación configurada; después de esa señal, el servidor espera el endpoint solo para perfiles directos. Los perfiles con pipeline o túnel SSH omiten esa espera porque el pipeline o el túnel resuelve su endpoint. El servidor MCP independiente no incluye un ejecutor de hooks Lua; un hook Lua habilitado devuelve un error que identifica su fase y el hook en lugar de omitirse.
+
 ## 3. Modelo de governance (conceptos centrales)
 
 Toda solicitud de IA se hace cumplir a través de todas estas capas, en orden:
@@ -285,6 +287,14 @@ las policies y el flujo de aprobación descritos arriba: para que las sentencias
 destructivas esperen a una persona, configure la decisión de la policy para
 `destructive` (o `admin_destructive`) como Ask o Deny.
 
+### Conexiones de solo lectura
+
+Cuando el perfil de una conexión tiene **Solo lectura** activado en el Connection Manager, toda llamada por encima de la clase `read` en esa conexión se deniega con el código de error `connection_read_only`. La comprobación se hace antes de las políticas, así que ninguna política, rol ni aprobación puede permitir la llamada: `request_execution` se deniega, y una llamada aprobada antes de activar el ajuste se deniega cuando se repite. Cada denegación queda registrada como un evento de auditoría `mcp_authorize` con resultado `failure`.
+
+`execute_script` gobierna un script de lectura como `write` en un driver que no puede imponer solo lectura, como se describe arriba, así que en una conexión de solo lectura con ese driver también se deniega. `select_data`, `count_records` y las demás herramientas de lectura se siguen ejecutando.
+
+El servidor MCP lee el ajuste de `dbflux.db` en cada llamada, así que un cambio hecho en la GUI se aplica a la siguiente llamada sin reiniciar el servidor. Si el servidor no puede leer el archivo, trata la conexión como de solo lectura.
+
 ## 6. Policies y roles integrados
 
 Se incluyen tres policies y tres roles como built-ins inmutables. Siempre están
@@ -460,6 +470,7 @@ let outcome = authorize_request(
         tool_id: "select_data".to_string(),
         classification: ExecutionClassification::Read,
         mcp_enabled_for_connection: true,
+        read_only_connection: false,
         correlation_id: None,
     },
     now_epoch_ms(),
@@ -523,6 +534,11 @@ Para evitar contaminar las máquinas de desarrollo durante los tests:
   (Connection Manager → pestaña MCP).
 - O define `mcp_enabled_by_default: true` en la configuración si quieres que
   todas las conexiones estén habilitadas.
+
+### Solicitud denegada porque la conexión es de solo lectura
+
+- El perfil de la conexión tiene **Solo lectura** activado (Connection Manager → pestaña Main → Seguridad). En ella solo se ejecutan llamadas `metadata` y `read`, digan lo que digan las políticas.
+- Desactiva el ajuste para volver a permitir escrituras. La siguiente llamada ve el cambio.
 
 ### Policy denegada
 

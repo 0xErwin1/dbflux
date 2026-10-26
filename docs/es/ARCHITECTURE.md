@@ -120,7 +120,7 @@ flowchart TB
     start["Conectar desde<br/>Connection Manager / sidebar"] --> prep["AppState::prepare_pipeline_input<br/>(input agnóstico del provider)"]
     prep --> pre{{"PreConnect hooks"}}
     pre --> auth["Pipeline: Authenticating<br/>(DynAuthProvider, p. ej. AWS SSO)"]
-    auth --> values["Pipeline: ResolvingValues<br/>(ValueRef → env/secret/param/auth)"]
+    auth --> values["Pipeline: ResolvingValues<br/>(ValueRef → env/dotenv/secret/param/auth)"]
     values --> access["Pipeline: OpeningAccess"]
     access --> tunnel{"¿Tipo de access?"}
     tunnel -->|Direct| connect
@@ -140,7 +140,7 @@ flowchart TB
   (DynamoDB), y HTTP vía `reqwest` (ClickHouse) (Cargo.toml).
 - Auth/integración AWS: `aws-config`, `aws-sdk-sso`, `aws-sdk-ssooidc`,
   `aws-sdk-sts`, `aws-sdk-secretsmanager`, `aws-sdk-ssm` (`dbflux_aws`).
-- IPC/RPC: sockets locales `interprocess` + framing de mensajes `bincode`
+- IPC/RPC: sockets locales `interprocess` + framing de mensajes `postcard`
   (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
 - SSH: `ssh2` vía `dbflux_ssh` (crates/dbflux_ssh/src/lib.rs).
 - Export: `csv` + `hex` + `base64` + `serde_json` vía `dbflux_export`
@@ -466,7 +466,7 @@ crates/
     src/envelope.rs         # ProtocolVersion + app/driver protocol constants
     src/protocol.rs         # Single-instance app-control messages
     src/driver_protocol.rs  # Driver RPC request/response schema (DTOs + errors)
-    src/framing.rs          # Length-prefixed bincode transport framing
+    src/framing.rs          # Length-prefixed postcard transport framing
     src/socket.rs           # Cross-platform socket naming helpers
   dbflux_driver_ipc/        # DbDriver adapter for external RPC services
     src/driver.rs           # IpcDriver + managed host lifecycle
@@ -512,6 +512,9 @@ crates/
     src/driver.rs           # Log group/stream discovery, EventStreamTarget, CollectionPresentation::EventStream
   dbflux_driver_s3/         # AWS S3 object-storage driver (DatabaseCategory::ObjectStorage)
     src/driver.rs           # Bucket/object discovery, ObjectStoreConnection impl, presign/copy/versions
+  dbflux_driver_aws_secrets/ # AWS Secrets Manager + Parameter Store driver (DatabaseCategory::SecretStore)
+    src/secrets_manager/    # SecretStoreSource over ListSecrets/DescribeSecret/GetSecretValue
+    src/parameter_store/    # SecretStoreSource over DescribeParameters/GetParameter, client-side path grouping
   dbflux_aws/               # AWS auth providers + Secrets Manager/SSM value providers
     src/auth.rs             # AWS SSO/shared/static providers and SSO login flow
     src/config.rs           # ~/.aws/config parser/cache and profile write-back helpers
@@ -766,6 +769,12 @@ de acciones.
   el módulo `object_text` (detección de line-ending, resaltado de lenguaje,
   audit de guardado) con el editor inline de `ObjectBrowserDocument`; indexado
   por `DocumentKey::ObjectEditor`.
+- `SecretStoreDocument` (`crates/dbflux_ui_document/src/secret_store/`) —
+  listado paginado de secretos con búsqueda por nombre, un panel de detalles y
+  lectura explícita y auditada del valor para un `SecretStoreSource`; los
+  valores se guardan como tipos `secrecy` y se dibujan solo con inputs
+  secretos, así que nunca llegan al árbol de UI automation; indexado por
+  `DocumentKey::SecretStore`.
 
 **Agregar un nuevo tipo de document** (sin cambios requeridos fuera del nuevo
 módulo):
@@ -1072,12 +1081,12 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
 - **Driver capabilities**: `crates/dbflux_core/src/driver/capabilities.rs`
   define:
   - `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream,
-    ObjectStorage
+    ObjectStorage, SecretStore
   - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl,
     OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql,
     Lua, Python, Bash (cada uno lleva su modo de editor, placeholder y prefijo
     de comentario)
-  - `DriverCapabilities`: bitflags `u64` para features como PAGINATION,
+  - `DriverCapabilities`: bitflags `u128` para features como PAGINATION,
     TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES,
     STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC, etc.
   - `DriverMetadata`: información estática del driver (id, name, category,
@@ -1568,6 +1577,18 @@ flujo de release/nightly en sí está documentado en `docs/RELEASE.md`.
     rename (copy-then-delete), URLs presignadas
   - Cada mutation se audita bajo `EventCategory::ObjectStorage`; las
     credenciales y URLs presignadas nunca se registran ni persisten
+- **AWS Secrets**: `crates/dbflux_driver_aws_secrets/` — driver
+  `aws-sdk-secretsmanager` + `aws-sdk-ssm` (`DatabaseCategory::SecretStore`):
+  - Expone dos almacenes con `Connection::secret_stores()` y el seam neutral al
+    proveedor `SecretStoreSource` (`dbflux_core/src/connection/secret_store/`),
+    habilitado por `DriverCapabilities::SECRET_STORE`; las
+    `SecretStoreCapabilities` de cada almacén habilitan el comportamiento de la UI
+  - El listado (`ListSecrets`, `DescribeParameters`) nunca lee valores; los
+    paths de Parameter Store se agrupan del lado del cliente en entradas
+    directas y paths hijos
+  - Los valores se leen solo con una lectura explícita, auditada bajo
+    `EventCategory::SecretStore` sin el valor; un `kms:Decrypt` denegado se
+    mapea a `DbError::PermissionDenied`
 
 ### Política de README de drivers
 
@@ -1869,6 +1890,10 @@ IA con una capa completa de gobernanza:
   override de endpoint y direccionamiento path-style para endpoints compatibles
   con S3 (Cloudflare R2, MinIO), CRUD de bucket/object, URLs presignadas, y
   soporte de copy/versions (crates/dbflux_driver_s3/src/driver.rs).
+- AWS Secrets: driver `aws-sdk-secretsmanager` y `aws-sdk-ssm` con AWS
+  profile/SSO o credenciales estáticas y override de endpoint, listado paginado
+  de secretos y parámetros, detalles y lectura explícita del valor
+  (crates/dbflux_driver_aws_secrets/src/driver/mod.rs).
 - Stack de auth de AWS: `dbflux_aws` provee providers de auth AWS
   SSO/shared/static, orquestación de login SSO, descubrimiento de account/role,
   y write-back del profile `~/.aws/config` para los auth profiles recién
@@ -1879,7 +1904,10 @@ IA con una capa completa de gobernanza:
   `dbflux_app::rpc_services` descubre los service descriptors persistidos,
   adapta `RpcServiceKind::Driver` en `DbDriver`s de runtime, y conecta
   `RpcServiceKind::AuthProvider` a `RpcAuthProvider` (que implementa
-  `DynAuthProvider`). Preserva la compatibilidad con `rpc:<socket_id>`. El
+  `DynAuthProvider`), y `RpcServiceKind::SecretProvider` a `RpcSecretProvider`
+  (que implementa `DynSecretProvider`; ver
+  [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md)). Preserva
+  la compatibilidad con `rpc:<socket_id>`. El
   protocolo IPC de auth-provider está en v1.2: agrega las variantes
   `FetchDynamicOptions` / `DynamicOptions` y el manifest flag
   `secret_dependency_opt_in`. Los auth tokens los gestiona
@@ -1901,7 +1929,7 @@ IA con una capa completa de gobernanza:
   dependencias compartidas.
 - Features de la app: `crates/dbflux/Cargo.toml` activa `sqlite`, `postgres`,
   `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`,
-  `redshift`, `clickhouse`, `s3`, `lua`, `aws`, y `mcp` (habilitadas por defecto
+  `redshift`, `clickhouse`, `s3`, `aws_secrets`, `lua`, `aws`, y `mcp` (habilitadas por defecto
   en esta branch).
 - Datos de runtime: toda la configuración de runtime se almacena en
   `~/.local/share/dbflux/dbflux.db` (un único archivo SQLite).
@@ -1911,8 +1939,8 @@ IA con una capa completa de gobernanza:
   - `cfg_hooks`, `cfg_hook_bindings`
   - `cfg_script_roots` (carpetas externas de scripts listadas en su lugar; quitar una fila nunca toca la carpeta)
   - `cfg_services`, `cfg_service_args`, `cfg_service_env` (descriptores de
-    servicio RPC; `cfg_services.service_kind` registra `driver` vs
-    `auth_provider`)
+    servicio RPC; `cfg_services.service_kind` registra `driver`,
+    `auth_provider` o `secret_provider`)
   - tablas `cfg_governance_*` (roles, policies, trusted clients)
   - `cfg_drivers` (overrides de settings por driver)
   - `cfg_folders` (organización del connection tree)

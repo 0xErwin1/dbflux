@@ -22,6 +22,7 @@ Advanced open-source relational database.
 - Multi-statement scripts (several `;`-separated statements) run as a batch via the simple query protocol, returning one result set per statement.
 - Server notices and warnings raised by a query (for example `WARNING: there is no transaction in progress` from a bare `COMMIT`, or `RAISE NOTICE`) are returned with its result; a batch attaches them all to the primary result, and a failed query drops them. A query keeps its first 100 notices, followed by one that counts the rest.
 - Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, `TRUNCATE TABLE` support, and a referential-integrity toggle (`SET session_replication_role`) for FK-safe migrations.
+- Batched primary-key row lookup (`fetch_rows_by_pks`): one `WHERE pk IN (...)` statement per chunk of at most 100 values, with an optional column projection; used to resolve foreign-key labels in the data grid.
 - Displays `pgvector` `vector`, `halfvec`, and `sparsevec` values, including verified one-dimensional arrays, as textual results.
 - Finds the rows nearest to a selected row on a table with a `pgvector` `vector` column, by L2 distance, cosine distance or inner product. The query names the distance `nearest_distance` (`dbflux_core::NEAREST_DISTANCE_COLUMN`); the grid shows it first, under the selected row, and shows the inner product itself rather than pgvector's negative product. `halfvec` and `sparsevec` columns do not offer the search.
 - A table with a `json` or `jsonb` column offers a Document view next to the grid: each row opens as a document with its JSON values expanded. The tree is read-only; edits go through the grid.
@@ -65,6 +66,7 @@ Exposes tabular snapshots of running server state:
 - A row-limited batch refuses, before any statement runs, `PREPARE TRANSACTION`, and a `SAVEPOINT`, `RELEASE`, `ROLLBACK TO`, or chained `COMMIT`/`ROLLBACK` that follows statements outside an explicit transaction. PostgreSQL rejects those inside its implicit transaction block, while the transaction the driver opens would accept them.
 - Statements that cannot run inside a transaction block, such as `VACUUM` or `CREATE INDEX CONCURRENTLY`, fail inside a row-limited batch with PostgreSQL's own error, as they do in an unbounded batch.
 - A row-limited batch is split with the SQL editor's statement splitter, which does not recognise SQL-standard `BEGIN ATOMIC` function bodies. A batch that contains one fails with a syntax error and rolls back instead of running; the same function alone in a request runs normally.
+- Batched primary-key row lookup sends at most 100 values per query; a larger request runs as several `IN (...)` statements.
 
 
 - Unbounded batched (multi-statement) result columns carry no type metadata; values are returned as text and chart auto-detection is disabled for them. Run a single statement to get fully typed columns.

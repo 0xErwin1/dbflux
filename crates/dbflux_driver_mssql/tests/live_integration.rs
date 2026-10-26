@@ -175,6 +175,46 @@ fn mssql_live_connect_ping_query_and_schema() -> Result<(), DbError> {
     })
 }
 
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_fetch_dependents_lists_views_and_foreign_key_children() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        let setup = [
+            "IF OBJECT_ID('dbo.dep_parent_view', 'V') IS NOT NULL DROP VIEW dbo.dep_parent_view",
+            "IF OBJECT_ID('dbo.dep_child', 'U') IS NOT NULL DROP TABLE dbo.dep_child",
+            "IF OBJECT_ID('dbo.dep_parent', 'U') IS NOT NULL DROP TABLE dbo.dep_parent",
+            "CREATE TABLE dbo.dep_parent (id INT PRIMARY KEY)",
+            "CREATE TABLE dbo.dep_child (id INT, parent_id INT REFERENCES dbo.dep_parent(id))",
+            "CREATE VIEW dbo.dep_parent_view AS SELECT id FROM dbo.dep_parent",
+        ];
+        for statement in setup {
+            connection.execute(&QueryRequest::new(statement))?;
+        }
+
+        let dependents = connection.fetch_dependents(TEST_DATABASE, Some("dbo"), "dep_parent")?;
+
+        for statement in &setup[..3] {
+            connection.execute(&QueryRequest::new(*statement))?;
+        }
+
+        assert_eq!(
+            dependents,
+            vec![
+                dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::View,
+                    qualified_name: "dbo.dep_parent_view".to_string(),
+                },
+                dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::ForeignKeyChild,
+                    qualified_name: "dbo.dep_child".to_string(),
+                },
+            ]
+        );
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Schema introspection
 // ---------------------------------------------------------------------------

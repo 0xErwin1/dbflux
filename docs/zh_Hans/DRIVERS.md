@@ -6,7 +6,7 @@
 
 每个驱动程序都会暴露一个 `DriverMetadata` 值（定义在 `crates/dbflux_core/src/driver/capabilities.rs`）。界面不依赖特定驱动程序，完全依据这份元数据来适配。相关字段如下：
 
-- **`DatabaseCategory`** —— 决定视图模型与术语。取值：`Relational`、`Document`、`KeyValue`、`TimeSeries`、`LogStream`、`ObjectStorage`。新类别必须与声明它的驱动程序一同加入。
+- **`DatabaseCategory`** —— 决定视图模型与术语。取值：`Relational`、`Document`、`KeyValue`、`TimeSeries`、`LogStream`、`ObjectStorage`、`SecretStore`。新类别必须与声明它的驱动程序一同加入。
 - **`QueryLanguage`** —— 决定编辑器模式、占位提示文本与查询解析。取值包括 `Sql`、`MongoQuery`、`RedisCommands`、`Cypher`、`InfluxQuery`、`Flux`、`Cql`、`CloudWatchLogsInsightsQl`、`OpenSearchPpl`、`OpenSearchSql`，脚本语言 `Lua` / `Python` / `Bash`，以及 `Custom(String)`。
 - **`DriverCapabilities`** —— 一个 `u64` 位标志集合，声明所支持的功能（事务、分页、Schema、键值操作等）。便捷基值 `RELATIONAL_BASE`、`DOCUMENT_BASE` 和 `KEYVALUE_BASE` 把各类别的通用标志归为一组。
 
@@ -31,6 +31,7 @@
 | TursoDB | 关系型 | SQL | 认证令牌、视图、索引、外键、CHECK/唯一约束、预编译语句、插入/更新/删除、分页、排序、筛选、CSV/JSON 导出、事务、事务性 DDL、多语句 | 走 HTTP 的远程 Turso / libSQL（`libsql://`，本地 `sqld` 用 `http://`）；交互式事务在每个文档独立的服务端流上运行；不支持查询取消、SSH 隧道、副本或切换数据库。 |
 | DuckDB | 关系型 | SQL | 多数据库、schema、视图、索引、外键、CHECK/唯一约束、预编译语句、带 RETURNING 的插入/更新/删除、分页、排序、筛选、CSV/JSON 导出、事务、事务性 DDL、查询取消、行数限制、只读强制、多语句 | 嵌入式文件或内存数据库；连接时挂载 DuckLake 目录；同一文件只能由一个进程以写模式打开；不支持语句超时。 |
 | Amazon S3 | 对象存储 | Custom("S3") | 认证（profile/SSO 或静态凭据、自定义端点）、存储桶浏览、分页的对象导航、预览、完整 CRUD、预签名 URL | 兼容 S3（Cloudflare R2、MinIO）；不支持分段上传/传输面板，不支持内嵌 PDF 查看器，不支持生命周期/ACL 管理或 S3 Select。 |
+| AWS Secrets | 密钥存储 | Custom("AWS Secrets") | 认证（profile/SSO 或静态凭据、自定义端点）、一个连接内的 Secrets Manager 与 Parameter Store、支持按名称搜索的分页列表、参数路径层级、详情、显式读取值 | 只读（不支持创建、编辑、删除、恢复、版本或轮换）；每个连接一个区域；LocalStack 不遵循 Parameter Store 的分页大小。 |
 
 ## 各驱动程序概要
 
@@ -89,6 +90,10 @@ AWS CloudWatch Logs 驱动程序，通过 `StartQuery` 执行查询，时间范�
 ### Amazon S3
 
 面向 AWS S3 及兼容 S3 的端点（Cloudflare R2、MinIO）的对象存储驱动程序，通过 AWS 配置文件/SSO 或静态凭据进行身份验证，支持端点覆盖与路径风格寻址。连接根节点会打开一个存储桶表；存储桶浏览按层级分页（AWS 控制台风格），并可切换到不分页的树形模式。对象预览原生支持图片，对类文本对象提供可内联编辑并回写的编辑器缓冲区，对 PDF 及其他二进制对象则提供元数据与下载/用外部程序打开；归档存储类别（GLACIER、DEEP_ARCHIVE）会完全跳过内容预览。支持上传、删除、需输入确认的递归前缀/存储桶删除、创建文件夹/存储桶、重命名（先复制后删除），以及预签名 URL。不支持分段上传、传输面板、内嵌 PDF 查看器、生命周期/ACL 管理或 S3 Select。参见 [`crates/dbflux_driver_s3/README.md`](../crates/dbflux_driver_s3/README.md)。
+
+### AWS Secrets
+
+面向 AWS Secrets Manager 与 Systems Manager Parameter Store 的密钥存储驱动程序，通过 AWS 配置文件/SSO 或静态凭据进行身份验证，并支持可选的端点覆盖。一个连接会在侧边栏中同时显示两个存储库。列表在服务端分页并支持按名称搜索，Parameter Store 路径按层级逐级浏览。列表和详情面板从不读取值：只有当用户执行 Retrieve value 时才会读取值，并记录一条不含该值的审计事件。键值 JSON 密钥以表格显示，其他文本以纯文本显示，二进制密钥以 base64 显示，由其他服务拥有的密钥标记为只读。缺少 `kms:Decrypt` 权限时会报告错误，绝不会返回空值。此版本为只读。参见 [`crates/dbflux_driver_aws_secrets/README.md`](../crates/dbflux_driver_aws_secrets/README.md)。
 
 ## 外部 RPC 驱动程序
 

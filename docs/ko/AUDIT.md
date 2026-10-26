@@ -55,6 +55,7 @@ DBFlux는 모든 중요한 작업을 SQLite에 저장된 통합 감사 트레일
 | `Config` | `config` | 프로필 변경, 설정 수정 |
 | `System` | `system` | 애플리케이션 시작, 패닉, 마이그레이션 |
 | `ObjectStorage` | `object_storage` | 개체 스토리지 CRUD/변경 이벤트 (업로드, 다운로드, 삭제, presign, 이름 바꾸기, 버킷/폴더 만들기, 저장 후 편집) |
+| `SecretStore` | `secret_store` | 시크릿 값 조회 (`secret_value_retrieved`, `secret_value_retrieve_failed`); 값 자체는 절대 기록되지 않음 |
 
 ### 행위자 타입
 
@@ -80,6 +81,7 @@ DBFlux는 모든 중요한 작업을 SQLite에 저장된 통합 감사 트레일
 | `Mcp` | `actor_id`, `object_id` (도구 이름) |
 | `Config` | `object_type`, `object_id` |
 | `ObjectStorage` | `connection_id`, `object_type`, `object_id` |
+| `SecretStore` | `connection_id`, `object_type` (저장소 id), `object_id` (시크릿 이름) |
 | `Governance`, `System` | 추가 필드 없음 |
 
 ## 개인정보 및 마스킹

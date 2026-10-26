@@ -74,6 +74,7 @@ impl Sidebar {
             &self.instance_metrics_cache,
             &self.instance_inspectors_cache,
             &self.bucket_cache,
+            &self.secret_path_cache,
         );
         let state = self.app_state.read(cx);
         self.reconcile_table_details_retry(state);
@@ -526,6 +527,7 @@ impl Sidebar {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
         )
     }
 
@@ -535,6 +537,7 @@ impl Sidebar {
         instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
         instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
         bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
+        secret_path_cache: &crate::secret_store::SecretPathCache,
     ) -> Vec<TreeItem> {
         let root_nodes = state.connection_tree().root_nodes();
         Self::build_tree_nodes_recursive_with_errors(
@@ -544,6 +547,7 @@ impl Sidebar {
             instance_metrics_cache,
             instance_inspectors_cache,
             bucket_cache,
+            secret_path_cache,
         )
     }
 
@@ -654,6 +658,7 @@ impl Sidebar {
         instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
         instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
         bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
+        secret_path_cache: &crate::secret_store::SecretPathCache,
     ) -> Vec<TreeItem> {
         let mut items = Vec::new();
 
@@ -670,6 +675,7 @@ impl Sidebar {
                         instance_metrics_cache,
                         instance_inspectors_cache,
                         bucket_cache,
+                        secret_path_cache,
                     );
 
                     let folder_item = TreeItem::new(
@@ -693,6 +699,7 @@ impl Sidebar {
                             instance_metrics_cache,
                             instance_inspectors_cache,
                             bucket_cache,
+                            secret_path_cache,
                         );
                         items.push(profile_item);
                         items.extend(Self::build_connect_failure_rows(profile_id, state));
@@ -734,6 +741,7 @@ impl Sidebar {
         instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
         instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
         bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
+        secret_path_cache: &crate::secret_store::SecretPathCache,
     ) -> TreeItem {
         let profile_id = profile.id;
         let is_connected = state.connections().contains_key(&profile_id);
@@ -787,6 +795,18 @@ impl Sidebar {
                 // folder: the prefix hierarchy lives in the object browser
                 // document, never in the global tree.
                 profile_children.push(build_buckets_folder(profile_id, bucket_cache));
+            } else if conn_category == DatabaseCategory::SecretStore {
+                let stores: Vec<dbflux_core::SecretStoreDescriptor> = connected
+                    .connection
+                    .secret_stores()
+                    .into_iter()
+                    .map(|store| store.descriptor().clone())
+                    .collect();
+                profile_children.extend(crate::secret_store::build_secret_store_nodes(
+                    profile_id,
+                    &stores,
+                    secret_path_cache,
+                ));
             } else if layout == DatabaseLayout::Keyspaces {
                 let kv_items = build_kv_database_children(profile_id, connected, state);
                 profile_children.push(Self::build_databases_folder_item(profile_id, kv_items));
@@ -4625,6 +4645,7 @@ mod tests {
                 &HashMap::new(),
                 &HashMap::new(),
                 &HashMap::new(),
+                &HashMap::new(),
             )
         };
 
@@ -4685,6 +4706,7 @@ mod tests {
         let item = Sidebar::build_profile_item_with_errors(
             &profile,
             &state,
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4775,6 +4797,7 @@ mod tests {
             Sidebar::build_profile_item_with_errors(
                 &profile,
                 &state,
+                &HashMap::new(),
                 &HashMap::new(),
                 &HashMap::new(),
                 &HashMap::new(),

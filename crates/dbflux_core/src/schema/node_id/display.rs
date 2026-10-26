@@ -14,8 +14,9 @@ use super::{
     P_REMOTE_DASHBOARDS_FOLDER, P_ROUTINE, P_ROUTINES_FOLDER, P_ROUTINES_LOADING,
     P_SAVED_CHART_ITEM, P_SAVED_CHARTS_FOLDER, P_SCHEMA, P_SCHEMA_FK, P_SCHEMA_FK_FOLDER,
     P_SCHEMA_FK_LOADING, P_SCHEMA_IDX_FOLDER, P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE,
-    P_SCRIPTS_FOLDER, P_SCRIPTS_ROOT, P_STORAGE_HINT_ITEM, P_STORAGE_HINTS_FOLDER, P_TABLE,
-    P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW, P_VIEWS_FOLDER,
+    P_SCRIPTS_FOLDER, P_SCRIPTS_ROOT, P_SECRET_PATH, P_SECRET_STORE, P_STORAGE_HINT_ITEM,
+    P_STORAGE_HINTS_FOLDER, P_TABLE, P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW,
+    P_VIEWS_FOLDER,
 };
 
 impl fmt::Display for SchemaNodeId {
@@ -100,6 +101,15 @@ impl fmt::Display for SchemaNodeId {
 
             Self::Bucket { profile_id, name } => write!(f, "{}|{}|{}", P_BUCKET, profile_id, name),
             Self::BucketsFolder { profile_id } => write!(f, "{}|{}", P_BUCKETS_FOLDER, profile_id),
+            Self::SecretStore {
+                profile_id,
+                store_id,
+            } => write!(f, "{}|{}|{}", P_SECRET_STORE, profile_id, store_id),
+            Self::SecretPath {
+                profile_id,
+                store_id,
+                path,
+            } => write!(f, "{}|{}|{}|{}", P_SECRET_PATH, profile_id, store_id, path),
         }
     }
 }

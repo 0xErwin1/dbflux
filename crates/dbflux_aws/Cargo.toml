@@ -18,6 +18,7 @@ workspace = true
 [dependencies]
 dbflux_core = { path = "../dbflux_core" }
 aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-runtime = "1"
 aws-sdk-sso = "1"
 aws-sdk-sts = "1"
 aws-sdk-secretsmanager = "1"

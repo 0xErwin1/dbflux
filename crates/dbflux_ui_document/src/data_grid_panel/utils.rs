@@ -1,6 +1,6 @@
 use super::DataGridPanel;
 use dbflux_core::{QueryResult, Value};
-use gpui::Context;
+use gpui::{App, Context};
 
 /// Returns `(column_index, column_name)` for every column marked as a primary key.
 /// Used by mutations and context-menu handlers to build document filters generically.
@@ -76,7 +76,7 @@ impl DataGridPanel {
     /// entry through here instead.
     pub(super) fn table_details_for<'a>(
         &'a self,
-        cx: &'a Context<'a, Self>,
+        cx: &'a App,
     ) -> Option<&'a dbflux_core::TableInfo> {
         let (profile_id, table_ref, database) = match &self.source {
             super::DataSource::Table {

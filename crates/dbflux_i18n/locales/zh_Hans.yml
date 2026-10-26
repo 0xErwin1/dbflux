@@ -175,10 +175,18 @@ components:
   value_source:
     literal: 字符
     env: 环境变量
+    dotenv: "Dotenv 文件"
     secret: AWS 云密钥管理
     parameter: AWS 参数存储
     auth: 认证会话字段
     json_key_placeholder: JSON 键（可选）
+    placeholder:
+      env: "VARIABLE_NAME"
+      dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+    hint:
+      env: "DBFlux 每次连接时从环境变量 %{name} 读取。DBFlux 不保存该值。"
+      dotenv: "DBFlux 每次连接时从 %{path} 中的 %{key} 读取。该文件必须只有您能读取。"
+      dotenv_missing_key: "在路径后添加键：~/path/to/file.env#KEY"
   file_picker:
     browse: 浏览…
   column_projection:
@@ -423,7 +431,7 @@ connection_manager:
     mcp: MCP
   field:
     show_all_databases: "显示所有数据库"
-    read_only_help: "阻止通过数据网格、查询构建器和模式对比进行的更改。在查询编辑器中输入的语句仍会执行。"
+    read_only_help: "阻止通过数据网格、查询构建器、模式对比和查询编辑器进行的更改，并拒绝此连接上的 MCP 写入。读取语句仍会执行。"
     read_only: "只读"
     name: 名称
     ssl_mode: SSL 模式
@@ -463,6 +471,7 @@ connection_manager:
       key_value: "键值"
       time_series_and_logs: "时间序列和日志"
       object_storage: "对象存储"
+      secret_store: "密钥存储"
       other: "其他"
   export:
     target:
@@ -958,6 +967,7 @@ document:
       query: 查询
       script: 脚本
       system: 系统
+      secret_store: "密钥存储"
     export:
       unsupported_source: 仅内置审计视图支持导出
       exported:
@@ -1411,6 +1421,7 @@ document:
         write_query_first: 请先编写查询才能在图表中打开
         connecting: "正在连接数据库 %{database}，请稍候…"
         redis_flush_disabled: FLUSHALL / FLUSHDB 已在设置中禁用
+        read_only_profile: "此连接的配置文件设为只读。此处只执行读取数据的语句。"
       result_title:
         query_failed: 查询失败
         script_failed: 脚本失败
@@ -1657,6 +1668,7 @@ document:
         nearest_distance: "更改距离（当前：%{distance}）"
         nearest_clear: "返回表中的行"
         nearest_column: "更改向量列"
+        go_to_referenced_row: "转到被引用行"
       error:
         no_results_to_export: 没有可导出的结果
         invalid_json: 无效的 JSON
@@ -1672,6 +1684,12 @@ document:
         toast:
           native_picker_fallback: "原生文件选择器不可用 — 已改为导出到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
           exported: "已导出到 %{path}"
+          exported_rows:
+            one: "已将 1 行已加载的数据导出到 %{path}"
+            many: "已将 %{count} 行已加载的数据导出到 %{path}"
+          native_picker_fallback_rows:
+            one: "原生文件选择器不可用 — 已改为将 1 行已加载的数据导出到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
+            many: "原生文件选择器不可用 — 已改为将 %{count} 行已加载的数据导出到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
       clipboard:
         error:
           binary_unsupported: 原始二进制无法复制到剪贴板 — 请选择 Hex 或 Base64。
@@ -1679,6 +1697,9 @@ document:
           failed: "复制失败：%{error}"
         toast:
           copied: "已将 %{format}（%{bytes} 字节）复制到剪贴板"
+          copied_rows:
+            one: "已将 1 行已加载的数据以 %{format}（%{bytes} 字节）复制到剪贴板"
+            many: "已将 %{count} 行已加载的数据以 %{format}（%{bytes} 字节）复制到剪贴板"
       document:
         toast:
           inserted: 文档已插入
@@ -1745,12 +1766,24 @@ document:
           many: "%{count} 处待处理更改"
       export:
         trigger: 导出
-        save_as_file: 保存为文件
-        copy_to_clipboard: 复制到剪贴板
+        save_as_file: 将已加载的行保存为文件
+        copy_to_clipboard: 将已加载的行复制到剪贴板
+        export_all_rows: 将所有行导出到文件
+        all:
+          task: "导出 %{table} 的所有行"
+          toast:
+            exported:
+              one: "已将 1 行导出到 %{path}"
+              many: "已将全部 %{count} 行导出到 %{path}"
+            cancelled: "导出已取消 — %{path} 仅包含停止前写入的行"
+            dropped_columns: "首页之后才出现的字段未写入文件：%{columns}"
+          error:
+            failed: "导出所有行失败：%{error}"
         format:
           csv: CSV
           json_pretty: JSON（美化）
           json_compact: JSON（紧凑）
+          json_lines: "JSON（每行一个对象）"
           text: 文本
           binary: 二进制
           hex: Hex
@@ -1892,6 +1925,9 @@ document:
         partial_delete:
           row: "已删除 %{done}/%{total} 行，随后失败：%{error}"
           document: "已删除 %{done}/%{total} 个文档，随后失败：%{error}"
+        unidentified_delete:
+          row: "已删除 %{done} 行；%{skipped} 行因无法读取主键值而未删除，仍标记为待删除。"
+          document: "已删除 %{done} 个文档；%{skipped} 个文档因无法读取 _id 值而未删除，仍标记为待删除。"
         chunk_size_reduced: "分块大小已从 %{original} 减小到 %{effective} — 驱动参数限制迫使分块下限低于 %{floor}。处理速度将慢于预期。"
         chunk_size_adjusted: "分块大小已从 %{original} 调整为 %{effective}，以保持在驱动参数限制之内。"
         execution_completed:
@@ -3379,6 +3415,130 @@ document:
     new: 新建标签页
     close_named: "关闭 %{title}"
     unsaved_changes: 未保存的更改
+  secret_store:
+    title: "%{store} · %{connection}"
+    search_placeholder: "搜索在存储端执行，绝不会列出值"
+    toolbar:
+      refresh: "刷新"
+    load_more: "加载下一页"
+    loading_more: "正在加载下一页…"
+    columns:
+      name: "名称"
+      description: "描述"
+      rotation: "轮换"
+      last_changed: "上次更改"
+      type: "类型"
+      tier: "层级"
+      version: "版本"
+      last_modified: "上次修改"
+    badge:
+      managed: "由 %{service} 管理"
+      deletes: "将于 %{date} 删除"
+    path_mode:
+      tree: "树"
+      flat: "平铺"
+      toggle: "在树状和平铺列表之间切换"
+    path:
+      up: "上移一级"
+    empty:
+      loading: "正在列出密钥…"
+      error: "无法列出密钥：%{error}"
+      no_match: "没有与“%{query}”匹配的密钥"
+      no_secrets: "此存储在此处没有密钥"
+    error:
+      connection_unavailable: "连接不可用"
+      store_unavailable: "该连接没有存储 %{store}"
+    footer:
+      loaded:
+        one: "已加载 %{count} 个密钥"
+        many: "已加载 %{count} 个密钥"
+      hint:
+        open: "打开"
+        retrieve: "获取值"
+        copy_id: "复制 ID"
+        filter: "筛选"
+        up: "上移"
+    status:
+      list_timing:
+        one: "列出 · %{count} 个密钥 · %{millis} ms"
+        many: "列出 · %{count} 个密钥 · %{millis} ms"
+      describe_timing: "描述 · %{millis} ms"
+      retrieve_timing: "获取值 · %{millis} ms"
+      duration_tooltip: "上次存储调用的客户端耗时"
+    rotation:
+      off: "关闭"
+      enabled: "已启用"
+      disabled: "已禁用"
+      every_days: "每 %{count} 天"
+      every_hours: "每 %{count} 小时"
+      schedule_with_window: "%{schedule} · 时间窗口 %{window}（%{expression}）"
+      title: "轮换"
+      status: "状态"
+      schedule: "计划"
+      next: "下次轮换"
+      function: "函数"
+      last: "上次轮换"
+    details:
+      none: "选择一个密钥以查看其详细信息"
+      loading: "正在加载详细信息…"
+      failed: "无法加载详细信息"
+      title: "密钥详细信息"
+      resource_id: "ARN"
+      type: "类型"
+      tier: "层级"
+      data_type: "数据类型"
+      encryption_key: "加密密钥"
+      description: "描述"
+      version: "版本"
+      last_modified: "上次修改"
+      created: "创建时间"
+      last_changed: "上次更改"
+      last_retrieved: "上次获取"
+      versions: "版本"
+    tags:
+      title: "标签"
+      none: "无标签"
+    managed:
+      title: "由 %{service} 管理"
+      body: "%{name} 属于 %{service}。%{service} 负责轮换和更新它，因此 DBFlux 以只读方式显示。"
+    action:
+      copy_resource_id: "复制 ARN"
+    toast:
+      value_copied: "已将值复制到剪贴板"
+      resource_id_copied: "已将 ARN 复制到剪贴板"
+      error_copied: "已将错误复制到剪贴板"
+    value:
+      title: "值"
+      not_loaded: "值未加载"
+      not_loaded_hint: "DBFlux 仅在你请求时获取值。每次获取都会记录到审计日志中，但不包含值本身。"
+      encrypted_hint: "获取时会使用其加密密钥解密此值。获取操作会被审计，值本身不会。"
+      needs_decrypt: "需要使用 %{key} 解密的权限"
+      retrieve: "获取值"
+      retrieving: "正在获取值…"
+      retrieved_at: "于 %{time} 获取 · 已审计"
+      view:
+        key_value: "键/值"
+        plaintext: "纯文本"
+      plaintext_only: "仅当值可解析为只含标量值的单层 JSON 对象时才会打开键/值视图。嵌套 JSON、数组和其他任何文本都以纯文本打开。"
+      binary_size: "二进制 · %{size}"
+      read_only: "只读"
+      binary_note: "二进制值由其他工具写入。DBFlux 以 base64 显示且不会编辑它们。"
+      reveal: "显示"
+      hide: "隐藏"
+      reveal_all: "显示或隐藏值"
+      show_all: "全部显示"
+      hide_all: "全部隐藏"
+      copy: "复制值"
+      copy_json: "复制 JSON"
+      copy_all: "复制值"
+      tab_only: "值仅在此标签页中可见，关闭时清除"
+      failed_decrypt: "无法解密该值"
+      failed: "无法获取该值"
+      copy_error: "复制错误"
+      view_in_audit: "在审计中查看"
+      metadata_loaded: "元数据已加载 · 仅值获取失败"
+      deletion_scheduled: "计划于 %{date} 删除"
+      deletion_scheduled_body: "在恢复之前无法获取其值。"
 document_tree:
   search_placeholder: 搜索…
   view:
@@ -3399,6 +3559,7 @@ documents:
       object_storage_account: 此对象存储账户没有活动连接
       bucket: 此存储桶没有活动连接
       object: 此对象没有活动连接
+      secret_store: "此密钥存储没有活动连接"
   error:
     write_initial_script_failed: "写入初始脚本内容失败：%{error}"
     save_session_failed: 保存会话清单失败
@@ -3942,6 +4103,11 @@ settings:
       no_matches: "没有匹配的字体"
     editor:
       group: "编辑器"
+    data_grid:
+      group: "数据网格"
+    grid_fk_labels:
+      label: "在外键单元格中显示被引用行的标签"
+      hint: "保存后加载的页面会解析外键单元格，并在其 ID 旁显示被引用行的标签。行检查器始终解析引用。"
     vim_mode:
       label: "在编辑器中使用 Vim 模式"
       hint: "普通模式与插入模式：h、j、k、l 和 Enter 移动光标，i 进入插入模式，Esc 返回普通模式，x 删除一个字符，u 撤销。保存后应用于已打开的编辑器。"
@@ -3984,6 +4150,7 @@ settings:
     max_background_tasks:
       label: 最大并发后台任务数
       error: 最大并发后台任务数必须大于等于 1
+      help: "计入正在运行的连接、断开连接、连接钩子、切换数据库、架构任务和键值扫描。达到上限后，新的连接、切换数据库、架构和表详情加载以及键值分页会被拒绝。查询、数据表格加载和导出不受限制。"
     pause_refresh_on_error:
       label: 出错时暂停自动刷新
     refresh_only_if_visible:
@@ -4738,6 +4905,7 @@ settings:
     kind:
       driver: 驱动
       auth_provider: 认证提供程序
+      secret_provider: 密钥提供程序
     action:
       add_variable: "添加变量"
       add_argument: "添加参数"
@@ -5052,6 +5220,7 @@ sidebar:
         opening_access: "流水线：正在打开访问通道（%{method}）"
         connecting: "流水线：正在连接驱动（%{driver}）"
         fetching_schema: "流水线：正在获取 Schema"
+    listing_secret_paths: "正在列出密钥路径：%{name}"
   toast:
     edit_reconnect_updated: "%{name} 已更新"
     edit_reconnect_body: 重新连接以将更改应用到当前会话。
@@ -5101,6 +5270,7 @@ sidebar:
     add_external_folder_failed: "无法添加文件夹：%{error}"
     remove_external_folder_failed: "无法移除文件夹：%{error}"
     script_operation_failed: "脚本操作失败：%{error}"
+    list_secret_paths_failed: "无法列出密钥路径：%{error}"
   tree:
     container:
       relational: "表（%{count}）"
@@ -5109,6 +5279,7 @@ sidebar:
       time_series: "测量（%{count}）"
       log_stream: "日志组（%{count}）"
       object_storage: "存储桶（%{count}）"
+      secret_store: "存储库（%{count}）"
     folder:
       empty_databases:
         one: "%{count} 个空数据库"

@@ -385,7 +385,7 @@ A read-only delete does not change the clipboard.
 | `Alt+l` / `Alt+h` | Next / previous result tab of a query, next / previous view (Documents, Schema, Aggregate) of a document collection, or next / previous view (Data, Columns, Partitions) of a table, wrapping at either end |
 | `Alt+w` | Close the result tab shown; the editor gets focus when it was the last |
 | `F5` | Refresh the focused document (table rows, bucket list, object listing, keys) |
-| `Ctrl+e` / `Cmd+e` | Open the export menu: the context menu keys move through its save and copy formats, `Enter` runs one, `Escape` closes it |
+| `Ctrl+e` / `Cmd+e` | Open the export menu: the context menu keys move through its formats to save or copy the loaded rows and, for a table, to export all rows; `Enter` runs one, `Escape` closes it |
 | `f` | Focus toolbar |
 | `Shift+f` | Clear the WHERE filter and reload the rows; in a document collection, empty the filter slot and find |
 | `/` | Focus search/filter |
@@ -637,7 +637,13 @@ panel, row inspector, document panel or query builder beside it.
 | `Enter` | Edit the value (value panel) |
 | `Escape` | Stop editing the value, or go back to the grid |
 | `Ctrl+h` | Go back to the grid |
-| `m` (or `Shift+F10`) | Open the grid's context menu. Its Toolbar entry lists the buttons of the open panel: in the value panel the other formats, word wrap, Format, Compact and, once the value changed, Revert and Save; in the row inspector Pin or Unpin |
+| `m` (or `Shift+F10`) | Open the grid's context menu. Its Toolbar entry lists the buttons of the open panel: in the value panel the other formats, word wrap, Format, Compact and, once the value changed, Revert and Save; in the row inspector Pin or Unpin, and Go to referenced row while it lists outgoing foreign-key references, or while the cursor sits on a foreign-key cell |
+
+**Go to referenced row** opens the row that a foreign key of the inspected
+row points to, as clicking a REFERENCES entry of the inspector does: it
+follows the grid cursor's cell when it sits on a single-column foreign key
+with a non-null value, otherwise the inspector's first outgoing reference. It
+has no key binding of its own; run it from the Toolbar entry above.
 
 The query builders have keys of their own, listed under
 [Query builders](#query-builders).

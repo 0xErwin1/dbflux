@@ -271,11 +271,14 @@ fn build_state(
         auth_profile_manager: Arc::new(RwLock::new(AuthProfileManager::default())),
         driver_registry: Arc::new(driver_registry),
         auth_provider_registry: Arc::new(HashMap::new()),
+        secret_provider_registry: Arc::new(HashMap::new()),
         driver_settings: Arc::new(HashMap::new()),
         connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
-        connection_setup_lock: Arc::new(tokio::sync::Mutex::new(())),
+        connection_setup_lock: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+        detached_processes: Arc::new(dbflux_mcp_server::state::DetachedProcessRegistry::new()),
         secret_manager: Arc::new(SecretManager::new(Box::new(NoopSecretStore))),
         mcp_enabled_by_default: true,
+        profile_store_path: None,
     }
 }
 

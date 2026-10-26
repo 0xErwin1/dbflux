@@ -56,13 +56,49 @@ fn build_service_config(
     }
 }
 
+/// A saved contract belongs to its kind; changing the kind drops it so the
+/// new kind's default contract applies.
 fn preserved_api_contract_for_edit(
     services: &[ServiceConfig],
     editing_svc_idx: Option<usize>,
+    kind: RpcServiceKind,
 ) -> Option<dbflux_core::ServiceRpcApiContract> {
     editing_svc_idx
         .and_then(|idx| services.get(idx))
+        .filter(|service| service.kind == kind)
         .and_then(|service| service.api_contract.clone())
+}
+
+fn service_kind_for_column(column: usize) -> RpcServiceKind {
+    match column {
+        0 => RpcServiceKind::Driver,
+        1 => RpcServiceKind::AuthProvider,
+        _ => RpcServiceKind::SecretProvider,
+    }
+}
+
+fn service_kind_column(kind: RpcServiceKind) -> usize {
+    match kind {
+        RpcServiceKind::Driver => 0,
+        RpcServiceKind::AuthProvider => 1,
+        RpcServiceKind::SecretProvider => 2,
+    }
+}
+
+fn service_kind_item_id(kind: RpcServiceKind) -> &'static str {
+    match kind {
+        RpcServiceKind::Driver => "driver",
+        RpcServiceKind::AuthProvider => "auth_provider",
+        RpcServiceKind::SecretProvider => "secret_provider",
+    }
+}
+
+fn service_kind_from_item_id(id: &str) -> RpcServiceKind {
+    match id {
+        "auth_provider" => RpcServiceKind::AuthProvider,
+        "secret_provider" => RpcServiceKind::SecretProvider,
+        _ => RpcServiceKind::Driver,
+    }
 }
 
 fn service_form_rows(
@@ -98,8 +134,8 @@ fn service_form_rows(
 
 fn service_row_max_col(row: ServiceFormRow) -> usize {
     match row {
-        ServiceFormRow::Kind | ServiceFormRow::Arg(_) => 1,
-        ServiceFormRow::EnvKey(_) => 2,
+        ServiceFormRow::Arg(_) => 1,
+        ServiceFormRow::Kind | ServiceFormRow::EnvKey(_) => 2,
         _ => 0,
     }
 }
@@ -351,8 +387,11 @@ impl ServicesSection {
             self.svc_kind,
         );
 
-        service.api_contract =
-            preserved_api_contract_for_edit(&self.svc_services, self.editing_svc_idx);
+        service.api_contract = preserved_api_contract_for_edit(
+            &self.svc_services,
+            self.editing_svc_idx,
+            self.svc_kind,
+        );
 
         #[expect(
             clippy::indexing_slicing,
@@ -728,11 +767,7 @@ impl ServicesSection {
             }
 
             Some(ServiceFormRow::Kind) => {
-                self.svc_kind = if self.svc_env_col == 0 {
-                    RpcServiceKind::Driver
-                } else {
-                    RpcServiceKind::AuthProvider
-                };
+                self.svc_kind = service_kind_for_column(self.svc_env_col);
                 cx.notify();
             }
 
@@ -857,6 +892,9 @@ impl ServicesSection {
                     RpcServiceKind::Driver => dbflux_i18n::t!("settings.rpc_services.kind.driver"),
                     RpcServiceKind::AuthProvider => {
                         dbflux_i18n::t!("settings.rpc_services.kind.auth_provider")
+                    }
+                    RpcServiceKind::SecretProvider => {
+                        dbflux_i18n::t!("settings.rpc_services.kind.secret_provider")
                     }
                 };
 
@@ -1084,10 +1122,7 @@ impl ServicesSection {
 
     fn render_svc_kind_selector(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
-        let active = match self.svc_kind {
-            RpcServiceKind::Driver => "driver",
-            RpcServiceKind::AuthProvider => "auth_provider",
-        };
+        let active = service_kind_item_id(self.svc_kind);
 
         let control = SegmentedControl::new(
             vec![
@@ -1101,14 +1136,16 @@ impl ServicesSection {
                     dbflux_i18n::t!("settings.rpc_services.kind.auth_provider"),
                 )
                 .icon(AppIcon::KeyRound),
+                SegmentedItem::new(
+                    "secret_provider",
+                    dbflux_i18n::t!("settings.rpc_services.kind.secret_provider"),
+                )
+                .icon(AppIcon::Lock),
             ],
             active,
             move |selected, _window, cx| {
-                let (kind, column) = if selected.as_ref() == "auth_provider" {
-                    (RpcServiceKind::AuthProvider, 1)
-                } else {
-                    (RpcServiceKind::Driver, 0)
-                };
+                let kind = service_kind_from_item_id(selected.as_ref());
+                let column = service_kind_column(kind);
 
                 entity.update(cx, |this, cx| {
                     this.svc_focus = ServiceFocus::Form;
@@ -1127,13 +1164,9 @@ impl ServicesSection {
             },
         );
 
-        let cursor_item = if self.svc_cursor_on(ServiceFormRow::Kind, 0) {
-            Some("driver")
-        } else if self.svc_cursor_on(ServiceFormRow::Kind, 1) {
-            Some("auth_provider")
-        } else {
-            None
-        };
+        let cursor_item = (0..=service_row_max_col(ServiceFormRow::Kind))
+            .find(|column| self.svc_cursor_on(ServiceFormRow::Kind, *column))
+            .map(|column| service_kind_item_id(service_kind_for_column(column)));
 
         let control = control
             .focused(cursor_item.is_some())
@@ -1301,7 +1334,9 @@ impl ServicesSection {
 mod tests {
     use super::{
         ServiceFormRow, build_service_config, editable_service_kind,
-        preserved_api_contract_for_edit, service_form_rows, service_row_max_col,
+        preserved_api_contract_for_edit, service_form_rows, service_kind_column,
+        service_kind_for_column, service_kind_from_item_id, service_kind_item_id,
+        service_row_max_col,
     };
     use dbflux_core::{RpcServiceKind, ServiceConfig, ServiceRpcApiContract};
     use std::collections::HashMap;
@@ -1326,8 +1361,8 @@ mod tests {
     }
 
     #[test]
-    fn service_row_max_col_allows_driver_and_auth_provider_selection() {
-        assert_eq!(service_row_max_col(ServiceFormRow::Kind), 1);
+    fn service_row_max_col_allows_every_service_kind_selection() {
+        assert_eq!(service_row_max_col(ServiceFormRow::Kind), 2);
         assert_eq!(service_row_max_col(ServiceFormRow::Enabled), 0);
     }
 
@@ -1381,8 +1416,64 @@ mod tests {
         }];
 
         assert_eq!(
-            preserved_api_contract_for_edit(&services, Some(0)),
+            preserved_api_contract_for_edit(&services, Some(0), RpcServiceKind::AuthProvider),
             Some(api_contract)
+        );
+    }
+
+    #[test]
+    fn preserved_api_contract_for_edit_drops_contract_when_kind_changes() {
+        let services = vec![ServiceConfig {
+            socket_id: "auth.sock".into(),
+            enabled: true,
+            command: Some("dbflux-auth".into()),
+            args: Vec::new(),
+            env: HashMap::new(),
+            startup_timeout_ms: None,
+            kind: RpcServiceKind::AuthProvider,
+            api_contract: Some(ServiceRpcApiContract::new("auth_provider_rpc", 1, 0)),
+        }];
+
+        assert_eq!(
+            preserved_api_contract_for_edit(&services, Some(0), RpcServiceKind::SecretProvider),
+            None
+        );
+    }
+
+    #[test]
+    fn service_kind_columns_round_trip_for_every_kind() {
+        for (column, kind) in [
+            (0, RpcServiceKind::Driver),
+            (1, RpcServiceKind::AuthProvider),
+            (2, RpcServiceKind::SecretProvider),
+        ] {
+            assert_eq!(service_kind_for_column(column), kind);
+            assert_eq!(service_kind_column(kind), column);
+            assert_eq!(service_kind_from_item_id(service_kind_item_id(kind)), kind);
+        }
+    }
+
+    #[test]
+    fn build_service_config_for_secret_provider_uses_secret_provider_default_contract() {
+        let service = build_service_config(
+            "vault.sock".into(),
+            true,
+            Some("dbflux-vault".into()),
+            Vec::new(),
+            HashMap::new(),
+            None,
+            service_kind_for_column(2),
+        );
+
+        assert_eq!(service.kind, RpcServiceKind::SecretProvider);
+        assert_eq!(
+            serde_json::to_value(service.kind).ok(),
+            Some(serde_json::json!("secret_provider"))
+        );
+        assert_eq!(service.api_contract, None);
+        assert_eq!(
+            service.kind.default_api_contract(),
+            ServiceRpcApiContract::new("secret_provider_rpc", 1, 0)
         );
     }
 
@@ -1457,6 +1548,15 @@ mod tests {
         assert_eq!(driver_es, "Driver");
         assert_eq!(auth_provider_es, "Proveedor de autenticación");
         assert_ne!(auth_provider_en, auth_provider_es);
+    }
+
+    #[test]
+    fn rpc_services_kind_label_resolves_for_secret_provider() {
+        let english = dbflux_i18n::t!("settings.rpc_services.kind.secret_provider", locale = "en");
+        let spanish = dbflux_i18n::t!("settings.rpc_services.kind.secret_provider", locale = "es");
+
+        assert_ne!(english, "settings.rpc_services.kind.secret_provider");
+        assert_ne!(english, spanish);
     }
 
     #[test]

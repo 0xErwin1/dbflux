@@ -4,8 +4,10 @@ mod chrome;
 pub(crate) mod context_menu;
 mod document_view;
 mod documents;
+mod export_all;
 mod facets;
 pub(crate) mod filter_bar;
+mod fk_display;
 mod grid;
 pub(crate) mod mutation_confirm;
 pub(crate) mod mutation_executor;
@@ -185,6 +187,18 @@ fn resolve_orderable_sort_key(columns: &[ColumnMeta]) -> Option<String> {
     primary_key_columns.last().map(|column| column.name.clone())
 }
 
+/// A row of another table that a foreign-key value points at, for the
+/// workspace to open as a filtered grid.
+#[derive(Clone, Debug)]
+pub struct ReferencedRowTarget {
+    pub profile_id: Uuid,
+    pub database: Option<String>,
+    pub table: TableRef,
+    /// PK column of the target table the foreign key points at.
+    pub key_column: String,
+    pub key_value: Value,
+}
+
 /// Events emitted by DataGridPanel.
 #[derive(Clone, Debug)]
 pub enum DataGridEvent {
@@ -269,6 +283,10 @@ pub enum DataGridEvent {
     /// Run the query behind a result the row limit cut short again, without
     /// the limit. Only emitted when the host offered it.
     LoadAllRowsRequested,
+
+    /// Open the row a foreign-key value points at (see
+    /// [`ReferencedRowTarget`]).
+    OpenReferencedRow { target: ReferencedRowTarget },
 
     /// Fetch the next rows of a result the row limit cut short, because its
     /// last row came into view. Only emitted when the host offered it; the
@@ -768,6 +786,11 @@ struct InspectorState {
     /// references.
     incoming_references: row_inspector::IncomingReferencesLoader,
 
+    /// The inspected row's outgoing-reference label lookup. Every open
+    /// replaces or drops it, cancelling a lookup still in flight for a
+    /// previous row.
+    outgoing_labels: Option<Task<()>>,
+
     /// The Document panel a document collection shows instead of the row
     /// inspector, kept alive so its expanded fields survive row changes.
     document_inspector_content: Option<Entity<documents::inspector::DocumentInspectorContent>>,
@@ -840,6 +863,8 @@ pub struct DataGridPanel {
     result_search: result_search::ResultSearch,
     inspector: InspectorState,
     pub(crate) builder: BuilderState,
+    /// Resolved display values of the grid's foreign-key cells.
+    fk_display: fk_display::FkDisplayLoader,
     /// Document collection presentation (flattened table, query bar, schema,
     /// field edits). Inert for other sources.
     collection: documents::CollectionViewState,
@@ -863,6 +888,9 @@ pub struct DataGridPanel {
     /// The rows on screen are the nearest neighbors of a row, not a page of
     /// the table. Cleared by any other result.
     nearest_neighbors: Option<nearest_neighbors::NearestNeighborSearch>,
+    /// The read behind the rows on screen: a table or collection browse, or
+    /// a builder SELECT. "Export all rows" pages through it again.
+    last_replayable_read: Option<dbflux_transfer::ReplayableRead>,
     /// The neighbor bar's controls and the search in flight.
     nearest: nearest_neighbors::NearestNeighborsUi,
     view_config: super::data_view::DataViewConfig,
@@ -975,7 +1003,11 @@ impl DataGridPanel {
         panel.fetch_table_details_for_pk(profile_id, &table, cx);
 
         panel.ensure_filter_source_columns_loaded(cx);
-        panel.ensure_fk_cache_loaded(cx);
+        // With the setting off the FK cache stays cold until the filter bar
+        // or the builder needs it; page loads re-evaluate (apply_table_result).
+        if panel.fk_labels_enabled(cx) {
+            panel.ensure_fk_cache_loaded(cx);
+        }
 
         panel
     }
@@ -1420,6 +1452,7 @@ impl DataGridPanel {
                 pinned: false,
                 _row_inspector_subscription: None,
                 incoming_references: row_inspector::IncomingReferencesLoader::default(),
+                outgoing_labels: None,
                 document_inspector_content: None,
                 _document_inspector_subscription: None,
                 row_action_provider: None,
@@ -1439,6 +1472,7 @@ impl DataGridPanel {
                 builder_open: false,
                 builder_editable_binding: None,
             },
+            fk_display: fk_display::FkDisplayLoader::default(),
             collection,
             table_views: table_views::TableViewsState::default(),
             runner,
@@ -1448,6 +1482,7 @@ impl DataGridPanel {
             pk_details_pending: false,
             pk_requery_pending: false,
             nearest_neighbors: None,
+            last_replayable_read: None,
             nearest,
             view_config,
             context_menu: None,

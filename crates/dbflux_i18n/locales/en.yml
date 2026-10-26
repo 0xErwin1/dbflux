@@ -175,10 +175,18 @@ components:
   value_source:
     literal: Literal
     env: Environment Variable
+    dotenv: "Dotenv File"
     secret: Secret Manager
     parameter: Parameter Store
     auth: Auth Session Field
     json_key_placeholder: JSON key (optional)
+    placeholder:
+      env: "VARIABLE_NAME"
+      dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+    hint:
+      env: "Read from the environment variable %{name} each time DBFlux connects. DBFlux does not store the value."
+      dotenv: "Read from %{key} in %{path} each time DBFlux connects. The file must be readable only by you."
+      dotenv_missing_key: "Add the key after the path: ~/path/to/file.env#KEY"
   file_picker:
     browse: "Browse…"
   column_projection:
@@ -423,7 +431,7 @@ connection_manager:
     mcp: MCP
   field:
     show_all_databases: "Show all databases"
-    read_only_help: "Blocks changes from the data grid, the query builder and schema diff. Statements typed in the query editor still run."
+    read_only_help: "Blocks changes from the data grid, the query builder, schema diff and the query editor, and denies MCP writes on this connection. Read statements still run."
     read_only: "Read-only"
     name: Name
     ssl_mode: SSL mode
@@ -463,6 +471,7 @@ connection_manager:
       key_value: "Key-value"
       time_series_and_logs: "Time series and logs"
       object_storage: "Object storage"
+      secret_store: "Secret stores"
       other: "Other"
   export:
     target:
@@ -958,6 +967,7 @@ document:
       query: Query
       script: Script
       system: System
+      secret_store: "Secret Store"
     export:
       unsupported_source: Export is only available for the built-in audit viewer
       exported:
@@ -1411,6 +1421,7 @@ document:
         write_query_first: Write a query first to open it in a chart
         connecting: "Connecting to database '%{database}', please wait…"
         redis_flush_disabled: FLUSHALL / FLUSHDB is disabled in settings
+        read_only_profile: "This connection's profile is set to read-only. Only statements that read data run here."
       result_title:
         query_failed: Query failed
         script_failed: Script failed
@@ -1657,6 +1668,7 @@ document:
         nearest_distance: "Change the distance (now %{distance})"
         nearest_clear: "Back to the table rows"
         nearest_column: "Change the vector column"
+        go_to_referenced_row: "Go to referenced row"
       error:
         no_results_to_export: No results to export
         invalid_json: Invalid JSON
@@ -1672,6 +1684,12 @@ document:
         toast:
           native_picker_fallback: "Native file picker unavailable — exported to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
           exported: "Exported to %{path}"
+          exported_rows:
+            one: "Exported 1 loaded row to %{path}"
+            many: "Exported %{count} loaded rows to %{path}"
+          native_picker_fallback_rows:
+            one: "Native file picker unavailable — exported 1 loaded row to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
+            many: "Native file picker unavailable — exported %{count} loaded rows to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
       clipboard:
         error:
           binary_unsupported: Raw binary cannot be copied to the clipboard — choose Hex or Base64 instead.
@@ -1679,6 +1697,9 @@ document:
           failed: "Copy failed: %{error}"
         toast:
           copied: "Copied %{format} (%{bytes} bytes) to clipboard"
+          copied_rows:
+            one: "Copied 1 loaded row as %{format} (%{bytes} bytes) to clipboard"
+            many: "Copied %{count} loaded rows as %{format} (%{bytes} bytes) to clipboard"
       document:
         toast:
           inserted: Document inserted
@@ -1745,12 +1766,24 @@ document:
           many: "%{count} pending changes"
       export:
         trigger: Export
-        save_as_file: Save as file
-        copy_to_clipboard: Copy to clipboard
+        save_as_file: Save loaded rows as file
+        copy_to_clipboard: Copy loaded rows to clipboard
+        export_all_rows: Export all rows to file
+        all:
+          task: "Export all rows of %{table}"
+          toast:
+            exported:
+              one: "Exported 1 row to %{path}"
+              many: "Exported all %{count} rows to %{path}"
+            cancelled: "Export cancelled — %{path} holds only the rows written before it stopped"
+            dropped_columns: "Fields that first appear after the first page are not in the file: %{columns}"
+          error:
+            failed: "Export of all rows failed: %{error}"
         format:
           csv: CSV
           json_pretty: "JSON (pretty)"
           json_compact: "JSON (compact)"
+          json_lines: "JSON (one object per line)"
           text: Text
           binary: Binary
           hex: Hex
@@ -1892,6 +1925,9 @@ document:
         partial_delete:
           row: "Deleted %{done} of %{total} row(s), then failed: %{error}"
           document: "Deleted %{done} of %{total} document(s), then failed: %{error}"
+        unidentified_delete:
+          row: "Deleted %{done} row(s); %{skipped} row(s) were not deleted because their primary key values could not be read. They stay marked for delete."
+          document: "Deleted %{done} document(s); %{skipped} document(s) were not deleted because their _id values could not be read. They stay marked for delete."
         chunk_size_reduced: "Chunk size reduced from %{original} to %{effective} — driver parameter limit forced the chunk floor below %{floor}. Processing will be slower than expected."
         chunk_size_adjusted: "Chunk size adjusted from %{original} to %{effective} to stay within driver parameter limits."
         execution_completed:
@@ -3379,6 +3415,130 @@ document:
     new: New tab
     close_named: "Close %{title}"
     unsaved_changes: Unsaved changes
+  secret_store:
+    title: "%{store} · %{connection}"
+    search_placeholder: "Search runs on the store, values are never listed"
+    toolbar:
+      refresh: "Refresh"
+    load_more: "Load next page"
+    loading_more: "Loading the next page…"
+    columns:
+      name: "Name"
+      description: "Description"
+      rotation: "Rotation"
+      last_changed: "Last changed"
+      type: "Type"
+      tier: "Tier"
+      version: "Version"
+      last_modified: "Last modified"
+    badge:
+      managed: "Managed by %{service}"
+      deletes: "Deletes %{date}"
+    path_mode:
+      tree: "Tree"
+      flat: "Flat"
+      toggle: "Switch tree and flat listing"
+    path:
+      up: "Up one level"
+    empty:
+      loading: "Listing secrets…"
+      error: "The secrets could not be listed: %{error}"
+      no_match: "No secret matches \"%{query}\""
+      no_secrets: "This store holds no secrets here"
+    error:
+      connection_unavailable: "The connection is not available"
+      store_unavailable: "The connection has no store %{store}"
+    footer:
+      loaded:
+        one: "%{count} secret loaded"
+        many: "%{count} secrets loaded"
+      hint:
+        open: "open"
+        retrieve: "retrieve value"
+        copy_id: "copy ID"
+        filter: "filter"
+        up: "up"
+    status:
+      list_timing:
+        one: "List · %{count} secret · %{millis} ms"
+        many: "List · %{count} secrets · %{millis} ms"
+      describe_timing: "Describe · %{millis} ms"
+      retrieve_timing: "Retrieve value · %{millis} ms"
+      duration_tooltip: "Client-side duration of the last store call"
+    rotation:
+      off: "Off"
+      enabled: "Enabled"
+      disabled: "Disabled"
+      every_days: "Every %{count} days"
+      every_hours: "Every %{count} hours"
+      schedule_with_window: "%{schedule} · window %{window} (%{expression})"
+      title: "Rotation"
+      status: "Status"
+      schedule: "Schedule"
+      next: "Next rotation"
+      function: "Function"
+      last: "Last rotated"
+    details:
+      none: "Select a secret to see its details"
+      loading: "Loading the details…"
+      failed: "The details could not be loaded"
+      title: "Secret details"
+      resource_id: "ARN"
+      type: "Type"
+      tier: "Tier"
+      data_type: "Data type"
+      encryption_key: "Encryption key"
+      description: "Description"
+      version: "Version"
+      last_modified: "Last modified"
+      created: "Created"
+      last_changed: "Last changed"
+      last_retrieved: "Last retrieved"
+      versions: "Versions"
+    tags:
+      title: "Tags"
+      none: "No tags"
+    managed:
+      title: "Managed by %{service}"
+      body: "%{name} belongs to %{service}. %{service} rotates and updates it, so DBFlux shows it read only."
+    action:
+      copy_resource_id: "Copy ARN"
+    toast:
+      value_copied: "Value copied to the clipboard"
+      resource_id_copied: "ARN copied to the clipboard"
+      error_copied: "Error copied to the clipboard"
+    value:
+      title: "Value"
+      not_loaded: "Value not loaded"
+      not_loaded_hint: "DBFlux fetches the value only when you ask. Each retrieval is recorded in the audit log, without the value."
+      encrypted_hint: "This value is decrypted with its encryption key when retrieved. The retrieval is audited, the value is not."
+      needs_decrypt: "Needs permission to decrypt with %{key}"
+      retrieve: "Retrieve value"
+      retrieving: "Retrieving the value…"
+      retrieved_at: "Retrieved %{time} · audited"
+      view:
+        key_value: "Key/value"
+        plaintext: "Plaintext"
+      plaintext_only: "Key/value opens only when the value parses as a one-level JSON object with scalar values. Nested JSON, arrays and any other text open as plaintext."
+      binary_size: "Binary · %{size}"
+      read_only: "Read only"
+      binary_note: "Binary values are written by other tools. DBFlux shows them as base64 and does not edit them."
+      reveal: "Reveal"
+      hide: "Hide"
+      reveal_all: "Reveal or hide the value"
+      show_all: "Reveal all"
+      hide_all: "Hide all"
+      copy: "Copy value"
+      copy_json: "Copy JSON"
+      copy_all: "Copy value"
+      tab_only: "Value visible in this tab only, cleared on close"
+      failed_decrypt: "The value could not be decrypted"
+      failed: "The value could not be retrieved"
+      copy_error: "Copy error"
+      view_in_audit: "View in Audit"
+      metadata_loaded: "Metadata loaded · only the value failed"
+      deletion_scheduled: "Deletion scheduled for %{date}"
+      deletion_scheduled_body: "Its value cannot be retrieved until it is restored."
 document_tree:
   search_placeholder: Search…
   view:
@@ -3399,6 +3559,7 @@ documents:
       object_storage_account: No active connection for this object-storage account
       bucket: No active connection for this bucket
       object: No active connection for this object
+      secret_store: "No active connection for this secret store"
   error:
     write_initial_script_failed: "Failed to write initial script content: %{error}"
     save_session_failed: Failed to save session manifest
@@ -3942,6 +4103,11 @@ settings:
       no_matches: "No fonts match"
     editor:
       group: "Editor"
+    data_grid:
+      group: "Data grid"
+    grid_fk_labels:
+      label: "Show referenced-row labels in foreign-key cells"
+      hint: "Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after saving; the row inspector always resolves references."
     vim_mode:
       label: "Vim mode in editors"
       hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."
@@ -3984,6 +4150,7 @@ settings:
     max_background_tasks:
       label: Max concurrent background tasks
       error: Max background tasks must be >= 1
+      help: "Counts running connects, disconnects, connection hooks, database switches, schema tasks and key-value scans. At the cap, new connects, database switches, schema and table-detail loads and key-value pages are refused. Queries, data-grid loads and exports are not limited."
     pause_refresh_on_error:
       label: Pause auto-refresh on error
     refresh_only_if_visible:
@@ -4738,6 +4905,7 @@ settings:
     kind:
       driver: Driver
       auth_provider: Auth Provider
+      secret_provider: Secret Provider
     action:
       add_variable: "Add variable"
       add_argument: "Add argument"
@@ -5054,6 +5222,7 @@ sidebar:
         opening_access: "Pipeline: Opening access (%{method})"
         connecting: "Pipeline: Connecting driver (%{driver})"
         fetching_schema: "Pipeline: Fetching schema"
+    listing_secret_paths: "Listing secret paths: %{name}"
   toast:
     edit_reconnect_updated: "'%{name}' updated"
     edit_reconnect_body: Reconnect to apply the changes to the live session.
@@ -5103,6 +5272,7 @@ sidebar:
     add_external_folder_failed: "Could not add the folder: %{error}"
     remove_external_folder_failed: "Could not remove the folder: %{error}"
     script_operation_failed: "The script operation failed: %{error}"
+    list_secret_paths_failed: "Failed to list secret paths: %{error}"
   tree:
     container:
       relational: Tables (%{count})
@@ -5111,6 +5281,7 @@ sidebar:
       time_series: Measurements (%{count})
       log_stream: Log Groups (%{count})
       object_storage: Buckets (%{count})
+      secret_store: Stores (%{count})
     folder:
       empty_databases:
         one: "%{count} empty database"

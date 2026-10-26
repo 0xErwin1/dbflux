@@ -410,6 +410,12 @@ pub struct GeneralSettings {
     #[serde(default = "default_vim_leader")]
     pub vim_leader: String,
 
+    // -- Data grid --
+    /// Resolve foreign-key cells to the referenced row's label in the data
+    /// grid. Off by default; the row inspector always resolves references.
+    #[serde(default)]
+    pub grid_fk_labels: bool,
+
     // -- Fonts --
     /// Interface font family. `None` uses the bundled interface font.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -538,6 +544,7 @@ impl Default for GeneralSettings {
             table_alias_completion: true,
             table_alias_use_as: false,
             vim_leader: default_vim_leader(),
+            grid_fk_labels: false,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
             editor_font_family: None,
@@ -564,6 +571,7 @@ mod font_settings_tests {
         assert_eq!(settings.grid_font_size, 12.5);
 
         let legacy: GeneralSettings = serde_json::from_str("{}").expect("legacy settings");
+        assert!(!legacy.grid_fk_labels);
         assert_eq!(legacy, settings);
     }
 
@@ -791,6 +799,7 @@ pub enum RpcServiceKind {
     #[default]
     Driver,
     AuthProvider,
+    SecretProvider,
 }
 
 impl RpcServiceKind {
@@ -798,6 +807,9 @@ impl RpcServiceKind {
         match self {
             RpcServiceKind::Driver => ServiceRpcApiContract::new("driver_rpc", 1, 1),
             RpcServiceKind::AuthProvider => ServiceRpcApiContract::new("auth_provider_rpc", 1, 2),
+            RpcServiceKind::SecretProvider => {
+                ServiceRpcApiContract::new("secret_provider_rpc", 1, 0)
+            }
         }
     }
 }
@@ -1342,6 +1354,24 @@ mod tests {
         assert_eq!(
             restored.api_contract,
             Some(ServiceRpcApiContract::new("auth_provider_rpc", 1, 2))
+        );
+    }
+
+    #[test]
+    fn secret_provider_kind_serializes_as_snake_case() {
+        let json = serde_json::to_value(RpcServiceKind::SecretProvider).unwrap();
+
+        assert_eq!(json, serde_json::json!("secret_provider"));
+
+        let restored: RpcServiceKind = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, RpcServiceKind::SecretProvider);
+    }
+
+    #[test]
+    fn secret_provider_kind_defaults_to_secret_provider_contract() {
+        assert_eq!(
+            RpcServiceKind::SecretProvider.default_api_contract(),
+            ServiceRpcApiContract::new("secret_provider_rpc", 1, 0)
         );
     }
 

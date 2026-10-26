@@ -98,7 +98,7 @@ flowchart TB
     start["从连接管理器 / 侧边栏<br/>发起连接"] --> prep["AppState::prepare_pipeline_input<br/>（与提供程序无关的输入）"]
     prep --> pre{{"连接前 Hook"}}
     pre --> auth["流水线：认证<br/>（DynAuthProvider，例如 AWS SSO）"]
-    auth --> values["流水线：解析取值<br/>（ValueRef → env/secret/param/auth）"]
+    auth --> values["流水线：解析取值<br/>（ValueRef → env/dotenv/secret/param/auth）"]
     values --> access["流水线：开通访问"]
     access --> tunnel{"访问方式？"}
     tunnel -->|Direct| connect
@@ -115,7 +115,7 @@ flowchart TB
 - 界面：`gpui`、`gpui-component`（Cargo.toml）。
 - 数据库：`tokio-postgres`（PostgreSQL）、`rusqlite`（SQLite）、`mysql`（MySQL/MariaDB）、`mongodb`（MongoDB）、`redis`（Redis）、`aws-sdk-dynamodb`（DynamoDB），以及基于 `reqwest` 的 HTTP（ClickHouse）（Cargo.toml）。
 - AWS 认证/集成：`aws-config`、`aws-sdk-sso`、`aws-sdk-ssooidc`、`aws-sdk-sts`、`aws-sdk-secretsmanager`、`aws-sdk-ssm`（`dbflux_aws`）。
-- IPC/RPC：`interprocess` 本地 Socket + `bincode` 消息分帧（`dbflux_ipc`、`dbflux_driver_ipc`、`dbflux_driver_host`）。
+- IPC/RPC：`interprocess` 本地 Socket + `postcard` 消息分帧（`dbflux_ipc`、`dbflux_driver_ipc`、`dbflux_driver_host`）。
 - SSH：经由 `dbflux_ssh` 使用 `ssh2`（crates/dbflux_ssh/src/lib.rs）。
 - 导出：经由 `dbflux_export` 使用 `csv` + `hex` + `base64` + `serde_json`（crates/dbflux_export/src/lib.rs）。
 - 序列化/配置：`serde`、`serde_json`、`dirs`（Cargo.toml）。
@@ -439,7 +439,7 @@ crates/
     src/envelope.rs         # ProtocolVersion + 应用/驱动程序协议常量
     src/protocol.rs         # 单实例应用控制消息
     src/driver_protocol.rs  # 驱动程序 RPC 请求/响应结构（DTO + 错误）
-    src/framing.rs          # 长度前缀的 bincode 传输分帧
+    src/framing.rs          # 长度前缀的 postcard 传输分帧
     src/socket.rs           # 跨平台 Socket 命名辅助函数
   dbflux_driver_ipc/        # 面向外部 RPC 服务的 DbDriver 适配器
     src/driver.rs           # IpcDriver + 受管宿主进程生命周期
@@ -485,6 +485,9 @@ crates/
     src/driver.rs           # 日志组/流发现、EventStreamTarget、CollectionPresentation::EventStream
   dbflux_driver_s3/         # AWS S3 对象存储驱动程序（DatabaseCategory::ObjectStorage）
     src/driver.rs           # 存储桶/对象发现、ObjectStoreConnection 实现、预签名/复制/版本
+  dbflux_driver_aws_secrets/ # AWS Secrets Manager + Parameter Store 驱动程序（DatabaseCategory::SecretStore）
+    src/secrets_manager/    # 基于 ListSecrets/DescribeSecret/GetSecretValue 的 SecretStoreSource
+    src/parameter_store/    # 基于 DescribeParameters/GetParameter 的 SecretStoreSource，客户端路径分组
   dbflux_aws/               # AWS 认证提供程序 + Secrets Manager/SSM 取值提供程序
     src/auth.rs             # AWS SSO/共享/静态提供程序与 SSO 登录流程
     src/config.rs           # ~/.aws/config 解析器/缓存与配置回写辅助函数
@@ -620,6 +623,7 @@ crates/
 - `BucketsTableDocument`（`crates/dbflux_ui_document/src/buckets_table/`）—— 连接根节点的对象存储视图（名称、区域、对象数、大小、版本控制、创建时间），复用 `dbflux_components::data_table` 而非 `DataGridPanel`；以 `DocumentKey::ObjectStoreBucketsRoot` 为键。
 - `ObjectBrowserDocument`（`crates/dbflux_ui_document/src/object_browser/`）—— 分栏的树/预览对象存储浏览器，支持分页与惰性树导航、预览、元数据、上传、删除、重命名与预签名；以 `DocumentKey::ObjectBrowser` 为键。
 - `ObjectEditorDocument`（`crates/dbflux_ui_document/src/object_editor/`）—— 面向 S3 文本对象的独立「在编辑器中打开」标签页，与 `ObjectBrowserDocument` 的内联编辑器共用 `object_text` 模块（行尾检测、语言高亮、保存审计）；以 `DocumentKey::ObjectEditor` 为键。
+- `SecretStoreDocument`（`crates/dbflux_ui_document/src/secret_store/`）—— 针对单个 `SecretStoreSource` 的分页密钥列表（支持按名称搜索）、详情面板，以及显式且经过审计的值读取；值以 `secrecy` 类型保存，并且只通过密文输入框绘制，因此从不进入 UI 自动化树；以 `DocumentKey::SecretStore` 为键。
 
 **新增一种文档类型**（无需改动新模块之外的任何内容）：
 1. 创建 `crates/dbflux_ui_document/src/<name>/mod.rs`，放入实体。
@@ -700,9 +704,9 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 ### 驱动程序体系
 
 - **驱动程序能力**：`crates/dbflux_core/src/driver/capabilities.rs` 定义了：
-  - `DatabaseCategory`：Relational、Document、KeyValue、TimeSeries、LogStream、ObjectStorage
+  - `DatabaseCategory`：Relational、Document、KeyValue、TimeSeries、LogStream、ObjectStorage、SecretStore
   - `QueryLanguage`：Sql、CloudWatchLogsInsightsQl、OpenSearchPpl、OpenSearchSql、MongoQuery、RedisCommands、Cypher、InfluxQuery、Flux、Cql、Lua、Python、Bash（各自携带编辑器模式、占位提示、注释前缀）
-  - `DriverCapabilities`：`u64` 位标志，用于 PAGINATION、TRANSACTIONS、NESTED_DOCUMENTS、MULTI_STATEMENT、ROUTINES、STORED_PROCEDURES、DASHBOARD_IMPORT、DASHBOARD_SYNC 等特性
+  - `DriverCapabilities`：`u128` 位标志，用于 PAGINATION、TRANSACTIONS、NESTED_DOCUMENTS、MULTI_STATEMENT、ROUTINES、STORED_PROCEDURES、DASHBOARD_IMPORT、DASHBOARD_SYNC 等特性
   - `DriverMetadata`：静态的驱动程序信息（id、name、category、query_language、capabilities、icon）
 - **由驱动程序拥有的连接表单**：每个 `DbDriver` 从 `form_definition()` 返回自己的 `&DriverFormDef`。表单定义存在于驱动程序 crate 中（例如 `dbflux_driver_cloudwatch::driver::CLOUDWATCH_FORM`），而非核心 crate。`DriverFormDef` 携带标签页 → 分区 → 字段，其中 `FormFieldKind` 覆盖 `Text`、`Password`、`WriteOnly`（密钥）、`FilePath`、`Select`、`DynamicSelect`（运行时获取的选项，`depends_on` + `RefreshTrigger`）与 `AuthProfileRef { provider_id }`。
 - **错误格式化**：`crates/dbflux_core/src/core/error_formatter.rs` 提供 `ErrorFormatter` trait，用于生成带上下文的驱动程序特定错误消息（detail、hint、column、table、constraint）。
@@ -887,6 +891,10 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
   - `ObjectStoreConnection` 实现覆盖上传、删除、递归前缀/存储桶删除（批量 `DeleteObjects`）、复制、预签名、存储桶详情/版本控制与对象版本
   - 界面提供完整 CRUD：上传、需输入确认的递归删除、创建文件夹/存储桶（按端点优雅降级）、重命名（先复制后删除）、预签名 URL
   - 每次变更都在 `EventCategory::ObjectStorage` 下审计；凭据与预签名 URL 从不被记录到日志或持久化
+- **AWS Secrets**：`crates/dbflux_driver_aws_secrets/` —— `aws-sdk-secretsmanager` + `aws-sdk-ssm` 驱动程序（`DatabaseCategory::SecretStore`）：
+  - 通过 `Connection::secret_stores()` 与提供方无关的 `SecretStoreSource` 接缝（`dbflux_core/src/connection/secret_store/`）暴露两个存储库，由 `DriverCapabilities::SECRET_STORE` 门控；各存储库的 `SecretStoreCapabilities` 门控 UI 行为
+  - 列表（`ListSecrets`、`DescribeParameters`）从不读取值；Parameter Store 路径在客户端分组为直接条目与子路径
+  - 值只在显式读取时获取，并在 `EventCategory::SecretStore` 下审计且不含该值；被拒绝的 `kms:Decrypt` 映射为 `DbError::PermissionDenied`
 
 ### 驱动程序 README 规范
 
@@ -997,8 +1005,9 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 - TursoDB：基于 Hrana HTTP 的 `turso_serverless` 驱动程序，带按配置的 Tokio 桥接、基于 PRAGMA 的 Schema 发现、类型化 CRUD，以及用于交互式事务的按流执行会话（crates/dbflux_driver_turso/src/connection.rs）。
 - DuckDB：内置的 `duckdb` 驱动程序，面向文件、内存数据库与 DuckLake 目录，每个文件共享一个实例，按目录发现数据库，支持查询取消与只读事务（crates/dbflux_driver_duckdb/src/connection.rs）。
 - Amazon S3：`aws-sdk-s3` 驱动程序，支持 AWS 配置/SSO 或静态凭据，对兼容 S3 的端点（Cloudflare R2、MinIO）支持端点覆盖与路径风格寻址，并支持存储桶/对象 CRUD、预签名 URL 与复制/版本（crates/dbflux_driver_s3/src/driver.rs）。
+- AWS Secrets：`aws-sdk-secretsmanager` 与 `aws-sdk-ssm` 驱动程序，支持 AWS 配置/SSO 或静态凭据与端点覆盖、分页的密钥与参数列表、详情以及显式读取值（crates/dbflux_driver_aws_secrets/src/driver/mod.rs）。
 - AWS 认证栈：`dbflux_aws` 提供 AWS SSO/共享/静态认证提供程序、SSO 登录编排、账户/角色发现，以及新保存认证配置对 `~/.aws/config` 的回写。
-- 本地 IPC/RPC：`interprocess` Socket + 带版本号的消息信封，用于应用控制与 RPC 服务通信（`crates/dbflux_ipc/`、`crates/dbflux_driver_ipc/`、`crates/dbflux_driver_host/`）。`dbflux_app::rpc_services` 发现已持久化的服务描述符，把 `RpcServiceKind::Driver` 适配为运行时 `DbDriver`，并把 `RpcServiceKind::AuthProvider` 接入 `RpcAuthProvider`（它实现 `DynAuthProvider`）。保持 `rpc:<socket_id>` 的兼容性。认证提供程序的 IPC 协议为 v1.2：新增 `FetchDynamicOptions` / `DynamicOptions` 变体与 `secret_dependency_opt_in` 清单标志。认证令牌由 `dbflux_ipc/src/auth.rs` 管理。
+- 本地 IPC/RPC：`interprocess` Socket + 带版本号的消息信封，用于应用控制与 RPC 服务通信（`crates/dbflux_ipc/`、`crates/dbflux_driver_ipc/`、`crates/dbflux_driver_host/`）。`dbflux_app::rpc_services` 发现已持久化的服务描述符，把 `RpcServiceKind::Driver` 适配为运行时 `DbDriver`，并把 `RpcServiceKind::AuthProvider` 接入 `RpcAuthProvider`（它实现 `DynAuthProvider`），并把 `RpcServiceKind::SecretProvider` 接入 `RpcSecretProvider`（它实现 `DynSecretProvider`；参见 [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md)）。保持 `rpc:<socket_id>` 的兼容性。认证提供程序的 IPC 协议为 v1.2：新增 `FetchDynamicOptions` / `DynamicOptions` 变体与 `secret_dependency_opt_in` 清单标志。认证令牌由 `dbflux_ipc/src/auth.rs` 管理。
 - 代理：经由 `dbflux_tunnel_core::Tunnel` 的 SOCKS5/HTTP CONNECT 隧道（crates/dbflux_proxy/src/lib.rs）。
 - SSH：`ssh2` 会话，经由 `dbflux_tunnel_core::Tunnel` 做本地 TCP 转发（crates/dbflux_ssh/src/lib.rs）。
 - 操作系统密钥环：为密码、SSH 口令与代理凭据提供可选的密钥存储（crates/dbflux_core/src/storage/secrets.rs）。
@@ -1007,14 +1016,14 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 ## 配置
 
 - 工作区设置：`Cargo.toml` 定义工作区成员与共享依赖。
-- 应用 feature：`crates/dbflux/Cargo.toml` 门控 `sqlite`、`postgres`、`mysql`、`mongodb`、`redis`、`dynamodb`、`cloudwatch`、`influxdb`、`mssql`、`redshift`、`clickhouse`、`s3`、`lua`、`aws` 与 `mcp`（本分支默认启用）。
+- 应用 feature：`crates/dbflux/Cargo.toml` 门控 `sqlite`、`postgres`、`mysql`、`mongodb`、`redis`、`dynamodb`、`cloudwatch`、`influxdb`、`mssql`、`redshift`、`clickhouse`、`s3`、`aws_secrets`、`lua`、`aws` 与 `mcp`（本分支默认启用）。
 - 运行时数据：所有运行时配置都存放在 `~/.local/share/dbflux/dbflux.db`（单个 SQLite 文件）。
   - `cfg_connection_profiles` + 子表（认证、代理、SSH 绑定）
   - `cfg_auth_profiles`（与提供程序无关的认证配置存储）
   - `cfg_ssh_tunnel_profiles`、`cfg_proxy_profiles`
   - `cfg_hooks`、`cfg_hook_bindings`
   - `cfg_script_roots`（在原位置列出的外部脚本文件夹；删除一行绝不会触碰该文件夹）
-  - `cfg_services`、`cfg_service_args`、`cfg_service_env`（RPC 服务描述符；`cfg_services.service_kind` 记录 `driver` 与 `auth_provider`）
+  - `cfg_services`、`cfg_service_args`、`cfg_service_env`（RPC 服务描述符；`cfg_services.service_kind` 记录 `driver`、`auth_provider` 或 `secret_provider`）
   - `cfg_governance_*` 表（角色、策略、受信客户端）
   - `cfg_drivers`（各驱动程序的设置覆盖项）
   - `cfg_folders`（连接树组织）

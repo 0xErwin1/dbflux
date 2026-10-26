@@ -118,6 +118,7 @@ pub struct AppState {
     protected_hook_rows: Vec<crate::config_loader::ProtectedHookRow>,
     detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
     auth_provider_registry: AuthProviderRegistry,
+    secret_provider_registry: crate::secret_provider_registry::SecretProviderRegistry,
     history_manager: crate::history_manager_sqlite::HistoryManager,
     scripts_directory: Option<ScriptsDirectory>,
     storage_runtime: StorageRuntime,
@@ -749,15 +750,24 @@ impl AppState {
         }
     }
 
+    /// Installs a finished connection for `profile`.
+    ///
+    /// `profile` is the copy taken when the connection attempt started. The
+    /// read-only setting is taken from the saved profile instead, so a save
+    /// made while the attempt was running decides the session's policy.
     pub fn apply_connect_profile(
         &mut self,
-        profile: ConnectionProfile,
+        mut profile: ConnectionProfile,
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
         proxy_tunnel: Option<Box<dyn std::any::Any + Send + Sync>>,
         is_mcp_actor: bool,
         probe: dbflux_core::WritePrivilege,
     ) {
+        if let Some(saved) = self.facade.profiles.find_by_id(profile.id) {
+            profile.read_only_flag = saved.read_only_flag;
+        }
+
         self.facade.connections.apply_connect_profile(
             profile,
             connection,
@@ -1289,6 +1299,10 @@ impl AppState {
             connected.profile.navigator_view = profile.navigator_view;
             connected.profile.show_all_databases = profile.show_all_databases;
         }
+
+        self.facade
+            .connections
+            .apply_profile_read_only_flag(profile.id, profile.read_only_flag);
 
         self.facade.profiles.update(profile);
 
@@ -2928,6 +2942,11 @@ impl AppState {
 }
 
 impl AppState {
+    /// External secret providers as `(provider id, display name)`, sorted by display name.
+    pub fn secret_providers(&self) -> Vec<(String, String)> {
+        self.secret_provider_registry.list()
+    }
+
     pub fn auth_provider_registry(&self) -> &AuthProviderRegistry {
         &self.auth_provider_registry
     }
@@ -3108,7 +3127,8 @@ impl AppState {
         let cache = Arc::new(dbflux_core::values::ValueCache::new(
             std::time::Duration::from_secs(300),
         ));
-        let resolver = dbflux_core::values::CompositeValueResolver::new(cache);
+        let mut resolver = dbflux_core::values::CompositeValueResolver::new(cache);
+        self.secret_provider_registry.register_into(&mut resolver);
 
         #[cfg(feature = "aws")]
         let aws_profile_name = auth_profile

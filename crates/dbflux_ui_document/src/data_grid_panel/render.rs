@@ -3858,7 +3858,6 @@ impl DataGridPanel {
     /// The Export button in the footer (secondary, with a chevron) and, when
     /// open, its menu of save and copy formats.
     fn render_export_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let formats = dbflux_export::available_formats(&self.result.shape);
         let menu_open = self.chrome.export_menu_open;
 
         div()
@@ -3876,41 +3875,38 @@ impl DataGridPanel {
                     this.export_results(window, cx);
                 })),
             )
-            .when(menu_open, |d| d.child(self.render_export_menu(formats, cx)))
+            .when(menu_open, |d| d.child(self.render_export_menu(cx)))
     }
 
-    fn render_export_menu(
-        &self,
-        formats: &[dbflux_export::ExportFormat],
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_export_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entries = self.export_menu_entries();
         let selected = self.chrome.export_menu_selected;
-        let mut items: Vec<AnyElement> = Vec::with_capacity(entries.len() + 3);
-
-        items.push(
-            render_menu_header(
-                &MenuItem::header(dbflux_i18n::t!("document.data.grid.export.save_as_file")),
-                cx,
-            )
-            .into_any_element(),
-        );
+        let mut items: Vec<AnyElement> = Vec::with_capacity(entries.len() + 5);
+        let mut section_start = 0;
 
         for (index, &entry) in entries.iter().enumerate() {
-            if index == formats.len() {
-                items.push(render_separator(cx).into_any_element());
+            let starts_section = entries.get(index.wrapping_sub(1)).is_none_or(|previous| {
+                export_menu_section(*previous) != export_menu_section(entry)
+            });
+
+            if starts_section {
+                if index > 0 {
+                    items.push(render_separator(cx).into_any_element());
+                }
                 items.push(
-                    render_menu_header(
-                        &MenuItem::header(dbflux_i18n::t!(
-                            "document.data.grid.export.copy_to_clipboard"
-                        )),
-                        cx,
-                    )
-                    .into_any_element(),
+                    render_menu_header(&MenuItem::header(export_menu_section_title(entry)), cx)
+                        .into_any_element(),
                 );
+                section_start = index;
             }
 
-            items.push(self.render_export_menu_row(index, entry, index == selected, cx));
+            items.push(self.render_export_menu_row(
+                index,
+                index - section_start,
+                entry,
+                index == selected,
+                cx,
+            ));
         }
 
         deferred(
@@ -3947,22 +3943,30 @@ impl DataGridPanel {
     fn render_export_menu_row(
         &self,
         index: usize,
+        row_index: usize,
         entry: ExportMenuEntry,
         selected: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (id, format, icon) = match entry {
-            ExportMenuEntry::Save(format) => ("export-save", format, AppIcon::Download),
-            ExportMenuEntry::Copy(format) => ("export-copy", format, AppIcon::Copy),
-        };
-        let row_index = match entry {
-            ExportMenuEntry::Save(_) => index,
-            ExportMenuEntry::Copy(_) => {
-                index - dbflux_export::available_formats(&self.result.shape).len()
-            }
+        let (id, label, icon) = match entry {
+            ExportMenuEntry::Save(format) => (
+                "export-save",
+                crate::labels::export_format_label(format),
+                AppIcon::Download,
+            ),
+            ExportMenuEntry::Copy(format) => (
+                "export-copy",
+                crate::labels::export_format_label(format),
+                AppIcon::Copy,
+            ),
+            ExportMenuEntry::SaveAll(format) => (
+                "export-all",
+                crate::labels::export_all_format_label(format),
+                AppIcon::Database,
+            ),
         };
 
-        let mut item = MenuItem::new(crate::labels::export_format_label(format)).icon(icon);
+        let mut item = MenuItem::new(label).icon(icon);
         if !entry.is_enabled() {
             item = item.disabled();
         }
@@ -4019,6 +4023,24 @@ impl DataGridPanel {
                 .on_scroll_wheel(cx.listener(move |this, _, window, cx| close(this, window, cx))),
         )
         .with_priority(1)
+    }
+}
+
+/// The export menu section an entry is drawn in, so the menu can start a
+/// header where the section changes.
+fn export_menu_section(entry: ExportMenuEntry) -> u8 {
+    match entry {
+        ExportMenuEntry::Save(_) => 0,
+        ExportMenuEntry::Copy(_) => 1,
+        ExportMenuEntry::SaveAll(_) => 2,
+    }
+}
+
+fn export_menu_section_title(entry: ExportMenuEntry) -> String {
+    match entry {
+        ExportMenuEntry::Save(_) => dbflux_i18n::t!("document.data.grid.export.save_as_file"),
+        ExportMenuEntry::Copy(_) => dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard"),
+        ExportMenuEntry::SaveAll(_) => dbflux_i18n::t!("document.data.grid.export.export_all_rows"),
     }
 }
 
@@ -4191,7 +4213,9 @@ mod tests {
         "document.data.grid.export.trigger",
         "document.data.grid.export.save_as_file",
         "document.data.grid.export.copy_to_clipboard",
+        "document.data.grid.export.export_all_rows",
         "document.data.grid.export.format.csv",
+        "document.data.grid.export.format.json_lines",
         "document.data.grid.export.format.json_pretty",
         "document.data.grid.export.format.json_compact",
         "document.data.grid.export.format.text",
@@ -4236,9 +4260,9 @@ mod tests {
         let copy_en = dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard", locale = "en");
         let copy_es = dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard", locale = "es");
 
-        assert_eq!(save_en, "Save as file");
+        assert_eq!(save_en, "Save loaded rows as file");
         assert_ne!(save_en, save_es);
-        assert_eq!(copy_en, "Copy to clipboard");
+        assert_eq!(copy_en, "Copy loaded rows to clipboard");
         assert_ne!(copy_en, copy_es);
     }
 }

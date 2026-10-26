@@ -88,19 +88,14 @@ impl DataGridPanel {
         cx.notify();
     }
 
-    /// Produces the executable read for a builder spec.
+    /// Produces the executable read for a builder spec, through the same
+    /// rendering "Export all rows" pages a builder query with
+    /// (`dbflux_transfer::select_for_visual_spec`).
     ///
-    /// Relational drivers materialize a parameterized `SelectQuery` via
-    /// `generate_select`. Document drivers (whose `generate_select` yields
-    /// `None`) fall back to the generic `generate_read_from_spec`, whose opaque
-    /// query text is wrapped as a parameter-less `SelectQuery` so the existing
-    /// execution path runs it unchanged. Selection is by which generator method
-    /// returns a query, never by a driver id.
-    ///
-    /// Returns `Ok(None)` when no generator is available or neither path emits a
+    /// Returns `Ok(None)` when no generator is available or none renders a
     /// query, and `Err(message)` when a generator actively rejects the spec
-    /// (e.g. `generate_read_from_spec` returns `InvalidSpec`) so the caller can
-    /// surface the failure instead of silently producing an empty read.
+    /// so the caller can surface the failure instead of silently producing an
+    /// empty read.
     pub(super) fn build_visual_select(
         &self,
         spec: &VisualQuerySpec,
@@ -110,24 +105,7 @@ impl DataGridPanel {
             return Ok(None);
         };
 
-        match generator.generate_select(spec) {
-            Ok(Some(select)) => return Ok(Some(select)),
-            // No structured SELECT for this generator (Document drivers return the
-            // default `Ok(None)`; `Unsupported` is the same intent made explicit).
-            // Either way, fall through to `generate_read_from_spec`.
-            Ok(None) => {}
-            Err(dbflux_core::QueryGenError::Unsupported) => {}
-            Err(error) => return Err(error.to_string()),
-        }
-
-        match generator.generate_read_from_spec(spec) {
-            Ok(Some(generated)) => Ok(Some(dbflux_core::SelectQuery {
-                sql: generated.text,
-                params: Vec::new(),
-            })),
-            Ok(None) => Ok(None),
-            Err(error) => Err(error.to_string()),
-        }
+        dbflux_transfer::select_for_visual_spec(generator, spec)
     }
 
     /// Clears the visual spec and restores the raw filter-input chrome.
@@ -472,6 +450,10 @@ impl DataGridPanel {
             }
         }
 
+        // The metadata this resolution needs may have landed after the page
+        // it should label.
+        self.resolve_fk_display_values(cx);
+
         cx.notify();
     }
 
@@ -811,7 +793,9 @@ impl DataGridPanel {
     /// Only fires when `fk_cache == Loading`. All other states (`Ready`,
     /// `Unavailable`) are treated as terminal and this method is a no-op.
     /// Must be called from a `DataSource::Table` context; non-Table sources
-    /// return immediately.
+    /// return immediately. A table without a database name (single-database
+    /// drivers such as SQLite, whose sidebar opens carry none) resolves the
+    /// database the way every other reader does instead of giving up.
     pub(crate) fn ensure_fk_cache_loaded(&mut self, cx: &mut Context<Self>) {
         if !matches!(self.builder.fk_cache, FkLoadState::Loading) {
             return;
@@ -827,20 +811,16 @@ impl DataGridPanel {
             _ => return,
         };
 
-        let Some(database) = database else {
-            self.mark_fk_unavailable(cx);
-            return;
-        };
+        let (conn, database) = {
+            let Some(connected) = self.app_state.read(cx).connections().get(&profile_id) else {
+                self.mark_fk_unavailable(cx);
+                return;
+            };
 
-        let Some(conn) = self
-            .app_state
-            .read(cx)
-            .connections()
-            .get(&profile_id)
-            .map(|c| c.connection.clone())
-        else {
-            self.mark_fk_unavailable(cx);
-            return;
+            (
+                connected.connection.clone(),
+                Self::table_details_database(connected, database.as_deref()),
+            )
         };
 
         let schema_for_task = schema;

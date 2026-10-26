@@ -653,7 +653,7 @@ impl DataGridPanel {
         true
     }
 
-    fn identity_columns(&self) -> Vec<String> {
+    pub(in crate::data_grid_panel) fn identity_columns(&self) -> Vec<String> {
         let marked: Vec<String> = self
             .collection
             .raw

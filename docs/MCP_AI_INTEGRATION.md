@@ -70,6 +70,8 @@ The `client-id` value must match a trusted client entry you created in the DBFlu
 
 **Note**: If you built DBFlux without the `mcp` feature (`--no-default-features`), the MCP server will not be available.
 
+The server loads inline connection hooks and reusable hook bindings from the shared database. It runs PreConnect and PostConnect around connection setup, and PreDisconnect and PostDisconnect when an open connection is disconnected. Hook outcomes are recorded in the audit log. A detached PreConnect hook must emit its configured ready signal; after that signal, the server waits for the endpoint only for direct profiles. Pipeline and SSH-tunnel profiles skip that endpoint wait because their endpoint is resolved by the pipeline or tunnel. The standalone MCP server does not include the Lua hook executor; an enabled Lua hook returns an error identifying its phase and hook instead of being skipped.
+
 ## 3. Governance Model (Core Concepts)
 
 Every AI request is enforced through all of these layers in order:
@@ -206,6 +208,14 @@ The editor's auto-refresh uses the same enforcement. On a connection whose drive
 
 The dangerous-query settings (**Confirm dangerous queries**, **Require WHERE for DELETE/UPDATE** and **Always require preview**) belong to the DBFlux editor. The MCP server does not read them, at the General level, as a per-driver override or as a per-connection override. An MCP call is gated only by the policies and the approval flow described above: to make destructive statements wait for a person, set the policy's decision for `destructive` (or `admin_destructive`) to Ask or Deny.
 
+### Read-only connections
+
+When a connection's profile has **Read-only** switched on in the Connection Manager, every call above the `read` class on that connection is denied with the error code `connection_read_only`. The check runs before the policies, so no policy, role or approval can allow the call: `request_execution` is denied, and a call approved before the setting was turned on is denied when it is repeated. Each denial is recorded as an `mcp_authorize` audit event with outcome `failure`.
+
+`execute_script` governs a read script as `write` on a driver that cannot enforce read-only, as described above, so on a read-only connection with such a driver it is denied too. `select_data`, `count_records` and the other read tools still run.
+
+The MCP server reads the setting from `dbflux.db` on every call, so a change made in the GUI applies to the next call without restarting the server. If the server cannot read the file, it treats the connection as read-only.
+
 ## 6. Built-in Policies and Roles
 
 Three policies and three roles are shipped as immutable built-ins. They are always present regardless of what is persisted on disk, and cannot be deleted or modified.
@@ -336,6 +346,7 @@ let outcome = authorize_request(
         tool_id: "select_data".to_string(),
         classification: ExecutionClassification::Read,
         mcp_enabled_for_connection: true,
+        read_only_connection: false,
         correlation_id: None,
     },
     now_epoch_ms(),
@@ -386,6 +397,11 @@ To avoid polluting developer machines during tests:
 
 - Enable MCP in the target connection's governance settings (Connection Manager → MCP tab).
 - Or set `mcp_enabled_by_default: true` in the config if you want all connections enabled.
+
+### Request denied as connection read-only
+
+- The connection's profile has **Read-only** switched on (Connection Manager → Main tab → Safety). Only `metadata` and `read` calls run on it, whatever the policies say.
+- Turn the setting off to allow writes again. The next call sees the change.
 
 ### Policy denied
 

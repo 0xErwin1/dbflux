@@ -422,6 +422,7 @@ pub(crate) enum NoActiveConnectionKind {
     ObjectStorageAccount,
     Bucket,
     Object,
+    SecretStore,
 }
 
 /// Formats the "No active connection for this X" toast for the given resource kind.
@@ -447,6 +448,9 @@ pub(crate) fn documents_no_active_connection_message(kind: NoActiveConnectionKin
         }
         NoActiveConnectionKind::Object => {
             dbflux_i18n::t!("documents.toast.no_active_connection_for.object")
+        }
+        NoActiveConnectionKind::SecretStore => {
+            dbflux_i18n::t!("documents.toast.no_active_connection_for.secret_store")
         }
     }
 }
@@ -841,6 +845,7 @@ mod tests {
             NoActiveConnectionKind::ObjectStorageAccount,
             NoActiveConnectionKind::Bucket,
             NoActiveConnectionKind::Object,
+            NoActiveConnectionKind::SecretStore,
         ];
 
         let mut messages = Vec::with_capacity(kinds.len());

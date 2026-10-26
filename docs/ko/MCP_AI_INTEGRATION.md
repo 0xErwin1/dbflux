@@ -70,6 +70,8 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 
 **참고**: `mcp` 기능 없이(`--no-default-features`) DBFlux를 빌드했다면 MCP 서버를 사용할 수 없습니다.
 
+서버는 공유 데이터베이스에서 인라인 연결 훅과 재사용 가능한 훅 바인딩을 불러옵니다. 연결을 설정할 때 PreConnect와 PostConnect를 실행하고, 열린 연결을 끊을 때 PreDisconnect와 PostDisconnect를 실행합니다. 훅 결과는 감사 로그에 기록됩니다. 분리된 PreConnect 훅은 설정된 준비 신호를 내보내야 하며, 그 신호 뒤에 서버는 직접 프로필에 대해서만 엔드포인트를 기다립니다. 파이프라인 또는 SSH 터널 프로필은 파이프라인이나 터널이 엔드포인트를 결정하므로 엔드포인트 대기를 건너뜁니다. 독립형 MCP 서버에는 Lua 훅 실행기가 포함되어 있지 않습니다. 활성화된 Lua 훅은 건너뛰지 않고 단계와 훅을 식별하는 오류를 반환합니다.
+
 ## 3. 거버넌스 모델 (핵심 개념)
 
 모든 AI 요청은 다음 계층 전부를 순서대로 거치며 강제됩니다:
@@ -204,6 +206,14 @@ SQL Server, Turso, 외부 IPC 드라이버, DynamoDB, CloudWatch, InfluxDB는 �
 
 위험 쿼리 설정(**Confirm dangerous queries**, **Require WHERE for DELETE/UPDATE**, **Always require preview**)은 DBFlux 편집기에 속합니다. MCP 서버는 General 수준, 드라이버별 재정의, 연결별 재정의 어디에서도 이 설정을 읽지 않습니다. MCP 호출은 위에서 설명한 정책과 승인 흐름으로만 통제됩니다. 파괴적인 문장이 사람의 승인을 기다리게 하려면 정책에서 `destructive`(또는 `admin_destructive`)의 결정을 Ask 또는 Deny로 설정하세요.
 
+### 읽기 전용 연결
+
+연결 관리자에서 연결 프로필의 **읽기 전용**이 켜져 있으면, 그 연결에서 `read` 클래스보다 높은 모든 호출이 오류 코드 `connection_read_only`로 거부됩니다. 이 검사는 정책보다 먼저 실행되므로 어떤 정책, 역할, 승인도 그 호출을 허용할 수 없습니다. `request_execution`은 거부되고, 설정을 켜기 전에 승인된 호출도 다시 호출하면 거부됩니다. 거부될 때마다 결과가 `failure`인 `mcp_authorize` 감사 이벤트가 기록됩니다.
+
+위에서 설명했듯이 `execute_script`는 읽기 전용을 강제할 수 없는 드라이버에서 읽기 스크립트를 `write`로 다루므로, 그런 드라이버의 읽기 전용 연결에서는 이것도 거부됩니다. `select_data`, `count_records` 등 읽기 도구는 그대로 실행됩니다.
+
+MCP 서버는 호출할 때마다 `dbflux.db`에서 이 설정을 읽으므로, GUI에서 바꾼 내용은 서버를 다시 시작하지 않아도 다음 호출부터 적용됩니다. 서버가 파일을 읽지 못하면 그 연결을 읽기 전용으로 취급합니다.
+
 ## 6. 내장 정책과 역할
 
 세 개의 정책과 세 개의 역할은 변경할 수 없는 내장 항목으로 제공됩니다. 디스크에 무엇이 저장되어 있든 항상 존재하며, 삭제하거나 수정할 수 없습니다.
@@ -333,6 +343,7 @@ let outcome = authorize_request(
         tool_id: "select_data".to_string(),
         classification: ExecutionClassification::Read,
         mcp_enabled_for_connection: true,
+        read_only_connection: false,
         correlation_id: None,
     },
     now_epoch_ms(),
@@ -383,6 +394,11 @@ AI 클라이언트를 MCP 서버에 연결하기 전에:
 
 - 대상 연결의 거버넌스 설정에서 MCP를 활성화합니다 (연결 관리자 → MCP 탭).
 - 또는 모든 연결을 활성화하려면 설정에서 `mcp_enabled_by_default: true`를 지정합니다.
+
+### 연결이 읽기 전용이라 요청이 거부됨
+
+- 연결 프로필의 **읽기 전용**이 켜져 있습니다(연결 관리자 → 메인 탭 → 안전). 정책과 관계없이 그 연결에서는 `metadata`와 `read` 호출만 실행됩니다.
+- 쓰기를 다시 허용하려면 설정을 끄세요. 다음 호출부터 변경 내용이 적용됩니다.
 
 ### 정책에 의해 거부됨
 

@@ -405,6 +405,7 @@ pub(crate) fn chart_rail_why_text(numeric_columns: usize, timestamp_columns: usi
 
 /// Item kind affected by a bulk delete, selecting the plural noun used in
 /// the completion toast and the partial-failure catalog buckets.
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum MutationItemKind {
     Row,
     Document,
@@ -471,6 +472,21 @@ pub(crate) fn partial_delete_label(
     };
 
     dbflux_i18n::t!(key, done = done, total = total, error = error)
+}
+
+/// Warning for a batch delete that left out items whose identity could not be
+/// read, with the deleted and skipped counts interpolated.
+pub(crate) fn bulk_delete_unidentified_label(
+    kind: MutationItemKind,
+    done: usize,
+    skipped: usize,
+) -> String {
+    let key = match kind {
+        MutationItemKind::Row => "document.data.mutation.toast.unidentified_delete.row",
+        MutationItemKind::Document => "document.data.mutation.toast.unidentified_delete.document",
+    };
+
+    dbflux_i18n::t!(key, done = done, skipped = skipped)
 }
 
 /// Toast text for a batch delete that completed in full, with the number of
@@ -1110,6 +1126,7 @@ pub(crate) fn audit_category_label(category: dbflux_core::EventCategory) -> Stri
         EventCategory::ObjectStorage => {
             dbflux_i18n::t!("document.audit.category.object_storage")
         }
+        EventCategory::SecretStore => dbflux_i18n::t!("document.audit.category.secret_store"),
     }
 }
 
@@ -2341,6 +2358,116 @@ pub(crate) fn context_menu_export_exported_toast(path: &str) -> String {
         "document.data.context_menu.export.toast.exported",
         path = path
     )
+}
+
+/// Toast text after the loaded rows of a result were written to a file.
+pub(crate) fn context_menu_export_exported_rows_toast(count: usize, path: &str) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.data.context_menu.export.toast.exported_rows.one",
+            path = path
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.context_menu.export.toast.exported_rows.many",
+            count = count,
+            path = path
+        )
+    }
+}
+
+/// Toast text after the loaded rows were written to the fallback directory
+/// because no native file picker was available.
+pub(crate) fn context_menu_export_native_picker_fallback_rows_toast(
+    count: usize,
+    path: &str,
+) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.data.context_menu.export.toast.native_picker_fallback_rows.one",
+            path = path
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.context_menu.export.toast.native_picker_fallback_rows.many",
+            count = count,
+            path = path
+        )
+    }
+}
+
+/// Toast text after the loaded rows of a result were copied to the clipboard.
+pub(crate) fn context_menu_clipboard_copied_rows_toast(
+    count: usize,
+    format: &str,
+    bytes: usize,
+) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.data.context_menu.clipboard.toast.copied_rows.one",
+            format = format,
+            bytes = bytes
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.context_menu.clipboard.toast.copied_rows.many",
+            count = count,
+            format = format,
+            bytes = bytes
+        )
+    }
+}
+
+/// Tasks panel label of an "Export all rows" run.
+pub(crate) fn export_all_rows_task_label(table: &str) -> String {
+    dbflux_i18n::t!("document.data.grid.export.all.task", table = table)
+}
+
+/// Toast text after every row of a table was written to a file.
+pub(crate) fn export_all_rows_exported_toast(count: u64, path: &str) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.data.grid.export.all.toast.exported.one",
+            path = path
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.grid.export.all.toast.exported.many",
+            count = count,
+            path = path
+        )
+    }
+}
+
+/// Toast text after an "Export all rows" run was cancelled part way.
+pub(crate) fn export_all_rows_cancelled_toast(path: &str) -> String {
+    dbflux_i18n::t!("document.data.grid.export.all.toast.cancelled", path = path)
+}
+
+/// Warning after an "Export all rows" run whose later pages had fields the
+/// first page, and so the file's header, did not.
+pub(crate) fn export_all_rows_dropped_columns_warning(columns: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.grid.export.all.toast.dropped_columns",
+        columns = columns
+    )
+}
+
+/// Error text when an "Export all rows" run fails.
+pub(crate) fn export_all_rows_failed_error(error: &str) -> String {
+    dbflux_i18n::t!("document.data.grid.export.all.error.failed", error = error)
+}
+
+/// Label of a streaming format in the "Export all rows" section.
+pub(crate) fn export_all_format_label(format: dbflux_transfer::FileFormat) -> String {
+    match format {
+        dbflux_transfer::FileFormat::Csv => {
+            dbflux_i18n::t!("document.data.grid.export.format.csv")
+        }
+        dbflux_transfer::FileFormat::Json => {
+            dbflux_i18n::t!("document.data.grid.export.format.json_lines")
+        }
+    }
 }
 
 /// Error text when writing the export file fails.
@@ -4984,6 +5111,7 @@ mod tests {
         EventCategory::Mcp,
         EventCategory::Governance,
         EventCategory::ObjectStorage,
+        EventCategory::SecretStore,
     ];
 
     const ALL_EVENT_OUTCOMES: &[EventOutcome] = &[
@@ -5024,6 +5152,7 @@ mod tests {
             EventCategory::Mcp => "document.audit.category.mcp",
             EventCategory::Governance => "document.audit.category.governance",
             EventCategory::ObjectStorage => "document.audit.category.object_storage",
+            EventCategory::SecretStore => "document.audit.category.secret_store",
         }
     }
 
@@ -8429,6 +8558,100 @@ mod tests {
         assert!(
             delimited_write_error_cause(&unencodable)
                 .starts_with("A value contains 'é', which Shift_JIS cannot represent.")
+        );
+    }
+
+    #[test]
+    fn context_menu_export_exported_rows_toast_states_the_loaded_row_count() {
+        assert_eq!(
+            super::context_menu_export_exported_rows_toast(1, "/tmp/users.csv"),
+            "Exported 1 loaded row to /tmp/users.csv"
+        );
+        assert_eq!(
+            super::context_menu_export_exported_rows_toast(100, "/tmp/users.csv"),
+            "Exported 100 loaded rows to /tmp/users.csv"
+        );
+    }
+
+    #[test]
+    fn context_menu_export_native_picker_fallback_rows_toast_states_the_loaded_row_count() {
+        let value = super::context_menu_export_native_picker_fallback_rows_toast(
+            42,
+            "/tmp/fallback/users.csv",
+        );
+
+        assert!(
+            value.starts_with(
+                "Native file picker unavailable — exported 42 loaded rows to /tmp/fallback/users.csv instead."
+            ),
+            "got {value:?}"
+        );
+    }
+
+    #[test]
+    fn context_menu_clipboard_copied_rows_toast_states_the_loaded_row_count() {
+        assert_eq!(
+            super::context_menu_clipboard_copied_rows_toast(1, "CSV", 12),
+            "Copied 1 loaded row as CSV (12 bytes) to clipboard"
+        );
+        assert_eq!(
+            super::context_menu_clipboard_copied_rows_toast(100, "CSV", 4096),
+            "Copied 100 loaded rows as CSV (4096 bytes) to clipboard"
+        );
+    }
+
+    #[test]
+    fn export_menu_headers_say_they_write_the_loaded_rows() {
+        assert_eq!(
+            dbflux_i18n::t!("document.data.grid.export.save_as_file"),
+            "Save loaded rows as file"
+        );
+        assert_eq!(
+            dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard"),
+            "Copy loaded rows to clipboard"
+        );
+        assert_eq!(
+            dbflux_i18n::t!("document.data.grid.export.export_all_rows"),
+            "Export all rows to file"
+        );
+    }
+
+    #[test]
+    fn export_all_rows_labels_state_the_table_count_and_path() {
+        assert_eq!(
+            super::export_all_rows_task_label("public.users"),
+            "Export all rows of public.users"
+        );
+        assert_eq!(
+            super::export_all_rows_exported_toast(1, "/tmp/users.csv"),
+            "Exported 1 row to /tmp/users.csv"
+        );
+        assert_eq!(
+            super::export_all_rows_exported_toast(2_345, "/tmp/users.csv"),
+            "Exported all 2345 rows to /tmp/users.csv"
+        );
+        assert_eq!(
+            super::export_all_rows_cancelled_toast("/tmp/users.csv"),
+            "Export cancelled — /tmp/users.csv holds only the rows written before it stopped"
+        );
+        assert_eq!(
+            super::export_all_rows_dropped_columns_warning("email, phone"),
+            "Fields that first appear after the first page are not in the file: email, phone"
+        );
+        assert_eq!(
+            super::export_all_rows_failed_error("disk full"),
+            "Export of all rows failed: disk full"
+        );
+    }
+
+    #[test]
+    fn export_all_format_label_names_each_streaming_format() {
+        use dbflux_transfer::FileFormat;
+
+        assert_eq!(super::export_all_format_label(FileFormat::Csv), "CSV");
+        assert_eq!(
+            super::export_all_format_label(FileFormat::Json),
+            "JSON (one object per line)"
         );
     }
 }

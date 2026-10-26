@@ -28,8 +28,9 @@ El Connection Manager muestra un selector de drivers. Los drivers disponibles
 dependen de los features con los que se compiló el binario; el build estándar
 incluye SQLite, PostgreSQL, MySQL/MariaDB, Microsoft SQL Server, Amazon
 Redshift, ClickHouse, TursoDB, DuckDB, MongoDB, DynamoDB, Redis, InfluxDB, CloudWatch
-Logs y Amazon S3. El selector agrupa los drivers por categoría: Relacional,
-Documentos, Clave-valor, Series temporales y logs, y Almacenamiento de objetos.
+Logs, Amazon S3 y AWS Secrets. El selector agrupa los drivers por categoría:
+Relacional, Documentos, Clave-valor, Series temporales y logs, Almacenamiento de
+objetos, y Almacenes de secretos.
 Los drivers RPC registrados externamente también aparecen aquí cuando están
 configurados (ver `docs/RPC_SERVICES_CONFIG.md`).
 
@@ -45,7 +46,15 @@ conexión; ver [Modo formulario vs. URI directa](#modo-formulario-vs-uri-directa
 La sección **Seguridad** al final de la pestaña Main contiene el interruptor
 **Solo lectura**. Cuando está activado, DBFlux bloquea los cambios hechos desde la
 grilla de datos, el constructor visual de consultas y la comparación de esquemas en
-esa conexión. Las sentencias escritas en el editor de consultas se siguen ejecutando.
+esa conexión, rechaza las sentencias del editor de consultas que cambiarían datos o
+esquema, y deniega las llamadas MCP por encima de la clase `read` (ver
+[Conexiones de solo lectura](MCP_AI_INTEGRATION.md#conexiones-de-solo-lectura)).
+Las sentencias de lectura se siguen ejecutando. En la app, activar el ajuste se aplica
+de inmediato a una conexión abierta, mientras que desactivarlo surte efecto al reconectar.
+MCP toma cualquiera de los dos cambios en su siguiente llamada. El editor clasifica cada sentencia por
+su texto, así que una función con efectos secundarios llamada desde un `SELECT`, como
+`setval` de PostgreSQL, se sigue ejecutando: las credenciales de solo lectura en la
+base de datos siguen siendo el límite más fuerte.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">
@@ -221,6 +230,7 @@ El formulario está guiado por el provider. Para AWS SSO rellenas:
 | **SSO session**   | Referencia opcional a un perfil **AWS SSO Session**. Al fijarla, el Start URL y la región se heredan y sus campos inline se deshabilitan visualmente. |
 | **SSO Start URL** | La URL de tu portal de Identity Center (omítela si usas una sesión).                                                                                  |
 | **Region**        | p. ej. `us-east-1`.                                                                                                                                   |
+| **Endpoint URL**  | Opcional, p. ej. `http://localhost:4566` para LocalStack. Solo afecta a Secrets Manager y SSM, mediante una sección `[services]` en `~/.aws/config`. Los perfiles AWS Shared Credentials tienen el mismo campo. |
 | **Account**       | Un desplegable que se rellena **después de iniciar sesión** — lista las cuentas a las que tu sesión SSO tiene acceso.                                 |
 | **Role**          | Un desplegable que se rellena una vez elegida una cuenta.                                                                                             |
 
@@ -294,6 +304,7 @@ selector de fuente junto a un campo y elige:
 | ------------------------ | ------------------------------------------------------------------ |
 | **Literal**              | El valor que escribes (por defecto).                               |
 | **Environment Variable** | Se lee de una variable de entorno por nombre.                      |
+| **Dotenv File**          | Se lee una clave de un archivo `.env` tuyo, escrito como `ruta#CLAVE`. |
 | **Secret Manager**       | Se obtiene de un secret provider (AWS Secrets Manager).            |
 | **Parameter Store**      | Se obtiene de un parameter provider (AWS SSM Parameter Store).     |
 | **Auth Session Field**   | Toma un campo de la sesión/credenciales resuelta del Auth Profile. |
@@ -307,6 +318,60 @@ Notas:
   obtenerlos en cada reconexión.
 - Las fuentes Secret/Parameter respaldadas por un auth provider **requieren un
   Auth Profile** en la conexión (se valida antes de conectar).
+- Para llegar a LocalStack o a un endpoint de VPC, define **Endpoint URL** en el
+  Auth Profile de AWS. El SDK de AWS también respeta
+  `AWS_ENDPOINT_URL_SECRETS_MANAGER` y `AWS_ENDPOINT_URL_SSM`.
+
+> **Atención:** DBFlux escribe el endpoint en una sección `[services]` a la que
+> apunta el perfil, por lo que solo se aplica a Secrets Manager y SSM. Eso
+> incluye los comandos `secretsmanager` y `ssm` del AWS CLI y el port
+> forwarding de SSM que usen ese perfil. DynamoDB, S3 y CloudWatch mantienen sus
+> endpoints por defecto. Una sección `[services]` compartida con otro perfil
+> nunca se edita: DBFlux le da a este perfil su propia copia.
+
+### Variables de entorno y archivos dotenv
+
+Ambas fuentes se leen cada vez que DBFlux se conecta, así que un valor rotado se
+usa en la siguiente conexión sin reiniciar DBFlux. DBFlux guarda solo la
+referencia (el nombre de la variable, o la ruta del archivo y la clave), nunca
+el valor, y ninguna de las dos fuentes se cachea.
+
+| Entrada del campo | Fuente | Lee |
+|-------------------|--------|-----|
+| `DB_PASSWORD` | Environment Variable | `DB_PASSWORD` del entorno con el que se inició DBFlux |
+| `~/.config/dbflux/prod.env#DB_PASSWORD` | Dotenv File | `DB_PASSWORD` de ese archivo |
+
+Un archivo dotenv debe cumplir estas reglas; si no, la conexión falla con un
+error que nombra el archivo y la clave pero nunca muestra un valor:
+
+- La ruta es absoluta o empieza con `~/`.
+- Es un archivo regular (se sigue un symlink a uno) de hasta 64 KiB y 1024
+  entradas, codificado en UTF-8.
+- En Linux y macOS, solo su dueño puede leerlo o escribirlo (`chmod 600`).
+- Cada línea está vacía, es un comentario `#` o es `CLAVE=valor`, con un prefijo
+  `export` opcional. Un valor puede ir sin comillas (se quita un ` # comentario`
+  final), entre comillas simples (se toma tal cual) o entre comillas dobles (se
+  interpretan `\n`, `\t`, `\"`, `\\` y `\$`). Los valores ocupan una línea y `${VAR}` no se expande.
+  Si una clave aparece dos veces, gana la última definición.
+
+| Problema | Error |
+|----------|-------|
+| Variable no definida | `Environment variable 'DB_PASSWORD' not set` |
+| Variable definida como cadena vacía | `Environment variable 'DB_PASSWORD' is empty` |
+| Archivo inexistente | `Dotenv file '~/prod.env' does not exist` |
+| Archivo sin permiso de lectura | `Dotenv file '~/prod.env' cannot be read: permission denied` |
+| Archivo abierto a otros usuarios | `Dotenv file '~/prod.env' can be read or changed by other users (mode 644); restrict it with chmod 600` |
+| Línea que no es una entrada | `Dotenv file '~/prod.env' has a malformed entry on line 4` |
+| Clave ausente en el archivo | `Key 'DB_PASSWORD' is not defined in dotenv file '~/prod.env'` |
+| Clave con valor vacío | `Key 'DB_PASSWORD' in dotenv file '~/prod.env' is empty` |
+
+Una lectura fallida detiene la conexión. DBFlux nunca recurre a una contraseña
+guardada en el keyring para ese campo.
+
+> **Atención:** un lanzador de escritorio inicia DBFlux con el entorno de la
+> sesión, no con el de tu shell. Una variable exportada solo en `~/.zshrc` o
+> `~/.bashrc` no es visible para DBFlux abierto desde el menú de aplicaciones;
+> usa un archivo dotenv, o define la variable en el entorno de tu sesión.
 
 ---
 

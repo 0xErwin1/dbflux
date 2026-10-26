@@ -1,10 +1,10 @@
 use super::{
-    DataGridPanel, DataSource, EditState, GridFocusMode, LocalSortState, PendingRequery,
-    ResultViewMode, TableReload, ToolbarFocus,
+    DataGridEvent, DataGridPanel, DataSource, EditState, GridFocusMode, LocalSortState,
+    PendingRequery, ReferencedRowTarget, ResultViewMode, TableReload, ToolbarFocus, row_inspector,
 };
 use dbflux_app::keymap::Command;
 use dbflux_components::components::data_table::{Direction, Edge, SortState as TableSortState};
-use dbflux_core::{OrderByColumn, Pagination, SortDirection};
+use dbflux_core::{OrderByColumn, Pagination, SortDirection, TableRef};
 use gpui::*;
 use std::cmp::Ordering;
 
@@ -927,5 +927,97 @@ impl DataGridPanel {
             Command::FindSimilarRows => self.find_similar_rows(cx),
             _ => false,
         }
+    }
+
+    // === Referenced-row navigation ===
+
+    /// Whether an applied builder spec owns this panel's next refresh: the
+    /// equality a referenced row writes would land in the hidden filter
+    /// input while the builder query reruns unchanged. The workspace keeps
+    /// such a tab's query and opens the referenced row in a tab of its own.
+    pub(crate) fn builder_query_applied(&self) -> bool {
+        self.builder.visual_select.is_some()
+    }
+
+    /// Maps an outgoing FK reference to the row the workspace should open.
+    /// `None` unless the panel browses a table, since the connection and
+    /// database the target lives in come from that source — and for an
+    /// incoming reference, whose columns run the other way.
+    pub(super) fn reference_target(
+        &self,
+        reference: &row_inspector::FkReference,
+    ) -> Option<ReferencedRowTarget> {
+        if !matches!(reference.kind, row_inspector::ReferenceKind::Outgoing) {
+            return None;
+        }
+
+        let DataSource::Table {
+            profile_id,
+            database,
+            ..
+        } = &self.source
+        else {
+            return None;
+        };
+
+        let table = match &reference.target_schema {
+            Some(schema) => TableRef::with_schema(schema.clone(), reference.target_table.clone()),
+            None => TableRef::new(reference.target_table.clone()),
+        };
+
+        Some(ReferencedRowTarget {
+            profile_id: *profile_id,
+            database: database.clone(),
+            table,
+            key_column: reference.target_pk.clone(),
+            key_value: reference.value.clone(),
+        })
+    }
+
+    /// The referenced-row target for a cell whose column is a single-column
+    /// foreign key and whose value is not null; `None` for every other cell.
+    /// `row` is a visual row of the table, so pending inserts shift the base
+    /// row it resolves to.
+    pub(super) fn fk_target_for_cell(
+        &self,
+        row: usize,
+        col: usize,
+        cx: &App,
+    ) -> Option<ReferencedRowTarget> {
+        let column_name = self.result.columns.get(col)?.name.clone();
+
+        let foreign_keys = self
+            .table_details_for(cx)?
+            .foreign_keys
+            .as_deref()
+            .unwrap_or(&[]);
+
+        let foreign_key = foreign_keys
+            .iter()
+            .find(|fk| matches!(fk.columns.as_slice(), [local] if *local == column_name))?;
+        let key_column = foreign_key.referenced_columns.first()?.clone();
+
+        let key_value = self
+            .resolve_cell_value(row, col, cx)
+            .filter(|value| !value.is_null())?;
+
+        self.reference_target(&row_inspector::FkReference {
+            column: column_name,
+            target_schema: foreign_key.referenced_schema.clone(),
+            target_table: foreign_key.referenced_table.clone(),
+            target_pk: key_column,
+            value: key_value,
+            display_label: None,
+            kind: row_inspector::ReferenceKind::Outgoing,
+        })
+    }
+
+    /// Emits the request to open the row `target` points at.
+    pub(super) fn navigate_to_reference(
+        &mut self,
+        target: ReferencedRowTarget,
+        cx: &mut Context<Self>,
+    ) {
+        cx.emit(DataGridEvent::OpenReferencedRow { target });
     }
 }

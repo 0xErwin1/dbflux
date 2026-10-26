@@ -19,6 +19,7 @@ Embedded file-based database.
 - Enforces a requested row limit on every single statement that produces rows (`SELECT`, `PRAGMA`, `EXPLAIN`, `WITH ... SELECT`, `VALUES`, and DML with `RETURNING`) by retaining only the requested rows during iteration: iteration drains to completion, so a mutation's effects always finish fully, a late per-row error still surfaces, and the result reports when rows were omitted.
 - Runs a row-limited multi-statement batch statement by statement under one row budget shared by the whole request. The batch is split with SQLite's own lexer, so a backslash is not an escape and semicolons inside literals, comments, and trigger bodies do not split a statement; trailing comments or semicolons do not create an extra statement. Each row-producing statement retains rows only while the budget lasts, statements after the budget is exhausted still run, and the batch stops at the first failure exactly as an unbounded batch does.
 - Rejects, before any preparation or execution, requests it cannot bound safely: a row-limited request aimed at instance metrics or inspectors, and a requested statement timeout.
+- Batched primary-key row lookup (`fetch_rows_by_pks`): one `WHERE pk IN (...)` statement per chunk of at most 100 values, with an optional column projection; used to resolve foreign-key labels in the data grid.
 - Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, and a per-connection referential-integrity toggle (`PRAGMA foreign_keys`) for FK-safe migrations.
 
 ## Limitations
@@ -33,6 +34,7 @@ Embedded file-based database.
 - SQLite schema model has no server-side multi-schema namespace equivalent.
 - No `TRUNCATE TABLE` statement; the data-transfer engine's Truncate load option is unavailable for SQLite targets (`DriverCapabilities::TRUNCATE_TABLE` is not set).
 - Schema discovery lists only the named columns of an index: an expression column, such as `lower(name)` in `CREATE INDEX ... ON t (lower(name), id)`, is left out of the index's column list.
+- Batched primary-key row lookup sends at most 100 values per query; a larger request runs as several `IN (...)` statements.
 - Read-only enforcement: a request DBFlux runs unattended as a read (MCP `execute_script` scripts classified `Read` or `Metadata`, editor auto-refresh) runs under `PRAGMA query_only`, which is checked before every statement and restored afterwards, and it is refused inside an open transaction. SQLite then rejects writes to the database, but not side effects of loaded extensions or application-defined functions; file permissions remain the real boundary.
 
 ## DDL Capabilities

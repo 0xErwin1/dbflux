@@ -1950,6 +1950,46 @@ impl ObjectStoreMetrics {
     pub const EDITOR_FOOTER_GAP: Pixels = px(16.0);
 }
 
+/// Geometry of the secret store views (IslSecrets, IslParameters,
+/// IslSecretDetail): the listing columns, the details pane and its value
+/// section.
+pub struct SecretStoreMetrics;
+
+impl SecretStoreMetrics {
+    /// Listing columns after the name: description, rotation and last
+    /// changed for a flat store; type, tier, version and last modified for a
+    /// hierarchical one.
+    pub const DESCRIPTION_WIDTH: Rems = ui(220.0);
+    pub const ROTATION_WIDTH: Rems = ui(130.0);
+    pub const LAST_CHANGED_WIDTH: Rems = ui(140.0);
+    pub const TYPE_WIDTH: Rems = ui(110.0);
+    pub const TIER_WIDTH: Rems = ui(90.0);
+    pub const VERSION_WIDTH: Rems = ui(70.0);
+    /// The name column never narrows below this; the columns after it shrink
+    /// first, so a narrow document keeps the names readable.
+    pub const NAME_MIN_WIDTH: Rems = ui(160.0);
+    /// The listing keeps this width before the details pane narrows.
+    pub const LISTING_MIN_WIDTH: Rems = ui(320.0);
+    /// The toolbar search narrows to this width before the listing clips it.
+    pub const SEARCH_MIN_WIDTH: Rems = ui(120.0);
+    /// Details pane: 380 px wide, 16 px side padding, 18 px between
+    /// sections, 8 px between the rows of a section and a 120 px label
+    /// column.
+    pub const DETAILS_WIDTH: Pixels = px(380.0);
+    /// The narrowest the details pane gets when the document is narrow.
+    pub const DETAILS_MIN_WIDTH: Pixels = px(280.0);
+    pub const DETAILS_PADDING_X: Pixels = px(16.0);
+    pub const DETAILS_PADDING_Y: Pixels = px(14.0);
+    pub const SECTION_GAP: Pixels = px(18.0);
+    pub const ROW_GAP: Pixels = px(8.0);
+    pub const LABEL_WIDTH: Rems = ui(120.0);
+    /// Name in the details header. (14 px)
+    pub const NAME_FONT: Rems = ui(14.0);
+    /// Value fields: 28 px rows, a 110 px key column.
+    pub const VALUE_ROW_HEIGHT: Rems = ui(28.0);
+    pub const VALUE_KEY_WIDTH: Rems = ui(110.0);
+}
+
 /// Geometry of the object preview rail (P1Objects): its header, the
 /// "Interpret as" row, the metadata section and the action row.
 pub struct PreviewRailMetrics;

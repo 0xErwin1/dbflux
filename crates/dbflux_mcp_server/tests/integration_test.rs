@@ -132,15 +132,18 @@ fn create_test_server_state() -> dbflux_mcp_server::state::ServerState {
         auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
         driver_registry: Arc::new(std::collections::HashMap::new()),
         auth_provider_registry: Arc::new(std::collections::HashMap::new()),
+        secret_provider_registry: Arc::new(std::collections::HashMap::new()),
         driver_settings: Arc::new(std::collections::HashMap::new()),
         connection_cache: Arc::new(RwLock::new(
             dbflux_mcp_server::connection_cache::ConnectionCache::new(),
         )),
-        connection_setup_lock: Arc::new(tokio::sync::Mutex::new(())),
+        connection_setup_lock: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+        detached_processes: Arc::new(dbflux_mcp_server::state::DetachedProcessRegistry::new()),
         secret_manager: Arc::new(dbflux_core::SecretManager::new(Box::new(
             dbflux_core::NoopSecretStore,
         ))),
         mcp_enabled_by_default: true,
+        profile_store_path: None,
     }
 }
 

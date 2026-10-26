@@ -14,6 +14,7 @@ mod render;
 mod render_footer;
 mod render_overlays;
 mod render_tree;
+mod secret_store;
 mod selection;
 mod style_guardrails;
 mod table_loading;
@@ -105,6 +106,14 @@ pub enum SidebarEvent {
     OpenObjectStoreBucket {
         profile_id: Uuid,
         bucket: String,
+    },
+    /// A store of a secret-store connection, or one of its paths, was
+    /// activated. The workspace opens the store's document, at `path` when
+    /// one is given.
+    OpenSecretStore {
+        profile_id: Uuid,
+        store_id: String,
+        path: Option<String>,
     },
     /// Request to show SQL preview modal
     RequestSqlPreview {
@@ -1149,6 +1158,11 @@ pub struct Sidebar {
     bucket_cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
     /// In-flight `list_buckets` fetches, keyed by profile_id.
     pending_bucket_fetches: HashMap<Uuid, Task<()>>,
+    /// Session-scoped cache of the listed path levels of hierarchical secret
+    /// stores. Populated on first expansion of a store or path node.
+    secret_path_cache: secret_store::SecretPathCache,
+    /// In-flight path level listings, keyed like `secret_path_cache`.
+    pending_secret_path_fetches: secret_store::PendingSecretPathFetches,
     /// Round trip of one `ping` measured after each profile connected, shown
     /// after its status diamond. `None` records a probe that failed, so a
     /// failing connection is not pinged again on every state change.
@@ -1457,6 +1471,8 @@ impl Sidebar {
             pending_instance_catalog_fetches: HashMap::new(),
             bucket_cache: HashMap::new(),
             pending_bucket_fetches: HashMap::new(),
+            secret_path_cache: HashMap::new(),
+            pending_secret_path_fetches: HashMap::new(),
             connection_latencies: HashMap::new(),
             pending_latency_probes: HashMap::new(),
         }
@@ -1776,6 +1792,27 @@ impl Sidebar {
                     bucket: name,
                 });
             }
+            SchemaNodeId::SecretStore {
+                profile_id,
+                store_id,
+            } => {
+                cx.emit(SidebarEvent::OpenSecretStore {
+                    profile_id,
+                    store_id,
+                    path: None,
+                });
+            }
+            SchemaNodeId::SecretPath {
+                profile_id,
+                store_id,
+                path,
+            } => {
+                cx.emit(SidebarEvent::OpenSecretStore {
+                    profile_id,
+                    store_id,
+                    path: Some(path),
+                });
+            }
             SchemaNodeId::ScriptFile { path } => {
                 cx.emit(SidebarEvent::OpenScript {
                     path: std::path::PathBuf::from(path),
@@ -1954,7 +1991,9 @@ impl Sidebar {
                 Some(SchemaNodeId::Profile { profile_id }) => {
                     self.profile_category(profile_id, cx) == Some(DatabaseCategory::ObjectStorage)
                 }
-                Some(SchemaNodeId::BucketsFolder { .. }) => true,
+                Some(SchemaNodeId::BucketsFolder { .. })
+                | Some(SchemaNodeId::SecretStore { .. })
+                | Some(SchemaNodeId::SecretPath { .. }) => true,
                 _ => false,
             };
 

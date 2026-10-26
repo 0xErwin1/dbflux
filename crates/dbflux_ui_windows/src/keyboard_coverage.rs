@@ -108,6 +108,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::ColumnRight),
         ),
         (
+            "seg-ctl-item-secret_provider",
+            KeyboardPath::Command(Command::ColumnRight),
+        ),
+        (
             "seg-ctl-item-driver",
             KeyboardPath::Command(Command::ColumnRight),
         ),
@@ -159,6 +163,7 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             "general-*-font-family.*",
             KeyboardPath::Command(Command::Execute),
         ),
+        ("grid-fk-labels", KeyboardPath::Command(Command::Execute)),
         ("pause-on-error", KeyboardPath::Command(Command::Execute)),
         ("refresh-visible", KeyboardPath::Command(Command::Execute)),
         ("reopen-conns", KeyboardPath::Command(Command::Execute)),

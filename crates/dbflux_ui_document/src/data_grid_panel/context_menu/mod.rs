@@ -137,10 +137,12 @@ pub(super) fn place_context_menu(
 /// One row of the data grid's export menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ExportMenuEntry {
-    /// Write the result to a file in this format.
+    /// Write the loaded rows to a file in this format.
     Save(ExportFormat),
-    /// Put the result on the clipboard in this format.
+    /// Put the loaded rows on the clipboard in this format.
     Copy(ExportFormat),
+    /// Page through the whole table and stream it to a file in this format.
+    SaveAll(dbflux_transfer::FileFormat),
 }
 
 impl ExportMenuEntry {
@@ -782,6 +784,8 @@ impl DataGridPanel {
             .map(|m| self.has_context_menu_row_target(m.row, m.is_document_view, cx))
             .unwrap_or(false);
 
+        // Must match `render_context_menu`, so the keyboard walks the same
+        // item list the menu draws.
         let table_queries = self.offers_table_query_actions();
         let has_filter = table_queries && self.has_filter_submenu(backend, is_document_view, cx);
         let has_order =
@@ -1230,14 +1234,25 @@ impl DataGridPanel {
     }
 
     /// The rows of the export menu, in the order it draws them: a save row
-    /// per format, then a copy row per format.
+    /// per format, a copy row per format, then, when the whole table can be
+    /// read again, an export-all row per streaming format.
     pub(super) fn export_menu_entries(&self) -> Vec<ExportMenuEntry> {
         let formats = dbflux_export::available_formats(&self.result.shape);
+        let export_all_formats: &[dbflux_transfer::FileFormat] = if self.can_export_all_rows() {
+            &dbflux_transfer::FileFormat::ALL
+        } else {
+            &[]
+        };
 
         formats
             .iter()
             .map(|&format| ExportMenuEntry::Save(format))
             .chain(formats.iter().map(|&format| ExportMenuEntry::Copy(format)))
+            .chain(
+                export_all_formats
+                    .iter()
+                    .map(|&format| ExportMenuEntry::SaveAll(format)),
+            )
             .collect()
     }
 
@@ -1290,6 +1305,7 @@ impl DataGridPanel {
         match entry {
             ExportMenuEntry::Save(format) => self.export_with_format(format, window, cx),
             ExportMenuEntry::Copy(format) => self.copy_to_clipboard_with_format(format, window, cx),
+            ExportMenuEntry::SaveAll(format) => self.export_all_rows(format, window, cx),
         }
     }
 
@@ -1304,6 +1320,7 @@ impl DataGridPanel {
         }
 
         let result = self.result.clone();
+        let loaded_rows = loaded_row_count(&result);
         let base_name = self.export_base_name();
         let extension = format.extension();
         let suggested_name = format!("{}.{}", base_name, extension);
@@ -1375,20 +1392,27 @@ impl DataGridPanel {
                 Ok::<_, dbflux_export::ExportError>(())
             })();
 
-            let (message, is_error) = match &export_result {
-                Ok(()) if used_fallback => (
-                    crate::labels::context_menu_export_native_picker_fallback_toast(
-                        &target_path.display().to_string(),
+            let path_text = target_path.display().to_string();
+            let (message, is_error) = match (&export_result, loaded_rows) {
+                (Ok(()), Some(count)) if used_fallback => (
+                    crate::labels::context_menu_export_native_picker_fallback_rows_toast(
+                        count, &path_text,
                     ),
                     false,
                 ),
-                Ok(()) => (
-                    crate::labels::context_menu_export_exported_toast(
-                        &target_path.display().to_string(),
-                    ),
+                (Ok(()), None) if used_fallback => (
+                    crate::labels::context_menu_export_native_picker_fallback_toast(&path_text),
                     false,
                 ),
-                Err(e) => (
+                (Ok(()), Some(count)) => (
+                    crate::labels::context_menu_export_exported_rows_toast(count, &path_text),
+                    false,
+                ),
+                (Ok(()), None) => (
+                    crate::labels::context_menu_export_exported_toast(&path_text),
+                    false,
+                ),
+                (Err(e), _) => (
                     crate::labels::context_menu_export_failed_error(&e.to_string()),
                     true,
                 ),
@@ -1450,11 +1474,19 @@ impl DataGridPanel {
                     let byte_len = text.len();
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     record_clipboard_audit(&audit_service, format_name, Some(byte_len), None);
-                    self.pending.toast = Some(PendingToast {
-                        message: crate::labels::context_menu_clipboard_copied_toast(
+                    let message = match loaded_row_count(&self.result) {
+                        Some(count) => crate::labels::context_menu_clipboard_copied_rows_toast(
+                            count,
                             format_name,
                             byte_len,
                         ),
+                        None => crate::labels::context_menu_clipboard_copied_toast(
+                            format_name,
+                            byte_len,
+                        ),
+                    };
+                    self.pending.toast = Some(PendingToast {
+                        message,
                         is_error: false,
                     });
                     cx.notify();
@@ -1958,6 +1990,7 @@ impl DataGridPanel {
             self.inspector.inspector_row = None;
             self.inspector.row_inspector_content = None;
             self.inspector.incoming_references.cancel();
+            self.inspector.outgoing_labels = None;
             cx.emit(DataGridEvent::CloseInspector);
             return;
         }
@@ -2027,9 +2060,10 @@ impl DataGridPanel {
         let pinned = self.inspector.pinned;
         content.update(cx, |c, cx| {
             c.set_pinned(pinned, cx);
-            c.set_outgoing_references(outgoing_references, cx);
+            c.set_outgoing_references(outgoing_references.clone(), cx);
         });
 
+        self.load_outgoing_reference_labels(&outgoing_references, content.clone(), cx);
         self.load_incoming_references(&cells, content.clone(), cx);
 
         // Remember the active coordinates so refresh / tab activation /
@@ -2071,6 +2105,20 @@ impl DataGridPanel {
                     content.update(cx, |c, cx| c.set_pinned(pinned, cx));
                 }
             }
+            RowInspectorContentEvent::NavigateReference { index } => {
+                let reference = self
+                    .inspector
+                    .row_inspector_content
+                    .as_ref()
+                    .and_then(|content| content.read(cx).reference(index).cloned());
+
+                if let Some(target) = reference
+                    .as_ref()
+                    .and_then(|reference| self.reference_target(reference))
+                {
+                    self.navigate_to_reference(target, cx);
+                }
+            }
             RowInspectorContentEvent::Edit
             | RowInspectorContentEvent::Duplicate
             | RowInspectorContentEvent::Delete => {
@@ -2100,7 +2148,9 @@ impl DataGridPanel {
             RowInspectorContentEvent::Edit => self.handle_edit(row, col, window, cx),
             RowInspectorContentEvent::Duplicate => self.handle_duplicate_row(row, false, cx),
             RowInspectorContentEvent::Delete => self.handle_delete_row(row, cx),
-            RowInspectorContentEvent::Close | RowInspectorContentEvent::TogglePin => {}
+            RowInspectorContentEvent::Close
+            | RowInspectorContentEvent::TogglePin
+            | RowInspectorContentEvent::NavigateReference { .. } => {}
         }
     }
 
@@ -2166,6 +2216,16 @@ impl DataGridPanel {
                 target_table: fk.referenced_table.clone(),
                 target_pk: ref_col.clone(),
                 value: cell.value.clone(),
+                // The grid resolves the same referenced rows for its FK
+                // cells; a cache hit names the row without a query. The
+                // referenced column is part of the cache identity, so two
+                // foreign keys into one table never share a label.
+                display_label: self.fk_display.cached_label(
+                    fk.referenced_schema.as_deref(),
+                    &fk.referenced_table,
+                    ref_col,
+                    &cell.value,
+                ),
                 kind: ReferenceKind::Outgoing,
             });
         }
@@ -2303,6 +2363,107 @@ impl DataGridPanel {
         };
 
         self.inspector.incoming_references.schedule(job, cx);
+    }
+
+    /// Resolves the readable label behind each outgoing REFERENCES entry
+    /// the panel's FK display cache could not seed: the referenced row
+    /// loads through `fetch_row_by_pk` in the background and is named by
+    /// its table's display column (cached table details, fetched when
+    /// missing). A row that no longer answers, or a failed fetch, keeps
+    /// the raw id.
+    ///
+    /// The lookup is held in `inspector.outgoing_labels`: opening another
+    /// row (or closing the inspector) drops it, cancelling its display
+    /// column and label fetches before they start; the generation check in
+    /// `resolve_outgoing_labels` only stops fetches that already began.
+    fn load_outgoing_reference_labels(
+        &mut self,
+        references: &[super::row_inspector::FkReference],
+        content: Entity<super::row_inspector::RowInspectorContent>,
+        cx: &mut Context<Self>,
+    ) {
+        let is_unresolved = |reference: &super::row_inspector::FkReference| {
+            matches!(
+                reference.kind,
+                super::row_inspector::ReferenceKind::Outgoing
+            ) && reference.display_label.is_none()
+        };
+        if !references.iter().any(is_unresolved) {
+            self.inspector.outgoing_labels = None;
+            return;
+        }
+
+        let Some(ReferenceLookupTarget {
+            profile_id,
+            database,
+            connection,
+            ..
+        }) = self.reference_lookup_target(cx)
+        else {
+            self.inspector.outgoing_labels = None;
+            return;
+        };
+
+        let generation = content.read(cx).generation();
+        let app_state = self.app_state.clone();
+        let references: Vec<super::row_inspector::FkReference> = references.to_vec();
+
+        let mut tables: Vec<(Option<String>, String)> = Vec::new();
+        for reference in references
+            .iter()
+            .filter(|reference| is_unresolved(reference))
+        {
+            let table = (
+                reference.target_schema.clone(),
+                reference.target_table.clone(),
+            );
+            if !tables.contains(&table) {
+                tables.push(table);
+            }
+        }
+
+        let task = cx.spawn(async move |_, cx| {
+            let display_columns = reference_display_columns(
+                &app_state,
+                profile_id,
+                &database,
+                &tables,
+                &connection,
+                cx,
+            )
+            .await;
+
+            super::row_inspector::resolve_outgoing_labels(
+                &content,
+                generation,
+                &references,
+                &display_columns,
+                |reference, executor| {
+                    let connection = connection.clone();
+                    let database = database.clone();
+                    let schema = reference.target_schema.clone();
+                    let table = reference.target_table.clone();
+                    let pk_column = reference.target_pk.clone();
+                    let value = reference.value.clone();
+
+                    executor.spawn(async move {
+                        connection
+                            .fetch_row_by_pk(
+                                &database,
+                                schema.as_deref().unwrap_or(""),
+                                &table,
+                                &pk_column,
+                                &value,
+                            )
+                            .map_err(|error| error.to_string())
+                    })
+                },
+                cx,
+            )
+            .await;
+        });
+
+        self.inspector.outgoing_labels = Some(task);
     }
 
     /// Convert a `CellValue` to a `dbflux_core::Value` for the inspector.
@@ -3295,7 +3456,12 @@ impl DataGridPanel {
     // === Filter / Order from context menu ===
 
     /// Resolves the original `Value` for a cell from the result set.
-    fn resolve_cell_value(&self, visual_row: usize, col: usize, cx: &App) -> Option<Value> {
+    pub(super) fn resolve_cell_value(
+        &self,
+        visual_row: usize,
+        col: usize,
+        cx: &App,
+    ) -> Option<Value> {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
         let table_state = self.grid_table.table_state.as_ref()?;
@@ -4142,7 +4308,16 @@ impl DataGridPanel {
     }
 }
 
-fn record_export_audit(
+/// How many rows an export of the loaded result writes, or `None` for a text
+/// or binary payload, which has no rows to count.
+fn loaded_row_count(result: &dbflux_core::QueryResult) -> Option<usize> {
+    let is_payload =
+        result.rows.is_empty() && (result.text_body.is_some() || result.raw_bytes.is_some());
+
+    (!is_payload).then_some(result.rows.len())
+}
+
+pub(super) fn record_export_audit(
     audit_service: &dbflux_audit::AuditService,
     format_name: &str,
     path: Option<&std::path::Path>,
@@ -4311,6 +4486,95 @@ async fn cached_or_fetched_schema_foreign_keys(
     });
 
     Ok(foreign_keys)
+}
+
+/// The display column of each referenced table, from the connection's
+/// cached details when it has them — keyed by the referenced schema first
+/// and without one second, the shape MySQL writes — otherwise fetched on
+/// the background executor and cached for the next reader. A table whose
+/// details cannot be read has no display column and keeps naming its rows
+/// by id.
+async fn reference_display_columns(
+    app_state: &Entity<dbflux_ui_base::AppStateEntity>,
+    profile_id: uuid::Uuid,
+    database: &str,
+    tables: &[(Option<String>, String)],
+    connection: &std::sync::Arc<dyn dbflux_core::Connection>,
+    cx: &mut AsyncApp,
+) -> std::collections::HashMap<(Option<String>, String), Option<String>> {
+    let mut display_columns: std::collections::HashMap<(Option<String>, String), Option<String>> =
+        std::collections::HashMap::new();
+
+    for (schema, table) in tables {
+        let cached = cx.update(|cx| {
+            app_state
+                .read(cx)
+                .connections()
+                .get(&profile_id)
+                .and_then(|connected| {
+                    connected
+                        .table_details
+                        .get(&(database.to_string(), schema.clone(), table.clone()))
+                        .or_else(|| {
+                            connected.table_details.get(&(
+                                database.to_string(),
+                                None,
+                                table.clone(),
+                            ))
+                        })
+                        .cloned()
+                })
+        });
+
+        let column = match cached {
+            Some(details) => super::fk_display::pick_display_column(
+                details.columns.as_deref().unwrap_or(&[]),
+                details.foreign_keys.as_deref().unwrap_or(&[]),
+            ),
+            None => {
+                let request = {
+                    let connection = connection.clone();
+                    let database = database.to_string();
+                    let schema = schema.clone();
+                    let table = table.clone();
+                    cx.background_executor().spawn(async move {
+                        connection.table_details(&database, schema.as_deref(), &table)
+                    })
+                };
+
+                match request.await {
+                    Ok(details) => {
+                        let column = super::fk_display::pick_display_column(
+                            details.columns.as_deref().unwrap_or(&[]),
+                            details.foreign_keys.as_deref().unwrap_or(&[]),
+                        );
+                        cx.update(|cx| {
+                            app_state.update(cx, |state, _| {
+                                state.set_table_details(
+                                    profile_id,
+                                    database.to_string(),
+                                    schema.clone(),
+                                    table.clone(),
+                                    details,
+                                );
+                            });
+                        });
+                        column
+                    }
+                    Err(error) => {
+                        log::debug!(
+                            "row inspector: no column metadata for referenced table {table}: {error}"
+                        );
+                        None
+                    }
+                }
+            }
+        };
+
+        display_columns.insert((schema.clone(), table.clone()), column);
+    }
+
+    display_columns
 }
 
 #[cfg(test)]

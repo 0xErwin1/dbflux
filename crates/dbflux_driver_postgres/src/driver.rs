@@ -1205,10 +1205,25 @@ fn connect_postgres(
 
     match connect_client(&conn_string, tls, notices) {
         Ok(client) => Ok(client),
-        Err(_) if ssl_mode == PgSslMode::Prefer => connect_client(&conn_string, NoTls, notices)
-            .map_err(|e| format_pg_error(&e, params.host, params.port)),
+        Err(e) if ssl_mode == PgSslMode::Prefer && is_tls_negotiation_failure(&e) => {
+            log::info!("[SSL] TLS negotiation failed ({e}), retrying without TLS (prefer)");
+            connect_client(&conn_string, NoTls, notices)
+                .map_err(|e| format_pg_error(&e, params.host, params.port))
+        }
         Err(e) => Err(format_pg_error(&e, params.host, params.port)),
     }
+}
+
+/// Whether a failed TLS attempt in `prefer` mode failed while negotiating
+/// TLS, the only case where libpq-style `prefer` retries without it. A server
+/// answer (wrong password, unknown database, missing privilege) or a network
+/// error is the real failure, and a plaintext retry would only hide it.
+///
+/// A server that refuses TLS never gets here: the client already continues in
+/// plaintext on the same socket.
+fn is_tls_negotiation_failure(error: &postgres::Error) -> bool {
+    error.as_db_error().is_none()
+        && std::error::Error::source(error).is_some_and(|source| source.is::<native_tls::Error>())
 }
 
 impl PostgresDriver {
@@ -1249,8 +1264,11 @@ impl PostgresDriver {
 
         let client = match connect_client(&uri, tls, &notices) {
             Ok(c) => c,
-            Err(_) if ssl_mode == PgSslMode::Prefer => connect_client(&uri, NoTls, &notices)
-                .map_err(|e| format_pg_uri_error(&e, base_uri))?,
+            Err(e) if ssl_mode == PgSslMode::Prefer && is_tls_negotiation_failure(&e) => {
+                log::info!("[SSL] TLS negotiation failed ({e}), retrying without TLS (prefer)");
+                connect_client(&uri, NoTls, &notices)
+                    .map_err(|e| format_pg_uri_error(&e, base_uri))?
+            }
             Err(e) => return Err(format_pg_uri_error(&e, base_uri)),
         };
 
@@ -2444,6 +2462,64 @@ impl Connection for PostgresConnection {
             .collect();
 
         Ok(Some(map))
+    }
+
+    /// Batched `fetch_row_by_pk`: one `WHERE pk IN (...)` statement per chunk
+    /// of at most 100 values. Honors `projection`; an empty projection list
+    /// falls back to `*` rather than emitting invalid SQL.
+    fn fetch_rows_by_pks(
+        &self,
+        _database: &str,
+        schema: &str,
+        table: &str,
+        pk_column: &str,
+        values: &[dbflux_core::Value],
+        projection: Option<&[String]>,
+    ) -> Result<Vec<std::collections::HashMap<String, dbflux_core::Value>>, dbflux_core::DbError>
+    {
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let select_list = match projection {
+            Some(columns) if !columns.is_empty() => columns
+                .iter()
+                .map(|column| POSTGRES_DIALECT.quote_identifier(column))
+                .collect::<Vec<_>>()
+                .join(", "),
+            _ => "*".to_string(),
+        };
+
+        let mut rows = Vec::with_capacity(values.len());
+        for chunk in values.chunks(100) {
+            let literals = chunk
+                .iter()
+                .map(|value| POSTGRES_DIALECT.value_to_literal(value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT {} FROM {}.{} WHERE {} IN ({})",
+                select_list,
+                POSTGRES_DIALECT.quote_identifier(schema),
+                POSTGRES_DIALECT.quote_identifier(table),
+                POSTGRES_DIALECT.quote_identifier(pk_column),
+                literals,
+            );
+
+            let result = self.execute(&dbflux_core::QueryRequest::new(sql))?;
+            let columns = result.columns;
+            for row in result.rows {
+                rows.push(
+                    columns
+                        .iter()
+                        .zip(row)
+                        .map(|(column, value)| (column.name.clone(), value))
+                        .collect(),
+                );
+            }
+        }
+
+        Ok(rows)
     }
 
     fn referenced_tables(&self, query: &str) -> Option<Vec<dbflux_core::QueryTableRef>> {
@@ -8752,3 +8828,6 @@ mod notice_buffer_tests {
         assert_eq!(buffer.take(), vec![notice("from the request")]);
     }
 }
+
+#[cfg(test)]
+mod prefer_fallback_tests;

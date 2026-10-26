@@ -21,6 +21,7 @@ pub(super) enum PickerSection {
     KeyValue,
     TimeSeriesAndLogs,
     ObjectStorage,
+    SecretStore,
     /// Categories with no section of their own (the reserved wire slots).
     Other,
 }
@@ -32,6 +33,7 @@ const SECTION_ORDER: &[PickerSection] = &[
     PickerSection::KeyValue,
     PickerSection::TimeSeriesAndLogs,
     PickerSection::ObjectStorage,
+    PickerSection::SecretStore,
     PickerSection::Other,
 ];
 
@@ -43,6 +45,7 @@ impl PickerSection {
             DatabaseCategory::KeyValue => Self::KeyValue,
             DatabaseCategory::TimeSeries | DatabaseCategory::LogStream => Self::TimeSeriesAndLogs,
             DatabaseCategory::ObjectStorage => Self::ObjectStorage,
+            DatabaseCategory::SecretStore => Self::SecretStore,
             DatabaseCategory::ReservedGraph | DatabaseCategory::ReservedWideColumn => Self::Other,
         }
     }
@@ -54,6 +57,7 @@ impl PickerSection {
             Self::KeyValue => "key_value",
             Self::TimeSeriesAndLogs => "time_series_and_logs",
             Self::ObjectStorage => "object_storage",
+            Self::SecretStore => "secret_store",
             Self::Other => "other",
         };
 
@@ -668,6 +672,7 @@ mod category_order_tests {
             DatabaseCategory::ReservedWideColumn,
             DatabaseCategory::LogStream,
             DatabaseCategory::ObjectStorage,
+            DatabaseCategory::SecretStore,
         ];
 
         let drivers: Vec<DriverInfo> = categories.iter().map(|c| driver_of(*c)).collect();

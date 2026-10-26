@@ -887,6 +887,63 @@ impl Connection for TursoConnection {
         ))
     }
 
+    /// Batched `fetch_row_by_pk`: one `WHERE pk IN (...)` statement per chunk
+    /// of at most 100 values, with the keys bound as parameters. Honors
+    /// `projection`; an empty projection list falls back to `*` rather than
+    /// emitting invalid SQL.
+    fn fetch_rows_by_pks(
+        &self,
+        _database: &str,
+        _schema: &str,
+        table: &str,
+        pk_column: &str,
+        values: &[Value],
+        projection: Option<&[String]>,
+    ) -> Result<Vec<HashMap<String, Value>>, DbError> {
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let select_list = match projection {
+            Some(columns) if !columns.is_empty() => columns
+                .iter()
+                .map(|column| quote_ident(column))
+                .collect::<Vec<_>>()
+                .join(", "),
+            _ => "*".to_string(),
+        };
+
+        let mut rows = Vec::with_capacity(values.len());
+        for chunk in values.chunks(100) {
+            let placeholders = vec!["?"; chunk.len()].join(", ");
+            let params = chunk
+                .iter()
+                .map(value_to_param)
+                .collect::<Result<Vec<_>, _>>()?;
+            let sql = format!(
+                "SELECT {} FROM {} WHERE {} IN ({})",
+                select_list,
+                quote_ident(table),
+                quote_ident(pk_column),
+                placeholders,
+            );
+
+            let result = self.run(&sql, params)?;
+            let columns = result.columns;
+            for row in result.rows {
+                rows.push(
+                    columns
+                        .iter()
+                        .zip(row)
+                        .map(|(column, value)| (column.name.clone(), value))
+                        .collect(),
+                );
+            }
+        }
+
+        Ok(rows)
+    }
+
     fn referenced_tables(&self, query: &str) -> Option<Vec<dbflux_core::QueryTableRef>> {
         Some(dbflux_core::extract_referenced_tables(query))
     }

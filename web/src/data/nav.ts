@@ -77,6 +77,7 @@ export const DOCS_SECTIONS: readonly DocsSection[] = [
       'drivers/influxdb',
       'drivers/cloudwatch',
       'drivers/s3',
+      'drivers/aws_secrets',
       'drivers/ipc',
     ],
   },
@@ -93,6 +94,7 @@ export const DOCS_SECTIONS: readonly DocsSection[] = [
       'driver_authoring',
       'custom_driver_example',
       'driver_rpc_protocol',
+      'secret_provider_rpc_protocol',
       'rpc_services_config',
       'release',
     ],
@@ -129,6 +131,7 @@ export const DOC_TITLES: Readonly<Record<string, string>> = {
   driver_authoring: 'Driver authoring',
   custom_driver_example: 'Custom driver example',
   driver_rpc_protocol: 'Driver RPC protocol',
+  secret_provider_rpc_protocol: 'Secret provider RPC protocol',
   rpc_services_config: 'RPC services config',
   release: 'Release process',
   architecture: 'Architecture',
@@ -152,6 +155,7 @@ export const DOC_TITLES: Readonly<Record<string, string>> = {
   'drivers/influxdb': 'InfluxDB',
   'drivers/cloudwatch': 'CloudWatch',
   'drivers/s3': 'S3',
+  'drivers/aws_secrets': 'AWS Secrets',
   'drivers/ipc': 'External RPC drivers',
 };
 

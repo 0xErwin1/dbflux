@@ -391,15 +391,19 @@ impl ConnectionHooks {
     ///
     /// If the profile has `hook_bindings`, each binding ID is looked up in
     /// `definitions` and placed into the corresponding phase. Missing IDs are
-    /// silently skipped (logged as warnings). If the profile has no bindings,
-    /// falls back to `profile.hooks` (inline hooks) or an empty default.
+    /// silently skipped (logged as warnings). Profiles without bindings retain
+    /// their inline hooks or use an empty default.
     pub fn resolve_from_bindings(
         profile: &ConnectionProfile,
         definitions: &HashMap<String, ConnectionHook>,
     ) -> Self {
-        if let Some(bindings) = &profile.hook_bindings {
-            let mut hooks = Self::default();
+        let mut hooks = if profile.hook_bindings.is_some() {
+            Self::default()
+        } else {
+            profile.hooks.clone().unwrap_or_default()
+        };
 
+        if let Some(bindings) = &profile.hook_bindings {
             for phase in [
                 HookPhase::PreConnect,
                 HookPhase::PostConnect,
@@ -419,11 +423,9 @@ impl ConnectionHooks {
                     }
                 }
             }
-
-            return hooks;
         }
 
-        profile.hooks.clone().unwrap_or_default()
+        hooks
     }
 }
 
@@ -459,6 +461,11 @@ pub struct HookContext {
     pub port: Option<u16>,
     pub database: Option<String>,
     pub phase: Option<HookPhase>,
+    /// Whether the driver dials `host:port` as configured. An SSH tunnel or
+    /// the connection pipeline (auth profile, value references, access kind)
+    /// decides the dialed address later, so `host:port` may not be reachable
+    /// from this machine at pre-connect time.
+    pub dials_configured_endpoint: bool,
 }
 
 impl HookContext {
@@ -473,7 +480,18 @@ impl HookContext {
             port,
             database,
             phase: None,
+            dials_configured_endpoint: !profile.uses_pipeline() && !profile.config.has_ssh_tunnel(),
         }
+    }
+
+    /// The address a runner checks after a detached pre-connect hook reports
+    /// ready, or `None` when the profile does not dial `host:port` itself.
+    pub fn pre_connect_probe_endpoint(&self) -> Option<(&str, u16)> {
+        if !self.dials_configured_endpoint {
+            return None;
+        }
+
+        Some((self.host.as_deref()?, self.port?))
     }
 }
 
@@ -534,6 +552,9 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
             ..
         } => (Some(host.clone()), Some(*port), Some(database.clone())),
         DbConfig::S3 {
+            region, endpoint, ..
+        }
+        | DbConfig::AwsSecrets {
             region, endpoint, ..
         } => (
             endpoint.clone().or_else(|| Some(region.clone())),
@@ -616,6 +637,14 @@ impl DetachedProcessHandle {
     /// the handle across the move.
     pub fn take_containment(&mut self) -> Option<ProcessContainment> {
         self.containment.take()
+    }
+
+    /// Terminates the detached hook and its entire process tree.
+    pub fn terminate(&mut self) -> Result<(), String> {
+        terminate_child(&mut self.child, self.containment.as_ref())
+            .map_err(|error| format!("{error:?}"))?;
+        self.containment.take();
+        Ok(())
     }
 }
 
@@ -1292,6 +1321,7 @@ impl ConnectionHook {
 
         let mut command = Command::new(&resolved.program);
         command.args(&resolved.args);
+        command.stdin(Stdio::null());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
 
@@ -1757,6 +1787,7 @@ mod tests {
             port: Some(5432),
             database: Some("mydb".to_string()),
             phase: None,
+            dials_configured_endpoint: true,
         }
     }
 
@@ -2168,6 +2199,72 @@ mod tests {
         assert_eq!(ctx.host.as_deref(), Some("ext-host"));
         assert_eq!(ctx.port, Some(9999));
         assert_eq!(ctx.database.as_deref(), Some("ext-db"));
+    }
+
+    #[test]
+    fn pre_connect_probe_targets_the_endpoint_of_a_direct_profile() {
+        let profile = ConnectionProfile::new("direct", DbConfig::default_postgres());
+
+        let context = HookContext::from_profile(&profile);
+
+        assert_eq!(
+            context.pre_connect_probe_endpoint(),
+            Some(("localhost", 5432))
+        );
+    }
+
+    #[test]
+    fn pre_connect_probe_is_skipped_behind_an_ssh_tunnel() {
+        let mut profile = ConnectionProfile::new("ssh", DbConfig::default_postgres());
+        profile.config.assign_ssh_tunnel(
+            Some(crate::SshTunnelConfig {
+                host: "bastion.example".to_string(),
+                port: 22,
+                user: "dbflux".to_string(),
+                auth_method: Default::default(),
+                ssh_config_host: None,
+            }),
+            None,
+        );
+
+        let context = HookContext::from_profile(&profile);
+
+        assert_eq!(context.pre_connect_probe_endpoint(), None);
+        assert_eq!(context.host.as_deref(), Some("localhost"));
+        assert_eq!(context.port, Some(5432));
+    }
+
+    #[test]
+    fn pre_connect_probe_is_skipped_for_a_saved_ssh_tunnel_profile() {
+        let mut profile = ConnectionProfile::new("ssh", DbConfig::default_postgres());
+        profile.config.assign_ssh_tunnel(None, Some(Uuid::new_v4()));
+
+        let context = HookContext::from_profile(&profile);
+
+        assert_eq!(context.pre_connect_probe_endpoint(), None);
+    }
+
+    #[test]
+    fn pre_connect_probe_is_skipped_when_the_pipeline_resolves_the_endpoint() {
+        let mut profile = ConnectionProfile::new("pipeline", DbConfig::default_postgres());
+        profile.access_kind = Some(crate::AccessKind::Managed {
+            provider: "aws-ssm".to_string(),
+            params: HashMap::new(),
+        });
+
+        let context = HookContext::from_profile(&profile);
+
+        assert_eq!(context.pre_connect_probe_endpoint(), None);
+        assert_eq!(context.host.as_deref(), Some("localhost"));
+    }
+
+    #[test]
+    fn pre_connect_probe_needs_a_port() {
+        let profile = ConnectionProfile::new("clickhouse", DbConfig::default_clickhouse());
+
+        let context = HookContext::from_profile(&profile);
+
+        assert_eq!(context.pre_connect_probe_endpoint(), None);
     }
 
     #[test]

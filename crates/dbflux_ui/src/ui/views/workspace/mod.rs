@@ -1118,6 +1118,19 @@ impl Workspace {
                 SidebarEvent::OpenObjectStoreBucket { profile_id, bucket } => {
                     this.open_object_browser(*profile_id, bucket.clone(), window, cx);
                 }
+                SidebarEvent::OpenSecretStore {
+                    profile_id,
+                    store_id,
+                    path,
+                } => {
+                    this.open_secret_store_document(
+                        *profile_id,
+                        store_id.clone(),
+                        path.clone(),
+                        window,
+                        cx,
+                    );
+                }
                 SidebarEvent::RequestSqlPreview {
                     profile_id,
                     table_info,
@@ -1588,6 +1601,9 @@ impl Workspace {
                         connection_id,
                     } => {
                         this.open_chart_from_query(query.clone(), *connection_id, window, cx);
+                    }
+                    TabManagerEvent::OpenReferencedRow { target } => {
+                        this.open_table_at_referenced_row(target.clone(), window, cx);
                     }
                     TabManagerEvent::RequestAddPanel { dashboard_id } => {
                         this.open_add_panel_picker(*dashboard_id, window, cx);

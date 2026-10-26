@@ -444,6 +444,7 @@ Key abstractions for UI adaptation:
 - RPC services are first-class persisted descriptors with `RpcServiceKind` (`Driver`, `AuthProvider`).
 - Both `Driver` and `AuthProvider` services are active. `AuthProvider` services connect through `RpcAuthProvider` in `dbflux_ipc`, which implements `DynAuthProvider` from `dbflux_core`.
 - The runtime seam for service discovery/classification lives in `dbflux_app::rpc_services`; extend that boundary for future RPC capabilities instead of hardcoding new driver-only bootstrap logic in `app_state.rs`.
+- `SecretProvider` services connect through `RpcSecretProvider` in `dbflux_ipc` (implements `DynSecretProvider`) and are registered into every connection's value resolver; see `docs/SECRET_PROVIDER_RPC_PROTOCOL.md`.
 - Preserve compatibility for external driver registration IDs as `rpc:<socket_id>`.
 - `DynAuthProvider::fetch_dynamic_options` is a real trait method (default implementation returns `Permanent("not supported")`); `RpcAuthProvider` implements it by dispatching `FetchDynamicOptions` requests over IPC.
 - The auth-provider IPC protocol is at v1.3. v1.2 added the `FetchDynamicOptions` request / `DynamicOptions` response variants plus the `secret_dependency_opt_in` manifest flag; v1.3 added the `audit_emit_opt_in` manifest flag and audit event emission (`EmitAuditEvent`). Providers advertising v1.2+ have `fetch_dynamic_options` available; older providers get `Permanent("not supported")`.
@@ -487,7 +488,7 @@ For external RPC-backed drivers, keep discovery/adaptation in `dbflux_app::rpc_s
 
 Drivers declare their capabilities via `DriverMetadata`:
 
-- `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream, ObjectStorage
+- `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream, ObjectStorage, SecretStore
 - `QueryLanguage`: SQL, MongoQuery, RedisCommands, Cypher, etc. (determines editor syntax highlighting and placeholder)
 - `DriverCapabilities`: bitflags for features (PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, etc.)
 - `ObjectFacet` (`dbflux_core/src/schema/facet.rs`): per-object paradigms. A new paradigm lands as one facet variant, a driver that emits it and the view that renders it, in the same plan. Never add a core facet, `DataStructure` variant or view kind as a skeleton to be filled in later.

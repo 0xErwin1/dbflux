@@ -175,10 +175,18 @@ components:
   value_source:
     literal: Literal
     env: Variável de ambiente
+    dotenv: "Arquivo dotenv"
     secret: Secret Manager
     parameter: Parameter Store
     auth: Campo da sessão de autenticação
     json_key_placeholder: Chave JSON (opcional)
+    placeholder:
+      env: "NOME_DA_VARIAVEL"
+      dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+    hint:
+      env: "Lido da variável de ambiente %{name} sempre que o DBFlux se conecta. O DBFlux não guarda o valor."
+      dotenv: "Lido de %{key} em %{path} sempre que o DBFlux se conecta. Somente você deve poder ler o arquivo."
+      dotenv_missing_key: "Adicione a chave depois do caminho: ~/caminho/do/arquivo.env#CHAVE"
   file_picker:
     browse: "Procurar…"
   column_projection:
@@ -423,7 +431,7 @@ connection_manager:
     mcp: MCP
   field:
     show_all_databases: "Mostrar todos os bancos de dados"
-    read_only_help: "Bloqueia alterações pela grade de dados, pelo construtor de consultas e pela comparação de esquemas. Instruções digitadas no editor de consultas continuam sendo executadas."
+    read_only_help: "Bloqueia alterações pela grade de dados, pelo construtor de consultas, pela comparação de esquemas e pelo editor de consultas, e nega escritas por MCP nesta conexão. Instruções de leitura continuam sendo executadas."
     read_only: "Somente leitura"
     name: Nome
     ssl_mode: Modo SSL
@@ -463,6 +471,7 @@ connection_manager:
       key_value: "Chave-valor"
       time_series_and_logs: "Séries temporais e logs"
       object_storage: "Armazenamento de objetos"
+      secret_store: "Cofres de segredos"
       other: "Outros"
   export:
     target:
@@ -958,6 +967,7 @@ document:
       query: Consulta
       script: Script
       system: Sistema
+      secret_store: "Cofre de segredos"
     export:
       unsupported_source: A exportação só está disponível no visualizador de auditoria integrado
       exported:
@@ -1411,6 +1421,7 @@ document:
         write_query_first: Escreva uma consulta primeiro para abri-la em um gráfico
         connecting: "Conectando ao banco de dados '%{database}', aguarde…"
         redis_flush_disabled: FLUSHALL / FLUSHDB está desabilitado nas configurações
+        read_only_profile: "O perfil desta conexão está definido como somente leitura. Aqui só são executadas instruções que leem dados."
       result_title:
         query_failed: Falha na consulta
         script_failed: Falha no script
@@ -1657,6 +1668,7 @@ document:
         nearest_distance: "Alterar a distância (atual: %{distance})"
         nearest_clear: "Voltar às linhas da tabela"
         nearest_column: "Mudar a coluna vetorial"
+        go_to_referenced_row: "Ir para a linha referenciada"
       error:
         no_results_to_export: Nenhum resultado para exportar
         invalid_json: JSON inválido
@@ -1672,6 +1684,12 @@ document:
         toast:
           native_picker_fallback: "O seletor de arquivos nativo não está disponível — exportado para %{path}. Instale xdg-desktop-portal, zenity ou kdialog para ter uma caixa de diálogo de salvar."
           exported: "Exportado para %{path}"
+          exported_rows:
+            one: "1 linha carregada exportada para %{path}"
+            many: "%{count} linhas carregadas exportadas para %{path}"
+          native_picker_fallback_rows:
+            one: "O seletor de arquivos nativo não está disponível — 1 linha carregada exportada para %{path}. Instale xdg-desktop-portal, zenity ou kdialog para ter uma caixa de diálogo de salvar."
+            many: "O seletor de arquivos nativo não está disponível — %{count} linhas carregadas exportadas para %{path}. Instale xdg-desktop-portal, zenity ou kdialog para ter uma caixa de diálogo de salvar."
       clipboard:
         error:
           binary_unsupported: Dados binários brutos não podem ser copiados para a área de transferência — escolha Hex ou Base64.
@@ -1679,6 +1697,9 @@ document:
           failed: "Falha ao copiar: %{error}"
         toast:
           copied: "%{format} copiado (%{bytes} bytes) para a área de transferência"
+          copied_rows:
+            one: "1 linha carregada copiada como %{format} (%{bytes} bytes) para a área de transferência"
+            many: "%{count} linhas carregadas copiadas como %{format} (%{bytes} bytes) para a área de transferência"
       document:
         toast:
           inserted: Documento inserido
@@ -1745,12 +1766,24 @@ document:
           many: "%{count} alterações pendentes"
       export:
         trigger: Exportar
-        save_as_file: Salvar como arquivo
-        copy_to_clipboard: Copiar para a área de transferência
+        save_as_file: Salvar linhas carregadas como arquivo
+        copy_to_clipboard: Copiar linhas carregadas para a área de transferência
+        export_all_rows: Exportar todas as linhas para um arquivo
+        all:
+          task: "Exportar todas as linhas de %{table}"
+          toast:
+            exported:
+              one: "1 linha exportada para %{path}"
+              many: "Todas as %{count} linhas exportadas para %{path}"
+            cancelled: "Exportação cancelada — %{path} contém apenas as linhas gravadas antes da interrupção"
+            dropped_columns: "Os campos que aparecem pela primeira vez depois da primeira página não estão no arquivo: %{columns}"
+          error:
+            failed: "Falha ao exportar todas as linhas: %{error}"
         format:
           csv: CSV
           json_pretty: "JSON (formatado)"
           json_compact: "JSON (compacto)"
+          json_lines: "JSON (um objeto por linha)"
           text: Texto
           binary: Binário
           hex: Hex
@@ -1892,6 +1925,9 @@ document:
         partial_delete:
           row: "%{done} de %{total} linha(s) excluída(s), depois falhou: %{error}"
           document: "%{done} de %{total} documento(s) excluído(s), depois falhou: %{error}"
+        unidentified_delete:
+          row: "%{done} linha(s) excluída(s); %{skipped} linha(s) não foram excluídas porque os valores da chave primária não puderam ser lidos. Elas continuam marcadas para exclusão."
+          document: "%{done} documento(s) excluído(s); %{skipped} documento(s) não foram excluídos porque os valores de _id não puderam ser lidos. Eles continuam marcados para exclusão."
         chunk_size_reduced: "Tamanho do bloco reduzido de %{original} para %{effective} — o limite de parâmetros do driver forçou o piso do bloco abaixo de %{floor}. O processamento será mais lento que o esperado."
         chunk_size_adjusted: "Tamanho do bloco ajustado de %{original} para %{effective} para respeitar os limites de parâmetros do driver."
         execution_completed:
@@ -3379,6 +3415,130 @@ document:
     new: Nova aba
     close_named: "Fechar %{title}"
     unsaved_changes: Alterações não salvas
+  secret_store:
+    title: "%{store} · %{connection}"
+    search_placeholder: "A busca roda no cofre; os valores nunca são listados"
+    toolbar:
+      refresh: "Atualizar"
+    load_more: "Carregar a próxima página"
+    loading_more: "Carregando a próxima página…"
+    columns:
+      name: "Nome"
+      description: "Descrição"
+      rotation: "Rotação"
+      last_changed: "Última alteração"
+      type: "Tipo"
+      tier: "Nível"
+      version: "Versão"
+      last_modified: "Última modificação"
+    badge:
+      managed: "Gerenciado por %{service}"
+      deletes: "Será excluído em %{date}"
+    path_mode:
+      tree: "Árvore"
+      flat: "Plano"
+      toggle: "Alternar entre árvore e lista plana"
+    path:
+      up: "Subir um nível"
+    empty:
+      loading: "Listando segredos…"
+      error: "Não foi possível listar os segredos: %{error}"
+      no_match: "Nenhum segredo corresponde a \"%{query}\""
+      no_secrets: "Este cofre não tem segredos aqui"
+    error:
+      connection_unavailable: "A conexão não está disponível"
+      store_unavailable: "A conexão não tem o cofre %{store}"
+    footer:
+      loaded:
+        one: "%{count} segredo carregado"
+        many: "%{count} segredos carregados"
+      hint:
+        open: "abrir"
+        retrieve: "obter valor"
+        copy_id: "copiar ID"
+        filter: "filtrar"
+        up: "subir"
+    status:
+      list_timing:
+        one: "Listagem · %{count} segredo · %{millis} ms"
+        many: "Listagem · %{count} segredos · %{millis} ms"
+      describe_timing: "Descrição · %{millis} ms"
+      retrieve_timing: "Obter valor · %{millis} ms"
+      duration_tooltip: "Duração no cliente da última chamada ao cofre"
+    rotation:
+      off: "Desativada"
+      enabled: "Ativada"
+      disabled: "Desativada"
+      every_days: "A cada %{count} dias"
+      every_hours: "A cada %{count} horas"
+      schedule_with_window: "%{schedule} · janela %{window} (%{expression})"
+      title: "Rotação"
+      status: "Status"
+      schedule: "Agendamento"
+      next: "Próxima rotação"
+      function: "Função"
+      last: "Última rotação"
+    details:
+      none: "Selecione um segredo para ver os detalhes"
+      loading: "Carregando os detalhes…"
+      failed: "Não foi possível carregar os detalhes"
+      title: "Detalhes do segredo"
+      resource_id: "ARN"
+      type: "Tipo"
+      tier: "Nível"
+      data_type: "Tipo de dados"
+      encryption_key: "Chave de criptografia"
+      description: "Descrição"
+      version: "Versão"
+      last_modified: "Última modificação"
+      created: "Criado"
+      last_changed: "Última alteração"
+      last_retrieved: "Última obtenção"
+      versions: "Versões"
+    tags:
+      title: "Tags"
+      none: "Sem tags"
+    managed:
+      title: "Gerenciado por %{service}"
+      body: "%{name} pertence a %{service}. %{service} faz a rotação e a atualização, então o DBFlux o mostra somente leitura."
+    action:
+      copy_resource_id: "Copiar ARN"
+    toast:
+      value_copied: "Valor copiado para a área de transferência"
+      resource_id_copied: "ARN copiado para a área de transferência"
+      error_copied: "Erro copiado para a área de transferência"
+    value:
+      title: "Valor"
+      not_loaded: "Valor não carregado"
+      not_loaded_hint: "O DBFlux só busca o valor quando você pede. Cada obtenção fica registrada na auditoria, sem o valor."
+      encrypted_hint: "Este valor é descriptografado com sua chave de criptografia ao ser obtido. A obtenção é auditada, o valor não."
+      needs_decrypt: "Requer permissão para descriptografar com %{key}"
+      retrieve: "Obter valor"
+      retrieving: "Obtendo o valor…"
+      retrieved_at: "Obtido às %{time} · auditado"
+      view:
+        key_value: "Chave/valor"
+        plaintext: "Texto simples"
+      plaintext_only: "Chave/valor só abre quando o valor é um objeto JSON de um nível com valores escalares. JSON aninhado, arrays e qualquer outro texto abrem como texto simples."
+      binary_size: "Binário · %{size}"
+      read_only: "Somente leitura"
+      binary_note: "Valores binários são gravados por outras ferramentas. O DBFlux os mostra em base64 e não os edita."
+      reveal: "Mostrar"
+      hide: "Ocultar"
+      reveal_all: "Mostrar ou ocultar o valor"
+      show_all: "Mostrar tudo"
+      hide_all: "Ocultar tudo"
+      copy: "Copiar valor"
+      copy_json: "Copiar JSON"
+      copy_all: "Copiar valor"
+      tab_only: "Valor visível só nesta aba; é apagado ao fechar"
+      failed_decrypt: "Não foi possível descriptografar o valor"
+      failed: "Não foi possível obter o valor"
+      copy_error: "Copiar erro"
+      view_in_audit: "Ver na auditoria"
+      metadata_loaded: "Metadados carregados · só o valor falhou"
+      deletion_scheduled: "Exclusão agendada para %{date}"
+      deletion_scheduled_body: "O valor não pode ser obtido até que seja restaurado."
 document_tree:
   search_placeholder: Buscar…
   view:
@@ -3399,6 +3559,7 @@ documents:
       object_storage_account: Nenhuma conexão ativa para esta conta de armazenamento de objetos
       bucket: Nenhuma conexão ativa para este bucket
       object: Nenhuma conexão ativa para este objeto
+      secret_store: "Nenhuma conexão ativa para este cofre de segredos"
   error:
     write_initial_script_failed: "Falha ao gravar o conteúdo inicial do script: %{error}"
     save_session_failed: Falha ao salvar o manifesto da sessão
@@ -3942,6 +4103,11 @@ settings:
       no_matches: "Nenhuma fonte corresponde"
     editor:
       group: "Editor"
+    data_grid:
+      group: "Grade de dados"
+    grid_fk_labels:
+      label: "Mostrar o valor do registro referenciado em células de chave estrangeira"
+      hint: "Células que contêm uma chave estrangeira resolvem e mostram o valor do registro referenciado ao lado do seu id. Aplica-se às páginas carregadas após salvar; o inspetor de linhas sempre resolve referências."
     vim_mode:
       label: "Modo Vim nos editores"
       hint: "Modos Normal e Insert: h, j, k, l e Enter movem, i insere, Esc volta ao Normal, x exclui um caractere, u desfaz. Aplicado aos editores abertos ao salvar."
@@ -3984,6 +4150,7 @@ settings:
     max_background_tasks:
       label: Máximo de tarefas simultâneas em segundo plano
       error: O máximo de tarefas em segundo plano deve ser >= 1
+      help: "Conta conexões, desconexões, hooks de conexão, trocas de banco de dados, tarefas de esquema e varreduras key-value em andamento. No limite, novas conexões, trocas de banco de dados, carregamentos de esquema e de detalhes de tabela e páginas key-value são recusados. Consultas, carregamentos da grade de dados e exportações não são limitados."
     pause_refresh_on_error:
       label: Pausar a atualização automática em caso de erro
     refresh_only_if_visible:
@@ -4738,6 +4905,7 @@ settings:
     kind:
       driver: Driver
       auth_provider: Provedor de autenticação
+      secret_provider: Provedor de segredos
     action:
       add_variable: "Adicionar variável"
       add_argument: "Adicionar argumento"
@@ -5054,6 +5222,7 @@ sidebar:
         opening_access: "Pipeline: abrindo o acesso (%{method})"
         connecting: "Pipeline: conectando o driver (%{driver})"
         fetching_schema: "Pipeline: buscando o schema"
+    listing_secret_paths: "Listando caminhos de segredos: %{name}"
   toast:
     edit_reconnect_updated: "'%{name}' atualizada"
     edit_reconnect_body: Reconecte para aplicar as alterações à sessão ativa.
@@ -5103,6 +5272,7 @@ sidebar:
     add_external_folder_failed: "Não foi possível adicionar a pasta: %{error}"
     remove_external_folder_failed: "Não foi possível remover a pasta: %{error}"
     script_operation_failed: "A operação no script falhou: %{error}"
+    list_secret_paths_failed: "Falha ao listar os caminhos de segredos: %{error}"
   tree:
     container:
       relational: Tabelas (%{count})
@@ -5111,6 +5281,7 @@ sidebar:
       time_series: Measurements (%{count})
       log_stream: Grupos de logs (%{count})
       object_storage: Buckets (%{count})
+      secret_store: Armazenamentos (%{count})
     folder:
       empty_databases:
         one: "%{count} banco de dados vazio"

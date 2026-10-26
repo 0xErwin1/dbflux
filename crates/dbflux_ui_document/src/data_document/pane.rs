@@ -189,6 +189,25 @@ impl DataDocument {
             Box::new(move |_window, cx| grid.update(cx, |grid, cx| grid.side_panels(cx)))
         });
 
+        // Optional helper: positioning the table on one record from outside
+        // the document (foreign-key navigation from the workspace).
+        handle.apply_table_filter = Some({
+            let grid = entity.read(cx).data_grid.clone();
+            Box::new(move |column, value, window, cx| {
+                grid.update(cx, |grid, cx| {
+                    grid.focus_row_by_key(column, value, window, cx)
+                })
+            })
+        });
+
+        // Optional helper: whether an applied builder spec owns this tab's
+        // query. The workspace reads it to keep such a tab's query and open
+        // a referenced row beside it instead.
+        handle.has_applied_builder_query = Some({
+            let grid = entity.read(cx).data_grid.clone();
+            Box::new(move |cx| grid.read(cx).builder_query_applied())
+        });
+
         handle
     }
 }
@@ -268,6 +287,61 @@ mod tests {
         assert!(
             !window.update(|window, cx| pane.apply_for_close(window, cx)),
             "a grid with nothing staged has no apply to wait on"
+        );
+    }
+
+    /// A table pane applies a filter handed to it from outside the document:
+    /// the pane helper forwards to the grid's key-focus, which rewrites the
+    /// filter as a dialect-quoted equality and reloads under it.
+    #[gpui::test]
+    fn a_table_pane_applies_an_outside_filter(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let driver = dbflux_test_support::fake_driver::FakeDriver::new(dbflux_core::DbKind::SQLite);
+        let (app_state, profile_id) =
+            crate::keyboard_test_support::connected_app_state(cx, &driver, "test");
+        let holder: Rc<RefCell<Option<PaneHandle>>> = Rc::new(RefCell::new(None));
+        let handle = holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                DataDocument::new_for_table(
+                    profile_id,
+                    TableRef::with_schema("public", "orders"),
+                    Some("app".to_string()),
+                    app_state.clone(),
+                    window,
+                    cx,
+                )
+            });
+
+            handle.replace(Some(DataDocument::into_pane(document.clone(), cx)));
+            Root::new(document, window, cx)
+        });
+
+        let pane = holder.borrow_mut().take().expect("the pane is built");
+        assert!(
+            pane.apply_table_filter.is_some(),
+            "a table pane must accept an outside filter"
+        );
+
+        window.run_until_parked();
+        window.update(|window, cx| {
+            pane.apply_table_filter("customer_id", &dbflux_core::Value::Int(8), window, cx);
+        });
+        window.run_until_parked();
+
+        let stats = driver.stats();
+        let executed_sql: Vec<&str> = stats
+            .executed_requests
+            .iter()
+            .map(|request| request.sql.as_str())
+            .collect();
+        assert!(
+            executed_sql
+                .iter()
+                .any(|sql| sql.contains("\"customer_id\" = 8")),
+            "the reload must run under the dialect-quoted equality, got {executed_sql:?}"
         );
     }
 

@@ -16,13 +16,13 @@
 
 ## 选择驱动
 
-连接管理器会显示一个驱动选择器。可用驱动取决于二进制构建时启用的 feature；标准构建包含 SQLite、PostgreSQL、MySQL/MariaDB、Microsoft SQL Server、Amazon Redshift、ClickHouse、TursoDB、DuckDB、MongoDB、DynamoDB、Redis、InfluxDB、CloudWatch Logs 和 Amazon S3。选择器按类别对驱动分组：关系型、文档、键值、时间序列和日志、对象存储。外部注册的 RPC 驱动在配置后也会出现在这里（参见 `docs/RPC_SERVICES_CONFIG.md`）。
+连接管理器会显示一个驱动选择器。可用驱动取决于二进制构建时启用的 feature；标准构建包含 SQLite、PostgreSQL、MySQL/MariaDB、Microsoft SQL Server、Amazon Redshift、ClickHouse、TursoDB、DuckDB、MongoDB、DynamoDB、Redis、InfluxDB、CloudWatch Logs、Amazon S3 和 AWS Secrets。选择器按类别对驱动分组：关系型、文档、键值、时间序列和日志、对象存储、密钥存储。外部注册的 RPC 驱动在配置后也会出现在这里（参见 `docs/RPC_SERVICES_CONFIG.md`）。
 
 使用 `/` 筛选驱动列表，`j`/`k`（或方向键）移动，`Enter` 确认选择。
 
 每个驱动都有自己的连接表单。表单是动态的：只显示该驱动真正需要的字段。以文件为基础的驱动（如 SQLite）使用文件路径表单。大多数关系型驱动也接受单个连接字符串，参见[表单模式与直接填写 URI](#表单模式与直接填写-uri)。
 
-主选项卡末尾的 **安全** 部分包含 **只读** 开关。开启后，DBFlux 会阻止在该连接上通过数据网格、可视化查询构建器和模式对比进行的更改。在查询编辑器中输入的语句仍会执行。
+主选项卡末尾的 **安全** 部分包含 **只读** 开关。开启后，DBFlux 会阻止在该连接上通过数据网格、可视化查询构建器和模式对比进行的更改，拒绝查询编辑器中会更改数据或模式的语句，并拒绝高于 `read` 类别的 MCP 调用（参见[只读连接](MCP_AI_INTEGRATION.md#只读连接)）。读取语句仍会执行。在应用中，开启该设置会立即作用于已打开的连接，关闭则在重新连接后生效。MCP 会在下一次调用时采用任一方向的更改。编辑器根据文本对语句分类，因此在 `SELECT` 中调用有副作用的函数（如 PostgreSQL 的 `setval`）仍会执行：数据库中的只读凭据仍是更强的边界。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">
@@ -144,6 +144,7 @@ SSH 隧道有两种用法：
 | **SSO 会话** | 可选，引用一个 **AWS SSO Session** 配置文件。设置后，起始 URL 和区域将从该会话继承，对应的内联字段会置灰。 |
 | **SSO 起始 URL** | 你的 Identity Center 门户 URL（使用会话时可跳过）。 |
 | **区域** | 例如 `us-east-1`。 |
+| **Endpoint URL** | 可选，例如 LocalStack 使用 `http://localhost:4566`。通过 `~/.aws/config` 中的 `[services]` 节，仅作用于 Secrets Manager 和 SSM。AWS 共享凭据配置文件也有同一字段。 |
 | **账户** | **登录后才**会填充的下拉框，列出当前 SSO 会话可访问的账户。 |
 | **角色** | 选定账户后才会填充的下拉框。 |
 
@@ -195,6 +196,7 @@ SSM 需要 `PATH` 中有 AWS CLI 和 Session Manager 插件。在 macOS 和 Linu
 | --- | --- |
 | **字符**（Literal） | 直接输入的值（默认）。 |
 | **环境变量**（Environment Variable） | 按名称从环境变量读取。 |
+| **Dotenv 文件**（Dotenv File） | 从你拥有的 `.env` 文件中读取一个键，写作 `路径#键`。 |
 | **AWS 云密钥管理**（Secret Manager） | 从密钥提供程序（AWS Secrets Manager）获取。 |
 | **AWS 参数存储**（Parameter Store） | 从参数提供程序（AWS SSM Parameter Store）获取。 |
 | **认证会话字段**（Auth Session Field） | 从已解析的认证配置文件会话或凭据中提取指定字段。 |
@@ -204,6 +206,40 @@ SSM 需要 `PATH` 中有 AWS CLI 和 Session Manager 插件。在 macOS 和 Linu
 - AWS 云密钥管理 / AWS 参数存储来源可以指向 JSON 密钥中的某个 **JSON 键**，因此一份 JSON 文档就能为多个字段供值。
 - 解析结果会缓存 **5 分钟**，避免每次重连都重新获取。
 - 由认证提供程序支持的 AWS 云密钥管理 / AWS 参数存储来源**要求连接上配置了认证配置文件**（连接前强制校验）。
+- 要访问 LocalStack 或 VPC 终端节点，请在 AWS 认证配置文件中设置 **Endpoint URL**。AWS SDK 也会读取 `AWS_ENDPOINT_URL_SECRETS_MANAGER` 和 `AWS_ENDPOINT_URL_SSM`。
+
+> **注意：**DBFlux 将终端节点写入配置文件引用的 `[services]` 节，因此只作用于 Secrets Manager 和 SSM，包括使用该配置文件运行的 AWS CLI `secretsmanager`、`ssm` 命令以及 SSM 端口转发。DynamoDB、S3 和 CloudWatch 保持默认终端节点。与其他配置文件共享的 `[services]` 节不会被修改，DBFlux 会为此配置文件创建单独的副本。
+
+### 环境变量与 dotenv 文件
+
+这两种来源在 DBFlux 每次连接时读取，因此轮换后的值无需重启 DBFlux 即可在下一次连接中生效。DBFlux 只保存引用（变量名，或文件路径和键），从不保存值，两种来源都不会缓存。
+
+| 字段输入 | 来源 | 读取 |
+| --- | --- | --- |
+| `DB_PASSWORD` | 环境变量 | 启动 DBFlux 时环境中的 `DB_PASSWORD` |
+| `~/.config/dbflux/prod.env#DB_PASSWORD` | Dotenv 文件 | 该文件中的 `DB_PASSWORD` |
+
+dotenv 文件必须满足以下规则，否则连接会失败，错误信息会指出文件和键，但绝不会显示值：
+
+- 路径为绝对路径或以 `~/` 开头。
+- 是不超过 64 KiB、1024 个条目的 UTF-8 普通文件（指向普通文件的符号链接会被跟随）。
+- 在 Linux 和 macOS 上，只有文件所有者可以读写（`chmod 600`）。
+- 每一行是空行、`#` 注释，或 `KEY=value`（可带 `export` 前缀）。值可以不加引号（末尾的 ` # 注释` 会被去掉）、使用单引号（按原样读取）或使用双引号（解析 `\n`、`\t`、`\"`、`\\` 和 `\$`）。值只占一行，`${VAR}` 不会展开。同一个键出现两次时，以最后一次定义为准。
+
+| 问题 | 错误 |
+| --- | --- |
+| 变量未设置 | `Environment variable 'DB_PASSWORD' not set` |
+| 变量为空字符串 | `Environment variable 'DB_PASSWORD' is empty` |
+| 文件不存在 | `Dotenv file '~/prod.env' does not exist` |
+| 文件不可读 | `Dotenv file '~/prod.env' cannot be read: permission denied` |
+| 其他用户可访问该文件 | `Dotenv file '~/prod.env' can be read or changed by other users (mode 644); restrict it with chmod 600` |
+| 某一行不是条目 | `Dotenv file '~/prod.env' has a malformed entry on line 4` |
+| 文件中没有该键 | `Key 'DB_PASSWORD' is not defined in dotenv file '~/prod.env'` |
+| 键的值为空 | `Key 'DB_PASSWORD' in dotenv file '~/prod.env' is empty` |
+
+读取失败会中止连接。DBFlux 绝不会为该字段改用密钥环中保存的密码。
+
+> **注意：**桌面启动器使用会话环境而不是 shell 环境启动 DBFlux。仅在 `~/.zshrc` 或 `~/.bashrc` 中导出的变量，对从应用菜单启动的 DBFlux 不可见；请改用 dotenv 文件，或在会话环境中设置该变量。
 
 ---
 

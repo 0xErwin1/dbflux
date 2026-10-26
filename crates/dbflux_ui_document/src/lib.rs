@@ -56,6 +56,7 @@ pub mod refresh;
 mod result_view;
 mod result_warnings;
 pub mod schema_viz;
+pub mod secret_store;
 pub mod tab_bar;
 pub mod tab_manager;
 mod task_runner;
@@ -70,11 +71,12 @@ pub use code::CodeDocument;
 pub use console_document::ConsoleDocument;
 pub use dashboard::{DashboardDocument, DashboardPanelSlot, PanelGridPos};
 pub use data_document::DataDocument;
-pub use data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
+pub use data_grid_panel::{DataGridEvent, DataGridPanel, DataSource, ReferencedRowTarget};
 pub use data_view::{DataViewConfig, DataViewMode};
 pub use data_view_trait::DataView;
 pub use document_builder::inspector_min_width;
 pub use dump_analysis::DumpAnalysisDocument;
+pub use secret_store::SecretStoreDocument;
 
 #[cfg(feature = "mcp")]
 pub use governance::McpApprovalsView;

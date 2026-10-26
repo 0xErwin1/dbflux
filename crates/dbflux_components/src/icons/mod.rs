@@ -478,6 +478,7 @@ mod tests {
             (DatabaseCategory::ObjectStorage, AppIcon::Boxes),
             (DatabaseCategory::TimeSeries, AppIcon::Database),
             (DatabaseCategory::LogStream, AppIcon::Database),
+            (DatabaseCategory::SecretStore, AppIcon::Lock),
         ];
 
         for (category, expected) in cases {

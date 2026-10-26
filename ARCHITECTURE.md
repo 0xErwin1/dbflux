@@ -98,7 +98,7 @@ flowchart TB
     start["Connect from<br/>Connection Manager / sidebar"] --> prep["AppState::prepare_pipeline_input<br/>(provider-agnostic input)"]
     prep --> pre{{"PreConnect hooks"}}
     pre --> auth["Pipeline: Authenticating<br/>(DynAuthProvider, e.g. AWS SSO)"]
-    auth --> values["Pipeline: ResolvingValues<br/>(ValueRef → env/secret/param/auth)"]
+    auth --> values["Pipeline: ResolvingValues<br/>(ValueRef → env/dotenv/secret/param/auth)"]
     values --> access["Pipeline: OpeningAccess"]
     access --> tunnel{"Access kind?"}
     tunnel -->|Direct| connect
@@ -115,7 +115,7 @@ flowchart TB
 - UI: `gpui`, `gpui-component` (Cargo.toml).
 - Databases: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis), `aws-sdk-dynamodb` (DynamoDB), and HTTP via `reqwest` (ClickHouse) (Cargo.toml).
 - AWS auth/integration: `aws-config`, `aws-sdk-sso`, `aws-sdk-ssooidc`, `aws-sdk-sts`, `aws-sdk-secretsmanager`, `aws-sdk-ssm` (`dbflux_aws`).
-- IPC/RPC: `interprocess` local sockets + `bincode` message framing (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
+- IPC/RPC: `interprocess` local sockets + `postcard` message framing (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
 - SSH: `ssh2` via `dbflux_ssh` (crates/dbflux_ssh/src/lib.rs).
 - Export: `csv` + `hex` + `base64` + `serde_json` via `dbflux_export` (crates/dbflux_export/src/lib.rs).
 - Serialization/config: `serde`, `serde_json`, `dirs` (Cargo.toml).
@@ -439,7 +439,7 @@ crates/
     src/envelope.rs         # ProtocolVersion + app/driver protocol constants
     src/protocol.rs         # Single-instance app-control messages
     src/driver_protocol.rs  # Driver RPC request/response schema (DTOs + errors)
-    src/framing.rs          # Length-prefixed bincode transport framing
+    src/framing.rs          # Length-prefixed postcard transport framing
     src/socket.rs           # Cross-platform socket naming helpers
   dbflux_driver_ipc/        # DbDriver adapter for external RPC services
     src/driver.rs           # IpcDriver + managed host lifecycle
@@ -485,6 +485,9 @@ crates/
     src/driver.rs           # Log group/stream discovery, EventStreamTarget, CollectionPresentation::EventStream
   dbflux_driver_s3/         # AWS S3 object-storage driver (DatabaseCategory::ObjectStorage)
     src/driver.rs           # Bucket/object discovery, ObjectStoreConnection impl, presign/copy/versions
+  dbflux_driver_aws_secrets/ # AWS Secrets Manager + Parameter Store driver (DatabaseCategory::SecretStore)
+    src/secrets_manager/    # SecretStoreSource over ListSecrets/DescribeSecret/GetSecretValue
+    src/parameter_store/    # SecretStoreSource over DescribeParameters/GetParameter, client-side path grouping
   dbflux_aws/               # AWS auth providers + Secrets Manager/SSM value providers
     src/auth.rs             # AWS SSO/shared/static providers and SSO login flow
     src/config.rs           # ~/.aws/config parser/cache and profile write-back helpers
@@ -620,6 +623,7 @@ A document lists the actions it otherwise offers only to the pointer (its toolba
 - `BucketsTableDocument` (`crates/dbflux_ui_document/src/buckets_table/`) — connection-root object-storage view (name, region, object count, size, versioning, created), reusing `dbflux_components::data_table` rather than `DataGridPanel`; keyed by `DocumentKey::ObjectStoreBucketsRoot`.
 - `ObjectBrowserDocument` (`crates/dbflux_ui_document/src/object_browser/`) — split tree/preview object-storage browser with paginated and lazy-tree navigation, preview, metadata, upload, delete, rename, and presign; keyed by `DocumentKey::ObjectBrowser`.
 - `ObjectEditorDocument` (`crates/dbflux_ui_document/src/object_editor/`) — standalone "open in editor" tab for S3 text objects, sharing the `object_text` module (line-ending detection, language highlighting, save audit) with `ObjectBrowserDocument`'s inline editor; keyed by `DocumentKey::ObjectEditor`.
+- `SecretStoreDocument` (`crates/dbflux_ui_document/src/secret_store/`) — paginated secret listing with name search, a details pane, and explicit, audited value retrieval for one `SecretStoreSource`; values are held as `secrecy` types and rendered only through secret inputs, so they never reach the UI automation tree; keyed by `DocumentKey::SecretStore`.
 
 **Adding a new document type** (no changes required outside the new module):
 1. Create `crates/dbflux_ui_document/src/<name>/mod.rs` with the entity.
@@ -709,9 +713,9 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 ### Driver System
 
 - **Driver capabilities**: `crates/dbflux_core/src/driver/capabilities.rs` defines:
-  - `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream, ObjectStorage
+  - `DatabaseCategory`: Relational, Document, KeyValue, TimeSeries, LogStream, ObjectStorage, SecretStore
   - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl, OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql, Lua, Python, Bash (each carries editor mode, placeholder, comment prefix)
-  - `DriverCapabilities`: `u64` bitflags for features like PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC, etc.
+  - `DriverCapabilities`: `u128` bitflags for features like PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC, etc.
   - `DriverMetadata`: static driver info (id, name, category, query_language, capabilities, icon)
 - **Driver-owned connection forms**: each `DbDriver` returns its `&DriverFormDef` from `form_definition()`. Form definitions live in the driver crate (e.g. `dbflux_driver_cloudwatch::driver::CLOUDWATCH_FORM`), not in core. `DriverFormDef` carries tabs → sections → fields, where `FormFieldKind` covers `Text`, `Password`, `WriteOnly` (secrets), `FilePath`, `Select`, `DynamicSelect` (runtime-fetched options, `depends_on` + `RefreshTrigger`), and `AuthProfileRef { provider_id }`.
 - **Error formatting**: `crates/dbflux_core/src/core/error_formatter.rs` provides `ErrorFormatter` trait for driver-specific error messages with context (detail, hint, column, table, constraint).
@@ -896,6 +900,10 @@ The channel/branding model is a runtime seam: UI and app code read `ReleaseChann
   - `ObjectStoreConnection` implementation covers upload, delete, recursive prefix/bucket delete (batched `DeleteObjects`), copy, presign, bucket details/versioning, and object versions
   - Full CRUD from the UI: upload, type-to-confirm recursive delete, folder/bucket creation with per-endpoint graceful degradation, rename (copy-then-delete), presigned URLs
   - Every mutation audited under `EventCategory::ObjectStorage`; credentials and presigned URLs are never logged or persisted
+- **AWS Secrets**: `crates/dbflux_driver_aws_secrets/` — `aws-sdk-secretsmanager` + `aws-sdk-ssm` driver (`DatabaseCategory::SecretStore`):
+  - Exposes two stores through `Connection::secret_stores()` and the provider-neutral `SecretStoreSource` seam (`dbflux_core/src/connection/secret_store/`), gated by `DriverCapabilities::SECRET_STORE`; per-store `SecretStoreCapabilities` gate UI behavior
+  - Listing (`ListSecrets`, `DescribeParameters`) never fetches values; Parameter Store paths are grouped client-side into direct entries and child paths
+  - Values are read only by an explicit retrieval, audited under `EventCategory::SecretStore` without the value; a denied `kms:Decrypt` maps to `DbError::PermissionDenied`
 
 ### Driver README policy
 
@@ -1006,8 +1014,9 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - TursoDB: `turso_serverless` driver over Hrana HTTP with per-profile Tokio bridging, PRAGMA-based schema discovery, typed CRUD, and per-stream execution sessions for interactive transactions (crates/dbflux_driver_turso/src/connection.rs).
 - DuckDB: bundled `duckdb` driver for files, in-memory databases, and DuckLake catalogs, with one shared instance per file, catalog-per-database discovery, query cancellation, and read-only transactions (crates/dbflux_driver_duckdb/src/connection.rs).
 - Amazon S3: `aws-sdk-s3` driver with AWS profile/SSO or static credentials, endpoint override and path-style addressing for S3-compatible endpoints (Cloudflare R2, MinIO), bucket/object CRUD, presigned URLs, and copy/versions support (crates/dbflux_driver_s3/src/driver.rs).
+- AWS Secrets: `aws-sdk-secretsmanager` and `aws-sdk-ssm` driver with AWS profile/SSO or static credentials and endpoint override, paginated secret and parameter listing, details, and explicit value retrieval (crates/dbflux_driver_aws_secrets/src/driver/mod.rs).
 - AWS auth stack: `dbflux_aws` provides AWS SSO/shared/static auth providers, SSO login orchestration, account/role discovery, and `~/.aws/config` profile write-back for newly saved auth profiles.
-- Local IPC/RPC: `interprocess` sockets + versioned envelopes for app control and RPC service communication (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). `dbflux_app::rpc_services` discovers persisted service descriptors, adapts `RpcServiceKind::Driver` into runtime `DbDriver`s, and wires `RpcServiceKind::AuthProvider` into `RpcAuthProvider` (which implements `DynAuthProvider`). Preserves `rpc:<socket_id>` compatibility. Auth-provider IPC protocol is at v1.2: adds `FetchDynamicOptions` / `DynamicOptions` variants and the `secret_dependency_opt_in` manifest flag. Auth tokens are managed by `dbflux_ipc/src/auth.rs`.
+- Local IPC/RPC: `interprocess` sockets + versioned envelopes for app control and RPC service communication (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). `dbflux_app::rpc_services` discovers persisted service descriptors, adapts `RpcServiceKind::Driver` into runtime `DbDriver`s, wires `RpcServiceKind::AuthProvider` into `RpcAuthProvider` (which implements `DynAuthProvider`), and wires `RpcServiceKind::SecretProvider` into `RpcSecretProvider` (which implements `DynSecretProvider`; see [Secret Provider RPC Protocol](docs/SECRET_PROVIDER_RPC_PROTOCOL.md)). Preserves `rpc:<socket_id>` compatibility. Auth-provider IPC protocol is at v1.2: adds `FetchDynamicOptions` / `DynamicOptions` variants and the `secret_dependency_opt_in` manifest flag. Auth tokens are managed by `dbflux_ipc/src/auth.rs`.
 - Proxy: SOCKS5/HTTP CONNECT tunnels via `dbflux_tunnel_core::Tunnel` (crates/dbflux_proxy/src/lib.rs).
 - SSH: `ssh2` sessions with local TCP forwarding via `dbflux_tunnel_core::Tunnel` (crates/dbflux_ssh/src/lib.rs).
 - OS keyring: optional secret storage for passwords, SSH passphrases, and proxy credentials (crates/dbflux_core/src/storage/secrets.rs).
@@ -1016,14 +1025,14 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 ## Configuration
 
 - Workspace settings: `Cargo.toml` defines workspace members and shared dependencies.
-- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`, `redshift`, `clickhouse`, `s3`, `lua`, `aws`, and `mcp` (enabled by default in this branch).
+- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`, `redshift`, `clickhouse`, `s3`, `aws_secrets`, `lua`, `aws`, and `mcp` (enabled by default in this branch).
 - Runtime data: All runtime configuration is stored in `~/.local/share/dbflux/dbflux.db` (single SQLite file).
   - `cfg_connection_profiles` + child tables (auth, proxy, SSH bindings)
   - `cfg_auth_profiles` (provider-agnostic auth profile storage)
   - `cfg_ssh_tunnel_profiles`, `cfg_proxy_profiles`
   - `cfg_hooks`, `cfg_hook_bindings`
   - `cfg_script_roots` (external scripts folders listed in place; removing a row never touches the folder)
-  - `cfg_services`, `cfg_service_args`, `cfg_service_env` (RPC service descriptors; `cfg_services.service_kind` records `driver` vs `auth_provider`)
+  - `cfg_services`, `cfg_service_args`, `cfg_service_env` (RPC service descriptors; `cfg_services.service_kind` records `driver`, `auth_provider` or `secret_provider`)
   - `cfg_governance_*` tables (roles, policies, trusted clients)
   - `cfg_drivers` (per-driver settings overrides)
   - `cfg_folders` (connection tree organization)

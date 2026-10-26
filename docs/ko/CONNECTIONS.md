@@ -24,9 +24,9 @@
 연결 관리자에는 드라이버 선택기가 표시됩니다. 사용 가능한 드라이버는 바이너리가
 빌드될 때 포함된 기능에 따라 다르며, 표준 빌드에는 SQLite, PostgreSQL,
 MySQL/MariaDB, Microsoft SQL Server, Amazon Redshift, ClickHouse, TursoDB,
-MongoDB, DynamoDB, Redis, InfluxDB, CloudWatch Logs, Amazon S3가 포함됩니다.
-선택기는 드라이버를 관계형, 문서, 키-값, 시계열 및 로그, 오브젝트 스토리지
-범주로 묶어 보여 줍니다. 구성되어 있으면 외부에서 등록된 RPC 드라이버도 여기에
+MongoDB, DynamoDB, Redis, InfluxDB, CloudWatch Logs, Amazon S3, AWS Secrets가
+포함됩니다. 선택기는 드라이버를 관계형, 문서, 키-값, 시계열 및 로그, 오브젝트
+스토리지, 시크릿 저장소 범주로 묶어 보여 줍니다. 구성되어 있으면 외부에서 등록된 RPC 드라이버도 여기에
 표시됩니다(`docs/RPC_SERVICES_CONFIG.md` 참조).
 
 `/`로 드라이버 목록을 필터링하고, `j`/`k`(또는 방향 키)로 이동하고, `Enter`로
@@ -38,8 +38,12 @@ MongoDB, DynamoDB, Redis, InfluxDB, CloudWatch Logs, Amazon S3가 포함됩니�
 [폼 모드 vs. 직접 URI](#폼-모드-vs-직접-uri)를 참고하세요.
 
 메인 탭 끝의 **안전** 섹션에는 **읽기 전용** 토글이 있습니다. 켜면 DBFlux는 해당
-연결에서 데이터 그리드, 비주얼 쿼리 빌더, 스키마 비교로 하는 변경을 차단합니다.
-쿼리 편집기에 입력한 문은 그대로 실행됩니다.
+연결에서 데이터 그리드, 비주얼 쿼리 빌더, 스키마 비교로 하는 변경을 차단하고, 데이터나
+스키마를 바꾸는 쿼리 편집기의 문을 거부하며, `read` 클래스보다 높은 MCP 호출을 거부합니다
+([읽기 전용 연결](MCP_AI_INTEGRATION.md#읽기-전용-연결) 참고). 읽기 문은 그대로
+실행됩니다. 앱에서는 설정을 켜면 열려 있는 연결에 바로 적용되고, 끄면 다시 연결한 뒤에 적용됩니다. MCP는 어느 쪽 변경이든 다음 호출부터 반영합니다. 편집기는 문을 텍스트로 분류하므로 PostgreSQL `setval`처럼 부수 효과가 있는
+함수를 `SELECT`에서 호출하면 그대로 실행됩니다. 더 강한 경계는 여전히 데이터베이스의 읽기
+전용 자격 증명입니다.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">
@@ -205,6 +209,7 @@ SSH 터널은 두 가지 방식으로 사용할 수 있습니다:
 | **SSO session** | **AWS SSO Session** 프로필에 대한 선택적 참조입니다. 설정하면 Start URL과 리전이 상속되고 해당 인라인 필드는 회색으로 비활성화됩니다. |
 | **SSO Start URL** | Identity Center 포털 URL입니다(세션을 사용한다면 건너뜁니다). |
 | **Region** | 예: `us-east-1`. |
+| **Endpoint URL** | 선택 사항. 예: LocalStack의 경우 `http://localhost:4566`. `~/.aws/config`의 `[services]` 섹션을 통해 Secrets Manager와 SSM에만 적용됩니다. AWS Shared Credentials 프로필에도 같은 필드가 있습니다. |
 | **Account** | **로그인 후에** 채워지는 드롭다운 — SSO 세션이 접근할 수 있는 계정을 나열합니다. |
 | **Role** | 계정을 선택하면 채워지는 드롭다운입니다. |
 
@@ -271,6 +276,7 @@ macOS와 Linux에서 DBFlux를 터미널 밖(Finder, Dock, 데스크톱 항목)�
 |--------|--------------|
 | **Literal** | 직접 입력한 값입니다(기본값). |
 | **Environment Variable** | 이름으로 환경 변수를 읽습니다. |
+| **Dotenv File** | 사용자가 소유한 `.env` 파일에서 키 하나를 읽습니다. `path#KEY` 형식으로 입력합니다. |
 | **Secret Manager** | 시크릿 공급자(AWS Secrets Manager)에서 가져옵니다. |
 | **Parameter Store** | 파라미터 공급자(AWS SSM Parameter Store)에서 가져옵니다. |
 | **Auth Session Field** | 확인된 인증 프로필의 세션/자격 증명에서 필드를 가져옵니다. |
@@ -282,6 +288,56 @@ macOS와 Linux에서 DBFlux를 터미널 밖(Finder, Dock, 데스크톱 항목)�
 - 확인된 값은 재연결 때마다 다시 가져오지 않도록 **5분** 동안 캐시됩니다.
 - 인증 공급자에 의해 지원되는 Secret/Parameter 소스는 연결에 **인증 프로필이
   필요**합니다(연결 전에 강제됩니다).
+- LocalStack 또는 VPC 엔드포인트에 연결하려면 AWS 인증 프로필에 **Endpoint
+  URL**을 설정하세요. AWS SDK는 `AWS_ENDPOINT_URL_SECRETS_MANAGER`와
+  `AWS_ENDPOINT_URL_SSM`도 따릅니다.
+
+> **주의:** DBFlux는 프로필이 참조하는 `[services]` 섹션에 엔드포인트를
+> 기록하므로 Secrets Manager와 SSM에만 적용됩니다. 해당 프로필로 실행하는 AWS
+> CLI의 `secretsmanager`, `ssm` 명령과 SSM 포트 포워딩도 포함됩니다. DynamoDB,
+> S3, CloudWatch는 기본 엔드포인트를 유지합니다. 다른 프로필과 공유하는
+> `[services]` 섹션은 수정하지 않으며, 이 프로필에 별도의 사본을 만듭니다.
+
+### 환경 변수와 dotenv 파일
+
+두 소스 모두 DBFlux가 연결할 때마다 읽으므로, 교체된 값은 DBFlux를 다시 시작하지
+않아도 다음 연결부터 사용됩니다. DBFlux는 참조(변수 이름, 또는 파일 경로와 키)만
+저장하고 값은 저장하지 않으며, 두 소스 모두 캐시하지 않습니다.
+
+| 필드 입력 | 소스 | 읽는 값 |
+|-----------|------|---------|
+| `DB_PASSWORD` | Environment Variable | DBFlux를 시작한 환경의 `DB_PASSWORD` |
+| `~/.config/dbflux/prod.env#DB_PASSWORD` | Dotenv File | 해당 파일의 `DB_PASSWORD` |
+
+dotenv 파일은 다음 규칙을 지켜야 합니다. 그렇지 않으면 파일과 키 이름은 알려 주지만
+값은 절대 보여 주지 않는 오류와 함께 연결이 실패합니다:
+
+- 경로는 절대 경로이거나 `~/`로 시작합니다.
+- 최대 64 KiB, 1024개 항목의 UTF-8 일반 파일입니다(일반 파일을 가리키는 심볼릭
+  링크는 따라갑니다).
+- Linux와 macOS에서는 소유자만 읽고 쓸 수 있어야 합니다(`chmod 600`).
+- 각 줄은 빈 줄, `#` 주석, 또는 선택적인 `export` 접두사가 붙은 `KEY=value`입니다.
+  값은 따옴표 없이(끝의 ` # comment`는 제거), 작은따옴표로(그대로 사용), 또는
+  큰따옴표로(`\n`, `\t`, `\"`, `\\`, `\$`를 해석) 쓸 수 있습니다. 값은 한 줄이며
+  `${VAR}`는 확장하지 않습니다. 같은 키가 두 번 나오면 마지막 정의가 적용됩니다.
+
+| 문제 | 오류 |
+|------|------|
+| 변수가 설정되지 않음 | `Environment variable 'DB_PASSWORD' not set` |
+| 변수가 빈 문자열로 설정됨 | `Environment variable 'DB_PASSWORD' is empty` |
+| 파일 없음 | `Dotenv file '~/prod.env' does not exist` |
+| 파일을 읽을 수 없음 | `Dotenv file '~/prod.env' cannot be read: permission denied` |
+| 다른 사용자에게 열린 파일 | `Dotenv file '~/prod.env' can be read or changed by other users (mode 644); restrict it with chmod 600` |
+| 항목이 아닌 줄 | `Dotenv file '~/prod.env' has a malformed entry on line 4` |
+| 파일에 키가 없음 | `Key 'DB_PASSWORD' is not defined in dotenv file '~/prod.env'` |
+| 값이 빈 키 | `Key 'DB_PASSWORD' in dotenv file '~/prod.env' is empty` |
+
+읽기에 실패하면 연결이 중단됩니다. DBFlux는 해당 필드에 대해 키링에 저장된
+비밀번호로 대체하지 않습니다.
+
+> **주의:** 데스크톱 런처는 셸이 아니라 세션의 환경으로 DBFlux를 시작합니다.
+> `~/.zshrc`나 `~/.bashrc`에서만 export한 변수는 애플리케이션 메뉴에서 시작한
+> DBFlux에 보이지 않습니다. dotenv 파일을 사용하거나 세션 환경에 변수를 설정하세요.
 
 ---
 

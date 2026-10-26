@@ -16,8 +16,9 @@ use super::{
     P_REMOTE_DASHBOARDS_FOLDER, P_ROUTINE, P_ROUTINES_FOLDER, P_ROUTINES_LOADING,
     P_SAVED_CHART_ITEM, P_SAVED_CHARTS_FOLDER, P_SCHEMA, P_SCHEMA_FK, P_SCHEMA_FK_FOLDER,
     P_SCHEMA_FK_LOADING, P_SCHEMA_IDX_FOLDER, P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE,
-    P_SCRIPTS_FOLDER, P_SCRIPTS_ROOT, P_STORAGE_HINT_ITEM, P_STORAGE_HINTS_FOLDER, P_TABLE,
-    P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW, P_VIEWS_FOLDER,
+    P_SCRIPTS_FOLDER, P_SCRIPTS_ROOT, P_SECRET_PATH, P_SECRET_STORE, P_STORAGE_HINT_ITEM,
+    P_STORAGE_HINTS_FOLDER, P_TABLE, P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW,
+    P_VIEWS_FOLDER,
 };
 
 impl FromStr for SchemaNodeId {
@@ -115,6 +116,8 @@ impl FromStr for SchemaNodeId {
             | P_INST_FOLDER
             | P_BUCKET
             | P_BUCKETS_FOLDER => parse_instance_variants(prefix, &parts, err),
+
+            P_SECRET_STORE | P_SECRET_PATH => parse_secret_store_variants(prefix, &parts, err),
 
             _ => Err(err()),
         }
@@ -877,6 +880,40 @@ fn parse_instance_variants(
         P_BUCKETS_FOLDER => {
             let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
             Ok(SchemaNodeId::BucketsFolder { profile_id })
+        }
+
+        _ => Err(err()),
+    }
+}
+
+fn parse_secret_store_variants(
+    prefix: &str,
+    parts: &[&str],
+    err: impl Fn() -> ParseSchemaNodeIdError + Copy,
+) -> Result<SchemaNodeId, ParseSchemaNodeIdError> {
+    let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+    let store_id = parts.get(2).ok_or_else(err)?.to_string();
+
+    match prefix {
+        P_SECRET_STORE => Ok(SchemaNodeId::SecretStore {
+            profile_id,
+            store_id,
+        }),
+
+        P_SECRET_PATH => {
+            // A path may hold the separator, so everything after the store id
+            // is the path.
+            let path = parts
+                .get(3..)
+                .filter(|rest| !rest.is_empty())
+                .ok_or_else(err)?
+                .join("|");
+
+            Ok(SchemaNodeId::SecretPath {
+                profile_id,
+                store_id,
+                path,
+            })
         }
 
         _ => Err(err()),

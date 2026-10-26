@@ -80,6 +80,12 @@ converted crate by crate and stays in English for now.
 | **Add an alias to table completions** | On | Accepting a table, view or CTE from SQL completion after `FROM` or `JOIN` inserts it with an alias built from the initials of its name: `access_control` becomes `access_control ac`, `public.order_items` becomes `public.order_items oi`. An alias already used in the statement, a reserved word or the name of a known table gets a number (`ac2`). No alias is added when one already follows the cursor, or after `INSERT INTO`. The target of `UPDATE` and `DELETE FROM` is aliased only on databases that accept it there: PostgreSQL and DuckDB, and SQLite and Turso with `AS`. |
 | **Write the alias with AS** | Off | Inserts `access_control AS ac` instead of `access_control ac`. |
 
+### Data grid
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| **Show referenced-row labels in foreign-key cells** | Off | Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after you save; the row inspector always resolves references. |
+
 ### Startup & session
 
 | Setting | Default | What it does |
@@ -96,7 +102,7 @@ converted crate by crate and stays in English for now.
 |---------|---------|--------------|
 | **Default refresh policy** | Manual | Manual or Interval auto-refresh for data views. |
 | **Default refresh interval (seconds)** | 5 | Interval used when the policy is Interval (minimum 1). |
-| **Max concurrent background tasks** | 8 | Cap on simultaneous background work (minimum 1). |
+| **Max concurrent background tasks** | 8 | Cap on connection and schema tasks (minimum 1). Running connects, disconnects, connection hooks, database switches, schema loads, refreshes and drops, and key-value scans count toward it. At the cap, a new connect, database switch, schema or table-detail load, or key-value page is refused with a notice until a running task finishes; it is not queued. Queries, data-grid loads, exports, dashboards and mutations neither count nor are limited. |
 | **Pause auto-refresh on error** | On | Stop auto-refreshing a view after it errors. |
 | **Auto-refresh only if tab is visible** | Off | Skip refreshing tabs you're not looking at. |
 

@@ -25,6 +25,7 @@ Popular open-source relational database.
 - Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, `TRUNCATE TABLE` support, and a referential-integrity toggle (`SET FOREIGN_KEY_CHECKS`) for FK-safe migrations. Both MySQL and MariaDB share this support.
 - Sends the `program_name` connection attribute as `dbflux/<version>`, visible in `performance_schema.session_connect_attrs`.
 - Write-privilege probe: after connecting, checks `@@read_only`/`@@super_read_only` and `SHOW GRANTS` for the current user to detect a read-only replica or a role without `INSERT`/`UPDATE`/`DELETE` grants, tightening the resolved mutation policy to read-only when the server would reject writes anyway (side-effect free; falls back to `@@read_only` alone on MariaDB, which has no `@@super_read_only`).
+- Batched primary-key row lookup (`fetch_rows_by_pks`): one `WHERE pk IN (...)` statement per chunk of at most 100 values, with an optional column projection; used to resolve foreign-key labels in the data grid.
 
 ### Instance Metrics
 
@@ -53,7 +54,10 @@ Exposes tabular snapshots of running server state:
 ## Limitations
 
 - Explicit statement timeouts and bounded instance metric/inspector requests are refused before execution; unbounded requests retain compatibility. The retained-row cap does not bound bytes, server work, engine allocation, or elapsed time. Hosted MariaDB was not verified.
+- Batched primary-key row lookup sends at most 100 values per query; a larger request runs as several `IN (...)` statements.
 - SQL-only driver; it does not expose document or key-value APIs.
+- On MariaDB, which has no `information_schema.VIEW_TABLE_USAGE`, the drop-table confirmation finds dependent views by searching view definitions for the `` `database`.`table` `` name, so a view that reaches the table only through another view is not listed.
+- MySQL before 8.0.16 does not store `CHECK` constraints, so table details list none there. MariaDB before 10.2.22 (10.3.10 in the 10.3 series) stores them but has no `information_schema.CHECK_CONSTRAINTS`, so table details list its check constraints without their clause.
 - `DECIMAL` columns are reported as `ColumnKind::Float`, since there is no decimal column kind: charts and other users of the column kind treat them as floating-point numbers, while the values themselves stay exact.
 
 - Instance metrics return a single data point per call (current snapshot from `SHOW GLOBAL STATUS`), not a historical time series. Cumulative counters (e.g. `mysql.bytes_sent`) grow monotonically — interpret them as deltas between samples rather than absolute rates.

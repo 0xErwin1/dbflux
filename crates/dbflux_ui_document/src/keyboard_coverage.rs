@@ -153,6 +153,12 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::ResultsDeleteRow),
         ),
         ("row-inspector-pin", KeyboardPath::Menu("pin-row-inspector")),
+        // The REFERENCES entries of the row inspector: a Toolbar entry of
+        // the table menu.
+        (
+            "row-inspector-reference-*",
+            KeyboardPath::Menu("go-to-referenced-row"),
+        ),
         // The value panel's buttons are Toolbar entries of the table menu,
         // which `m` also opens from inside the panel.
         ("value-panel-format-*", KeyboardPath::Menu("value-format-*")),
@@ -638,6 +644,71 @@ pub(crate) const BUCKETS: SurfaceRegistry = SurfaceRegistry {
         (
             "buckets-calculate-size",
             KeyboardPath::Menu("buckets-calculate-size"),
+        ),
+    ],
+};
+
+/// A secret store tab: its listing and details pane. The pane actions (`m`)
+/// list Retrieve value, the copy actions, Hide all, the error actions, Load
+/// next page, Refresh and, on a hierarchical store, the path mode and Up.
+pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
+    name: "secret store",
+    contexts: &[ContextId::Results, ContextId::ContextMenu],
+    entries: &[
+        ("secret-row-*", KeyboardPath::Command(Command::SelectNext)),
+        (
+            "secret-path-row-*",
+            KeyboardPath::Command(Command::SelectNext),
+        ),
+        (
+            "secret-load-more",
+            KeyboardPath::Command(Command::ResultsNextPage),
+        ),
+        (
+            "secret-refresh",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "secret-path-crumb-*",
+            KeyboardPath::Command(Command::ColumnLeft),
+        ),
+        (
+            "segmented-secret-path-mode-*",
+            KeyboardPath::Command(Command::CycleDocumentView),
+        ),
+        (
+            "segmented-secret-value-view-*",
+            KeyboardPath::Command(Command::CycleResultView),
+        ),
+        (
+            "secret-retrieve-value",
+            KeyboardPath::Command(Command::ToggleValuePanel),
+        ),
+        (
+            "secret-value-copy-all",
+            KeyboardPath::Command(Command::ResultsCopyRow),
+        ),
+        (
+            "secret-value-copy-error",
+            KeyboardPath::Menu("secret-copy-error"),
+        ),
+        (
+            "secret-value-view-in-audit",
+            KeyboardPath::Menu("secret-view-in-audit"),
+        ),
+        (
+            "secret-value-hide-all",
+            KeyboardPath::Menu("secret-hide-all"),
+        ),
+        (
+            "secret-value-reveal-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "secret-value-copy-*",
+            KeyboardPath::MouseOnly(
+                "copies one field of the value; the copy key copies the whole value",
+            ),
         ),
     ],
 };
