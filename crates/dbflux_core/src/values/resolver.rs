@@ -629,7 +629,7 @@ mod tests {
     #[tokio::test]
     async fn secret_provider_with_zero_ttl_is_not_cached() {
         let provider = Arc::new(CountingSecretProvider::new("rpc", Some(Duration::ZERO)));
-        let resolver = counting_resolver(Duration::from_secs(60), &[provider.clone()]);
+        let resolver = counting_resolver(Duration::from_secs(60), std::slice::from_ref(&provider));
         let value_ref = ValueRef::secret("rpc", "db-pass", None);
 
         resolver.resolve(&value_ref, &empty_ctx()).await.unwrap();
@@ -641,7 +641,7 @@ mod tests {
     #[tokio::test]
     async fn secret_provider_without_ttl_uses_cache_default() {
         let provider = Arc::new(CountingSecretProvider::new("rpc", None));
-        let resolver = counting_resolver(Duration::from_secs(60), &[provider.clone()]);
+        let resolver = counting_resolver(Duration::from_secs(60), std::slice::from_ref(&provider));
         let value_ref = ValueRef::secret("rpc", "db-pass", None);
 
         resolver.resolve(&value_ref, &empty_ctx()).await.unwrap();
@@ -656,7 +656,7 @@ mod tests {
             "rpc",
             Some(Duration::from_millis(1)),
         ));
-        let resolver = counting_resolver(Duration::from_secs(60), &[provider.clone()]);
+        let resolver = counting_resolver(Duration::from_secs(60), std::slice::from_ref(&provider));
         let value_ref = ValueRef::secret("rpc", "db-pass", None);
 
         resolver.resolve(&value_ref, &empty_ctx()).await.unwrap();
@@ -672,7 +672,7 @@ mod tests {
             "rpc",
             Some(Duration::from_secs(3600)),
         ));
-        let resolver = counting_resolver(Duration::from_millis(1), &[provider.clone()]);
+        let resolver = counting_resolver(Duration::from_millis(1), std::slice::from_ref(&provider));
         let value_ref = ValueRef::secret("rpc", "db-pass", None);
 
         resolver.resolve(&value_ref, &empty_ctx()).await.unwrap();
