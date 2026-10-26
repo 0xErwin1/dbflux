@@ -118,6 +118,7 @@ pub struct AppState {
     protected_hook_rows: Vec<crate::config_loader::ProtectedHookRow>,
     detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
     auth_provider_registry: AuthProviderRegistry,
+    secret_provider_registry: crate::secret_provider_registry::SecretProviderRegistry,
     history_manager: crate::history_manager_sqlite::HistoryManager,
     scripts_directory: Option<ScriptsDirectory>,
     storage_runtime: StorageRuntime,
@@ -2941,6 +2942,11 @@ impl AppState {
 }
 
 impl AppState {
+    /// External secret providers as `(provider id, display name)`, sorted by display name.
+    pub fn secret_providers(&self) -> Vec<(String, String)> {
+        self.secret_provider_registry.list()
+    }
+
     pub fn auth_provider_registry(&self) -> &AuthProviderRegistry {
         &self.auth_provider_registry
     }
@@ -3121,7 +3127,8 @@ impl AppState {
         let cache = Arc::new(dbflux_core::values::ValueCache::new(
             std::time::Duration::from_secs(300),
         ));
-        let resolver = dbflux_core::values::CompositeValueResolver::new(cache);
+        let mut resolver = dbflux_core::values::CompositeValueResolver::new(cache);
+        self.secret_provider_registry.register_into(&mut resolver);
 
         #[cfg(feature = "aws")]
         let aws_profile_name = auth_profile

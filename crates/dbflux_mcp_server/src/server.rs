@@ -1620,9 +1620,12 @@ impl McpConnectionFactory {
             (None, None)
         };
 
-        let resolver = CompositeValueResolver::new(Arc::new(ValueCache::new(
+        let mut resolver = CompositeValueResolver::new(Arc::new(ValueCache::new(
             std::time::Duration::from_secs(300),
         )));
+        for provider in self.state.secret_provider_registry.values() {
+            resolver.register_secret_provider(Arc::clone(provider));
+        }
 
         #[cfg(feature = "aws")]
         let aws_profile_name = auth_profile
@@ -2484,6 +2487,7 @@ mod tests {
             auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
             driver_registry: Arc::new(HashMap::from([(driver_id.to_string(), driver)])),
             auth_provider_registry: Arc::new(HashMap::new()),
+            secret_provider_registry: Arc::new(HashMap::new()),
             driver_settings: Arc::new(HashMap::new()),
             connection_cache: Arc::new(
                 RwLock::new(crate::connection_cache::ConnectionCache::new()),
