@@ -1034,10 +1034,11 @@ fn on_commit_clause_end(bytes: &[u8], start: usize) -> Option<usize> {
 }
 
 /// Returns where `ALL` starts in a `GROUP BY ALL` starting at `start` when
-/// another clause, not a grouping expression, follows it.
+/// another clause, not a grouping expression, follows it. Comments may sit
+/// between `ALL` and that clause.
 fn bare_group_by_all_start(bytes: &[u8], start: usize) -> Option<usize> {
     let after_all = match_words(bytes, start, &["GROUP", "BY", "ALL"])?;
-    let next_word = skip_separator(bytes, after_all)?;
+    let next_word = skip_whitespace_and_comments(bytes, after_all);
 
     CLAUSES_AFTER_GROUP_BY
         .iter()
@@ -1081,6 +1082,24 @@ fn skip_separator(bytes: &[u8], start: usize) -> Option<usize> {
         .count();
 
     (whitespace > 0).then_some(start + whitespace)
+}
+
+/// Skips whitespace, `--` line comments and `/* */` block comments.
+fn skip_whitespace_and_comments(bytes: &[u8], start: usize) -> usize {
+    let mut index = start;
+
+    loop {
+        match (bytes.get(index), bytes.get(index + 1)) {
+            (Some(byte), _) if byte.is_ascii_whitespace() => index += 1,
+            (Some(b'-'), Some(b'-')) => {
+                index = find_from(bytes, index, b"\n").map_or(bytes.len(), |end| end + 1);
+            }
+            (Some(b'/'), Some(b'*')) => {
+                index = find_from(bytes, index + 2, b"*/").map_or(bytes.len(), |end| end + 2);
+            }
+            _ => return index,
+        }
+    }
 }
 
 /// Returns the position after the quoted run opened at `start`. A doubled
@@ -1950,6 +1969,11 @@ mod tests {
             "SELECT a FROM t GROUP BY ALL LIMIT 5;",
             "SELECT a FROM t GROUP BY ALL;",
             "SELECT a FROM t GROUP BY ALL a, b ORDER BY a;",
+            "SELECT a FROM t GROUP BY ALL -- note\nORDER BY a;",
+            "SELECT a FROM t GROUP BY ALL /* note */ ORDER BY a;",
+            "SELECT a FROM t GROUP BY ALL/* note */ORDER BY a;",
+            "(SELECT a FROM t GROUP BY ALL)",
+            "SELECT * FROM (SELECT a FROM t GROUP BY ALL) s ORDER BY a;",
         ];
 
         for query in queries {
