@@ -359,7 +359,8 @@ function rowFrame(index: number, time: number): DemoRowFrame {
     frame.caret = true;
   } else if (time >= 364 && time < 386) {
     frame.cell = 'pending';
-    frame.status = 'pending → paid';
+    frame.status = 'paid';
+    frame.tone = 'paid';
   } else if (time >= 386) {
     frame.status = 'paid';
     frame.tone = 'paid';

@@ -149,7 +149,12 @@ test('editing row 2 goes from selected text to a pending change to saved', () =>
 
   const pending = frameAt(370);
   assert.equal(editedRow(370)?.cell, 'pending');
-  assert.equal(editedRow(370)?.status, 'pending → paid');
+  assert.equal(
+    editedRow(370)?.status,
+    'paid',
+    'a relational grid shows the new value, not old → new',
+  );
+  assert.equal(editedRow(370)?.tone, 'paid');
   assert.equal(pending.toolbar.dirty, true);
 
   const saved = frameAt(390);

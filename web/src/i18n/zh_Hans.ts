@@ -111,6 +111,7 @@ export const zh_Hans: Dictionary = {
       body: '滚动即可操作 DBFlux。打开表、筛选、编辑值、生成图表，并在审计日志中找到这次更改，全程无需打开 SQL 编辑器。',
       scroll_hint: '滚动探索',
       nav_label: '产品之旅章节',
+      skip: '跳过演示',
       chapters: {
         explore: {
           nav: '探索',

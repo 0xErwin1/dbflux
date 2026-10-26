@@ -112,6 +112,7 @@ export const en = {
       body: 'Scroll to drive DBFlux. Open a table, filter it, edit a value, chart it and find the change in the audit log, all without opening the SQL editor.',
       scroll_hint: 'Scroll to explore',
       nav_label: 'Product journey chapters',
+      skip: 'Skip the demo',
       chapters: {
         explore: {
           nav: 'Explore',

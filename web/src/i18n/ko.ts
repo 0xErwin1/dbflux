@@ -112,6 +112,7 @@ export const ko: Dictionary = {
       body: '스크롤하면 DBFlux가 움직입니다. SQL 편집기를 열지 않고 테이블을 열고, 필터링하고, 값을 편집하고, 차트로 만들고, 감사 로그에서 변경 사항을 확인하세요.',
       scroll_hint: '스크롤하여 살펴 보기',
       nav_label: '제품 둘러보기 챕터',
+      skip: '데모 건너뛰기',
       chapters: {
         explore: {
           nav: '탐색',

@@ -112,6 +112,7 @@ export const es: Dictionary = {
       body: 'Desplázate para manejar DBFlux. Abre una tabla, fíltrala, edita un valor, grafícala y encuentra el cambio en el registro de auditoría, todo sin abrir el editor SQL.',
       scroll_hint: 'Desplázate para explorar',
       nav_label: 'Capítulos del recorrido por el producto',
+      skip: 'Saltar la demo',
       chapters: {
         explore: {
           nav: 'Explorar',

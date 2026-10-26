@@ -810,16 +810,24 @@ html[data-theme='light'] .ld-app {
   visibility: visible;
 }
 
+/*
+ * A changed cell in a relational grid keeps the new value and marks it with a
+ * 20% warning wash and a 2px warning stroke on the left; the focus ring stays
+ * on it until another cell takes focus (data_table/table.rs).
+ */
 .ld-cell[data-cell='pending'] {
-  background: color-mix(in srgb, var(--ld-pending) 8%, transparent);
-  box-shadow: inset 0 0 0 1.5px var(--ld-pending);
+  background: color-mix(in srgb, var(--ld-pending) 20%, transparent);
+  box-shadow:
+    inset 2px 0 0 var(--ld-pending),
+    inset 0 0 0 1.5px var(--accent);
 }
 
 .ld-cell[data-cell='pending'] .ld-cell__text {
-  color: var(--ld-pending);
+  color: var(--text-strong);
 }
 
-.ld-cell:not([data-cell='normal']) .ld-diamond {
+.ld-cell[data-cell='selecting'] .ld-diamond,
+.ld-cell[data-cell='editing'] .ld-diamond {
   display: none;
 }
 

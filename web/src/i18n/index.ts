@@ -242,6 +242,8 @@ export interface Dictionary {
       body: string;
       scroll_hint: string;
       nav_label: string;
+      /** Link that scrolls past the pinned demo to the content after it. */
+      skip: string;
       chapters: {
         explore: LandingJourneyChapterStrings;
         filter: LandingJourneyChapterStrings;
