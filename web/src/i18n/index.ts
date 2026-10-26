@@ -104,6 +104,12 @@ export interface VsSharedStrings {
   others_title: string;
 }
 
+interface LandingJourneyChapterStrings {
+  nav: string;
+  title: string;
+  body: string;
+}
+
 /** Strings one per-client comparison page owns. */
 export interface VsClientStrings {
   page_title: string;
@@ -132,7 +138,6 @@ export interface Dictionary {
   nav: {
     drivers: string;
     keyboard: string;
-    governance: string;
     compare: string;
     docs: string;
     about: string;
@@ -230,6 +235,23 @@ export interface Dictionary {
     };
     drivers_label: string;
     and_more: string;
+    journey: {
+      eyebrow: string;
+      title: string;
+      body: string;
+      scroll_hint: string;
+      nav_label: string;
+      /** Link that scrolls past the pinned demo to the content after it. */
+      skip: string;
+      chapters: {
+        explore: LandingJourneyChapterStrings;
+        filter: LandingJourneyChapterStrings;
+        builder: LandingJourneyChapterStrings;
+        edit: LandingJourneyChapterStrings;
+        chart: LandingJourneyChapterStrings;
+        audit: LandingJourneyChapterStrings;
+      };
+    };
     core: {
       eyebrow: string;
       title: string;

@@ -1,0 +1,1079 @@
+---
+import Glyph from '../Glyph.astro';
+import DemoApp from './live-demo/DemoApp.astro';
+import { docsUrl } from '../../data/site';
+import { DEFAULT_LOCALE, dictionary } from '../../i18n';
+import type { Locale } from '../../i18n';
+import { DEMO_STEPS } from '../../lib/live-demo';
+
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = DEFAULT_LOCALE } = Astro.props;
+const landing = dictionary(locale).landing;
+const strings = landing.journey;
+const total = String(DEMO_STEPS.length).padStart(2, '0');
+const steps = DEMO_STEPS.map((step, index) => ({
+  ...step,
+  index,
+  number: String(index + 1).padStart(2, '0'),
+  ...strings.chapters[step.id],
+}));
+---
+
+<section id="visual-workflow" class="ld-section shell" data-live-demo>
+  <header class="ld-section__head reveal">
+    <div>
+      <p class="eyebrow">{strings.eyebrow}</p>
+      <h2 class="display display--section">{strings.title}</h2>
+    </div>
+    <div class="ld-section__intro">
+      <p>{strings.body}</p>
+      <span class="ld-section__hint mono">
+        <Glyph name="chevron-down" size={14} />
+        {strings.scroll_hint}
+      </span>
+    </div>
+  </header>
+
+  <div class="ld-section__track" data-ld-track>
+    <div class="ld-section__sticky">
+      <div class="ld-section__bar">
+        <ol class="ld-section__steps">
+          {
+            steps.map((step) => (
+              <li id={step.anchor} class="ld-section__step" data-ld-step={step.index}>
+                <p class="ld-section__number mono">
+                  {step.number} / {total}
+                </p>
+                <h3>{step.title}</h3>
+                <p class="ld-section__body">{step.body}</p>
+                <div class="ld-section__shot" data-ld-shot={step.id} aria-hidden="true" />
+              </li>
+            ))
+          }
+        </ol>
+
+        <nav class="ld-section__nav" aria-label={strings.nav_label}>
+          {
+            steps.map((step) => (
+              <a class="ld-section__link c6" href={`#${step.anchor}`} data-ld-link={step.index}>
+                <span class="mono">{step.number}</span>
+                <span>{step.nav}</span>
+                <span class="ld-section__fill" data-ld-fill={step.index} />
+              </a>
+            ))
+          }
+        </nav>
+
+        <a class="ld-section__skip c6" href="#keyboard">
+          {strings.skip}
+          <Glyph name="chevron-down" size={14} />
+        </a>
+      </div>
+
+      <div class="ld-section__stage">
+        <div class="ld-section__window c18" data-ld-window aria-hidden="true" hidden>
+          <div class="ld-section__camera" data-ld-camera>
+            <DemoApp />
+          </div>
+          <span class="ld-section__ripple" data-ld-ripple></span>
+          <span class="ld-section__enter c4" data-ld-enter>Enter</span>
+          <svg class="ld-section__cursor" viewBox="0 0 22 24" data-ld-cursor>
+            <path d="M3 2 L3 19.5 L7.6 15.2 L10.6 21.8 L13.6 20.5 L10.6 14 L16.8 14 Z"></path>
+          </svg>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <aside id="keyboard" class="ld-section__keyboard c12">
+    <div class="ld-section__keys" aria-hidden="true">
+      <span class="ld-section__vim mono">NORMAL</span>
+      <span class="ld-section__key mono c5">Ctrl</span>
+      <span class="ld-section__key mono c5">Shift</span>
+      <span class="ld-section__key ld-section__key--accent mono c5">P</span>
+    </div>
+    <div class="ld-section__keyboard-copy">
+      <p class="eyebrow">{landing.rules.r1_title}</p>
+      <p>{landing.rules.r1_body}</p>
+    </div>
+    <a class="go" href={docsUrl('keyboard', '', locale)}>
+      {landing.keyboard.link}<Glyph name="chevron-right" size={14} class="go__chev" />
+    </a>
+  </aside>
+</section>
+
+<script>
+  import {
+    DEFAULT_DEMO_ANCHORS,
+    DEMO_APP,
+    demoEligibility,
+    demoFrame,
+    demoSnapshot,
+    demoStepAt,
+    demoStepTarget,
+    demoTime,
+    type DemoAnchorKey,
+    type DemoAnchors,
+    type DemoFrame,
+    type DemoStepId,
+  } from '../../lib/live-demo';
+
+  /** How long the window takes to catch up most of the way to the scroll position. */
+  const SMOOTHING_MS = 220;
+
+  /** The elements one copy of the window exposes to the frame renderer. */
+  interface WindowNodes {
+    window: HTMLElement;
+    app: HTMLElement;
+    camera: HTMLElement;
+    cursor: SVGElement;
+    ripple: HTMLElement;
+    enter: HTMLElement;
+    levels: Map<number, HTMLElement[]>;
+    chevrons: Map<number, HTMLElement>;
+    orders: HTMLElement | null;
+    tab: HTMLElement | null;
+    body: HTMLElement | null;
+    where: HTMLElement | null;
+    whereSelected: HTMLElement | null;
+    whereText: HTMLElement | null;
+    wherePlaceholder: HTMLElement | null;
+    builder: HTMLElement | null;
+    builderButton: HTMLElement | null;
+    rows: HTMLElement[];
+    cells: HTMLElement[];
+    cellTexts: HTMLElement[];
+    chartToggle: HTMLElement | null;
+    chart: HTMLElement | null;
+    chartLines: SVGElement[];
+    chartTips: Element[];
+    audit: HTMLElement | null;
+    auditNew: HTMLElement | null;
+    railConnections: HTMLElement | null;
+    railAudit: HTMLElement | null;
+    statusQuery: HTMLElement | null;
+  }
+
+  const written = new WeakMap<Element, Map<string, string>>();
+
+  /** True when `key` on `element` already holds `value`; records it otherwise. */
+  function unchanged(element: Element, key: string, value: string): boolean {
+    let cache = written.get(element);
+    if (!cache) {
+      cache = new Map();
+      written.set(element, cache);
+    }
+    if (cache.get(key) === value) return true;
+    cache.set(key, value);
+    return false;
+  }
+
+  function style(element: Element | null | undefined, property: string, value: string) {
+    if (!element || unchanged(element, `style:${property}`, value)) return;
+    (element as HTMLElement).style.setProperty(property, value);
+  }
+
+  function text(element: Element | null | undefined, value: string) {
+    if (!element || unchanged(element, 'text', value)) return;
+    element.textContent = value;
+  }
+
+  function data(element: Element | null | undefined, name: string, value: string) {
+    if (!element || unchanged(element, `data:${name}`, value)) return;
+    element.setAttribute(name, value);
+  }
+
+  function flag(element: Element | null | undefined, name: string, on: boolean) {
+    if (!element || unchanged(element, `class:${name}`, String(on))) return;
+    element.classList.toggle(name, on);
+  }
+
+  function attribute(element: Element | null | undefined, name: string, on: boolean) {
+    if (!element || unchanged(element, `attr:${name}`, String(on))) return;
+    element.toggleAttribute(name, on);
+  }
+
+  function collect(window: HTMLElement): WindowNodes {
+    const one = <T extends Element = HTMLElement>(selector: string) =>
+      window.querySelector<T & Element>(selector) as T | null;
+    const all = <T extends Element = HTMLElement>(selector: string) =>
+      Array.from(window.querySelectorAll(selector)) as T[];
+
+    const levels = new Map<number, HTMLElement[]>();
+    for (const group of all('[data-ld-level]')) {
+      const level = Number(group.dataset.ldLevel);
+      levels.set(level, [...(levels.get(level) ?? []), group]);
+    }
+    const chevrons = new Map<number, HTMLElement>();
+    for (const chevron of all('[data-ld-chevron]')) {
+      chevrons.set(Number(chevron.dataset.ldChevron), chevron);
+    }
+
+    return {
+      window,
+      app: one('[data-ld-app]') as HTMLElement,
+      camera: one('[data-ld-camera]') as HTMLElement,
+      cursor: one<SVGElement>('[data-ld-cursor]') as SVGElement,
+      ripple: one('[data-ld-ripple]') as HTMLElement,
+      enter: one('[data-ld-enter]') as HTMLElement,
+      levels,
+      chevrons,
+      orders: one('[data-ld-orders]'),
+      tab: one('[data-ld-tab]'),
+      body: one('[data-ld-body]'),
+      where: one('[data-ld-where]'),
+      whereSelected: one('[data-ld-where-selected]'),
+      whereText: one('[data-ld-where-text]'),
+      wherePlaceholder: one('[data-ld-where-placeholder]'),
+      builder: one('[data-ld-builder]'),
+      builderButton: one('[data-ld-builder-button]'),
+      rows: all('[data-ld-row]'),
+      cells: all('.ld-cell'),
+      cellTexts: all('.ld-cell__text'),
+      chartToggle: one('[data-ld-chart-toggle]'),
+      chart: one('[data-ld-chart]'),
+      chartLines: all<SVGElement>('[data-ld-chart-line]'),
+      chartTips: all<Element>('[data-ld-chart-tip]'),
+      audit: one('[data-ld-audit]'),
+      auditNew: one('[data-ld-audit-new]'),
+      railConnections: one('[data-ld-rail="connections"]'),
+      railAudit: one('[data-ld-rail="audit"]'),
+      statusQuery: one('[data-ld-status-query]'),
+    };
+  }
+
+  /**
+   * Reads the boxes the cursor and camera aim at, in app coordinates. The chart
+   * and audit layers are shown for the read so their targets have a layout, and
+   * the Builder is folded to its stylesheet state, because an open Builder
+   * narrows the document and shifts every target in it.
+   */
+  function measure(nodes: WindowNodes): DemoAnchors {
+    const anchors: DemoAnchors = { ...DEFAULT_DEMO_ANCHORS };
+    const box = nodes.app.getBoundingClientRect();
+    if (!box.width) return anchors;
+    const scale = box.width / DEMO_APP.width;
+
+    const chartHidden = nodes.chart?.hidden ?? true;
+    const auditHidden = nodes.audit?.hidden ?? true;
+    const builderWidth = nodes.builder?.style.width ?? '';
+    const builderMargin = nodes.builder?.style.marginLeft ?? '';
+    if (nodes.chart) nodes.chart.hidden = false;
+    if (nodes.audit) nodes.audit.hidden = false;
+    if (nodes.builder) {
+      nodes.builder.style.width = '';
+      nodes.builder.style.marginLeft = '';
+    }
+
+    for (const element of nodes.app.querySelectorAll<HTMLElement>('[data-ld-anchor]')) {
+      const key = element.dataset.ldAnchor as DemoAnchorKey;
+      if (!(key in anchors)) continue;
+      const rect = element.getBoundingClientRect();
+      if (!rect.width && !rect.height) continue;
+      anchors[key] = {
+        x: (rect.left - box.left) / scale,
+        y: (rect.top - box.top) / scale,
+        w: rect.width / scale,
+        h: rect.height / scale,
+      };
+    }
+
+    if (nodes.chart) nodes.chart.hidden = chartHidden;
+    if (nodes.audit) nodes.audit.hidden = auditHidden;
+    if (nodes.builder) {
+      nodes.builder.style.width = builderWidth;
+      nodes.builder.style.marginLeft = builderMargin;
+    }
+    return anchors;
+  }
+
+  function render(nodes: WindowNodes, frame: DemoFrame) {
+    const { camera, cursor, ripple, enterKey } = frame;
+    style(
+      nodes.camera,
+      'transform',
+      `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})`,
+    );
+    style(
+      nodes.cursor,
+      'transform',
+      `translate(${cursor.x}px, ${cursor.y}px) scale(${cursor.pressed ? 0.86 : 1})`,
+    );
+    style(nodes.cursor, 'opacity', cursor.opacity.toFixed(3));
+    style(
+      nodes.ripple,
+      'transform',
+      `translate(${ripple.x}px, ${ripple.y}px) scale(${ripple.scale})`,
+    );
+    style(nodes.ripple, 'opacity', ripple.opacity.toFixed(3));
+    style(nodes.enter, 'transform', `translate(${enterKey.x}px, ${enterKey.y}px)`);
+    style(nodes.enter, 'opacity', enterKey.opacity.toFixed(3));
+
+    frame.tree.levels.forEach((level, index) => {
+      for (const group of nodes.levels.get(index + 1) ?? []) {
+        style(group, 'height', `${(level * 26).toFixed(2)}px`);
+      }
+    });
+    frame.tree.chevrons.forEach((turn, index) => {
+      style(nodes.chevrons.get(index + 1), 'transform', `rotate(${(turn * 90).toFixed(1)}deg)`);
+    });
+    flag(nodes.orders, 'is-selected', frame.tree.ordersSelected);
+    attribute(nodes.tab, 'hidden', !frame.tabOpen);
+    style(nodes.body, 'opacity', frame.documentOpacity.toFixed(3));
+
+    flag(nodes.where, 'is-focused', frame.where.focused);
+    flag(nodes.where, 'is-selected', frame.where.selected);
+    text(nodes.whereSelected, frame.where.selected ? frame.where.text : '');
+    text(nodes.whereText, frame.where.selected ? '' : frame.where.text);
+    attribute(nodes.wherePlaceholder, 'hidden', !frame.where.placeholder);
+
+    style(nodes.builder, 'width', `${(442 * frame.builder.open).toFixed(1)}px`);
+    style(nodes.builder, 'margin-left', `${(-8 + 8 * frame.builder.open).toFixed(1)}px`);
+    flag(nodes.builderButton, 'is-on', frame.builder.active);
+
+    frame.rows.forEach((row, index) => {
+      const element = nodes.rows[index];
+      style(element, 'height', `${(30 * row.keep).toFixed(2)}px`);
+      style(element, 'opacity', (row.load * row.keep).toFixed(3));
+      style(element, 'transform', `translateY(${((1 - row.load) * 6).toFixed(2)}px)`);
+      flag(element, 'is-selected', row.selected);
+      data(nodes.cells[index], 'data-cell', row.cell);
+      data(nodes.cells[index], 'data-tone', row.tone);
+      text(nodes.cellTexts[index], row.status);
+    });
+
+    attribute(nodes.app, 'data-dirty', frame.toolbar.dirty);
+    attribute(nodes.app, 'data-filtered', frame.footerRows === 'filtered');
+    flag(nodes.chartToggle, 'is-hover', frame.chart.toggleHover);
+
+    attribute(nodes.chart, 'hidden', !frame.chart.visible);
+    for (const line of nodes.chartLines) {
+      style(line, 'stroke-dashoffset', (1 - frame.chart.draw).toFixed(4));
+    }
+    for (const tip of nodes.chartTips) style(tip, 'opacity', frame.chart.tip.toFixed(3));
+
+    attribute(nodes.audit, 'hidden', !frame.audit.visible);
+    style(nodes.auditNew, 'height', `${(32 * frame.audit.newRow).toFixed(2)}px`);
+    flag(nodes.auditNew, 'is-highlighted', frame.audit.highlight);
+
+    flag(nodes.railConnections, 'is-on', !frame.railAudit);
+    flag(nodes.railAudit, 'is-on', frame.railAudit);
+    text(nodes.statusQuery, frame.statusQuery);
+  }
+
+  function viewOf(nodes: WindowNodes) {
+    return { width: nodes.window.clientWidth, height: nodes.window.clientHeight };
+  }
+
+  for (const root of document.querySelectorAll<HTMLElement>('[data-live-demo]')) {
+    const track = root.querySelector<HTMLElement>('[data-ld-track]');
+    const stageWindow = root.querySelector<HTMLElement>('[data-ld-window]');
+    if (!track || !stageWindow) continue;
+
+    const steps = Array.from(root.querySelectorAll<HTMLElement>('[data-ld-step]'));
+    const links = Array.from(root.querySelectorAll<HTMLAnchorElement>('[data-ld-link]'));
+    const fills = Array.from(root.querySelectorAll<HTMLElement>('[data-ld-fill]'));
+    const shots = Array.from(root.querySelectorAll<HTMLElement>('[data-ld-shot]'));
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const wide = window.matchMedia('(min-width: 1181px)');
+
+    let revision = 0;
+    let firstSync = true;
+    let dispose: (() => void) | undefined;
+    let jump: ((progress: number) => void) | undefined;
+    /**
+     * Moves the reader past the pinned demo in one step when a jump would
+     * otherwise scroll through it, then runs `finish` from the far edge.
+     * Returns false when the path does not cross the demo.
+     */
+    let cross: ((destination: number, finish: () => void) => boolean) | undefined;
+
+    const markStep = (time: number) => {
+      const current = demoStepAt(time);
+      steps.forEach((step, index) => step.toggleAttribute('data-current', index === current.index));
+      links.forEach((link, index) => {
+        if (index === current.index) link.setAttribute('aria-current', 'step');
+        else link.removeAttribute('aria-current');
+      });
+      fills.forEach((fill, index) => {
+        const amount = index < current.index ? 1 : index === current.index ? current.fill : 0;
+        fill.style.transform = `scaleX(${amount})`;
+      });
+    };
+
+    const clearStaticShots = () => {
+      for (const shot of shots) shot.replaceChildren();
+      root.removeAttribute('data-ld-shots');
+    };
+
+    /** Freezes one copy of the window per step, framed on that step's action. */
+    const buildStaticShots = () => {
+      clearStaticShots();
+      root.setAttribute('data-ld-shots', '');
+      for (const shot of shots) {
+        const copy = stageWindow.cloneNode(true) as HTMLElement;
+        copy.hidden = false;
+        copy.removeAttribute('aria-hidden');
+        shot.append(copy);
+        const nodes = collect(copy);
+        const anchors = measure(nodes);
+        render(nodes, demoSnapshot(shot.dataset.ldShot as DemoStepId, anchors, viewOf(nodes)));
+      }
+    };
+
+    const onLinkClick = (event: MouseEvent) => {
+      if (!jump || event.defaultPrevented || event.button !== 0) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
+      if (!(anchor instanceof HTMLAnchorElement)) return;
+      const url = new URL(anchor.href, window.location.href);
+      if (url.origin !== window.location.origin || url.pathname !== window.location.pathname)
+        return;
+      const target = demoStepTarget(url.hash);
+      if (target) {
+        event.preventDefault();
+        window.history.pushState(null, '', url.hash);
+        jump(target.progress);
+        return;
+      }
+
+      const element = url.hash
+        ? document.getElementById(decodeURIComponent(url.hash.slice(1)))
+        : null;
+      if (!element) return;
+      const destination = element.getBoundingClientRect().top + window.scrollY;
+      const crossed = cross?.(destination, () =>
+        element.scrollIntoView({ block: 'start', behavior: 'smooth' }),
+      );
+      if (!crossed) return;
+      event.preventDefault();
+      window.history.pushState(null, '', url.hash);
+    };
+    document.addEventListener('click', onLinkClick);
+
+    // Back to top scrolls smoothly through the whole page; across the demo it jumps instead.
+    const onBackToTop = (event: MouseEvent) => {
+      const button =
+        event.target instanceof Element ? event.target.closest('[data-back-to-top]') : null;
+      if (!button) return;
+      const crossed = cross?.(0, () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+      if (!crossed) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    window.addEventListener('click', onBackToTop, { capture: true });
+
+    const sync = async () => {
+      const current = ++revision;
+      const alignHash = firstSync;
+      firstSync = false;
+      dispose?.();
+      dispose = undefined;
+
+      if (demoEligibility(window.innerWidth, reducedMotion.matches).mode === 'static') {
+        buildStaticShots();
+        return;
+      }
+
+      try {
+        const [{ gsap }, { ScrollTrigger }] = await Promise.all([
+          import('gsap'),
+          import('gsap/ScrollTrigger'),
+        ]);
+        if (
+          current !== revision ||
+          demoEligibility(window.innerWidth, reducedMotion.matches).mode === 'static'
+        ) {
+          return;
+        }
+        gsap.registerPlugin(ScrollTrigger);
+
+        clearStaticShots();
+        root.setAttribute('data-ld-enhanced', '');
+        stageWindow.hidden = false;
+        const nodes = collect(stageWindow);
+        let anchors = DEFAULT_DEMO_ANCHORS;
+        let progress = 0;
+        let target = 0;
+        let lastTick = 0;
+        let tick = 0;
+
+        const draw = () => {
+          const time = demoTime(progress);
+          render(nodes, demoFrame(time, anchors, viewOf(nodes)));
+          markStep(time);
+        };
+
+        /**
+         * The window trails the scroll position by a short ease, so a fast flick
+         * plays its steps instead of skipping them. At rest it always lands on
+         * the frame for the current scroll position.
+         */
+        const follow = (now: number) => {
+          const elapsed = lastTick ? Math.min(now - lastTick, 1000) : 16;
+          lastTick = now;
+          progress += (target - progress) * (1 - Math.exp(-elapsed / SMOOTHING_MS));
+          if (Math.abs(target - progress) < 0.00005) progress = target;
+          draw();
+          tick = progress === target ? 0 : requestAnimationFrame(follow);
+          if (!tick) lastTick = 0;
+        };
+
+        const settle = (value: number) => {
+          if (tick) cancelAnimationFrame(tick);
+          tick = 0;
+          lastTick = 0;
+          target = value;
+          progress = value;
+          draw();
+        };
+
+        const trigger = ScrollTrigger.create({
+          trigger: track,
+          start: () =>
+            `top top+=${document.querySelector<HTMLElement>('[data-nav]')?.offsetHeight ?? 0}`,
+          end: 'bottom bottom',
+          invalidateOnRefresh: true,
+          onRefresh: (self) => {
+            anchors = measure(nodes);
+            settle(self.progress);
+          },
+          onUpdate: (self) => {
+            target = self.progress;
+            if (!tick) tick = requestAnimationFrame(follow);
+          },
+        });
+
+        jump = (destination: number) => {
+          window.scrollTo({
+            top: trigger.start + (trigger.end - trigger.start) * destination,
+            behavior: 'instant',
+          });
+          settle(destination);
+        };
+
+        cross = (destination, finish) => {
+          const from = window.scrollY;
+          const low = Math.min(from, destination);
+          const high = Math.max(from, destination);
+          if (high <= trigger.start || low >= trigger.end) return false;
+          const forward = destination > from;
+          window.scrollTo({
+            top: forward ? trigger.end + 1 : Math.max(0, trigger.start - 1),
+            behavior: 'instant',
+          });
+          settle(forward ? 1 : 0);
+          requestAnimationFrame(finish);
+          return true;
+        };
+
+        const alignInitialHash = () => {
+          const target = demoStepTarget(window.location.hash);
+          if (target) jump?.(target.progress);
+        };
+
+        dispose = () => {
+          window.removeEventListener('load', alignInitialHash);
+          if (tick) cancelAnimationFrame(tick);
+          trigger.kill();
+          jump = undefined;
+          cross = undefined;
+          root.removeAttribute('data-ld-enhanced');
+          stageWindow.hidden = true;
+          steps.forEach((step) => step.removeAttribute('data-current'));
+          links.forEach((link) => link.removeAttribute('aria-current'));
+          fills.forEach((fill) => fill.style.removeProperty('transform'));
+        };
+
+        ScrollTrigger.refresh();
+        if (alignHash) {
+          if (document.readyState === 'complete') alignInitialHash();
+          else window.addEventListener('load', alignInitialHash, { once: true });
+        }
+      } catch {
+        // The enhancement is optional; without it the static steps stay readable.
+        dispose?.();
+        dispose = undefined;
+        buildStaticShots();
+      }
+    };
+
+    let resizeTimer: number | undefined;
+    const onResize = () => {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        if (root.hasAttribute('data-ld-shots')) buildStaticShots();
+      }, 150);
+    };
+
+    window.addEventListener('resize', onResize);
+    wide.addEventListener('change', () => void sync());
+    reducedMotion.addEventListener('change', () => void sync());
+    void sync();
+  }
+</script>
+
+<style>
+  .ld-section {
+    position: relative;
+    padding-top: 110px;
+  }
+
+  .ld-section__head {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(300px, 0.75fr);
+    gap: 72px;
+    align-items: end;
+  }
+
+  .ld-section__head h2 {
+    max-width: 850px;
+  }
+
+  .ld-section__intro {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 24px;
+    padding-bottom: 4px;
+  }
+
+  .ld-section__intro > p {
+    margin: 0;
+    color: var(--text);
+    font-size: 16px;
+    line-height: 1.7;
+  }
+
+  .ld-section__hint {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .ld-section__hint :global(.ico) {
+    color: var(--accent);
+  }
+
+  .ld-section__track {
+    position: relative;
+    margin-top: 68px;
+  }
+
+  .ld-section__bar {
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+  }
+
+  .ld-section__steps {
+    display: flex;
+    flex-direction: column;
+    gap: 56px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ld-section__step {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-width: 760px;
+    scroll-margin-top: calc(var(--nav-h) + 24px);
+  }
+
+  .ld-section__number {
+    margin: 0;
+    color: var(--accent);
+    font-size: 12px;
+  }
+
+  .ld-section__step h3 {
+    margin: 0;
+    color: var(--text-strong);
+    font-family: var(--font-display);
+    font-size: clamp(1.75rem, 2.6vw, 2.5rem);
+    font-stretch: var(--stretch-display);
+    font-weight: 900;
+    letter-spacing: -0.015em;
+    line-height: 0.98;
+    text-transform: uppercase;
+  }
+
+  .ld-section__body {
+    margin: 0;
+    color: var(--text);
+    font-size: 15px;
+    line-height: 1.7;
+  }
+
+  .ld-section__shot {
+    display: none;
+  }
+
+  .ld-section[data-ld-shots] .ld-section__shot {
+    display: block;
+    margin-top: 10px;
+  }
+
+  .ld-section__shot :global(.ld-section__window) {
+    aspect-ratio: 16 / 10;
+    width: 100%;
+  }
+
+  .ld-section__nav {
+    order: -1;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .ld-section__link {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
+    min-height: 52px;
+    padding: 0 12px;
+    overflow: hidden;
+    color: var(--text-muted);
+    box-shadow: inset 0 0 0 1px var(--border);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .ld-section__link .mono {
+    color: var(--text-faint);
+    font-size: 10.5px;
+    font-weight: 500;
+  }
+
+  .ld-section__link:hover,
+  .ld-section__link[aria-current='step'] {
+    background: var(--panel);
+    color: var(--text-strong);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+  }
+
+  .ld-section__link[aria-current='step'] .mono {
+    color: var(--accent);
+  }
+
+  .ld-section__fill {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    background: var(--accent-fill);
+    transform: scaleX(0);
+    transform-origin: left;
+  }
+
+  .ld-section__skip {
+    display: none;
+  }
+
+  .ld-section__stage {
+    display: none;
+  }
+
+  .ld-section__window {
+    position: relative;
+    overflow: hidden;
+    background: var(--bg-sunken);
+    box-shadow: inset 0 0 0 1px var(--console-edge);
+  }
+
+  .ld-section__window[hidden] {
+    display: none;
+  }
+
+  .ld-section__camera {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;
+  }
+
+  .ld-section__cursor,
+  .ld-section__ripple,
+  .ld-section__enter {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    opacity: 0;
+  }
+
+  .ld-section__cursor {
+    width: 22px;
+    height: 24px;
+    margin: -2px 0 0 -3px;
+    transform-origin: 3px 2px;
+    filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.45));
+  }
+
+  .ld-section__cursor path {
+    fill: #fff;
+    stroke: #141118;
+    stroke-width: 1.3;
+    stroke-linejoin: round;
+  }
+
+  .ld-section__ripple {
+    width: 36px;
+    height: 36px;
+    margin: -18px 0 0 -18px;
+    border: 2px solid var(--accent);
+    border-radius: 50%;
+  }
+
+  .ld-section__enter {
+    padding: 2px 6px;
+    background: var(--raised);
+    color: var(--text-muted);
+    box-shadow: inset 0 -1px 0 var(--border-strong);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+  }
+
+  .ld-section__keyboard {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 28px;
+    align-items: center;
+    margin: 72px 0 110px;
+    padding: 24px 28px;
+    background: var(--band);
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+
+  .ld-section__keys {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .ld-section__vim {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    margin-right: 6px;
+    padding: 0 12px;
+    background: var(--accent-fill);
+    color: var(--accent-on);
+    font-size: 10px;
+    font-weight: 800;
+  }
+
+  .ld-section__key {
+    display: grid;
+    place-items: center;
+    min-width: 42px;
+    height: 36px;
+    padding: 0 8px;
+    background: var(--raised);
+    color: var(--text);
+    box-shadow: inset 0 -3px 0 var(--border-strong);
+    font-size: 9px;
+  }
+
+  .ld-section__key--accent {
+    background: var(--accent-fill);
+    color: var(--accent-on);
+    box-shadow: inset 0 -3px 0 var(--accent-fill-deep);
+  }
+
+  .ld-section__keyboard-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .ld-section__keyboard-copy p {
+    margin: 0;
+  }
+
+  .ld-section__keyboard-copy > p:last-child {
+    max-width: 650px;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  /* Pinned and scrubbed: the six steps share one caption slot above the window. */
+  @media (min-width: 1181px) and (prefers-reduced-motion: no-preference) {
+    .ld-section[data-ld-enhanced] .ld-section__track {
+      /* About two and a half screens of scroll per step, so each action reads before the next. */
+      height: 1500vh;
+      height: 1500dvh;
+    }
+
+    .ld-section[data-ld-enhanced] .ld-section__sticky {
+      position: sticky;
+      top: var(--nav-h);
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      height: calc(100vh - var(--nav-h));
+      height: calc(100dvh - var(--nav-h));
+      padding: 24px 0 32px;
+      box-sizing: border-box;
+      overflow: hidden;
+    }
+
+    .ld-section[data-ld-enhanced] .ld-section__bar {
+      flex-direction: row;
+      align-items: flex-end;
+      gap: 48px;
+    }
+
+    .ld-section[data-ld-enhanced] .ld-section__steps {
+      display: grid;
+      flex: 0 0 min(560px, 42%);
+      gap: 0;
+    }
+
+    .ld-section[data-ld-enhanced] .ld-section__step {
+      grid-area: 1 / 1;
+      gap: 10px;
+      visibility: hidden;
+    }
+
+    .ld-section[data-ld-enhanced] .ld-section__step[data-current] {
+      visibility: visible;
+    }
+
+    .ld-section[data-ld-enhanced] .ld-section__step h3 {
+      font-size: clamp(1.6rem, 2.2vw, 2.15rem);
+    }
+
+    .ld-section[data-ld-enhanced] .ld-section__nav {
+      order: 0;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .ld-section[data-ld-enhanced] .ld-section__skip {
+      display: flex;
+      flex: none;
+      align-items: center;
+      gap: 6px;
+      min-height: 52px;
+      padding: 0 14px;
+      color: var(--text-muted);
+      box-shadow: inset 0 0 0 1px var(--border);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .ld-section[data-ld-enhanced] .ld-section__skip:hover {
+      background: var(--panel);
+      color: var(--text-strong);
+    }
+
+    .ld-section[data-ld-enhanced] .ld-section__stage {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      justify-content: center;
+      container-type: size;
+    }
+
+    .ld-section[data-ld-enhanced] .ld-section__stage .ld-section__window {
+      width: min(100cqw, 100cqh * 1.7022);
+      height: min(100cqh, 100cqw / 1.7022);
+    }
+  }
+
+  @media (max-width: 1180px) {
+    .ld-section__head {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 28px;
+    }
+
+    .ld-section__intro {
+      max-width: 680px;
+    }
+
+    .ld-section__keyboard {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .ld-section__keys {
+      grid-column: 1 / -1;
+    }
+  }
+
+  @media (max-width: 700px) {
+    .ld-section {
+      padding-top: 76px;
+    }
+
+    .ld-section__track {
+      margin-top: 42px;
+    }
+
+    .ld-section__nav {
+      display: flex;
+      margin-right: calc(var(--gutter) * -1);
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .ld-section__nav::-webkit-scrollbar {
+      display: none;
+    }
+
+    .ld-section__link {
+      min-width: 120px;
+      flex: 1 0 auto;
+    }
+
+    .ld-section__steps {
+      gap: 44px;
+    }
+
+    .ld-section__keyboard {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 22px;
+      margin-bottom: 76px;
+      padding: 22px;
+    }
+
+    .ld-section__keys {
+      flex-wrap: wrap;
+    }
+
+    .ld-section__vim {
+      min-height: 36px;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .ld-section__head h2 {
+      font-size: 2.5rem;
+    }
+
+    .ld-section__intro > p {
+      font-size: 15px;
+    }
+
+    .ld-section__body {
+      font-size: 14px;
+    }
+  }
+</style>

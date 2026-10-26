@@ -4,7 +4,6 @@ export const ko: Dictionary = {
   nav: {
     drivers: '드라이버',
     keyboard: '키보드',
-    governance: '거버넌스',
     compare: '비교',
     docs: '문서',
     about: '소개',
@@ -106,6 +105,46 @@ export const ko: Dictionary = {
     },
     drivers_label: '내장 드라이버',
     and_more: '그 외',
+    journey: {
+      eyebrow: '시각적 워크플로',
+      title: '데이터에서 결과까지. 우회 없이.',
+      body: '스크롤하면 DBFlux가 움직입니다. SQL 편집기를 열지 않고 테이블을 열고, 필터링하고, 값을 편집하고, 차트로 만들고, 감사 로그에서 변경 사항을 확인하세요.',
+      scroll_hint: '스크롤하여 살펴 보기',
+      nav_label: '제품 둘러보기 챕터',
+      skip: '데모 건너뛰기',
+      chapters: {
+        explore: {
+          nav: '탐색',
+          title: '두 번의 클릭으로 테이블 열기.',
+          body: '연결을 펼치고 테이블을 고르면 그리드가 로드됩니다. 먼저 쿼리를 작성할 필요가 없습니다.',
+        },
+        filter: {
+          nav: '필터',
+          title: '그리드를 떠나지 않고 필터링.',
+          body: '필터 바에 WHERE 절을 입력하고 새로 고치세요. 행이 그 자리에서 줄어듭니다.',
+        },
+        builder: {
+          nav: '빌드',
+          title: '만들고 있는 쿼리를 확인.',
+          body: 'Builder는 같은 필터를 열, 조건, 실시간 SQL 미리 보기로 보여 줍니다.',
+        },
+        edit: {
+          nav: '편집',
+          title: '셀을 편집하고 저장.',
+          body: '값을 더블 클릭해 바꾸세요. 저장할 때까지 변경 사항이 대기하므로 실수로 기록되는 일이 없습니다.',
+        },
+        chart: {
+          nav: '차트',
+          title: '내보내지 않고 차트로.',
+          body: '결과를 차트로 전환하면 DBFlux가 데이터 옆에 바로 그려 줍니다.',
+        },
+        audit: {
+          nav: '감사',
+          title: '모든 변경은 기록으로 남습니다.',
+          body: '감사 뷰어에 방금 저장한 업데이트와 실행한 사람, 걸린 시간이 표시됩니다.',
+        },
+      },
+    },
     core: {
       eyebrow: '드라이버 중립 코어',
       title: 'UI는 드라이버의 이름을 배우지 않습니다.',

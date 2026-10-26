@@ -4,7 +4,6 @@ export const zh_Hans: Dictionary = {
   nav: {
     drivers: '驱动',
     keyboard: '键盘',
-    governance: '治理',
     compare: '对比',
     docs: '文档',
     about: '关于',
@@ -105,6 +104,46 @@ export const zh_Hans: Dictionary = {
     },
     drivers_label: '内置驱动',
     and_more: '更多',
+    journey: {
+      eyebrow: '可视化工作流',
+      title: '从数据到完成。无需绕路。',
+      body: '滚动即可操作 DBFlux。打开表、筛选、编辑值、生成图表，并在审计日志中找到这次更改，全程无需打开 SQL 编辑器。',
+      scroll_hint: '滚动探索',
+      nav_label: '产品之旅章节',
+      skip: '跳过演示',
+      chapters: {
+        explore: {
+          nav: '探索',
+          title: '两次点击打开一张表。',
+          body: '展开连接，选中一张表，网格随即加载。无需先写查询。',
+        },
+        filter: {
+          nav: '筛选',
+          title: '不离开网格即可筛选。',
+          body: '在筛选栏输入 WHERE 子句并刷新，数据行就地收窄。',
+        },
+        builder: {
+          nav: '构建',
+          title: '看清正在构建的查询。',
+          body: 'Builder 以列、条件和实时 SQL 预览展示同一个筛选。',
+        },
+        edit: {
+          nav: '编辑',
+          title: '编辑单元格，然后保存。',
+          body: '双击一个值即可修改。更改会一直等待到你保存，不会意外写入。',
+        },
+        chart: {
+          nav: '图表',
+          title: '无需导出即可绘图。',
+          body: '将结果切换为图表，DBFlux 会在数据旁边直接绘制。',
+        },
+        audit: {
+          nav: '审计',
+          title: '每次更改都有记录。',
+          body: '审计查看器会列出你刚保存的更新、执行者以及耗时。',
+        },
+      },
+    },
     core: {
       eyebrow: '驱动中立的内核',
       title: '界面永远不会知道驱动的名字。',

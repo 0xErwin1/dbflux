@@ -4,7 +4,6 @@ export const en = {
   nav: {
     drivers: 'Drivers',
     keyboard: 'Keyboard',
-    governance: 'Governance',
     compare: 'Compare',
     docs: 'Docs',
     about: 'About',
@@ -106,6 +105,46 @@ export const en = {
     },
     drivers_label: 'Built-in drivers',
     and_more: 'and more',
+    journey: {
+      eyebrow: 'A visual workflow',
+      title: 'From data to done. Without the detour.',
+      body: 'Scroll to drive DBFlux. Open a table, filter it, edit a value, chart it and find the change in the audit log, all without opening the SQL editor.',
+      scroll_hint: 'Scroll to explore',
+      nav_label: 'Product journey chapters',
+      skip: 'Skip the demo',
+      chapters: {
+        explore: {
+          nav: 'Explore',
+          title: 'Open a table in two clicks.',
+          body: 'Expand a connection, pick a table and the grid loads. There is no query to write first.',
+        },
+        filter: {
+          nav: 'Filter',
+          title: 'Filter without leaving the grid.',
+          body: 'Type a WHERE clause in the filter bar and refresh. The rows narrow in place.',
+        },
+        builder: {
+          nav: 'Build',
+          title: 'See the query you are building.',
+          body: 'The Builder shows the same filter as columns, conditions and a live SQL preview.',
+        },
+        edit: {
+          nav: 'Edit',
+          title: 'Edit a cell, then save.',
+          body: 'Double-click a value to change it. The change waits until you save, so nothing is written by accident.',
+        },
+        chart: {
+          nav: 'Chart',
+          title: 'Chart it without exporting.',
+          body: 'Switch the result to a chart and DBFlux plots it next to your data.',
+        },
+        audit: {
+          nav: 'Audit',
+          title: 'Every change leaves a record.',
+          body: 'The audit viewer lists the update you just saved, who ran it and how long it took.',
+        },
+      },
+    },
     core: {
       eyebrow: 'Driver-neutral core',
       title: 'The UI never learns a driver’s name.',

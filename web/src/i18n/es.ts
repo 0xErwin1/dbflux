@@ -4,7 +4,6 @@ export const es: Dictionary = {
   nav: {
     drivers: 'Drivers',
     keyboard: 'Teclado',
-    governance: 'Gobernanza',
     compare: 'Comparar',
     docs: 'Documentación',
     about: 'Acerca de',
@@ -106,6 +105,46 @@ export const es: Dictionary = {
     },
     drivers_label: 'Drivers integrados',
     and_more: 'y más',
+    journey: {
+      eyebrow: 'Un flujo visual',
+      title: 'De los datos al resultado. Sin rodeos.',
+      body: 'Desplázate para manejar DBFlux. Abre una tabla, fíltrala, edita un valor, grafícala y encuentra el cambio en el registro de auditoría, todo sin abrir el editor SQL.',
+      scroll_hint: 'Desplázate para explorar',
+      nav_label: 'Capítulos del recorrido por el producto',
+      skip: 'Saltar la demo',
+      chapters: {
+        explore: {
+          nav: 'Explorar',
+          title: 'Abre una tabla en dos clics.',
+          body: 'Expande una conexión, elige una tabla y la grilla se carga. No hace falta escribir una consulta antes.',
+        },
+        filter: {
+          nav: 'Filtrar',
+          title: 'Filtra sin salir de la grilla.',
+          body: 'Escribe una cláusula WHERE en la barra de filtros y actualiza. Las filas se reducen en el mismo lugar.',
+        },
+        builder: {
+          nav: 'Construir',
+          title: 'Mira la consulta que estás armando.',
+          body: 'El Builder muestra el mismo filtro como columnas, condiciones y una vista previa del SQL en vivo.',
+        },
+        edit: {
+          nav: 'Editar',
+          title: 'Edita una celda y guarda.',
+          body: 'Haz doble clic en un valor para cambiarlo. El cambio espera hasta que guardas, así nada se escribe por accidente.',
+        },
+        chart: {
+          nav: 'Graficar',
+          title: 'Grafícalo sin exportar.',
+          body: 'Cambia el resultado a un gráfico y DBFlux lo dibuja junto a tus datos.',
+        },
+        audit: {
+          nav: 'Auditoría',
+          title: 'Cada cambio deja un registro.',
+          body: 'El visor de auditoría muestra la actualización que acabas de guardar, quién la ejecutó y cuánto tardó.',
+        },
+      },
+    },
     core: {
       eyebrow: 'Núcleo neutral',
       title: 'La interfaz nunca aprende el nombre de un driver.',
