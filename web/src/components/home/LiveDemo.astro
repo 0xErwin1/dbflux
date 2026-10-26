@@ -116,6 +116,9 @@ const steps = DEMO_STEPS.map((step, index) => ({
     type DemoStepId,
   } from '../../lib/live-demo';
 
+  /** How long the window takes to catch up most of the way to the scroll position. */
+  const SMOOTHING_MS = 220;
+
   /** The elements one copy of the window exposes to the frame renderer. */
   interface WindowNodes {
     window: HTMLElement;
@@ -445,11 +448,38 @@ const steps = DEMO_STEPS.map((step, index) => ({
         const nodes = collect(stageWindow);
         let anchors = DEFAULT_DEMO_ANCHORS;
         let progress = 0;
+        let target = 0;
+        let lastTick = 0;
+        let tick = 0;
 
         const draw = () => {
           const time = demoTime(progress);
           render(nodes, demoFrame(time, anchors, viewOf(nodes)));
           markStep(time);
+        };
+
+        /**
+         * The window trails the scroll position by a short ease, so a fast flick
+         * plays its steps instead of skipping them. At rest it always lands on
+         * the frame for the current scroll position.
+         */
+        const follow = (now: number) => {
+          const elapsed = lastTick ? Math.min(now - lastTick, 64) : 16;
+          lastTick = now;
+          progress += (target - progress) * (1 - Math.exp(-elapsed / SMOOTHING_MS));
+          if (Math.abs(target - progress) < 0.00005) progress = target;
+          draw();
+          tick = progress === target ? 0 : requestAnimationFrame(follow);
+          if (!tick) lastTick = 0;
+        };
+
+        const settle = (value: number) => {
+          if (tick) cancelAnimationFrame(tick);
+          tick = 0;
+          lastTick = 0;
+          target = value;
+          progress = value;
+          draw();
         };
 
         const trigger = ScrollTrigger.create({
@@ -460,20 +490,20 @@ const steps = DEMO_STEPS.map((step, index) => ({
           invalidateOnRefresh: true,
           onRefresh: (self) => {
             anchors = measure(nodes);
-            progress = self.progress;
-            draw();
+            settle(self.progress);
           },
           onUpdate: (self) => {
-            progress = self.progress;
-            draw();
+            target = self.progress;
+            if (!tick) tick = requestAnimationFrame(follow);
           },
         });
 
-        jump = (target: number) => {
+        jump = (destination: number) => {
           window.scrollTo({
-            top: trigger.start + (trigger.end - trigger.start) * target,
+            top: trigger.start + (trigger.end - trigger.start) * destination,
             behavior: 'instant',
           });
+          settle(destination);
         };
 
         const alignInitialHash = () => {
@@ -483,6 +513,7 @@ const steps = DEMO_STEPS.map((step, index) => ({
 
         dispose = () => {
           window.removeEventListener('load', alignInitialHash);
+          if (tick) cancelAnimationFrame(tick);
           trigger.kill();
           jump = undefined;
           root.removeAttribute('data-ld-enhanced');
@@ -815,8 +846,9 @@ const steps = DEMO_STEPS.map((step, index) => ({
   /* Pinned and scrubbed: the six steps share one caption slot above the window. */
   @media (min-width: 1181px) and (prefers-reduced-motion: no-preference) {
     .ld-section[data-ld-enhanced] .ld-section__track {
-      height: 600vh;
-      height: 600dvh;
+      /* About two and a half screens of scroll per step, so each action reads before the next. */
+      height: 1500vh;
+      height: 1500dvh;
     }
 
     .ld-section[data-ld-enhanced] .ld-section__sticky {
