@@ -4,7 +4,6 @@ export const es: Dictionary = {
   nav: {
     drivers: 'Drivers',
     keyboard: 'Teclado',
-    governance: 'Gobernanza',
     compare: 'Comparar',
     docs: 'Documentación',
     about: 'Acerca de',

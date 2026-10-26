@@ -4,7 +4,6 @@ export const en = {
   nav: {
     drivers: 'Drivers',
     keyboard: 'Keyboard',
-    governance: 'Governance',
     compare: 'Compare',
     docs: 'Docs',
     about: 'About',

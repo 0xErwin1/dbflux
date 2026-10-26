@@ -138,7 +138,6 @@ export interface Dictionary {
   nav: {
     drivers: string;
     keyboard: string;
-    governance: string;
     compare: string;
     docs: string;
     about: string;

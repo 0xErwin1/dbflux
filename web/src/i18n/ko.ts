@@ -4,7 +4,6 @@ export const ko: Dictionary = {
   nav: {
     drivers: '드라이버',
     keyboard: '키보드',
-    governance: '거버넌스',
     compare: '비교',
     docs: '문서',
     about: '소개',

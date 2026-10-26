@@ -4,7 +4,6 @@ export const zh_Hans: Dictionary = {
   nav: {
     drivers: '驱动',
     keyboard: '键盘',
-    governance: '治理',
     compare: '对比',
     docs: '文档',
     about: '关于',
