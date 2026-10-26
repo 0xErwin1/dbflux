@@ -47,7 +47,7 @@ DBFlux 通过 `interprocess` 使用本地 Socket：
 消息帧格式如下：
 
 - 4 字节小端序长度（`u32`）
-- bincode 载荷
+- postcard 载荷
 
 最大消息大小：`16 MiB`。
 

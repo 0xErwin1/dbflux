@@ -115,7 +115,7 @@ flowchart TB
 - 界面：`gpui`、`gpui-component`（Cargo.toml）。
 - 数据库：`tokio-postgres`（PostgreSQL）、`rusqlite`（SQLite）、`mysql`（MySQL/MariaDB）、`mongodb`（MongoDB）、`redis`（Redis）、`aws-sdk-dynamodb`（DynamoDB），以及基于 `reqwest` 的 HTTP（ClickHouse）（Cargo.toml）。
 - AWS 认证/集成：`aws-config`、`aws-sdk-sso`、`aws-sdk-ssooidc`、`aws-sdk-sts`、`aws-sdk-secretsmanager`、`aws-sdk-ssm`（`dbflux_aws`）。
-- IPC/RPC：`interprocess` 本地 Socket + `bincode` 消息分帧（`dbflux_ipc`、`dbflux_driver_ipc`、`dbflux_driver_host`）。
+- IPC/RPC：`interprocess` 本地 Socket + `postcard` 消息分帧（`dbflux_ipc`、`dbflux_driver_ipc`、`dbflux_driver_host`）。
 - SSH：经由 `dbflux_ssh` 使用 `ssh2`（crates/dbflux_ssh/src/lib.rs）。
 - 导出：经由 `dbflux_export` 使用 `csv` + `hex` + `base64` + `serde_json`（crates/dbflux_export/src/lib.rs）。
 - 序列化/配置：`serde`、`serde_json`、`dirs`（Cargo.toml）。
@@ -439,7 +439,7 @@ crates/
     src/envelope.rs         # ProtocolVersion + 应用/驱动程序协议常量
     src/protocol.rs         # 单实例应用控制消息
     src/driver_protocol.rs  # 驱动程序 RPC 请求/响应结构（DTO + 错误）
-    src/framing.rs          # 长度前缀的 bincode 传输分帧
+    src/framing.rs          # 长度前缀的 postcard 传输分帧
     src/socket.rs           # 跨平台 Socket 命名辅助函数
   dbflux_driver_ipc/        # 面向外部 RPC 服务的 DbDriver 适配器
     src/driver.rs           # IpcDriver + 受管宿主进程生命周期

@@ -115,7 +115,7 @@ flowchart TB
 - UI: `gpui`, `gpui-component` (Cargo.toml).
 - 데이터베이스: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis), `aws-sdk-dynamodb` (DynamoDB), 그리고 `reqwest`를 통한 HTTP (ClickHouse) (Cargo.toml).
 - AWS 인증/통합: `aws-config`, `aws-sdk-sso`, `aws-sdk-ssooidc`, `aws-sdk-sts`, `aws-sdk-secretsmanager`, `aws-sdk-ssm` (`dbflux_aws`).
-- IPC/RPC: `interprocess` 로컬 소켓 + `bincode` 메시지 프레이밍 (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
+- IPC/RPC: `interprocess` 로컬 소켓 + `postcard` 메시지 프레이밍 (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
 - SSH: `dbflux_ssh`를 통한 `ssh2` (crates/dbflux_ssh/src/lib.rs).
 - 내보내기: `dbflux_export`를 통한 `csv` + `hex` + `base64` + `serde_json` (crates/dbflux_export/src/lib.rs).
 - 직렬화/설정: `serde`, `serde_json`, `dirs` (Cargo.toml).
@@ -438,7 +438,7 @@ crates/
     src/envelope.rs         # ProtocolVersion + 앱/드라이버 프로토콜 상수
     src/protocol.rs         # 단일 인스턴스 앱 제어 메시지
     src/driver_protocol.rs  # 드라이버 RPC 요청/응답 스키마 (DTO + 오류)
-    src/framing.rs          # 길이 접두사 bincode 전송 프레이밍
+    src/framing.rs          # 길이 접두사 postcard 전송 프레이밍
     src/socket.rs           # 크로스 플랫폼 소켓 이름 지정 헬퍼
   dbflux_driver_ipc/        # 외부 RPC 서비스를 위한 DbDriver 어댑터
     src/driver.rs           # IpcDriver + 관리형 호스트 수명 주기
