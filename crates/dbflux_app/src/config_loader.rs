@@ -1576,6 +1576,15 @@ fn load_hook_bindings_from_dtos(
     result
 }
 
+/// `load_profiles` has no error channel, so a stored value reference that cannot be
+/// rebuilt is skipped while the rest of the profile still loads. The warning keeps that
+/// skip visible; it names the field but never a stored value.
+fn warn_dropped_value_ref(profile_id: &str, ref_key: &str, kind: &str, missing: &str) {
+    log::warn!(
+        "Skipping {kind} value reference for field '{ref_key}' of connection profile {profile_id}: the stored row has no {missing}"
+    );
+}
+
 fn load_profiles(
     repo: &dbflux_storage::repositories::connection_profiles::ConnectionProfileRepository,
 ) -> Vec<ConnectionProfile> {
@@ -1626,22 +1635,34 @@ fn load_profiles(
                             }
                         }
                         dbflux_storage::repositories::connection_profile_value_refs::RefKind::Dotenv => {
+                            let Some(key) = vr.env_key else {
+                                warn_dropped_value_ref(profile_id, &vr.ref_key, "dotenv", "key");
+                                return None;
+                            };
                             ValueRef::Dotenv {
                                 path: vr.ref_value,
-                                key: vr.env_key?,
+                                key,
                             }
                         }
                         dbflux_storage::repositories::connection_profile_value_refs::RefKind::Secret => {
+                            let Some(provider) = vr.ref_provider else {
+                                warn_dropped_value_ref(profile_id, &vr.ref_key, "secret", "provider");
+                                return None;
+                            };
                             ValueRef::Secret {
                                 locator: vr.secret_locator.unwrap_or(vr.ref_value),
-                                provider: vr.ref_provider?,
+                                provider,
                                 json_key: vr.ref_json_key,
                             }
                         }
                         dbflux_storage::repositories::connection_profile_value_refs::RefKind::Param => {
+                            let Some(provider) = vr.ref_provider else {
+                                warn_dropped_value_ref(profile_id, &vr.ref_key, "parameter", "provider");
+                                return None;
+                            };
                             ValueRef::Parameter {
                                 name: vr.param_name.unwrap_or(vr.ref_value),
-                                provider: vr.ref_provider?,
+                                provider,
                                 json_key: vr.ref_json_key,
                             }
                         }
@@ -2487,6 +2508,42 @@ mod tests {
             Some(dbflux_core::ValueRef::Dotenv { path, key })
                 if path == "~/.config/dbflux/prod.env" && key == "DB_PASSWORD"
         ));
+        assert!(matches!(
+            reloaded.value_refs.get("user"),
+            Some(dbflux_core::ValueRef::Env { key }) if key == "DB_USER"
+        ));
+    }
+
+    #[test]
+    fn dotenv_value_ref_without_a_key_is_skipped_and_the_profile_still_loads() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut profile = ConnectionProfile::new("sourced", DbConfig::default_postgres());
+        profile.value_refs.insert(
+            "password".to_string(),
+            dbflux_core::ValueRef::dotenv("~/.config/dbflux/prod.env", "DB_PASSWORD"),
+        );
+        profile
+            .value_refs
+            .insert("user".to_string(), dbflux_core::ValueRef::env("DB_USER"));
+        save_profiles(&runtime, std::slice::from_ref(&profile)).expect("save sourced profile");
+
+        let conn = runtime.open_dbflux_db().expect("open runtime database");
+        let updated = conn
+            .execute(
+                "UPDATE cfg_connection_profile_value_refs SET env_key = NULL WHERE profile_id = ?1 AND ref_key = 'password'",
+                [profile.id.to_string()],
+            )
+            .expect("corrupt the dotenv row");
+        assert_eq!(updated, 1);
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let reloaded = loaded
+            .iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("profile still loads");
+
+        assert!(!reloaded.value_refs.contains_key("password"));
         assert!(matches!(
             reloaded.value_refs.get("user"),
             Some(dbflux_core::ValueRef::Env { key }) if key == "DB_USER"

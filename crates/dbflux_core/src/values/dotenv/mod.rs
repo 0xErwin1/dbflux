@@ -84,8 +84,26 @@ fn resolve_path(path: &str) -> Result<PathBuf, DbError> {
     Ok(candidate)
 }
 
+/// Opening a FIFO for reading blocks until a writer appears, which would hang the
+/// resolver before the regular-file check could reject it. `O_NONBLOCK` makes that open
+/// return at once; it has no effect on reads from a regular file.
+#[cfg(unix)]
+fn open_without_blocking(path: &PathBuf) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_without_blocking(path: &PathBuf) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
+}
+
 fn read_file(display_path: &str, path: &PathBuf) -> Result<SecretString, DbError> {
-    let file = std::fs::File::open(path).map_err(|io_error| match io_error.kind() {
+    let file = open_without_blocking(path).map_err(|io_error| match io_error.kind() {
         std::io::ErrorKind::NotFound => {
             error(format!("Dotenv file '{display_path}' does not exist"))
         }

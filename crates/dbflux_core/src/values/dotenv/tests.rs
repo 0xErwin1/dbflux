@@ -160,6 +160,40 @@ fn missing_file_and_bad_paths_fail_visibly() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_fifo_is_rejected_without_blocking() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let fifo = directory.path().join("pipe.env");
+    let status = std::process::Command::new("mkfifo")
+        .arg("-m")
+        .arg("600")
+        .arg(&fifo)
+        .status()
+        .expect("run mkfifo");
+    assert!(status.success(), "mkfifo failed: {status}");
+
+    let fifo = fifo.to_string_lossy().into_owned();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn({
+        let fifo = fifo.clone();
+        move || {
+            if sender.send(read_dotenv_value(&fifo, "KEY")).is_err() {
+                eprintln!("fifo read finished after the test gave up");
+            }
+        }
+    });
+
+    let result = receiver
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("reading a FIFO without a writer must not block");
+
+    assert_eq!(
+        error_message(result),
+        format!("Dotenv file '{fifo}' is not a regular file")
+    );
+}
+
 #[test]
 fn oversized_files_and_too_many_entries_are_rejected() {
     let directory = tempfile::tempdir().expect("tempdir");
