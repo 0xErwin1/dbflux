@@ -18,8 +18,10 @@ with the [Driver RPC Protocol](DRIVER_RPC_PROTOCOL.md).
 | Timeouts, cancellation, caching and invalidation | A hosted control plane |
 | Optional forwarding of auth-profile credentials | |
 
-The contract is read-only. DBFlux never sends a secret value to a provider and has no
-method to create, update or delete one.
+The contract is read-only: it has no method to create, update or delete a secret, and DBFlux
+never sends a provider the value it asks for. The one secret DBFlux can send is the
+connection's resolved auth-profile credentials, and only to a provider whose manifest declares
+`auth_profile_dependency` as `optional` or `required` (see [Credential dependency](#credential-dependency)).
 
 ## Quick path
 
@@ -48,7 +50,7 @@ with the reserved ids `aws-secrets-manager` and `aws-ssm`, and keep working unch
 |---|---|
 | Socket name | `dbflux-secret-provider-<socket_id>.sock`, or `dbflux-secret-provider-<socket_id>-debug.sock` from a debug build |
 | Namespace | Platform local sockets, as for drivers (abstract Unix socket, `/tmp/` Unix socket, or named pipe) |
-| Framing | 4-byte little-endian `u32` length, then a bincode payload; 16 MiB maximum |
+| Framing | 4-byte little-endian `u32` length, then a postcard payload; 16 MiB maximum |
 | Connections | One connection per request: DBFlux connects, sends one envelope, reads one response, closes |
 | Auth token | Sent in `Hello.auth_token`; a managed host receives it in `DBFLUX_SECRET_PROVIDER_RPC_AUTH_TOKEN` |
 
@@ -217,8 +219,10 @@ recovery hint "Unlock or restart the secret provider, then reconnect".
   `[REDACTED]` for the value, the forwarded credentials and the auth token.
 - Provider error messages are sanitized before display: control characters are stripped and
   the message is cut at 512 characters.
-- Every failed request carries a UUID v7 correlation id that ties the user-facing error to
-  the audit trail without exposing the value.
+- Every failed request carries a UUID v7 correlation id in the user-facing error message,
+  without exposing the value. A failed exchange with the provider also writes the id to a
+  warning log line; a request rejected before the exchange carries the id in the error only.
+  The RPC client does not write the id to audit events.
 - A provider must never put a secret value in an error message.
 
 ## Host lifecycle
@@ -229,7 +233,8 @@ recovery hint "Unlock or restart the secret provider, then reconnect".
 | No `command`, no `args` | Unmanaged: DBFlux expects the provider to be running already |
 | No `command`, `args` set | Rejected; there is no default host for secret providers |
 | Managed host exited | Relaunched on the next request |
-| DBFlux shutdown | Managed hosts that DBFlux spawned are terminated; unmanaged providers are left alone |
+| DBFlux app shutdown | Managed hosts that the app spawned are terminated; unmanaged providers are left alone |
+| `dbflux mcp` exit | Managed hosts that the MCP server spawned are not terminated and keep running, as with auth-provider hosts |
 
 ## Registration
 

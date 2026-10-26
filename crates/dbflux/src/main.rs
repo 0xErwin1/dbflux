@@ -813,24 +813,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     loop {
         if start.elapsed() > TOTAL_SHUTDOWN_TIMEOUT {
             log::error!("Shutdown exceeded total timeout, forcing quit");
-            let stopped = shutdown_managed_hosts();
-            if stopped > 0 {
-                info!("Stopped {} managed RPC host process(es)", stopped);
-            }
-            let auth_stopped = shutdown_managed_auth_provider_hosts();
-            if auth_stopped > 0 {
-                info!(
-                    "Stopped {} managed auth-provider host process(es)",
-                    auth_stopped
-                );
-            }
-            let secret_stopped = shutdown_managed_secret_provider_hosts();
-            if secret_stopped > 0 {
-                info!(
-                    "Stopped {} managed secret-provider host process(es)",
-                    secret_stopped
-                );
-            }
+            shutdown_all_managed_hosts();
             cx.update(|cx| cx.quit());
             return;
         }
@@ -862,24 +845,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     loop {
         if start.elapsed() > TOTAL_SHUTDOWN_TIMEOUT {
             log::error!("Shutdown exceeded total timeout, forcing quit");
-            let stopped = shutdown_managed_hosts();
-            if stopped > 0 {
-                info!("Stopped {} managed RPC host process(es)", stopped);
-            }
-            let auth_stopped = shutdown_managed_auth_provider_hosts();
-            if auth_stopped > 0 {
-                info!(
-                    "Stopped {} managed auth-provider host process(es)",
-                    auth_stopped
-                );
-            }
-            let secret_stopped = shutdown_managed_secret_provider_hosts();
-            if secret_stopped > 0 {
-                info!(
-                    "Stopped {} managed secret-provider host process(es)",
-                    secret_stopped
-                );
-            }
+            shutdown_all_managed_hosts();
             cx.update(|cx| cx.quit());
             return;
         }
@@ -959,6 +925,16 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
         });
     });
 
+    shutdown_all_managed_hosts();
+
+    cx.update(|cx| {
+        cx.quit();
+    });
+}
+
+/// Every forced and orderly exit path goes through here, so a new managed host kind is
+/// stopped on all of them.
+fn shutdown_all_managed_hosts() {
     let stopped = shutdown_managed_hosts();
     if stopped > 0 {
         info!("Stopped {} managed RPC host process(es)", stopped);
@@ -973,15 +949,10 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     }
 
     let secret_stopped = shutdown_managed_secret_provider_hosts();
-
     if secret_stopped > 0 {
         info!(
             "Stopped {} managed secret-provider host process(es)",
             secret_stopped
         );
     }
-
-    cx.update(|cx| {
-        cx.quit();
-    });
 }
