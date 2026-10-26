@@ -1,4 +1,8 @@
 pub(crate) mod external_audit;
+mod secret_provider;
+
+pub use secret_provider::{ExternalSecretProviderDiagnostic, ExternalSecretProviderStage};
+pub(crate) use secret_provider::{SecretProviderServiceAdaptation, adapt_secret_provider_service};
 
 use dbflux_core::{
     DbDriver, DbError, DbKind, DriverFormDef, DriverMetadata, RpcServiceKind, ServiceConfig,
@@ -7,6 +11,7 @@ use dbflux_core::{
 use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use dbflux_ipc::{
     AUTH_PROVIDER_RPC_API_CONTRACT, ExternalAuditEmitter, IpcServiceLaunchConfig, RpcAuthProvider,
+    RpcSecretProvider,
 };
 use std::sync::Arc;
 
@@ -18,6 +23,7 @@ pub(crate) type DriverProbe = (DbKind, DriverMetadata, DriverFormDef, Option<Dri
 enum RpcServiceLaunch {
     Driver(IpcDriverLaunchConfig),
     AuthProvider(IpcServiceLaunchConfig),
+    SecretProvider(IpcServiceLaunchConfig),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -315,6 +321,15 @@ fn build_service_launch_config(
             config.startup_timeout_ms,
         )
         .map(|launch| launch.map(RpcServiceLaunch::AuthProvider))
+        .map_err(Box::new),
+        RpcServiceKind::SecretProvider => RpcSecretProvider::build_launch_config(
+            &config.socket_id,
+            config.command.as_deref(),
+            &config.args,
+            &config.env,
+            config.startup_timeout_ms,
+        )
+        .map(|launch| launch.map(RpcServiceLaunch::SecretProvider))
         .map_err(Box::new),
     }
 }

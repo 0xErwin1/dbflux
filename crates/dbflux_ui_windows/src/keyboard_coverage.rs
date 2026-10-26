@@ -108,6 +108,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::ColumnRight),
         ),
         (
+            "seg-ctl-item-secret_provider",
+            KeyboardPath::Command(Command::ColumnRight),
+        ),
+        (
             "seg-ctl-item-driver",
             KeyboardPath::Command(Command::ColumnRight),
         ),

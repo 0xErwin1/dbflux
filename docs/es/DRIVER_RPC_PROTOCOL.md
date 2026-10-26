@@ -3,11 +3,14 @@
 Este documento define cómo DBFlux descubre, lanza y se comunica con servicios
 RPC a través de IPC local.
 
-DBFlux ahora activa dos familias de servicios en runtime:
+DBFlux ahora activa tres familias de servicios en runtime:
 
 - `RpcServiceKind::Driver` -> drivers de base de datos en runtime
 - `RpcServiceKind::AuthProvider` -> registros de auth-provider en runtime, en la
   app y en el servidor MCP
+- `RpcServiceKind::SecretProvider` -> secret providers en runtime en el value
+  resolver de cada conexión; ver
+  [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md)
 
 ## Fuente de verdad
 

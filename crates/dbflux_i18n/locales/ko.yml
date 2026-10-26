@@ -4894,6 +4894,7 @@ settings:
     kind:
       driver: 드라이버
       auth_provider: 인증 공급자
+      secret_provider: 시크릿 공급자
     action:
       add_variable: "변수 추가"
       add_argument: "인수 추가"

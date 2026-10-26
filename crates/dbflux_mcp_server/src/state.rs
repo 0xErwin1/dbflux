@@ -7,13 +7,17 @@ use tokio::sync::{Mutex, RwLock};
 #[cfg(feature = "mysql")]
 use dbflux_core::DbKind;
 use dbflux_core::auth::DynAuthProvider;
+use dbflux_core::values::DynSecretProvider;
 use dbflux_core::{
     AccessKind, AuthProfileManager, CancelToken, ConnectionMcpGovernance,
     ConnectionMcpPolicyBinding, ConnectionProfile, DbDriver, DetachedProcessHandle, DriverKey,
     FormValues, GovernanceSettings, KeyringSecretStore, ProfileManager, RpcServiceKind,
     SecretManager, ServiceConfig, ValueRef,
 };
-use dbflux_ipc::{AUTH_PROVIDER_RPC_API_CONTRACT, RpcAuthProvider};
+use dbflux_ipc::{
+    AUTH_PROVIDER_RPC_API_CONTRACT, BUILT_IN_SECRET_PROVIDER_IDS, RpcAuthProvider,
+    RpcSecretProvider, SECRET_PROVIDER_RPC_API_CONTRACT,
+};
 use dbflux_mcp::{
     McpGovernanceService, McpRuntime, PolicyRoleDto, ToolPolicyDto, TrustedClientDto,
     builtin_policies, builtin_roles,
@@ -238,6 +242,9 @@ pub struct ServerState {
     pub auth_profile_manager: Arc<RwLock<AuthProfileManager>>,
     pub driver_registry: Arc<HashMap<String, Arc<dyn DbDriver>>>,
     pub auth_provider_registry: Arc<HashMap<String, Arc<dyn DynAuthProvider>>>,
+    /// External secret providers discovered from RPC services, registered into every
+    /// connection resolver.
+    pub secret_provider_registry: Arc<HashMap<String, Arc<dyn DynSecretProvider>>>,
     pub driver_settings: Arc<HashMap<DriverKey, FormValues>>,
     pub connection_cache: Arc<RwLock<ConnectionCache>>,
     pub connection_setup_lock: Arc<Mutex<HashMap<String, std::sync::Weak<Mutex<()>>>>>,
@@ -273,6 +280,7 @@ impl ServerState {
             ProfileManager::with_profiles_and_errors(profiles, profile_load_errors);
         let driver_registry = build_driver_registry();
         let auth_provider_registry = build_auth_provider_registry(&services);
+        let secret_provider_registry = build_secret_provider_registry(&services);
         let auth_profile_manager =
             build_auth_profile_manager(stored_auth_profiles, &auth_provider_registry);
         let driver_settings = Arc::new(load_driver_settings(&storage_runtime)?);
@@ -285,6 +293,7 @@ impl ServerState {
             auth_profile_manager: Arc::new(RwLock::new(auth_profile_manager)),
             driver_registry: Arc::new(driver_registry),
             auth_provider_registry: Arc::new(auth_provider_registry),
+            secret_provider_registry: Arc::new(secret_provider_registry),
             driver_settings,
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
             connection_setup_lock: Arc::new(Mutex::new(HashMap::new())),
@@ -1755,6 +1764,84 @@ fn validate_auth_provider_contract(service: &ServiceConfig) -> Result<(), String
     Ok(())
 }
 
+/// Probes every enabled secret-provider service; built-in AWS providers are registered per
+/// connection by their auth provider, so they never enter this map and their ids are reserved.
+fn build_secret_provider_registry(
+    services: &[ServiceConfig],
+) -> HashMap<String, Arc<dyn DynSecretProvider>> {
+    let mut registry: HashMap<String, Arc<dyn DynSecretProvider>> = HashMap::new();
+
+    for service in services {
+        if !service.enabled || service.kind != RpcServiceKind::SecretProvider {
+            continue;
+        }
+
+        match load_external_secret_provider(service) {
+            Ok(provider) => {
+                let provider_id = provider.provider_id().to_string();
+                if registry.contains_key(&provider_id) {
+                    log::warn!(
+                        "Skipping RPC secret-provider service '{}': provider id '{}' already exists",
+                        service.socket_id,
+                        provider_id
+                    );
+                    continue;
+                }
+
+                registry.insert(provider_id, provider);
+            }
+            Err(message) => {
+                log::warn!(
+                    "Skipping RPC secret-provider service '{}': {}",
+                    service.socket_id,
+                    message
+                );
+            }
+        }
+    }
+
+    registry
+}
+
+fn load_external_secret_provider(
+    service: &ServiceConfig,
+) -> Result<Arc<dyn DynSecretProvider>, String> {
+    validate_secret_provider_contract(service)?;
+
+    let launch = RpcSecretProvider::build_launch_config(
+        &service.socket_id,
+        service.command.as_deref(),
+        &service.args,
+        &service.env,
+        service.startup_timeout_ms,
+    )
+    .map_err(|error| error.to_string())?;
+
+    RpcSecretProvider::probe(&service.socket_id, launch, &BUILT_IN_SECRET_PROVIDER_IDS)
+        .map(|provider| Arc::new(provider) as Arc<dyn DynSecretProvider>)
+        .map_err(|error| error.to_string())
+}
+
+fn validate_secret_provider_contract(service: &ServiceConfig) -> Result<(), String> {
+    let contract = service.resolved_api_contract();
+
+    if contract.family != "secret_provider_rpc" {
+        return Err(format!(
+            "secret-provider service declares incompatible RPC family '{}'",
+            contract.family
+        ));
+    }
+
+    if contract.major != SECRET_PROVIDER_RPC_API_CONTRACT.version.major {
+        return Err(format!(
+            "secret-provider service declares incompatible RPC major version {}",
+            contract.major
+        ));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2239,6 +2326,66 @@ mod tests {
 
         let registry = build_auth_provider_registry(&services);
         assert!(!registry.contains_key("bad-auth"));
+    }
+
+    fn unreachable_service(socket_id: &str, kind: RpcServiceKind) -> ServiceConfig {
+        ServiceConfig {
+            socket_id: socket_id.to_string(),
+            enabled: true,
+            command: None,
+            args: Vec::new(),
+            env: HashMap::new(),
+            startup_timeout_ms: None,
+            kind,
+            api_contract: None,
+        }
+    }
+
+    #[test]
+    fn secret_provider_service_is_not_treated_as_auth_provider() {
+        let socket_id = format!("mcp-secret-{}", uuid::Uuid::new_v4().simple());
+        let services = vec![unreachable_service(
+            &socket_id,
+            RpcServiceKind::SecretProvider,
+        )];
+
+        let auth_registry = build_auth_provider_registry(&services);
+        let external_auth_ids: Vec<&String> = auth_registry
+            .keys()
+            .filter(|provider_id| !provider_id.starts_with("aws-"))
+            .collect();
+
+        assert!(
+            external_auth_ids.is_empty(),
+            "secret-provider services must never be probed as auth providers: {external_auth_ids:?}"
+        );
+    }
+
+    #[test]
+    fn auth_and_driver_services_are_not_treated_as_secret_providers() {
+        let services = vec![
+            unreachable_service("mcp-auth-only", RpcServiceKind::AuthProvider),
+            unreachable_service("mcp-driver-only", RpcServiceKind::Driver),
+        ];
+
+        assert!(build_secret_provider_registry(&services).is_empty());
+    }
+
+    #[test]
+    fn build_secret_provider_registry_skips_incompatible_and_unreachable_services() {
+        let mut incompatible = unreachable_service("bad-secret", RpcServiceKind::SecretProvider);
+        incompatible.api_contract = Some(dbflux_core::ServiceRpcApiContract::new(
+            "auth_provider_rpc",
+            1,
+            0,
+        ));
+        let unreachable = unreachable_service(
+            &format!("mcp-secret-{}", uuid::Uuid::new_v4().simple()),
+            RpcServiceKind::SecretProvider,
+        );
+
+        assert!(validate_secret_provider_contract(&incompatible).is_err());
+        assert!(build_secret_provider_registry(&[incompatible, unreachable]).is_empty());
     }
 
     #[tokio::test]
