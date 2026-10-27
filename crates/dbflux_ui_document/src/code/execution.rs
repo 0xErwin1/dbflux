@@ -843,6 +843,7 @@ impl CodeDocument {
             connection_id: conn_id,
             context: session_context.clone(),
             exec_ctx: exec_ctx.clone(),
+            language: self.effective_language().clone(),
         };
 
         if on_session {
@@ -2099,7 +2100,7 @@ impl CodeDocument {
             dbflux_core::count_query_from_sql(&query),
             origin.context.database.clone(),
             &origin.exec_ctx,
-            self.effective_language().clone(),
+            origin.language.clone(),
             count_row_limit,
         );
         let task = self.execute_in_result_context(origin.context, request, cx);
@@ -2161,7 +2162,7 @@ impl CodeDocument {
             query,
             origin.context.database.clone(),
             &origin.exec_ctx,
-            self.effective_language().clone(),
+            origin.language.clone(),
             row_limit,
         );
         let task = self.execute_in_result_context(origin.context, request, cx);
