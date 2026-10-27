@@ -1,0 +1,20 @@
+{
+  "title": "DBFlux redesign: D3 Bolt: the bolt as geometry",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Explorations, row \"D3 Bolt: the bolt as geometry\".",
+  "artboards": [
+    {
+      "file": "01-d3-app.html",
+      "title": "D3 Bolt / app",
+      "tradeoff": "D3 Bolt: the bolt as chamfered geometry and expanded uppercase labels; strongest brand, highest risk of fatigue.",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "02-d3-web.html",
+      "title": "D3 Bolt / web",
+      "tradeoff": "D3 Bolt: the bolt as chamfered geometry and expanded uppercase labels; strongest brand, highest risk of fatigue.",
+      "width": 1440,
+      "height": 900
+    }
+  ]
+}

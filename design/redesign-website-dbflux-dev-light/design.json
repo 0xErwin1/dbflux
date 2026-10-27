@@ -1,0 +1,48 @@
+{
+  "title": "DBFlux redesign: dbflux.dev · light",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Web, row \"dbflux.dev · light\".",
+  "artboards": [
+    {
+      "file": "01-site-byz-light-home.html",
+      "title": "Home (light)",
+      "tradeoff": "dbflux.dev, light: readable in daylight and in print; less of the dark-first app feel.",
+      "width": 1440,
+      "height": 6220
+    },
+    {
+      "file": "02-site-byz-light-compare.html",
+      "title": "Compare (light)",
+      "tradeoff": "dbflux.dev, light: readable in daylight and in print; less of the dark-first app feel.",
+      "width": 1440,
+      "height": 2403
+    },
+    {
+      "file": "03-site-byz-light-vs-dbeaver.html",
+      "title": "vs DBeaver (light)",
+      "tradeoff": "dbflux.dev, light: readable in daylight and in print; less of the dark-first app feel.",
+      "width": 1440,
+      "height": 3087
+    },
+    {
+      "file": "04-site-byz-light-about.html",
+      "title": "About (light)",
+      "tradeoff": "dbflux.dev, light: readable in daylight and in print; less of the dark-first app feel.",
+      "width": 1440,
+      "height": 2362
+    },
+    {
+      "file": "05-site-byz-light-docs.html",
+      "title": "Docs page (light)",
+      "tradeoff": "dbflux.dev, light: readable in daylight and in print; less of the dark-first app feel.",
+      "width": 1440,
+      "height": 1388
+    },
+    {
+      "file": "06-site-byz-light-mobile.html",
+      "title": "Home, mobile (light)",
+      "tradeoff": "Mobile site, light: single column at 390 px; drops the wide app screenshots.",
+      "width": 390,
+      "height": 3144
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "title": "DBFlux redesign: home page live demo",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: the scroll-driven home page demo, its keyframes, static fallback and motion spec.",
+  "artboards": [
+    {
+      "file": "01-demo-live.html",
+      "title": "Live demo: scroll-scrubbed prototype",
+      "tradeoff": "Scroll-driven live demo: shows the app working as the reader scrolls; needs JS and motion, here frozen at its first frame.",
+      "width": 1440,
+      "height": 1020
+    },
+    {
+      "file": "02-demo-spec.html",
+      "title": "Motion spec and open questions",
+      "tradeoff": "Motion spec and open questions: pins timing and decisions; text-heavy.",
+      "width": 1440,
+      "height": 3260
+    },
+    {
+      "file": "03-demo-keys-dark.html",
+      "title": "Keyframes, dark",
+      "tradeoff": "Keyframes, dark: every demo step laid out for review; a storyboard, not the shipped page.",
+      "width": 1600,
+      "height": 2934
+    },
+    {
+      "file": "04-demo-keys-light.html",
+      "title": "Keyframes, light",
+      "tradeoff": "Keyframes, light: the same storyboard on the light theme; a storyboard, not the shipped page.",
+      "width": 1600,
+      "height": 2934
+    },
+    {
+      "file": "05-demo-fallback.html",
+      "title": "Static fallback: 1180 px and below, reduced motion, no JS",
+      "tradeoff": "Static fallback: works at 1180 px and below, with reduced motion and without JS; loses the scroll story.",
+      "width": 940,
+      "height": 2860
+    }
+  ]
+}

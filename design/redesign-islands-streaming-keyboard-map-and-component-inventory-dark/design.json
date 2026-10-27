@@ -1,0 +1,20 @@
+{
+  "title": "DBFlux redesign: Streaming: keyboard map and component inventory · dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Streaming, row \"Streaming: keyboard map and component inventory · dark\".",
+  "artboards": [
+    {
+      "file": "01-isl-str-keys.html",
+      "title": "Streaming: keyboard map",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1420
+    },
+    {
+      "file": "02-isl-str-inventory.html",
+      "title": "Streaming: component inventory and localization",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1300
+    }
+  ]
+}

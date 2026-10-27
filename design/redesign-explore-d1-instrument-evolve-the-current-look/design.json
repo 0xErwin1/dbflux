@@ -1,0 +1,20 @@
+{
+  "title": "DBFlux redesign: D1 Instrument: evolve the current look",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Explorations, row \"D1 Instrument: evolve the current look\".",
+  "artboards": [
+    {
+      "file": "01-d1-app.html",
+      "title": "D1 Instrument / app",
+      "tradeoff": "D1 Instrument: evolves the current Ayu look with precise instrument details; least change, least new character.",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "02-d1-web.html",
+      "title": "D1 Instrument / web",
+      "tradeoff": "D1 Instrument: evolves the current Ayu look with precise instrument details; least change, least new character.",
+      "width": 1440,
+      "height": 900
+    }
+  ]
+}

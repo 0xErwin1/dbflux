@@ -1,0 +1,34 @@
+{
+  "title": "DBFlux redesign: Documents · dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Workspace and documents, row \"Documents · dark\".",
+  "artboards": [
+    {
+      "file": "01-isl-empty.html",
+      "title": "Empty workspace + tasks",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-kv-hash.html",
+      "title": "Key-value: hash key",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-kv-string.html",
+      "title": "Key-value: JSON string + large value",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "04-isl-doc-table.html",
+      "title": "Documents: table view + inspector",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "title": "DBFlux redesign: Phase 2: documents and time series · dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Key-value, documents and series, row \"Phase 2: documents and time series · dark\".",
+  "artboards": [
+    {
+      "file": "01-isl-doc-nested.html",
+      "title": "Documents: nested column groups + conflict on commit",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-series.html",
+      "title": "Time series: InfluxDB measurement",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}

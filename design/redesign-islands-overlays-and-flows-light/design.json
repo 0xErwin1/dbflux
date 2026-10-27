@@ -1,0 +1,41 @@
+{
+  "title": "DBFlux redesign: Overlays and flows · light",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Overlays, windows and settings, row \"Overlays and flows · light\".",
+  "artboards": [
+    {
+      "file": "01-isl-light-palette.html",
+      "title": "Command palette",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-light-approvals.html",
+      "title": "MCP approvals",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-light-modals.html",
+      "title": "Modals and toasts",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 960
+    },
+    {
+      "file": "04-isl-light-sidebar.html",
+      "title": "Sidebar states and menus",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 760
+    },
+    {
+      "file": "05-isl-light-flows.html",
+      "title": "Sign-in, wizards and editors",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1360,
+      "height": 960
+    }
+  ]
+}
