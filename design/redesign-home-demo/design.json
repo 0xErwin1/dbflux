@@ -5,9 +5,9 @@
     {
       "file": "01-demo-live.html",
       "title": "Live demo: scroll-scrubbed prototype",
-      "tradeoff": "Scroll-driven live demo: shows the app working as the reader scrolls; needs JS and motion, here frozen at its first frame.",
+      "tradeoff": "Scroll-driven live demo: chapters and skip sit left under the copy, with an explicit scroll hint; needs JS and motion, here frozen at its first frame.",
       "width": 1440,
-      "height": 1020
+      "height": 1094
     },
     {
       "file": "02-demo-spec.html",

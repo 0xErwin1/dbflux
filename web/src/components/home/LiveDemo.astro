@@ -55,22 +55,23 @@ const steps = DEMO_STEPS.map((step, index) => ({
           }
         </ol>
 
-        <nav class="ld-section__nav" aria-label={strings.nav_label}>
-          {
-            steps.map((step) => (
-              <a class="ld-section__link c6" href={`#${step.anchor}`} data-ld-link={step.index}>
-                <span class="mono">{step.number}</span>
-                <span>{step.nav}</span>
-                <span class="ld-section__fill" data-ld-fill={step.index} />
-              </a>
-            ))
-          }
-        </nav>
+        <div class="ld-section__controls">
+          <nav class="ld-section__nav" aria-label={strings.nav_label}>
+            {
+              steps.map((step) => (
+                <a class="ld-section__link c6" href={`#${step.anchor}`} data-ld-link={step.index}>
+                  <span class="mono">{step.number}</span>
+                  <span>{step.nav}</span>
+                  <span class="ld-section__fill" data-ld-fill={step.index} />
+                </a>
+              ))
+            }
+          </nav>
 
-        <a class="ld-section__skip c6" href="#keyboard">
-          {strings.skip}
-          <Glyph name="chevron-down" size={14} />
-        </a>
+          <a class="ld-section__skip" href="#keyboard">{strings.skip}</a>
+
+          <p class="ld-section__scroll mono" aria-hidden="true">{strings.scroll_hint}</p>
+        </div>
       </div>
 
       <div class="ld-section__stage">
@@ -729,8 +730,11 @@ const steps = DEMO_STEPS.map((step, index) => ({
     width: 100%;
   }
 
-  .ld-section__nav {
+  .ld-section__controls {
     order: -1;
+  }
+
+  .ld-section__nav {
     display: grid;
     grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 8px;
@@ -780,7 +784,8 @@ const steps = DEMO_STEPS.map((step, index) => ({
     transform-origin: left;
   }
 
-  .ld-section__skip {
+  .ld-section__skip,
+  .ld-section__scroll {
     display: none;
   }
 
@@ -933,15 +938,14 @@ const steps = DEMO_STEPS.map((step, index) => ({
       overflow: hidden;
     }
 
+    /* Caption first, then the chapters, the skip link and the scroll cue on one left-aligned row. */
     .ld-section[data-ld-enhanced] .ld-section__bar {
-      flex-direction: row;
-      align-items: flex-end;
-      gap: 48px;
+      gap: 22px;
     }
 
     .ld-section[data-ld-enhanced] .ld-section__steps {
       display: grid;
-      flex: 0 0 min(560px, 42%);
+      width: min(600px, 100%);
       gap: 0;
     }
 
@@ -959,30 +963,53 @@ const steps = DEMO_STEPS.map((step, index) => ({
       font-size: clamp(1.6rem, 2.2vw, 2.15rem);
     }
 
-    .ld-section[data-ld-enhanced] .ld-section__nav {
+    .ld-section[data-ld-enhanced] .ld-section__controls {
       order: 0;
-      flex: 1;
-      min-width: 0;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
     }
 
+    .ld-section[data-ld-enhanced] .ld-section__nav {
+      flex: none;
+      grid-template-columns: none;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(112px, max-content);
+    }
+
+    /* A plain link, not a boxed control, so it does not read as a dropdown trigger. */
     .ld-section[data-ld-enhanced] .ld-section__skip {
       display: flex;
       flex: none;
       align-items: center;
-      gap: 6px;
       min-height: 52px;
-      padding: 0 14px;
-      color: var(--text-muted);
-      box-shadow: inset 0 0 0 1px var(--border);
+      margin-left: 16px;
+      padding: 0 4px;
+      color: var(--text);
       font-family: var(--font-mono);
       font-size: 12px;
       font-weight: 600;
+      text-decoration: underline;
+      text-decoration-color: var(--border-strong);
+      text-underline-offset: 4px;
       white-space: nowrap;
     }
 
     .ld-section[data-ld-enhanced] .ld-section__skip:hover {
-      background: var(--panel);
       color: var(--text-strong);
+      text-decoration-color: var(--accent);
+    }
+
+    .ld-section[data-ld-enhanced] .ld-section__scroll {
+      display: block;
+      flex: none;
+      margin: 0 0 0 20px;
+      color: var(--text-muted);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      white-space: nowrap;
     }
 
     .ld-section[data-ld-enhanced] .ld-section__stage {
