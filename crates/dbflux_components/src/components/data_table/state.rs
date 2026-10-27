@@ -1540,7 +1540,9 @@ impl DataTableState {
     /// Emits `DataTableEvent::ReachedEnd` when the last row comes into view.
     /// Called by `DataTable::render`, after a scroll or cursor move has
     /// re-rendered the table. A host whose response failed hears about the
-    /// end again only once the user moves away from it and back.
+    /// end again only once the user moves away from it and back. A new model
+    /// from `set_model` resets this, so after a successful fetch the next
+    /// render emits again if the new end is already in view.
     pub fn report_reached_end(&mut self, cx: &mut Context<Self>) {
         let row_count = self.row_count();
         let scroll_laid_out = self.reached_end_checked_rows == row_count;

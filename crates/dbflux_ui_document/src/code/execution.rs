@@ -2143,7 +2143,7 @@ impl CodeDocument {
     /// Fetches the next editor-row-limit rows of the query behind a result tab
     /// and appends them, where the query ran.
     ///
-    /// ponytail: runs the query again with a limit one page higher and keeps
+    /// Runs the query again with a limit one page higher and keeps
     /// the rows past the loaded ones, so every page re-reads the earlier ones.
     /// Drivers have no shared offset; move to cursor or `OFFSET` paging if
     /// deep scrolling gets slow.
