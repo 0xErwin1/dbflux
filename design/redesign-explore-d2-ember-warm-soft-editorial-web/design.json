@@ -1,0 +1,20 @@
+{
+  "title": "DBFlux redesign: D2 Ember: warm, soft, editorial web",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Explorations, row \"D2 Ember: warm, soft, editorial web\".",
+  "artboards": [
+    {
+      "file": "01-d2-app.html",
+      "title": "D2 Ember / app",
+      "tradeoff": "D2 Ember: warm, rounded panes and per-environment color with an editorial serif; softer, less technical feel.",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "02-d2-web.html",
+      "title": "D2 Ember / web",
+      "tradeoff": "D2 Ember: warm, rounded panes and per-environment color with an editorial serif; softer, less technical feel.",
+      "width": 1440,
+      "height": 900
+    }
+  ]
+}

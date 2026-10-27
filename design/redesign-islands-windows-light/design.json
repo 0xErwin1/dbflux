@@ -1,0 +1,41 @@
+{
+  "title": "DBFlux redesign: Windows · light",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Overlays, windows and settings, row \"Windows · light\".",
+  "artboards": [
+    {
+      "file": "01-isl-light-settings-general.html",
+      "title": "Settings: general",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1320,
+      "height": 900
+    },
+    {
+      "file": "02-isl-light-settings-ssh.html",
+      "title": "Settings: SSH tunnels",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1320,
+      "height": 900
+    },
+    {
+      "file": "03-isl-light-driver-picker.html",
+      "title": "Connection Manager: driver picker",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1180,
+      "height": 920
+    },
+    {
+      "file": "04-isl-light-conn-form.html",
+      "title": "Connection Manager: PostgreSQL form",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1040,
+      "height": 1000
+    },
+    {
+      "file": "05-isl-light-conn-form-sources.html",
+      "title": "Connection Manager: environment and dotenv sources",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1040,
+      "height": 1000
+    }
+  ]
+}

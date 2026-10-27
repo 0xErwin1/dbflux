@@ -1,0 +1,48 @@
+{
+  "title": "DBFlux redesign: dbflux.dev · dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Web, row \"dbflux.dev · dark\".",
+  "artboards": [
+    {
+      "file": "01-site-byz-home.html",
+      "title": "Home",
+      "tradeoff": "dbflux.dev, dark: matches the dark-first app; heavier for long reading in daylight.",
+      "width": 1440,
+      "height": 6220
+    },
+    {
+      "file": "02-site-byz-compare.html",
+      "title": "Compare",
+      "tradeoff": "dbflux.dev, dark: matches the dark-first app; heavier for long reading in daylight.",
+      "width": 1440,
+      "height": 2403
+    },
+    {
+      "file": "03-site-byz-vs-dbeaver.html",
+      "title": "vs DBeaver",
+      "tradeoff": "dbflux.dev, dark: matches the dark-first app; heavier for long reading in daylight.",
+      "width": 1440,
+      "height": 3087
+    },
+    {
+      "file": "04-site-byz-about.html",
+      "title": "About",
+      "tradeoff": "dbflux.dev, dark: matches the dark-first app; heavier for long reading in daylight.",
+      "width": 1440,
+      "height": 2362
+    },
+    {
+      "file": "05-site-byz-docs.html",
+      "title": "Docs page",
+      "tradeoff": "dbflux.dev, dark: matches the dark-first app; heavier for long reading in daylight.",
+      "width": 1440,
+      "height": 1388
+    },
+    {
+      "file": "06-site-byz-mobile.html",
+      "title": "Home, mobile",
+      "tradeoff": "Mobile site, dark: single column at 390 px; drops the wide app screenshots.",
+      "width": 390,
+      "height": 3144
+    }
+  ]
+}

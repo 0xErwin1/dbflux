@@ -1,0 +1,34 @@
+{
+  "title": "DBFlux redesign: AWS Secrets Manager and Parameter Store (#1147) · dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Migrate, AI, notifications, secrets, row \"AWS Secrets Manager and Parameter Store (#1147) · dark\".",
+  "artboards": [
+    {
+      "file": "01-isl-secrets.html",
+      "title": "Secrets Manager: browse + details",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-secret-detail.html",
+      "title": "Secret: value, versions, rotation",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-parameters.html",
+      "title": "Parameter Store: path browser + history",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "04-isl-secret-states.html",
+      "title": "Secret store: states and dialogs",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1640
+    }
+  ]
+}
