@@ -264,6 +264,7 @@ mod tests {
         factory: Option<Arc<FakeFactory>>,
         queries: AtomicUsize,
         cancels: AtomicUsize,
+        cleanups: AtomicUsize,
         databases: Mutex<Vec<Option<String>>>,
         request_limits: Mutex<Vec<(Option<u32>, Option<std::time::Duration>)>>,
         execute_gate: Option<Arc<ExecuteGate>>,
@@ -281,6 +282,7 @@ mod tests {
                 factory: Some(factory),
                 queries: AtomicUsize::new(0),
                 cancels: AtomicUsize::new(0),
+                cleanups: AtomicUsize::new(0),
                 databases: Mutex::new(Vec::new()),
                 request_limits: Mutex::new(Vec::new()),
                 execute_gate: None,
@@ -300,6 +302,7 @@ mod tests {
                 factory: None,
                 queries: AtomicUsize::new(0),
                 cancels: AtomicUsize::new(0),
+                cleanups: AtomicUsize::new(0),
                 databases: Mutex::new(Vec::new()),
                 request_limits: Mutex::new(Vec::new()),
                 execute_gate: None,
@@ -313,6 +316,7 @@ mod tests {
                 factory: None,
                 queries: AtomicUsize::new(0),
                 cancels: AtomicUsize::new(0),
+                cleanups: AtomicUsize::new(0),
                 databases: Mutex::new(Vec::new()),
                 request_limits: Mutex::new(Vec::new()),
                 execute_gate,
@@ -390,6 +394,11 @@ mod tests {
 
         fn cancel_active(&self) -> Result<(), DbError> {
             self.cancels.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn cleanup_after_cancel(&self) -> Result<(), DbError> {
+            self.cleanups.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
@@ -1057,6 +1066,11 @@ mod tests {
             root.queries.load(Ordering::SeqCst),
             0,
             "a query cancelled before dispatch never reaches the driver"
+        );
+        assert_eq!(
+            root.cleanups.load(Ordering::SeqCst),
+            0,
+            "a query that never reached the driver must not trigger its cancel cleanup"
         );
         assert!(window.update(|_, cx| {
             let document = document.read(cx);

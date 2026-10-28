@@ -961,25 +961,27 @@ impl CodeDocument {
                 // cancel that lands before this worker runs must keep the
                 // statement from reaching the database at all.
                 if dispatch_token.is_cancelled() {
-                    return super::execution_session::SessionExecution {
+                    let skipped = super::execution_session::SessionExecution {
                         result: Err(DbError::Cancelled),
                         isolated: false,
                     };
+                    return (false, skipped);
                 }
 
-                if on_session {
+                let execution = if on_session {
                     session_binding.execute(connection, session_database, &request)
                 } else {
                     super::execution_session::SessionExecution {
                         result: connection.execute(&request),
                         isolated: false,
                     }
-                }
+                };
+                (true, execution)
             }
         });
 
         cx.spawn(async move |this, cx| {
-            let session_execution = task.await;
+            let (dispatched, session_execution) = task.await;
             let session_isolated = session_execution.isolated;
             let result = session_execution.result;
 
@@ -1007,7 +1009,10 @@ impl CodeDocument {
             } else if cancel_token.is_cancelled() {
                 log::info!("Query was cancelled, discarding result");
 
-                if let Err(error) = connection.cleanup_after_cancel() {
+                // The cleanup rolls back the connection's transaction. A query
+                // that never reached the driver left nothing to undo, and
+                // rolling back would discard a transaction the user opened.
+                if dispatched && let Err(error) = connection.cleanup_after_cancel() {
                     log::warn!("Cleanup after cancel failed: {error}");
                 }
 
