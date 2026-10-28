@@ -986,19 +986,24 @@ fn mask_unparsed_clauses(query: &str) -> Cow<'_, str> {
 
         let starts_word = index == 0 || !is_identifier_byte(bytes[index - 1]);
 
-        if let Some(end) = starts_word
-            .then(|| on_commit_clause_end(bytes, index))
-            .flatten()
-        {
+        let blanked_range = starts_word
+            .then(|| {
+                on_commit_clause_end(bytes, index)
+                    .map(|end| index..end)
+                    .or_else(|| on_conflict_target_range(bytes, index))
+            })
+            .flatten();
+
+        if let Some(range) = blanked_range {
             let buffer = masked.get_or_insert_with(|| bytes.to_vec());
 
-            for byte in &mut buffer[index..end] {
+            for byte in &mut buffer[range.clone()] {
                 if *byte != b'\n' && *byte != b'\r' {
                     *byte = b' ';
                 }
             }
 
-            index = end;
+            index = range.end;
             continue;
         }
 
@@ -1031,6 +1036,51 @@ fn on_commit_clause_end(bytes: &[u8], start: usize) -> Option<usize> {
     ON_COMMIT_ACTIONS
         .iter()
         .find_map(|action| match_words(bytes, action_start, action))
+}
+
+/// Returns the conflict target of an `ON CONFLICT <target> DO` clause starting
+/// at `start`: the column list, index expression, index predicate or
+/// `ON CONSTRAINT name` between `CONFLICT` and `DO`. The grammar only accepts
+/// `ON CONFLICT DO ...`, so the target is blanked out. A clause without a
+/// top-level `DO` before the statement ends is left alone so the grammar still
+/// reports it.
+fn on_conflict_target_range(bytes: &[u8], start: usize) -> Option<std::ops::Range<usize>> {
+    let after_conflict = match_words(bytes, start, &["ON", "CONFLICT"])?;
+    let mut index = after_conflict;
+    let mut depth = 0usize;
+
+    while let Some(&byte) = bytes.get(index) {
+        match (byte, bytes.get(index + 1)) {
+            (quote @ (b'\'' | b'"'), _) => {
+                index = skip_quoted(bytes, index, quote);
+                continue;
+            }
+            (b'-', Some(b'-')) | (b'/', Some(b'*')) => {
+                index = skip_whitespace_and_comments(bytes, index);
+                continue;
+            }
+            (b'(', _) => depth += 1,
+            (b')', _) => depth = depth.checked_sub(1)?,
+            (b';', _) => return None,
+            _ => {}
+        }
+
+        let starts_word = !bytes
+            .get(index.wrapping_sub(1))
+            .is_some_and(|previous| is_identifier_byte(*previous));
+
+        if depth == 0 && starts_word && match_words(bytes, index, &["DO"]).is_some() {
+            return bytes
+                .get(after_conflict..index)?
+                .iter()
+                .any(|byte| !byte.is_ascii_whitespace())
+                .then_some(after_conflict..index);
+        }
+
+        index += 1;
+    }
+
+    None
 }
 
 /// Returns where `ALL` starts in a `GROUP BY ALL` starting at `start` when
@@ -1950,6 +2000,59 @@ mod tests {
             "SELECT 1 -- on commit drop",
             "SELECT 1 /* on commit drop */",
             "SELECT session_on commit_drop FROM users",
+        ];
+
+        for query in queries {
+            assert!(
+                matches!(mask_unparsed_clauses(query), Cow::Borrowed(_)),
+                "{query:?} was masked"
+            );
+        }
+    }
+
+    #[test]
+    fn postgres_on_conflict_targets_have_no_diagnostics() {
+        let queries = [
+            "INSERT INTO commercial_plan (commercial_plan_id, plan_product_name, tea_rate, cft_rate, is_active, process_id, loaded_at)\nVALUES ('PLAN-1', 'Plan', 10.5000, NULL, true, 'manual_qa', NOW())\nON CONFLICT (commercial_plan_id) DO NOTHING;",
+            "INSERT INTO t (a, b) VALUES (1, 2) ON CONFLICT (a, b) DO NOTHING;",
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT (a) DO UPDATE SET a = EXCLUDED.a;",
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT (lower(a)) DO NOTHING;",
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT (a) WHERE a > 0 DO NOTHING;",
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT ON CONSTRAINT t_pkey DO NOTHING;",
+            "insert into t (a) values (1)\non conflict\n  (a)\ndo nothing;",
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT DO NOTHING;",
+        ];
+
+        for query in queries {
+            let diags = sql_editor_diagnostics(query);
+            assert!(diags.is_empty(), "{query:?} produced {diags:?}");
+        }
+    }
+
+    #[test]
+    fn on_conflict_without_an_action_is_still_reported() {
+        let diags = sql_editor_diagnostics("INSERT INTO t (a) VALUES (1) ON CONFLICT (a);");
+        assert!(!diags.is_empty());
+    }
+
+    #[test]
+    fn mask_on_conflict_target_preserves_length_and_newlines() {
+        let query = "INSERT INTO t (a) VALUES (1) ON CONFLICT (a,\nb) DO NOTHING";
+        let masked = mask_unparsed_clauses(query);
+
+        assert_eq!(masked.len(), query.len());
+        assert_eq!(
+            masked,
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT    \n   DO NOTHING"
+        );
+    }
+
+    #[test]
+    fn mask_on_conflict_target_ignores_strings_and_comments() {
+        let queries = [
+            "SELECT 'on conflict (a) do nothing' FROM t",
+            "SELECT 1 -- on conflict (a) do nothing",
+            "SELECT \"on conflict (a) do\" FROM t",
         ];
 
         for query in queries {
