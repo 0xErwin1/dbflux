@@ -382,6 +382,10 @@ pub struct Workspace {
     pending_open_script: Option<PendingOpenScript>,
     pending_open_routine: Option<PendingOpenRoutine>,
     needs_focus_restore: bool,
+    /// Set when the last tab closed under an open overlay: once every overlay
+    /// is gone, the sidebar takes keyboard focus, since an overlay may hand it
+    /// back to the closed document or to nothing at all.
+    focus_sidebar_after_overlays: bool,
 
     /// Active pipeline progress watcher for pipeline-enabled connects.
     pipeline_progress: Option<Entity<pipeline::PipelineProgress>>,
@@ -1657,11 +1661,12 @@ impl Workspace {
                             // to take it, so keyboard focus would land nowhere.
                             // Focus elsewhere is left alone: a deferred close
                             // can land while the user works in another area.
-                            // An open overlay keeps the keyboard and hands it
-                            // to the recorded target when it closes.
+                            // An open overlay keeps the keyboard until it
+                            // closes; render then hands it to the sidebar.
                             if this.focus_target == FocusTarget::Document {
                                 if this.overlay_context(cx).is_some() {
                                     this.mark_focus_target(FocusTarget::Sidebar, cx);
+                                    this.focus_sidebar_after_overlays = true;
                                 } else {
                                     this.set_focus(FocusTarget::Sidebar, window, cx);
                                 }
@@ -1725,6 +1730,7 @@ impl Workspace {
             pending_open_script: None,
             pending_open_routine: None,
             needs_focus_restore: false,
+            focus_sidebar_after_overlays: false,
             pipeline_progress: None,
             _pipeline_subscription: None,
             focus_target: FocusTarget::default(),
@@ -2610,6 +2616,7 @@ mod tab_close_request_tests {
     use dbflux_core::QueryLanguage;
     use dbflux_core::document_id::DocumentId;
     use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::modals::DeleteConfirmRequest;
     use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -3053,6 +3060,100 @@ mod tab_close_request_tests {
             assert!(
                 workspace.read(cx).focus_handle.is_focused(window),
                 "closing the palette must hand focus to the sidebar"
+            );
+        });
+    }
+
+    /// The SQL preview does not hand focus back when it closes, so the
+    /// workspace has to move it once no overlay is left.
+    #[gpui::test]
+    fn closing_the_sql_preview_after_the_last_tab_focuses_the_sidebar(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let document_id = open_code_tab(window, &workspace, &app_state);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace.sql_preview_modal.update(cx, |modal, cx| {
+                    modal.open_query_preview(
+                        QueryLanguage::Sql,
+                        "SQL",
+                        "SELECT 1".to_string(),
+                        window,
+                        cx,
+                    );
+                });
+            });
+        });
+        window.run_until_parked();
+
+        close_tab(window, &workspace, document_id);
+
+        window.update(|window, cx| {
+            assert!(
+                !workspace.read(cx).focus_handle.is_focused(window),
+                "the open preview must keep keyboard focus"
+            );
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .sql_preview_modal
+                    .update(cx, |modal, cx| modal.close(cx));
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            assert!(
+                workspace.read(cx).focus_handle.is_focused(window),
+                "closing the preview must hand focus to the sidebar"
+            );
+        });
+    }
+
+    /// A modal restores the handle that was focused when it opened, which
+    /// belongs to the closed document; the sidebar must win over it.
+    #[gpui::test]
+    fn closing_a_modal_after_the_last_tab_focuses_the_sidebar(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let document_id = open_code_tab(window, &workspace, &app_state);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.modal_delete_dashboard.update(cx, |modal, cx| {
+                    modal.open(
+                        DeleteConfirmRequest::Dashboard {
+                            dashboard_id: uuid::Uuid::new_v4(),
+                            dashboard_name: "Sales".to_string(),
+                        },
+                        cx,
+                    );
+                });
+            });
+        });
+        window.run_until_parked();
+
+        close_tab(window, &workspace, document_id);
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .modal_delete_dashboard
+                    .update(cx, |modal, cx| modal.cancel(cx));
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            let workspace = workspace.read(cx);
+            assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+            assert!(
+                workspace.focus_handle.is_focused(window),
+                "closing the modal must hand focus to the sidebar"
             );
         });
     }
