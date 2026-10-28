@@ -322,6 +322,8 @@ After the GitHub Release artifacts for the tag are published, also update:
 
 The AUR `PKGBUILD` lives in an **external AUR repository**, not in this repo. It is bumped only for stable tags.
 
+The Homebrew cask lives in the external tap `0xErwin1/homebrew-dbflux`. The `homebrew-tap` job updates it automatically for published stable tags; check that the job succeeded (see [Homebrew tap](#homebrew-tap)).
+
 ## How Nightly Works
 
 `.github/workflows/nightly.yml` runs daily at 03:17 UTC:
@@ -379,11 +381,11 @@ git log --grep='cherry picked from' release/vX.Y
 
 ## Downstream Channels
 
-| Tag kind (GitHub Release)   | AUR         | Nix flake (this repo)                         | nixpkgs (future) |
-|-----------------------------|-------------|-----------------------------------------------|------------------|
-| nightly (prerelease)        | skip        | auto-pinned — `#dbflux-nightly` on nightly ref | skip            |
-| `-rc.N` (prerelease)        | skip        | bump release branch's + main's `release-info` | skip             |
-| Stable `vX.Y.Z` (published) | bump + push | bump release branch's + main's `release-info` | bump + PR        |
+| Tag kind (GitHub Release)   | AUR         | Nix flake (this repo)                         | nixpkgs (future) | Homebrew tap |
+|-----------------------------|-------------|-----------------------------------------------|------------------|-----------------------------------|
+| nightly (prerelease)        | skip        | auto-pinned — `#dbflux-nightly` on nightly ref | skip            | skip |
+| `-rc.N` (prerelease)        | skip        | bump release branch's + main's `release-info` | skip             | skip |
+| Stable `vX.Y.Z` (published) | bump + push | bump release branch's + main's `release-info` | bump + PR        | auto — `homebrew-tap` job |
 
 ### AUR
 
@@ -423,6 +425,28 @@ nix build .#dbflux-bin --no-link --print-out-paths
 ```bash
 nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
 ```
+
+### Homebrew tap
+
+The `homebrew-tap` job in `.github/workflows/release.yml` runs after the release job, only for published stable tags (never for RC, nightly or drafts). It downloads the release's four `.sha256` files (both macOS DMGs and both Linux tarballs), renders `Casks/dbflux.rb` with `scripts/homebrew_cask.py` and pushes it to [`0xErwin1/homebrew-dbflux`](https://github.com/0xErwin1/homebrew-dbflux).
+
+| Case | Behavior |
+|------|----------|
+| `HOMEBREW_TAP_TOKEN` missing | The job warns and skips; the tap keeps its previous version. |
+| Token expired or revoked | The job fails. Renew the token, update the secret, and re-run the job or update the cask by hand. |
+| Tag older than the tap's version (a patch on an older line) | The cask is left unchanged, with a warning. The tap never moves back. |
+
+`HOMEBREW_TAP_TOKEN` is a fine-grained personal access token with **Contents: read and write**, scoped to `0xErwin1/homebrew-dbflux` only.
+
+To update the cask by hand after a failed job, download the four `.sha256` files of the release into one directory, then:
+
+```bash
+python3 scripts/homebrew_cask.py --version X.Y.Z \
+  --checksums <dir with the four .sha256 files> \
+  --output <tap checkout>/Casks/dbflux.rb
+```
+
+Commit and push the change in the tap checkout.
 
 ### nixpkgs (future)
 

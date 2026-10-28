@@ -76,6 +76,7 @@ Los paquetes para cada plataforma — tarball, AUR, `.deb`, `.rpm`, AppImage, Ni
 macOS e instalador de Windows — están en la página de [Releases](https://github.com/0xErwin1/dbflux/releases).
 La guía completa, incluyendo los pasos de Gatekeeper y SmartScreen para los builds sin firmar
 de macOS y Windows, está en [Instalar DBFlux](INSTALL.md).
+En macOS y Linux, Homebrew lo instala con `brew install --cask 0xErwin1/dbflux/dbflux`.
 
 ## Funcionalidades
 
