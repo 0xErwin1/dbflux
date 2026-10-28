@@ -2072,15 +2072,15 @@ mod tests {
         ];
 
         for query in queries {
-            let diags = sql_editor_diagnostics(query);
-            assert!(diags.is_empty(), "{query:?} produced {diags:?}");
+            let diagnostics = sql_editor_diagnostics(query);
+            assert!(diagnostics.is_empty(), "{query:?} produced {diagnostics:?}");
         }
     }
 
     #[test]
     fn on_conflict_without_an_action_is_still_reported() {
-        let diags = sql_editor_diagnostics("INSERT INTO t (a) VALUES (1) ON CONFLICT (a);");
-        assert!(!diags.is_empty());
+        let diagnostics = sql_editor_diagnostics("INSERT INTO t (a) VALUES (1) ON CONFLICT (a);");
+        assert!(!diagnostics.is_empty());
     }
 
     #[test]
@@ -2108,8 +2108,8 @@ mod tests {
         ];
 
         for query in queries {
-            let diags = sql_editor_diagnostics(query);
-            assert!(diags.is_empty(), "{query:?} produced {diags:?}");
+            let diagnostics = sql_editor_diagnostics(query);
+            assert!(diagnostics.is_empty(), "{query:?} produced {diagnostics:?}");
         }
 
         assert!(matches!(
