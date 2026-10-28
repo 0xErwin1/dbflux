@@ -955,7 +955,18 @@ impl CodeDocument {
         let task = cx.background_executor().spawn({
             let connection = connection.clone();
             let session_binding = session_binding.clone();
+            let dispatch_token = cancel_token.clone();
             async move {
+                // The editor is released as soon as its task is cancelled, so a
+                // cancel that lands before this worker runs must keep the
+                // statement from reaching the database at all.
+                if dispatch_token.is_cancelled() {
+                    return super::execution_session::SessionExecution {
+                        result: Err(DbError::Cancelled),
+                        isolated: false,
+                    };
+                }
+
                 if on_session {
                     session_binding.execute(connection, session_database, &request)
                 } else {

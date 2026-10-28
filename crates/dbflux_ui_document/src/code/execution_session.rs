@@ -1053,6 +1053,11 @@ mod tests {
 
         window.run_until_parked();
 
+        assert_eq!(
+            root.queries.load(Ordering::SeqCst),
+            0,
+            "a query cancelled before dispatch never reaches the driver"
+        );
         assert!(window.update(|_, cx| {
             let document = document.read(cx);
             document.state == crate::types::DocumentState::Clean
