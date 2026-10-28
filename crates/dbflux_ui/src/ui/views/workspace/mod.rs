@@ -1657,8 +1657,14 @@ impl Workspace {
                             // to take it, so keyboard focus would land nowhere.
                             // Focus elsewhere is left alone: a deferred close
                             // can land while the user works in another area.
+                            // An open overlay keeps the keyboard and hands it
+                            // to the recorded target when it closes.
                             if this.focus_target == FocusTarget::Document {
-                                this.set_focus(FocusTarget::Sidebar, window, cx);
+                                if this.overlay_context(cx).is_some() {
+                                    this.mark_focus_target(FocusTarget::Sidebar, cx);
+                                } else {
+                                    this.set_focus(FocusTarget::Sidebar, window, cx);
+                                }
                             }
                         }
 
@@ -2964,7 +2970,7 @@ mod tab_close_request_tests {
         });
     }
 
-    /// Regression (#1199): closing the last tab dropped the focused document and
+    /// Regression: closing the last tab dropped the focused document and
     /// left keyboard focus nowhere, so sidebar navigation and shortcuts stopped
     /// responding until the user clicked.
     #[gpui::test]
@@ -3006,6 +3012,48 @@ mod tab_close_request_tests {
 
         window.update(|_, cx| {
             assert_eq!(workspace.read(cx).focus_target, FocusTarget::Document);
+        });
+    }
+
+    /// An overlay owns the keyboard without changing the focus target, so a
+    /// deferred close landing while it is open must not pull focus out of it.
+    /// The sidebar takes focus once the overlay closes.
+    #[gpui::test]
+    fn closing_the_last_tab_under_an_overlay_keeps_the_overlay_focused(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let document_id = open_code_tab(window, &workspace, &app_state);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace.toggle_command_palette(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        close_tab(window, &workspace, document_id);
+
+        window.update(|window, cx| {
+            let workspace = workspace.read(cx);
+            assert!(workspace.command_palette.read(cx).is_visible());
+            assert!(
+                !workspace.focus_handle.is_focused(window),
+                "the open palette must keep keyboard focus"
+            );
+            assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+        });
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.toggle_command_palette(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            assert!(
+                workspace.read(cx).focus_handle.is_focused(window),
+                "closing the palette must hand focus to the sidebar"
+            );
         });
     }
 
