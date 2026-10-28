@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 SCRIPT = pathlib.Path(__file__).resolve().parent / "homebrew_cask.py"
+RELEASE = pathlib.Path(__file__).resolve().parents[1] / ".github/workflows/release.yml"
 
 HASHES = {
     "dbflux-macos-arm64.dmg": "a" * 64,
@@ -138,6 +139,33 @@ class HomebrewCaskTests(unittest.TestCase):
             f"error: missing {self.checksums / 'dbflux-linux-arm64.tar.gz.sha256'}\n",
         )
         self.assertFalse(self.output.exists())
+
+
+class ReleaseWorkflowTapJobTests(unittest.TestCase):
+    def setUp(self):
+        workflow = RELEASE.read_text(encoding="utf-8")
+        self.assertIn("  homebrew-tap:\n", workflow, "release.yml must define the homebrew-tap job")
+        # The job is the last one in the file, so it runs to the end.
+        self.job = workflow.split("  homebrew-tap:\n", 1)[1]
+
+    def test_runs_after_the_release_for_published_stable_tags_only(self):
+        self.assertIn("needs: [classify, release]", self.job)
+        self.assertIn(
+            "if: needs.classify.outputs.channel == 'stable' && needs.classify.outputs.draft == 'false'",
+            self.job,
+        )
+
+    def test_skips_with_a_warning_when_the_token_is_missing(self):
+        self.assertIn("secrets.HOMEBREW_TAP_TOKEN", self.job)
+        self.assertIn("::warning::HOMEBREW_TAP_TOKEN is not set", self.job)
+
+    def test_never_moves_the_cask_to_an_older_version(self):
+        self.assertIn("sort -V", self.job)
+        self.assertIn("::warning::The tap already ships", self.job)
+
+    def test_renders_the_cask_with_the_repository_script(self):
+        self.assertIn("python3 scripts/homebrew_cask.py", self.job)
+        self.assertIn("repository: 0xErwin1/homebrew-dbflux", self.job)
 
 
 if __name__ == "__main__":
