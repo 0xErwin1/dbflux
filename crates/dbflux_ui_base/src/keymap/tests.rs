@@ -1438,6 +1438,24 @@ fn run_query_wins_over_the_inputs_own_primary_enter() {
 }
 
 #[test]
+fn toggle_full_screen_has_a_global_default_chord() {
+    let mut keymap = gpui::Keymap::default();
+    keymap.add_bindings(keymap_keybindings());
+
+    #[cfg(target_os = "macos")]
+    let chord = "ctrl-cmd-f";
+    #[cfg(not(target_os = "macos"))]
+    let chord = "f11";
+
+    let stack = element_stack(
+        root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Editor, &[]),
+        &["CodeEditor", "Input"],
+    );
+    let action = top_action(&keymap, chord, &stack).expect("bound");
+    assert!(runs_command(action.as_ref(), Command::ToggleFullScreen));
+}
+
+#[test]
 fn modal_keys_run_the_modal_actions() {
     let stack = element_stack(
         root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Editor, &[]),

@@ -1731,6 +1731,19 @@ mod tests {
     }
 
     #[test]
+    fn command_palette_lists_toggle_full_screen_under_view() {
+        use super::super::super::views::workspace::Workspace;
+
+        let commands = Workspace::palette_commands_for_test();
+        let entry = commands
+            .iter()
+            .find(|command| command.id == "toggle_full_screen")
+            .expect("the palette must list Toggle full screen");
+        assert_eq!(entry.name, "Toggle full screen");
+        assert_eq!(entry.category, "View");
+    }
+
+    #[test]
     fn command_palette_does_not_include_import_dashboard_in_commands() {
         // ImportDashboard is a PaletteItem::ImportDashboard, not a PaletteCommand.
         // It should never appear in default_commands().

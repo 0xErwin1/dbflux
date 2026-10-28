@@ -39,6 +39,7 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+Shift+4` | Focus background tasks |
 | `Ctrl+Shift+A` / `Cmd+Shift+A` | Open audit viewer |
 | `Ctrl+b` / `Cmd+b` | Toggle sidebar |
+| `F11` / `Ctrl+Cmd+F` | Toggle full screen |
 | `Ctrl+m` | Open tab context menu |
 | `` Ctrl+` `` | Show or hide the console docked under the active table, collection or key-value browser, where its connection has one; in a console tab, return the keyboard to its input |
 | `Ctrl+,` / `Cmd+,` | Open settings |

@@ -21,6 +21,10 @@ impl Workspace {
                 self.toggle_sidebar(cx);
                 Some(true)
             }
+            Command::ToggleFullScreen => {
+                window.toggle_fullscreen();
+                Some(true)
+            }
             Command::ToggleNotifications => {
                 self.toggle_notifications(window, cx);
                 Some(true)

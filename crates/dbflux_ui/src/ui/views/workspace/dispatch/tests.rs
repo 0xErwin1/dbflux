@@ -125,3 +125,25 @@ fn create_folder_on_connections_tab_creates_a_folder(cx: &mut TestAppContext) {
     assert_eq!(routed, Some(true));
     assert_eq!(nodes_after, nodes_before + 1);
 }
+
+#[gpui::test]
+fn toggle_full_screen_enters_and_leaves_full_screen(cx: &mut TestAppContext) {
+    let app_state = init(cx);
+    let (workspace, window) = open_workspace(&app_state, cx);
+
+    let toggle = |window: &mut VisualTestContext| {
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.route_command(Command::ToggleFullScreen, window, cx)
+            })
+        })
+    };
+
+    assert!(!window.update(|window, _| window.is_fullscreen()));
+
+    assert_eq!(toggle(window), Some(true));
+    assert!(window.update(|window, _| window.is_fullscreen()));
+
+    assert_eq!(toggle(window), Some(true));
+    assert!(!window.update(|window, _| window.is_fullscreen()));
+}

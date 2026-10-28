@@ -2009,6 +2009,11 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.view"),
             ),
             PaletteCommand::new(
+                "toggle_full_screen",
+                dbflux_i18n::t!("palette.command.toggle_full_screen.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
                 "toggle_editor",
                 dbflux_i18n::t!("palette.command.toggle_editor.name"),
                 dbflux_i18n::t!("palette.category.view"),

@@ -40,6 +40,7 @@ foco toma `Enter` y `Space` para sí.
 | `Ctrl+Shift+4`                                   | Enfocar tareas en segundo plano                                   |
 | `Ctrl+Shift+A` / `Cmd+Shift+A`                   | Abrir el visor de auditoría                                       |
 | `Ctrl+b` / `Cmd+b`                               | Alternar sidebar                                                  |
+| `F11` / `Ctrl+Cmd+F`                             | Alternar pantalla completa                                        |
 | `Ctrl+m`                                         | Abrir el menú contextual de la pestaña                            |
 | `` Ctrl+` ``                                     | Mostrar u ocultar la consola acoplada bajo la tabla, colección o navegador clave-valor activo, cuando su conexión tiene una; en una pestaña de consola, devolver el teclado a su campo |
 | `Ctrl+,` / `Cmd+,`                               | Abrir la configuración                                            |

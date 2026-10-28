@@ -205,6 +205,20 @@ fn global_layer() -> KeymapLayer {
         Command::ToggleSidebar,
     );
 
+    // Ctrl+Cmd+F is the macOS full-screen convention; F11 elsewhere.
+    #[cfg(target_os = "macos")]
+    let full_screen = KeyChord::new(
+        "f",
+        Modifiers {
+            ctrl: true,
+            platform: true,
+            ..Modifiers::none()
+        },
+    );
+    #[cfg(not(target_os = "macos"))]
+    let full_screen = KeyChord::new("f11", Modifiers::none());
+    layer.bind(full_screen, Command::ToggleFullScreen);
+
     // Tab context menu — stays Ctrl+M everywhere: Cmd+M is the system
     // "minimize window" shortcut on macOS.
     layer.bind(KeyChord::new("m", Modifiers::ctrl()), Command::OpenTabMenu);
