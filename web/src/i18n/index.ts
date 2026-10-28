@@ -496,6 +496,7 @@ export interface Dictionary {
     platforms_label: string;
     note: {
       linux: string;
+      homebrew: string;
       arch: string;
       nix: string;
       macos: string;

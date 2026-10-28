@@ -396,6 +396,7 @@ export const ko: Dictionary = {
     platforms_label: '플랫폼',
     note: {
       linux: 'sudo 없이 설치하려면 -s -- --prefix ~/.local을 붙이세요.',
+      homebrew: 'macOS와 Linux. macOS에서는 Gatekeeper 경고 없이 열립니다.',
       arch: 'yay를 통해 AUR에서도 설치할 수 있습니다.',
       nix: 'nightly flake 출력도 있습니다.',
       macos: 'Apple Silicon과 Intel. macOS 11 이상. 아직 서명되지 않았습니다.',

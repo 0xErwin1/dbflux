@@ -397,6 +397,7 @@ export const en = {
     platforms_label: 'Platform',
     note: {
       linux: 'Prefer no sudo? Append -s -- --prefix ~/.local.',
+      homebrew: 'macOS and Linux. On macOS it opens without the Gatekeeper prompt.',
       arch: 'Also on the AUR through yay.',
       nix: 'A nightly flake output is available too.',
       macos: 'Apple Silicon and Intel. macOS 11 or later. Not signed yet.',
