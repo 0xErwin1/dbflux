@@ -39,6 +39,7 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+Shift+4` | Focus background tasks |
 | `Ctrl+Shift+A` / `Cmd+Shift+A` | Open audit viewer |
 | `Ctrl+b` / `Cmd+b` | Toggle sidebar |
+| `F11` / `Ctrl+Cmd+F` | Toggle full screen |
 | `Ctrl+m` | Open tab context menu |
 | `` Ctrl+` `` | Show or hide the console docked under the active table, collection or key-value browser, where its connection has one; in a console tab, return the keyboard to its input |
 | `Ctrl+,` / `Cmd+,` | Open settings |
@@ -825,11 +826,11 @@ The keys are listed under the Migrate Wizard context in Settings > Keybindings.
 | `Ctrl+Shift+z` | Redo (Linux and Windows; macOS uses `Cmd+Shift+z`) |
 
 While you type in a text field outside a dialog, such as the sidebar search or
-the execution context bar, the global shortcuts that hold `Ctrl` or `Cmd` keep
-working: `Ctrl+Tab`, `Ctrl+1` .. `Ctrl+9`, `Ctrl+w`, `Ctrl+Shift+P` and the
-others in [Global](#global-available-regardless-of-focus). Keys without those
-modifiers, including `Tab`, `Escape`, `Enter` and the arrows, stay with the
-field. A shortcut the field binds itself, such as `Ctrl+a` or `Ctrl+c`, wins
+the execution context bar, the global shortcuts that hold `Ctrl` or `Cmd`, or
+that start with a function key such as `F11`, keep working: `Ctrl+Tab`,
+`Ctrl+1` .. `Ctrl+9`, `Ctrl+w`, `Ctrl+Shift+P` and the others in
+[Global](#global-available-regardless-of-focus). Other keys, including `Tab`,
+`Escape`, `Enter` and the arrows, stay with the field. A shortcut the field binds itself, such as `Ctrl+a` or `Ctrl+c`, wins
 over the global one. Inside a dialog, a menu, a dropdown or a picker the global
 shortcuts wait until it closes.
 

@@ -3943,6 +3943,8 @@ palette:
       name: Enfocar panel de tareas
     toggle_sidebar:
       name: Mostrar u ocultar barra lateral
+    toggle_full_screen:
+      name: Alternar pantalla completa
     toggle_editor:
       name: Mostrar u ocultar panel del editor
     toggle_results:
@@ -4355,6 +4357,7 @@ settings:
       cancel_task: Cancelar tarea
       clear_finished_tasks: Borrar tareas terminadas
       toggle_sidebar: Mostrar u ocultar barra lateral
+      toggle_full_screen: Alternar pantalla completa
       open_settings: Abrir configuración
       open_login_modal: Abrir inicio de sesión de Auth Profile
       open_sso_wizard: Abrir asistente de AWS SSO
