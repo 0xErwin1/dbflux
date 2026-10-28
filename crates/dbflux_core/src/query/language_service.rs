@@ -1046,6 +1046,16 @@ fn on_commit_clause_end(bytes: &[u8], start: usize) -> Option<usize> {
 /// reports it.
 fn on_conflict_target_range(bytes: &[u8], start: usize) -> Option<std::ops::Range<usize>> {
     let after_conflict = match_words(bytes, start, &["ON", "CONFLICT"])?;
+    let target_start = skip_whitespace_and_comments(bytes, after_conflict);
+
+    // PostgreSQL accepts only a parenthesized index target or `ON CONSTRAINT
+    // name` here; anything else stays visible so the grammar reports it.
+    if bytes.get(target_start) != Some(&b'(')
+        && match_words(bytes, target_start, &["ON", "CONSTRAINT"]).is_none()
+    {
+        return None;
+    }
+
     let mut index = after_conflict;
     let mut depth = 0usize;
 
@@ -1153,8 +1163,15 @@ fn skip_whitespace_and_comments(bytes: &[u8], start: usize) -> usize {
 }
 
 /// Returns the position after the quoted run opened at `start`. A doubled
-/// quote is an escaped quote; an unterminated run extends to the end.
+/// quote is an escaped quote; an unterminated run extends to the end. In a
+/// PostgreSQL escape string (`E'...'`) a backslash also escapes the next
+/// byte, so `\'` does not close it; in a standard string a backslash is an
+/// ordinary character.
 fn skip_quoted(bytes: &[u8], start: usize, quote: u8) -> usize {
+    if quote == b'\'' && is_escape_string_prefix(bytes, start) {
+        return skip_escape_string(bytes, start);
+    }
+
     let mut index = start + 1;
 
     while let Some(offset) = bytes
@@ -1169,6 +1186,37 @@ fn skip_quoted(bytes: &[u8], start: usize, quote: u8) -> usize {
         }
 
         return closing + 1;
+    }
+
+    bytes.len()
+}
+
+/// Whether the quote at `quote_index` opens an escape string: it follows an
+/// `E` or `e` that does not end a longer identifier.
+fn is_escape_string_prefix(bytes: &[u8], quote_index: usize) -> bool {
+    let Some(prefix_index) = quote_index.checked_sub(1) else {
+        return false;
+    };
+
+    bytes
+        .get(prefix_index)
+        .is_some_and(|prefix| matches!(prefix, b'E' | b'e'))
+        && !prefix_index
+            .checked_sub(1)
+            .and_then(|before| bytes.get(before))
+            .is_some_and(|before| is_identifier_byte(*before))
+}
+
+fn skip_escape_string(bytes: &[u8], start: usize) -> usize {
+    let mut index = start + 1;
+
+    while let Some(&byte) = bytes.get(index) {
+        match byte {
+            b'\\' => index += 2,
+            b'\'' if bytes.get(index + 1) == Some(&b'\'') => index += 2,
+            b'\'' => return index + 1,
+            _ => index += 1,
+        }
     }
 
     bytes.len()
@@ -2033,6 +2081,50 @@ mod tests {
     fn on_conflict_without_an_action_is_still_reported() {
         let diags = sql_editor_diagnostics("INSERT INTO t (a) VALUES (1) ON CONFLICT (a);");
         assert!(!diags.is_empty());
+    }
+
+    #[test]
+    fn malformed_on_conflict_target_is_still_reported() {
+        for query in [
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT bogus DO NOTHING;",
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT ON t_pkey DO NOTHING;",
+        ] {
+            assert!(
+                !sql_editor_diagnostics(query).is_empty(),
+                "{query:?} reported no diagnostic"
+            );
+            assert!(
+                matches!(mask_unparsed_clauses(query), Cow::Borrowed(_)),
+                "{query:?} was masked"
+            );
+        }
+    }
+
+    #[test]
+    fn escape_strings_with_backslash_quotes_stay_one_literal() {
+        let queries = [
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT (a) WHERE a <> E'it\\'s do' DO NOTHING;",
+            "INSERT INTO t (a) VALUES (E'x\\' on conflict') ON CONFLICT (a) DO NOTHING;",
+        ];
+
+        for query in queries {
+            let diags = sql_editor_diagnostics(query);
+            assert!(diags.is_empty(), "{query:?} produced {diags:?}");
+        }
+
+        assert!(matches!(
+            mask_unparsed_clauses("SELECT E'\\' on commit drop' FROM t"),
+            Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn backslash_in_a_standard_string_is_an_ordinary_character() {
+        let query = "SELECT 'C:\\' AS path FROM t GROUP BY ALL ORDER BY path";
+        assert_eq!(
+            mask_unparsed_clauses(query),
+            "SELECT 'C:\\' AS path FROM t GROUP BY 1   ORDER BY path"
+        );
     }
 
     #[test]
