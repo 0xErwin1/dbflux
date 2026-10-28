@@ -973,6 +973,93 @@ mod tests {
         }));
     }
 
+    /// A query cancelled from the Background tasks panel releases the editor
+    /// at once, even while the driver call has not returned yet.
+    #[gpui::test]
+    fn cancelling_the_query_task_outside_the_editor_releases_the_editor(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app_state = initialized_app_state(cx);
+        let root = FakeConnection::isolated();
+        let profile_id = add_test_profile(cx, &app_state, root.clone());
+        let document = Rc::new(RefCell::new(None));
+        let document_ref = document.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    Some(profile_id),
+                    dbflux_core::QueryLanguage::Sql,
+                    window,
+                    cx,
+                );
+                document.set_content("SELECT 1", window, cx);
+                document
+            });
+            document_ref.replace(Some(document.clone()));
+            Root::new(document, window, cx)
+        });
+        let document = document.borrow().clone().expect("document created");
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        for _ in 0..128 {
+            if window.update(|_, cx| document.read(cx).execution.active_query_task.is_some()) {
+                break;
+            }
+            window.dispatcher.tick(false);
+        }
+        let task_id = window
+            .update(|_, cx| {
+                document
+                    .read(cx)
+                    .execution
+                    .active_query_task
+                    .as_ref()
+                    .map(|task| task.task_id)
+            })
+            .expect("query task started");
+        assert_eq!(root.queries.load(Ordering::SeqCst), 0);
+        assert!(
+            window
+                .update(|_, cx| document.read(cx).state == crate::types::DocumentState::Executing)
+        );
+
+        window.update(|_, cx| {
+            app_state.update(cx, |state, cx| {
+                state.tasks_mut().cancel(task_id);
+                cx.emit(dbflux_ui_base::AppStateChanged);
+            });
+        });
+
+        assert_eq!(
+            root.queries.load(Ordering::SeqCst),
+            0,
+            "the driver call has not returned yet"
+        );
+        assert!(window.update(|_, cx| {
+            let document = document.read(cx);
+            document.state == crate::types::DocumentState::Clean
+                && !document.runner.is_primary_active()
+                && document
+                    .execution
+                    .execution_history
+                    .last()
+                    .is_some_and(|record| record.finished_at.is_some())
+        }));
+
+        window.run_until_parked();
+
+        assert!(window.update(|_, cx| {
+            let document = document.read(cx);
+            document.state == crate::types::DocumentState::Clean
+                && document.execution.active_query_task.is_none()
+        }));
+    }
+
     #[gpui::test]
     fn cancelling_real_isolated_query_preserves_result_and_closes_child_session(
         cx: &mut gpui::TestAppContext,

@@ -2174,15 +2174,47 @@ impl CodeDocument {
         self.execute_query_internal(query, false, ReadOnlyEnforcement::None, window, cx);
     }
 
+    /// Releases the editor when its running query task was cancelled outside
+    /// it, from the Background tasks panel. The driver call keeps running
+    /// until the database answers the cancel, and its completion still records
+    /// the cancellation; without this the editor kept showing a run the user
+    /// had already cancelled for as long as that call blocked.
+    pub(super) fn sync_external_query_cancellation(&mut self, cx: &mut Context<Self>) {
+        if self.state != DocumentState::Executing {
+            return;
+        }
+
+        let Some(task) = self.execution.active_query_task.as_ref() else {
+            return;
+        };
+
+        let cancelled = self
+            .app_state
+            .read(cx)
+            .tasks()
+            .get(task.task_id)
+            .is_some_and(|task| task.status == dbflux_core::TaskStatus::Cancelled);
+
+        if cancelled {
+            self.release_cancelled_execution(cx);
+        }
+    }
+
+    fn release_cancelled_execution(&mut self, cx: &mut Context<Self>) {
+        if let Some(index) = self.execution.active_execution_index
+            && let Some(record) = self.execution.execution_history.get_mut(index)
+            && record.finished_at.is_none()
+        {
+            record.finished_at = Some(Instant::now());
+        }
+
+        self.state = DocumentState::Clean;
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
+    }
+
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
         if self.runner.cancel_primary(cx) {
-            if let Some(index) = self.execution.active_execution_index
-                && let Some(record) = self.execution.execution_history.get_mut(index)
-                && record.finished_at.is_none()
-            {
-                record.finished_at = Some(Instant::now());
-            }
-
             if let Some(task) = self.execution.active_query_task.as_ref() {
                 if !task.uses_isolated_session {
                     self.app_state
@@ -2204,9 +2236,7 @@ impl CodeDocument {
                 self.app_state.read(cx).cancel_query_for_target(&target);
             }
 
-            self.state = DocumentState::Clean;
-            cx.emit(DocumentEvent::MetaChanged);
-            cx.notify();
+            self.release_cancelled_execution(cx);
         }
     }
 
