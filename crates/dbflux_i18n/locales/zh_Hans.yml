@@ -3943,6 +3943,8 @@ palette:
       name: 聚焦任务面板
     toggle_sidebar:
       name: 切换侧边栏
+    toggle_full_screen:
+      name: 切换全屏
     toggle_editor:
       name: 切换编辑器面板
     toggle_results:
@@ -4355,6 +4357,7 @@ settings:
       cancel_task: 取消任务
       clear_finished_tasks: 清除已完成任务
       toggle_sidebar: 切换侧边栏
+      toggle_full_screen: 切换全屏
       open_settings: 打开设置
       open_login_modal: 打开认证配置文件登录
       open_sso_wizard: 打开 AWS SSO 向导

@@ -3943,6 +3943,8 @@ palette:
       name: Focar no painel de tarefas
     toggle_sidebar:
       name: Alternar barra lateral
+    toggle_full_screen:
+      name: Alternar tela cheia
     toggle_editor:
       name: Alternar painel do editor
     toggle_results:
@@ -4355,6 +4357,7 @@ settings:
       cancel_task: Cancelar tarefa
       clear_finished_tasks: Limpar tarefas concluídas
       toggle_sidebar: Alternar barra lateral
+      toggle_full_screen: Alternar tela cheia
       open_settings: Abrir configurações
       open_login_modal: Abrir login do perfil de autenticação
       open_sso_wizard: Abrir assistente AWS SSO

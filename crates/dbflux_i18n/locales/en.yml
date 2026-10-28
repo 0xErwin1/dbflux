@@ -3943,6 +3943,8 @@ palette:
       name: Focus tasks panel
     toggle_sidebar:
       name: Toggle sidebar
+    toggle_full_screen:
+      name: Toggle full screen
     toggle_editor:
       name: Toggle editor panel
     toggle_results:
@@ -4355,6 +4357,7 @@ settings:
       cancel_task: Cancel task
       clear_finished_tasks: Clear finished tasks
       toggle_sidebar: Toggle sidebar
+      toggle_full_screen: Toggle full screen
       open_settings: Open settings
       open_login_modal: Open auth profile login
       open_sso_wizard: Open AWS SSO wizard
