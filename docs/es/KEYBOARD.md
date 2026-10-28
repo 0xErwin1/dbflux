@@ -864,10 +864,10 @@ Las teclas aparecen en el contexto Migrate Wizard de Settings > Keybindings.
 
 Mientras escribes en un campo de texto fuera de un diálogo, como la búsqueda de
 la sidebar o la barra de contexto de ejecución, los atajos globales que llevan
-`Ctrl` o `Cmd` siguen funcionando: `Ctrl+Tab`, `Ctrl+1` .. `Ctrl+9`, `Ctrl+w`,
-`Ctrl+Shift+P` y los demás de [Global](#global-disponible-sin-importar-el-foco).
-Las teclas sin esos modificadores, incluidas `Tab`, `Escape`, `Enter` y las
-flechas, se quedan en el campo. Un atajo que el propio campo define, como
+`Ctrl` o `Cmd`, o que empiezan con una tecla de función como `F11`, siguen
+funcionando: `Ctrl+Tab`, `Ctrl+1` .. `Ctrl+9`, `Ctrl+w`, `Ctrl+Shift+P` y los
+demás de [Global](#global-disponible-sin-importar-el-foco). Las demás teclas,
+incluidas `Tab`, `Escape`, `Enter` y las flechas, se quedan en el campo. Un atajo que el propio campo define, como
 `Ctrl+a` o `Ctrl+c`, tiene prioridad sobre el global. Dentro de un diálogo, un
 menú, un desplegable o un selector, los atajos globales esperan a que se cierre.
 

@@ -1023,8 +1023,9 @@ fn overlay_roots_do_not_keep_the_global_chords() {
 }
 
 /// The copies of the global chords follow the user's overrides: a rebound
-/// chord moves, a shortcut moved to a bare key or to a predicate of the
-/// user's own stays out of the text roots.
+/// chord moves, a shortcut moved to a function key comes along, and one
+/// moved to a bare letter or to a predicate of the user's own stays out of
+/// the text roots.
 #[test]
 fn global_chords_in_text_roots_follow_the_overrides() {
     let next_tab = BindingSlot::new(
@@ -1042,6 +1043,11 @@ fn global_chords_in_text_roots_follow_the_overrides() {
         Command::ToggleCommandPalette,
         KeyChord::new("p", Modifiers::primary_shift()),
     );
+    let prev_tab = BindingSlot::new(
+        ContextId::Global,
+        Command::PrevTab,
+        KeyChord::new("tab", Modifiers::ctrl_shift()),
+    );
 
     let mut overrides = KeymapOverrides::new();
     overrides.set(
@@ -1054,6 +1060,10 @@ fn global_chords_in_text_roots_follow_the_overrides() {
     overrides.set(
         close_tab,
         Some(KeySequence::from(KeyChord::new("f4", Modifiers::none()))),
+    );
+    overrides.set(
+        prev_tab,
+        Some(KeySequence::from(KeyChord::new("x", Modifiers::none()))),
     );
     overrides.set_predicate(palette, Some("Editor && !Modal".to_string()));
 
@@ -1069,7 +1079,12 @@ fn global_chords_in_text_roots_follow_the_overrides() {
     let rebound = top_action(&keymap, "ctrl-shift-j", stack).expect("the rebound chord");
     assert!(runs_command(rebound.as_ref(), Command::NextTab));
     assert!(top_action(&keymap, "ctrl-tab", stack).is_none());
-    assert!(top_action(&keymap, "f4", stack).is_none());
+    let function_key = top_action(&keymap, "f4", stack).expect("the function key");
+    assert!(runs_command(
+        function_key.as_ref(),
+        Command::CloseCurrentTab
+    ));
+    assert!(top_action(&keymap, "x", stack).is_none());
     assert!(top_action(&keymap, "ctrl-shift-p", stack).is_none());
 }
 
@@ -1453,6 +1468,41 @@ fn toggle_full_screen_has_a_global_default_chord() {
     );
     let action = top_action(&keymap, chord, &stack).expect("bound");
     assert!(runs_command(action.as_ref(), Command::ToggleFullScreen));
+}
+
+/// A function key types no character, so a global binding on one reaches the
+/// text roots like a Ctrl or Cmd chord does, and stops at dialogs the same way.
+#[test]
+fn toggle_full_screen_reaches_text_roots_and_stops_at_dialogs() {
+    let keymap = native_keymap();
+
+    #[cfg(target_os = "macos")]
+    let chord = "ctrl-cmd-f";
+    #[cfg(not(target_os = "macos"))]
+    let chord = "f11";
+
+    for context in [ContextId::TextInput, ContextId::ContextBar] {
+        let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+        let inside_input = element_stack(root.clone(), &["Input"]);
+
+        for stack in [std::slice::from_ref(&root), inside_input.as_slice()] {
+            let action = top_action(&keymap, chord, stack)
+                .unwrap_or_else(|| panic!("`{chord}` must be bound in {context:?}"));
+            assert!(
+                runs_command(action.as_ref(), Command::ToggleFullScreen),
+                "`{chord}` in {context:?} must toggle full screen, got {}",
+                action.name()
+            );
+        }
+    }
+
+    for context in [ContextId::ConfirmModal, ContextId::CommandPalette] {
+        let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+        assert!(
+            top_action(&keymap, chord, std::slice::from_ref(&root)).is_none(),
+            "`{chord}` must not fire while {context:?} owns the keyboard"
+        );
+    }
 }
 
 #[test]

@@ -261,6 +261,14 @@ impl KeyChord {
     pub fn has_ctrl_or_cmd(&self) -> bool {
         self.modifiers.ctrl || self.modifiers.platform
     }
+
+    /// Returns true if the key is a function key, `f1` through `f24`.
+    pub fn is_function_key(&self) -> bool {
+        self.key
+            .strip_prefix('f')
+            .and_then(|number| number.parse::<u8>().ok())
+            .is_some_and(|number| (1..=24).contains(&number))
+    }
 }
 
 impl fmt::Display for KeyChord {
@@ -348,10 +356,12 @@ impl KeySequence {
 
     /// Whether a global binding on these keys is one of the global chords
     /// (see `ContextId::inherits_global_chords`): its first key holds Ctrl or
-    /// Cmd. Alt alone does not count, since Alt with a letter types a
-    /// character on macOS and on many keyboard layouts.
+    /// Cmd, or is a function key. Both leave the text being typed alone. Alt
+    /// alone does not count, since Alt with a letter types a character on
+    /// macOS and on many keyboard layouts.
     pub fn is_global_chord(&self) -> bool {
-        self.first().has_ctrl_or_cmd()
+        let first = self.first();
+        first.has_ctrl_or_cmd() || first.is_function_key()
     }
 
     /// Whether `self` is a strict prefix of `other`: pressing `self` leaves
@@ -455,6 +465,25 @@ mod tests {
         assert!(chord.modifiers.ctrl);
         assert!(chord.modifiers.shift);
         assert!(!chord.modifiers.alt);
+    }
+
+    #[test]
+    fn function_keys_are_global_chords_and_plain_letters_are_not() {
+        let global = |text: &str| {
+            KeySequence::new(vec![KeyChord::parse(text).unwrap()])
+                .unwrap()
+                .is_global_chord()
+        };
+
+        assert!(global("F11"));
+        assert!(global("F1"));
+        assert!(global("F24"));
+        assert!(global("Ctrl+f"));
+        assert!(!global("f"));
+        assert!(!global("Shift+f"));
+        assert!(!global("Alt+f"));
+        assert!(!global("F25"));
+        assert!(!global("F0"));
     }
 
     #[test]
