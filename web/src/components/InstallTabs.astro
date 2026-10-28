@@ -36,6 +36,12 @@ const PLATFORMS: readonly Platform[] = [
     command:
       'curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/install.sh | sudo bash',
   },
+  {
+    id: 'homebrew',
+    label: 'Homebrew',
+    icon: 'square-terminal',
+    command: 'brew install --cask 0xErwin1/dbflux/dbflux',
+  },
   { id: 'arch', label: 'Arch', icon: 'square-terminal', command: 'paru -S dbflux' },
   {
     id: 'nix',

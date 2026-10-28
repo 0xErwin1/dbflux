@@ -390,6 +390,7 @@ export const zh_Hans: Dictionary = {
     platforms_label: '平台',
     note: {
       linux: '不想用 sudo？追加 -s -- --prefix ~/.local。',
+      homebrew: 'macOS 与 Linux。在 macOS 上打开时不会出现 Gatekeeper 提示。',
       arch: '也可以通过 yay 从 AUR 安装。',
       nix: '也提供 nightly flake 输出。',
       macos: 'Apple Silicon 与 Intel。需要 macOS 11 或更高版本。尚未签名。',

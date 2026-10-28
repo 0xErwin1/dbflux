@@ -398,6 +398,7 @@ export const es: Dictionary = {
     platforms_label: 'Plataforma',
     note: {
       linux: '¿Prefieres no usar sudo? Añade -s -- --prefix ~/.local.',
+      homebrew: 'macOS y Linux. En macOS abre sin el aviso de Gatekeeper.',
       arch: 'También en AUR mediante yay.',
       nix: 'También hay una salida nightly del flake.',
       macos: 'Apple Silicon e Intel. macOS 11 o posterior. Aún sin firmar.',
