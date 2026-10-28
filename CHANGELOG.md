@@ -2,7 +2,7 @@
 
 All notable changes to DBFlux will be documented in this file.
 
-## [Unreleased]
+## [0.9.0] - 2026-10-27
 
 ### Added
 * **JSON columns as documents on PostgreSQL** — A PostgreSQL table with a `json` or `jsonb` column offers a Document view next to the grid (the view switch in the filter row): each row opens as a document with its JSON values expanded into nested fields. The tree is read-only, and edits go through the grid.
