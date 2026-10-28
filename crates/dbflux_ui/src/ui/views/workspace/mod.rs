@@ -1652,6 +1652,14 @@ impl Workspace {
                             this.workspace_inspector.update(cx, |insp, cx| {
                                 insp.hide(cx);
                             });
+
+                            // The focused document is gone and no tab is left
+                            // to take it, so keyboard focus would land nowhere.
+                            // Focus elsewhere is left alone: a deferred close
+                            // can land while the user works in another area.
+                            if this.focus_target == FocusTarget::Document {
+                                this.set_focus(FocusTarget::Sidebar, window, cx);
+                            }
                         }
 
                         this.write_session_manifest(cx);
@@ -2952,6 +2960,75 @@ mod tab_close_request_tests {
                     .document(document_id)
                     .is_none(),
                 "the workspace must close the tab whose document asked"
+            );
+        });
+    }
+
+    /// Regression (#1199): closing the last tab dropped the focused document and
+    /// left keyboard focus nowhere, so sidebar navigation and shortcuts stopped
+    /// responding until the user clicked.
+    #[gpui::test]
+    fn closing_the_last_tab_hands_focus_to_the_sidebar(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let document_id = open_code_tab(window, &workspace, &app_state);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        close_tab(window, &workspace, document_id);
+
+        window.update(|window, cx| {
+            let workspace = workspace.read(cx);
+            assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+            assert!(
+                workspace.focus_handle.is_focused(window),
+                "the sidebar must hold keyboard focus once no tab is left"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn closing_a_tab_with_others_left_keeps_focus_on_the_document(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        open_code_tab(window, &workspace, &app_state);
+        let closed = open_code_tab(window, &workspace, &app_state);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        close_tab(window, &workspace, closed);
+
+        window.update(|_, cx| {
+            assert_eq!(workspace.read(cx).focus_target, FocusTarget::Document);
+        });
+    }
+
+    /// A tab can close while the user works elsewhere (a deferred close lands
+    /// after its save), so the last close must not pull focus away from an
+    /// area the user moved to.
+    #[gpui::test]
+    fn closing_the_last_tab_leaves_focus_outside_the_document_alone(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let document_id = open_code_tab(window, &workspace, &app_state);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::BackgroundTasks, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        close_tab(window, &workspace, document_id);
+
+        window.update(|_, cx| {
+            assert_eq!(
+                workspace.read(cx).focus_target,
+                FocusTarget::BackgroundTasks
             );
         });
     }
