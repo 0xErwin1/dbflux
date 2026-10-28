@@ -79,12 +79,23 @@ class HomebrewCaskTests(unittest.TestCase):
         self.render()
 
         cask = self.output.read_text(encoding="utf-8")
-        macos = cask.split("on_macos do", 1)[1].split("\n  end\n", 1)[0]
-        linux = cask.split("on_linux do", 1)[1].split("\n  end\n", 1)[0]
+        macos = cask.split("  on_macos do", 1)[1].split("\n  end\n", 1)[0]
+        linux = cask.split("  on_linux do", 1)[1].split("\n  end\n", 1)[0]
         self.assertIn('app "DBFlux.app"', macos)
-        self.assertIn('"-dr", "com.apple.quarantine", "#{appdir}/DBFlux.app"', macos)
         self.assertIn('binary "dbflux"', linux)
         self.assertNotIn("quarantine", linux)
+
+    def test_removes_the_quarantine_attribute_on_macos_only(self):
+        self.render()
+
+        cask = self.output.read_text(encoding="utf-8")
+        steps = cask.split("  postflight_steps do\n", 1)[1]
+        self.assertTrue(steps.startswith("    on_macos do\n"), steps)
+        self.assertIn(
+            'run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/DBFlux.app"]',
+            steps,
+        )
+        self.assertNotIn("postflight do", cask)
 
     def test_rejects_a_prerelease_version_and_writes_nothing(self):
         result = self.render(version="0.10.0-rc.1")

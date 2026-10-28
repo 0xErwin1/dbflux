@@ -35,36 +35,36 @@ cask "dbflux" do
          arm64_linux:  "{arm64_linux}",
          x86_64_linux: "{x86_64_linux}"
 
-  name "DBFlux"
-  desc "Keyboard-first database client"
-  homepage "https://dbflux.dev"
-
-  livecheck do
-    url "https://github.com/0xErwin1/dbflux"
-    strategy :github_latest
-  end
-
   on_macos do
     url "https://github.com/0xErwin1/dbflux/releases/download/v#{{version}}/dbflux-macos-#{{arch}}.dmg"
 
     app "DBFlux.app"
 
-    # The app is not notarized, so Gatekeeper would refuse to open it after
-    # every install and upgrade.
-    postflight do
-      system_command "/usr/bin/xattr",
-                     args: ["-dr", "com.apple.quarantine", "#{{appdir}}/DBFlux.app"]
-    end
-
     zap trash: "~/Library/Application Support/dbflux"
   end
-
   on_linux do
     url "https://github.com/0xErwin1/dbflux/releases/download/v#{{version}}/dbflux-linux-#{{arch}}.tar.gz"
 
     binary "dbflux"
 
     zap trash: "~/.local/share/dbflux"
+  end
+
+  name "DBFlux"
+  desc "Keyboard-first database client"
+  homepage "https://dbflux.dev/"
+
+  livecheck do
+    url "https://github.com/0xErwin1/dbflux"
+    strategy :github_latest
+  end
+
+  # The app is not notarized, so Gatekeeper would refuse to open it after
+  # every install and upgrade.
+  postflight_steps do
+    on_macos do
+      run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{{{appdir}}}}/DBFlux.app"]
+    end
   end
 end
 """
