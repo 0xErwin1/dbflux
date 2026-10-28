@@ -294,6 +294,8 @@ RC가 깨끗할 때 `release/vX.Y`에서 수행합니다:
 `web/versions.json`은 릴리스마다 하는 버전 올림에 포함되지 않습니다. 마이너의 생성, 안정 승격, EOL 때 바뀝니다([웹사이트](#웹사이트) 참조).
 
 AUR `PKGBUILD`는 이 리포지토리가 아닌 **외부 AUR 리포지토리**에 있습니다. 안정 태그에만 올립니다.
+
+Homebrew cask는 외부 tap `0xErwin1/homebrew-dbflux`에 있습니다. 게시된 안정 태그에서는 `homebrew-tap` 잡이 자동으로 갱신하므로, 잡이 성공했는지 확인합니다([Homebrew tap](#homebrew-tap) 참조).
 ## 나이틀리 동작 방식
 
 `.github/workflows/nightly.yml`은 매일 03:17 UTC에 실행됩니다:
@@ -351,11 +353,11 @@ git log --grep='cherry picked from' release/vX.Y
 
 ## 다운스트림 채널
 
-| 태그 종류 (GitHub Release)  | AUR         | Nix flake (이 리포지토리)                    | nixpkgs (향후)   |
-|-----------------------------|-------------|-----------------------------------------------|------------------|
-| nightly (프리릴리스)        | 건너뜀      | 자동 고정 — nightly ref의 `#dbflux-nightly`   | 건너뜀           |
-| `-rc.N` (프리릴리스)        | 건너뜀      | 릴리스 브랜치와 main의 `release-info` 갱신    | 건너뜀           |
-| 안정 `vX.Y.Z` (게시됨)      | 갱신 + 푸시 | 릴리스 브랜치와 main의 `release-info` 갱신    | 갱신 + PR        |
+| 태그 종류 (GitHub Release)  | AUR         | Nix flake (이 리포지토리)                    | nixpkgs (향후)   | Homebrew tap |
+|-----------------------------|-------------|-----------------------------------------------|------------------|-----------------------------|
+| nightly (프리릴리스)        | 건너뜀      | 자동 고정 — nightly ref의 `#dbflux-nightly`   | 건너뜀           | 건너뜀 |
+| `-rc.N` (프리릴리스)        | 건너뜀      | 릴리스 브랜치와 main의 `release-info` 갱신    | 건너뜀           | 건너뜀 |
+| 안정 `vX.Y.Z` (게시됨)      | 갱신 + 푸시 | 릴리스 브랜치와 main의 `release-info` 갱신    | 갱신 + PR        | 자동 — `homebrew-tap` 잡 |
 
 ### AUR
 
@@ -395,6 +397,28 @@ nix build .#dbflux-bin --no-link --print-out-paths
 ```bash
 nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
 ```
+
+### Homebrew tap
+
+`.github/workflows/release.yml`의 `homebrew-tap` 잡은 릴리스 잡 뒤에, 게시된 안정 태그에서만 실행됩니다(RC, 나이틀리, 드래프트에서는 실행되지 않습니다). 릴리스의 `.sha256` 파일 네 개(macOS DMG 두 개와 Linux tarball 두 개)를 내려받아 `scripts/homebrew_cask.py`로 `Casks/dbflux.rb`를 생성하고 [`0xErwin1/homebrew-dbflux`](https://github.com/0xErwin1/homebrew-dbflux)에 푸시합니다.
+
+| 경우 | 동작 |
+|------|------|
+| `HOMEBREW_TAP_TOKEN` 없음 | 잡이 경고를 남기고 건너뜁니다. tap은 이전 버전을 유지합니다. |
+| 토큰 만료 또는 폐기 | 잡이 실패합니다. 토큰을 갱신하고 시크릿을 업데이트한 뒤, 잡을 다시 실행하거나 cask를 수동으로 갱신합니다. |
+| tap의 버전보다 오래된 태그(이전 라인의 패치) | 경고와 함께 cask를 그대로 둡니다. tap은 절대 이전 버전으로 돌아가지 않습니다. |
+
+`HOMEBREW_TAP_TOKEN`은 `0xErwin1/homebrew-dbflux`에만 한정된 **Contents: read and write** 권한의 fine-grained 개인 액세스 토큰입니다.
+
+잡이 실패한 뒤 cask를 수동으로 갱신하려면, 릴리스의 `.sha256` 파일 네 개를 한 디렉터리에 내려받은 다음 실행합니다:
+
+```bash
+python3 scripts/homebrew_cask.py --version X.Y.Z \
+  --checksums <.sha256 파일 네 개가 있는 디렉터리> \
+  --output <tap 체크아웃>/Casks/dbflux.rb
+```
+
+tap 체크아웃에서 변경을 커밋하고 푸시합니다.
 
 ### nixpkgs (향후)
 

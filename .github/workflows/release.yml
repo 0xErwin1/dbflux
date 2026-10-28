@@ -317,3 +317,81 @@ jobs:
             artifacts/macos-*/*.dmg
             artifacts/windows-*/*.zip
             artifacts/windows-*/*-setup.exe
+
+  # Points the Homebrew cask in 0xErwin1/homebrew-dbflux at this release. Only
+  # published stable tags qualify: the classify safety net makes an unknown
+  # tag a stable *draft*, whose assets are not public yet.
+  homebrew-tap:
+    name: Update Homebrew tap
+    needs: [classify, release]
+    if: needs.classify.outputs.channel == 'stable' && needs.classify.outputs.draft == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check for the tap token
+        id: token
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set; the Homebrew tap was not updated."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repository
+        if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Checkout the tap
+        if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: 0xErwin1/homebrew-dbflux
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Download the release checksums
+        if: steps.token.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.classify.outputs.version }}
+        run: |
+          gh release download "v${VERSION}" --repo "$GITHUB_REPOSITORY" --dir checksums \
+            --pattern 'dbflux-macos-*.dmg.sha256' \
+            --pattern 'dbflux-linux-*.tar.gz.sha256'
+
+      # A patch on an older release line is stable too; it must not move the
+      # cask back from a newer version.
+      - name: Update the cask
+        if: steps.token.outputs.present == 'true'
+        env:
+          VERSION: ${{ needs.classify.outputs.version }}
+        run: |
+          CURRENT="$(sed -n 's/^  version "\(.*\)"$/\1/p' tap/Casks/dbflux.rb 2>/dev/null || true)"
+          if [ -n "$CURRENT" ]; then
+            NEWEST="$(printf '%s\n%s\n' "$CURRENT" "$VERSION" | sort -V | tail -n 1)"
+            if [ "$NEWEST" != "$VERSION" ]; then
+              echo "::warning::The tap already ships ${CURRENT}, newer than ${VERSION}; the cask was left unchanged."
+              exit 0
+            fi
+          fi
+
+          python3 scripts/homebrew_cask.py \
+            --version "$VERSION" \
+            --checksums checksums \
+            --output tap/Casks/dbflux.rb
+
+          cd tap
+          if git diff --quiet; then
+            echo "The cask already points at ${VERSION}."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "dbflux ${VERSION}"
+          git push origin HEAD
