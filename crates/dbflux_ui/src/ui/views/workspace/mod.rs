@@ -382,6 +382,10 @@ pub struct Workspace {
     pending_open_script: Option<PendingOpenScript>,
     pending_open_routine: Option<PendingOpenRoutine>,
     needs_focus_restore: bool,
+    /// Set when the last tab closed under an open overlay: once every overlay
+    /// is gone, the sidebar takes keyboard focus, since an overlay may hand it
+    /// back to the closed document or to nothing at all.
+    focus_sidebar_after_overlays: bool,
 
     /// Active pipeline progress watcher for pipeline-enabled connects.
     pipeline_progress: Option<Entity<pipeline::PipelineProgress>>,
@@ -1652,6 +1656,21 @@ impl Workspace {
                             this.workspace_inspector.update(cx, |insp, cx| {
                                 insp.hide(cx);
                             });
+
+                            // The focused document is gone and no tab is left
+                            // to take it, so keyboard focus would land nowhere.
+                            // Focus elsewhere is left alone: a deferred close
+                            // can land while the user works in another area.
+                            // An open overlay keeps the keyboard until it
+                            // closes; render then hands it to the sidebar.
+                            if this.focus_target == FocusTarget::Document {
+                                if this.overlay_context(cx).is_some() {
+                                    this.mark_focus_target(FocusTarget::Sidebar, cx);
+                                    this.focus_sidebar_after_overlays = true;
+                                } else {
+                                    this.set_focus(FocusTarget::Sidebar, window, cx);
+                                }
+                            }
                         }
 
                         this.write_session_manifest(cx);
@@ -1711,6 +1730,7 @@ impl Workspace {
             pending_open_script: None,
             pending_open_routine: None,
             needs_focus_restore: false,
+            focus_sidebar_after_overlays: false,
             pipeline_progress: None,
             _pipeline_subscription: None,
             focus_target: FocusTarget::default(),
@@ -2596,6 +2616,7 @@ mod tab_close_request_tests {
     use dbflux_core::QueryLanguage;
     use dbflux_core::document_id::DocumentId;
     use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::modals::DeleteConfirmRequest;
     use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -2952,6 +2973,211 @@ mod tab_close_request_tests {
                     .document(document_id)
                     .is_none(),
                 "the workspace must close the tab whose document asked"
+            );
+        });
+    }
+
+    /// Regression: closing the last tab dropped the focused document and
+    /// left keyboard focus nowhere, so sidebar navigation and shortcuts stopped
+    /// responding until the user clicked.
+    #[gpui::test]
+    fn closing_the_last_tab_hands_focus_to_the_sidebar(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let document_id = open_code_tab(window, &workspace, &app_state);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        close_tab(window, &workspace, document_id);
+
+        window.update(|window, cx| {
+            let workspace = workspace.read(cx);
+            assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+            assert!(
+                workspace.focus_handle.is_focused(window),
+                "the sidebar must hold keyboard focus once no tab is left"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn closing_a_tab_with_others_left_keeps_focus_on_the_document(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        open_code_tab(window, &workspace, &app_state);
+        let closed = open_code_tab(window, &workspace, &app_state);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        close_tab(window, &workspace, closed);
+
+        window.update(|_, cx| {
+            assert_eq!(workspace.read(cx).focus_target, FocusTarget::Document);
+        });
+    }
+
+    /// An overlay owns the keyboard without changing the focus target, so a
+    /// deferred close landing while it is open must not pull focus out of it.
+    /// The sidebar takes focus once the overlay closes.
+    #[gpui::test]
+    fn closing_the_last_tab_under_an_overlay_keeps_the_overlay_focused(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let document_id = open_code_tab(window, &workspace, &app_state);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace.toggle_command_palette(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        close_tab(window, &workspace, document_id);
+
+        window.update(|window, cx| {
+            let workspace = workspace.read(cx);
+            assert!(workspace.command_palette.read(cx).is_visible());
+            assert!(
+                !workspace.focus_handle.is_focused(window),
+                "the open palette must keep keyboard focus"
+            );
+            assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+        });
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.toggle_command_palette(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            assert!(
+                workspace.read(cx).focus_handle.is_focused(window),
+                "closing the palette must hand focus to the sidebar"
+            );
+        });
+    }
+
+    /// The SQL preview does not hand focus back when it closes, so the
+    /// workspace has to move it once no overlay is left.
+    #[gpui::test]
+    fn closing_the_sql_preview_after_the_last_tab_focuses_the_sidebar(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let document_id = open_code_tab(window, &workspace, &app_state);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace.sql_preview_modal.update(cx, |modal, cx| {
+                    modal.open_query_preview(
+                        QueryLanguage::Sql,
+                        "SQL",
+                        "SELECT 1".to_string(),
+                        window,
+                        cx,
+                    );
+                });
+            });
+        });
+        window.run_until_parked();
+
+        close_tab(window, &workspace, document_id);
+
+        window.update(|window, cx| {
+            assert!(
+                !workspace.read(cx).focus_handle.is_focused(window),
+                "the open preview must keep keyboard focus"
+            );
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .sql_preview_modal
+                    .update(cx, |modal, cx| modal.close(cx));
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            assert!(
+                workspace.read(cx).focus_handle.is_focused(window),
+                "closing the preview must hand focus to the sidebar"
+            );
+        });
+    }
+
+    /// A modal restores the handle that was focused when it opened, which
+    /// belongs to the closed document; the sidebar must win over it.
+    #[gpui::test]
+    fn closing_a_modal_after_the_last_tab_focuses_the_sidebar(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let document_id = open_code_tab(window, &workspace, &app_state);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.modal_delete_dashboard.update(cx, |modal, cx| {
+                    modal.open(
+                        DeleteConfirmRequest::Dashboard {
+                            dashboard_id: uuid::Uuid::new_v4(),
+                            dashboard_name: "Sales".to_string(),
+                        },
+                        cx,
+                    );
+                });
+            });
+        });
+        window.run_until_parked();
+
+        close_tab(window, &workspace, document_id);
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .modal_delete_dashboard
+                    .update(cx, |modal, cx| modal.cancel(cx));
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            let workspace = workspace.read(cx);
+            assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+            assert!(
+                workspace.focus_handle.is_focused(window),
+                "closing the modal must hand focus to the sidebar"
+            );
+        });
+    }
+
+    /// A tab can close while the user works elsewhere (a deferred close lands
+    /// after its save), so the last close must not pull focus away from an
+    /// area the user moved to.
+    #[gpui::test]
+    fn closing_the_last_tab_leaves_focus_outside_the_document_alone(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let document_id = open_code_tab(window, &workspace, &app_state);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::BackgroundTasks, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        close_tab(window, &workspace, document_id);
+
+        window.update(|_, cx| {
+            assert_eq!(
+                workspace.read(cx).focus_target,
+                FocusTarget::BackgroundTasks
             );
         });
     }

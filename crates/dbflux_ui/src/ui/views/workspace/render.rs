@@ -230,6 +230,16 @@ impl Render for Workspace {
             self.set_focus(self.focus_target, window, cx);
         }
 
+        // Runs after the overlays' own focus restore, which may point at the
+        // document that closed. A focus move made while the overlay was open
+        // changed the target and wins.
+        if self.focus_sidebar_after_overlays && self.overlay_context(cx).is_none() {
+            self.focus_sidebar_after_overlays = false;
+            if self.focus_target == FocusTarget::Sidebar {
+                self.set_focus(FocusTarget::Sidebar, window, cx);
+            }
+        }
+
         // Open the login modal on behalf of a settings-window auth-profile login.
         if let Some((provider_name, profile_name, url)) = self.pending_login_modal_open.take() {
             self.login_modal.update(cx, |modal, cx| {
