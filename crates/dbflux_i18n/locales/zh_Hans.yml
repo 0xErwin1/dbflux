@@ -3420,6 +3420,10 @@ document:
       refresh: "刷新"
     load_more: "加载下一页"
     loading_more: "正在加载下一页…"
+    region:
+      label: "区域"
+      retry: "重试"
+      switch_failed: "无法切换到区域 %{region}：%{error}"
     columns:
       name: "名称"
       description: "描述"

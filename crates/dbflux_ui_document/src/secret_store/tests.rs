@@ -19,7 +19,10 @@ use dbflux_test_support::fake_driver::{
 };
 use dbflux_ui_base::AppStateEntity;
 use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+use std::sync::Arc;
 use uuid::Uuid;
+
+use super::RegionListState;
 
 const KEY_VALUE_SECRET: &str = "prod/api/credentials";
 const MANAGED_SECRET: &str = "prod/db/master";
@@ -704,6 +707,262 @@ fn the_reveal_all_button_names_what_it_will_do(cx: &mut TestAppContext) {
     assert!(!revealed.contains("Reveal all"), "revealed: {revealed}");
 }
 
+// -- Region switch ---------------------------------------------------------
+
+const CURRENT_REGION: &str = "us-east-1";
+const OTHER_REGION: &str = "eu-west-1";
+
+/// An app state whose profile is an `aws_secrets` connection the manager can
+/// switch by region: the fake driver is registered under the built-in driver
+/// id the profile resolves to, so `prepare_switch_region` finds it.
+fn connected_aws_app_state(
+    cx: &mut TestAppContext,
+    driver: &FakeDriver,
+) -> (Entity<AppStateEntity>, Uuid) {
+    let profile_id = Uuid::new_v4();
+
+    let app_state = cx.update(|cx| {
+        cx.new(|_| {
+            let runtime =
+                dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("in-memory storage");
+            dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                .expect("test storage setup")
+        })
+    });
+
+    let profile = dbflux_core::ConnectionProfile::new(
+        "prod-aws",
+        dbflux_core::DbConfig::AwsSecrets {
+            region: CURRENT_REGION.to_string(),
+            profile: None,
+            access_key_id: None,
+            endpoint: None,
+        },
+    );
+    let connection = driver.connect_arc(&profile).expect("fake connection");
+
+    cx.update(|cx| {
+        app_state.update(cx, |state, _| {
+            state
+                .facade
+                .connections
+                .drivers
+                .insert("aws_secrets".to_string(), Arc::new(driver.clone()));
+            state.connections_mut().insert(
+                profile_id,
+                dbflux_core::ConnectedProfile {
+                    profile,
+                    connection,
+                    schema: None,
+                    mutation_policy: dbflux_core::MutationPolicy::default(),
+                    read_only_reason: None,
+                    database_schemas: Default::default(),
+                    table_details: Default::default(),
+                    collection_children: Default::default(),
+                    schema_types: Default::default(),
+                    schema_columns: Default::default(),
+                    schema_indexes: Default::default(),
+                    schema_foreign_keys: Default::default(),
+                    schema_routines: Default::default(),
+                    dependents_cache: Default::default(),
+                    active_database: None,
+                    redis_key_cache: Default::default(),
+                    database_connections: Default::default(),
+                    proxy_tunnel: None,
+                },
+            );
+        });
+    });
+
+    (app_state, profile_id)
+}
+
+fn open_region_doc<'a>(
+    cx: &'a mut TestAppContext,
+    regions: &[&str],
+    list_error: Option<String>,
+) -> Opened<'a> {
+    init_keyboard_runtime(cx);
+
+    let driver = FakeDriver::new(DbKind::AwsSecrets).with_region_switch(regions);
+    driver.set_region_list_error(list_error);
+    let (app_state, profile_id) = connected_aws_app_state(cx, &driver);
+
+    let state = app_state.clone();
+    let store_id = FAKE_SECRETS_STORE_ID.to_string();
+
+    let (doc, window) = cx.add_window_view(move |window, cx| {
+        SecretStoreDocument::new(profile_id, store_id, None, state, window, cx)
+    });
+    window.run_until_parked();
+
+    Opened {
+        doc,
+        window,
+        driver,
+        app_state,
+    }
+}
+
+fn open_with_regions<'a>(cx: &'a mut TestAppContext, regions: &[&str]) -> Opened<'a> {
+    open_region_doc(cx, regions, None)
+}
+
+/// The region picker only exists when the connection's driver advertises
+/// `REGION_SWITCH`; a driver without it renders nothing regional.
+#[gpui::test]
+fn the_region_control_is_offered_only_when_the_driver_supports_it(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    assert!(!opened.read(|doc| doc.supports_region_switch()));
+    let text = opened.rendered_text();
+    assert!(!text.contains(CURRENT_REGION), "{text}");
+    drop(opened);
+
+    let mut opened = open_with_regions(cx, &[OTHER_REGION, CURRENT_REGION]);
+    assert!(opened.read(|doc| doc.supports_region_switch()));
+    let text = opened.rendered_text();
+    assert!(text.contains(CURRENT_REGION), "{text}");
+}
+
+/// With the capability, the picker offers exactly the regions the
+/// connection lists, sorted, with the current one shown as its value.
+#[gpui::test]
+fn the_region_control_offers_the_regions_the_connection_lists(cx: &mut TestAppContext) {
+    let mut opened = open_with_regions(cx, &[OTHER_REGION, "ap-south-1", CURRENT_REGION]);
+
+    let regions = opened.read(|doc| match doc.regions() {
+        RegionListState::Loaded(regions) => regions.clone(),
+        other => panic!("regions not loaded: {other:?}"),
+    });
+    assert_eq!(
+        regions,
+        vec![
+            "ap-south-1".to_string(),
+            OTHER_REGION.to_string(),
+            CURRENT_REGION.to_string(),
+        ]
+    );
+
+    let text = opened.rendered_text();
+    assert!(text.contains(CURRENT_REGION), "{text}");
+}
+
+/// A failed region listing is shown with a retry and never as an empty
+/// picker; retrying asks the connection again.
+#[gpui::test]
+fn a_failed_region_list_is_reported_and_retriable(cx: &mut TestAppContext) {
+    let message = "AccessDenied: not authorized to perform ec2:DescribeRegions";
+    let mut opened = open_region_doc(cx, &[CURRENT_REGION], Some(message.to_string()));
+
+    assert!(matches!(
+        opened.read(|doc| doc.regions().clone()),
+        RegionListState::Failed(text) if text.contains(message)
+    ));
+
+    let text = opened.rendered_text();
+    assert!(text.contains(message), "{text}");
+    assert!(
+        text.contains(&dbflux_i18n::t!("document.secret_store.region.retry")),
+        "{text}"
+    );
+    assert!(!text.contains(CURRENT_REGION), "no picker: {text}");
+
+    opened.driver.set_region_list_error(None);
+    opened.update(|doc, cx| doc.load_regions(cx));
+
+    assert_eq!(opened.driver.available_regions_calls(), 2);
+    assert!(matches!(
+        opened.read(|doc| doc.regions().clone()),
+        RegionListState::Loaded(_)
+    ));
+}
+
+/// A successful switch reconnects the profile under the chosen region,
+/// reloads the listing from its first page and drops the selection, its
+/// details and any retrieved value.
+#[gpui::test]
+fn switching_the_region_reloads_the_listing(cx: &mut TestAppContext) {
+    let mut opened = open_with_regions(cx, &[OTHER_REGION, CURRENT_REGION]);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+
+    let lists_before = opened.driver.secret_store_calls().list_requests.len();
+
+    let region = OTHER_REGION.to_string();
+    opened.update(|doc, cx| doc.switch_region(region, cx));
+
+    assert_eq!(
+        opened.read(|doc| doc.region().map(str::to_string)),
+        Some(OTHER_REGION.to_string())
+    );
+
+    let profile_id = opened.read(|doc| doc.connection_id().expect("connection"));
+    let app_state = opened.app_state.clone();
+    let live_region = opened.window.update(|_, cx| {
+        app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .and_then(|connected| connected.connection.current_region())
+    });
+    assert_eq!(live_region.as_deref(), Some(OTHER_REGION));
+
+    let calls = opened.driver.secret_store_calls();
+    assert_eq!(calls.list_requests.len(), lists_before + 1);
+    assert_eq!(
+        calls
+            .list_requests
+            .last()
+            .and_then(|(_, request)| request.page_token.clone()),
+        None
+    );
+
+    assert!(opened.read(|doc| doc.selected().is_none()));
+    assert!(opened.read(|doc| matches!(doc.details(), DetailsState::Idle)));
+    assert!(opened.read(|doc| matches!(doc.value(), ValueState::NotLoaded)));
+    assert!(!opened.read(|doc| doc.region_switch_in_flight()));
+}
+
+/// A failed reconnect keeps the region, the stores and the listing exactly
+/// as they were; picking the region already in use is ignored before
+/// anything reconnects.
+#[gpui::test]
+fn a_failed_region_switch_keeps_the_current_region_and_listing(cx: &mut TestAppContext) {
+    let mut opened = open_with_regions(cx, &[OTHER_REGION, CURRENT_REGION]);
+    let entries_before = opened.entry_names();
+    let lists_before = opened.driver.secret_store_calls().list_requests.len();
+
+    opened
+        .driver
+        .set_connect_error(Some("network unreachable".to_string()));
+
+    let region = OTHER_REGION.to_string();
+    opened.update(|doc, cx| doc.switch_region(region, cx));
+
+    assert_eq!(
+        opened.read(|doc| doc.region().map(str::to_string)),
+        Some(CURRENT_REGION.to_string())
+    );
+    assert!(!opened.read(|doc| doc.region_switch_in_flight()));
+    assert_eq!(opened.entry_names(), entries_before);
+    assert_eq!(
+        opened.driver.secret_store_calls().list_requests.len(),
+        lists_before
+    );
+
+    opened.update(|doc, cx| doc.switch_region(CURRENT_REGION.to_string(), cx));
+
+    assert_eq!(
+        opened.read(|doc| doc.region().map(str::to_string)),
+        Some(CURRENT_REGION.to_string())
+    );
+    assert_eq!(
+        opened.driver.secret_store_calls().list_requests.len(),
+        lists_before
+    );
+}
+
 /// Every clickable element of the listing and the details pane has a
 /// keyboard path.
 #[gpui::test]
@@ -737,6 +996,60 @@ fn the_secret_store_document_is_covered(cx: &mut TestAppContext) {
     assert!(
         checked.iter().any(|id| id == "secret-value-reveal-0"),
         "{checked:?}"
+    );
+}
+
+/// The region picker and the retry of a failed region listing are only
+/// rendered by a region-capable driver, so covering them needs documents of
+/// their own: the surface above renders a driver without `REGION_SWITCH` and
+/// says nothing about either control.
+#[gpui::test]
+fn the_region_controls_are_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::SECRET_STORE;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture, clickable_elements};
+
+    /// Checks the surface and returns the path of every clickable element, so
+    /// the assertion names the control the way the registry does.
+    fn checked_paths(opened: &mut Opened<'_>) -> Vec<String> {
+        let entries: Vec<String> = opened.window.update(|_, cx| {
+            opened
+                .doc
+                .read(cx)
+                .pane_actions(&opened.doc)
+                .into_iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+
+        let capture = FrameCapture::observe(opened.window);
+        let frame = capture.frame(opened.window);
+        Coverage::new(SECRET_STORE)
+            .with_menu_entries(entries)
+            .assert_covered(&frame);
+
+        clickable_elements(&frame)
+            .into_iter()
+            .map(|element| element.path)
+            .collect()
+    }
+
+    let mut switchable = open_with_regions(cx, &[OTHER_REGION, CURRENT_REGION]);
+    let paths = checked_paths(&mut switchable);
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with("secret-region.dropdown-trigger")),
+        "the picker renders for a region-capable driver: {paths:?}"
+    );
+    drop(switchable);
+
+    let mut failing = open_region_doc(cx, &[CURRENT_REGION], Some("AccessDenied".to_string()));
+    let paths = checked_paths(&mut failing);
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with("secret-region-retry")),
+        "a failed region listing renders its retry: {paths:?}"
     );
 }
 

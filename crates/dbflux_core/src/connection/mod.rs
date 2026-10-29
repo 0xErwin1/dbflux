@@ -65,7 +65,8 @@ pub use manager::{
     MutationPolicy, OwnedCacheEntry, PendingOperation, PrepareConnectError, ProfilePolicyResolver,
     ReadOnlyReason, RedisKeyCache, RedisKeyCacheEntry, RefreshViewsParams, RefreshedViews,
     ResolvedProxy, SchemaCacheKey, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams,
-    SwitchDatabaseResult, TableDetailsPrepareError, WritePrivilege, compose_mutation_policy,
+    SwitchDatabaseResult, SwitchRegionParams, SwitchRegionResult, TableDetailsPrepareError,
+    WritePrivilege, compose_mutation_policy,
 };
 #[allow(deprecated)]
 pub use profile::{

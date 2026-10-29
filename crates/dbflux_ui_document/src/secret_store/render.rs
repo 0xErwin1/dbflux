@@ -3,7 +3,7 @@
 //! lives in `details.rs`.
 
 use super::listing::{PathMode, child_path_label, path_segments, relative_name};
-use super::{SecretFocusMode, SecretRowKey, SecretStoreDocument};
+use super::{RegionListState, SecretFocusMode, SecretRowKey, SecretStoreDocument};
 use crate::chrome::{
     connection_segment, document_bar, document_footer, footer_item, footer_key_hint, search_field,
 };
@@ -16,7 +16,7 @@ use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Badge, BadgeTone, Icon, SegmentedControl, SegmentedItem};
 use dbflux_components::tokens::{
-    ChromeColors, DocumentMetrics, ObjectStoreMetrics, SecretStoreMetrics,
+    ChromeColors, DocumentMetrics, NavigationMetrics, ObjectStoreMetrics, SecretStoreMetrics,
 };
 use dbflux_core::chrono::{DateTime, Local, Utc};
 use dbflux_core::{SecretRotation, SecretStoreCapabilities, SecretSummary};
@@ -125,7 +125,8 @@ fn meta_cell(width: Rems, text: String, color: Hsla) -> Div {
 impl SecretStoreDocument {
     /// The connection, the store and, on a hierarchical store, every segment
     /// of the current path. Each segment before the last opens its level.
-    fn render_breadcrumb(&self, cx: &mut Context<Self>) -> Breadcrumb {
+    /// The store segment of the breadcrumb row: the connection and the store.
+    fn identity_segments(&self, cx: &mut Context<Self>) -> Vec<BreadcrumbSegment> {
         let mut segments: Vec<BreadcrumbSegment> =
             connection_segment(&self.app_state, self.profile_id, cx)
                 .into_iter()
@@ -149,24 +150,123 @@ impl SecretStoreDocument {
         }
 
         segments.push(store_segment);
+        segments
+    }
 
-        if self.hierarchical() {
-            let path_segments = path_segments(self.path.as_deref().unwrap_or_default());
-            let last = path_segments.len().saturating_sub(1);
-
-            for (index, (label, path)) in path_segments.into_iter().enumerate() {
-                let mut segment = BreadcrumbSegment::new(label);
-
-                if index != last {
-                    segment = segment
-                        .on_click(format!("secret-path-crumb-{index}"), navigate(Some(path)));
-                }
-
-                segments.push(segment);
-            }
+    /// On a hierarchical store, every segment of the current path. Each one
+    /// before the last opens its level.
+    fn store_path_segments(&self, cx: &mut Context<Self>) -> Vec<BreadcrumbSegment> {
+        if !self.hierarchical() {
+            return Vec::new();
         }
 
-        Breadcrumb::new(segments).mono()
+        let entity = cx.entity().downgrade();
+        let navigate = move |path: Option<String>| {
+            let entity = entity.clone();
+            move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                if let Some(doc) = entity.upgrade() {
+                    doc.update(cx, |doc, cx| doc.navigate_to(path.clone(), cx));
+                }
+            }
+        };
+
+        let segments = path_segments(self.path.as_deref().unwrap_or_default());
+        let last = segments.len().saturating_sub(1);
+
+        segments
+            .into_iter()
+            .enumerate()
+            .map(|(index, (label, path))| {
+                let segment = BreadcrumbSegment::new(label);
+
+                if index == last {
+                    segment
+                } else {
+                    segment.on_click(format!("secret-path-crumb-{index}"), navigate(Some(path)))
+                }
+            })
+            .collect()
+    }
+
+    /// Separator between two breadcrumb groups, the one glyph the
+    /// `Breadcrumb` component draws between its own segments.
+    fn breadcrumb_separator(cx: &Context<Self>) -> Icon {
+        Icon::new(AppIcon::ChevronRight)
+            .size(NavigationMetrics::BREADCRUMB_CHEVRON)
+            .color(cx.theme().input)
+    }
+
+    /// The connection, the store, the region when the connection can move
+    /// between them, and the path of a hierarchical store.
+    ///
+    /// The region belongs with the identity the breadcrumb already spells
+    /// out: "which region am I reading" is the same question as "which store
+    /// is this", so it sits between the store and the path rather than in the
+    /// toolbar among the controls.
+    fn render_breadcrumb_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut row = div()
+            .flex()
+            .min_w_0()
+            .items_center()
+            .gap(NavigationMetrics::BREADCRUMB_GAP)
+            .child(Breadcrumb::new(self.identity_segments(cx)).mono());
+
+        if let Some(picker) = self.render_region_picker() {
+            row = row.child(Self::breadcrumb_separator(cx)).child(picker);
+        }
+
+        let path = self.store_path_segments(cx);
+
+        if !path.is_empty() {
+            row = row
+                .child(Self::breadcrumb_separator(cx))
+                .child(Breadcrumb::new(path).mono());
+        }
+
+        row
+    }
+
+    /// The region picker, once the connection listed its regions. It is the
+    /// last segment of the breadcrumb row, and it is the only dropdown of the
+    /// document, so its trigger carries the picker's own element id.
+    fn render_region_picker(&self) -> Option<AnyElement> {
+        if !matches!(self.regions, RegionListState::Loaded(_)) {
+            return None;
+        }
+
+        self.region_dropdown.clone().map(|dropdown| {
+            div()
+                .id("secret-region")
+                .flex_shrink_0()
+                .child(dropdown.into_any_element())
+                .into_any_element()
+        })
+    }
+
+    /// The failure of the region listing: the store's error and the retry,
+    /// where the toolbar keeps transient notices. A failed listing never
+    /// renders as an empty picker.
+    fn render_region_failure(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let RegionListState::Failed(error) = &self.regions else {
+            return Vec::new();
+        };
+
+        vec![
+            div()
+                .id("secret-region-error")
+                .max_w(px(240.0))
+                .truncate()
+                .text_size(DocumentMetrics::TABLE_META_FONT)
+                .text_color(cx.theme().muted_foreground)
+                .child(error.clone())
+                .into_any_element(),
+            Button::new(
+                "secret-region-retry",
+                dbflux_i18n::t!("document.secret_store.region.retry"),
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.load_regions(cx)))
+            .into_any_element(),
+        ]
     }
 
     fn render_path_mode(&self, cx: &mut Context<Self>) -> SegmentedControl {
@@ -203,8 +303,9 @@ impl SecretStoreDocument {
         .group("secret-path-mode")
     }
 
-    /// Breadcrumb, the Tree | Flat switch of a hierarchical store, the
-    /// store-side search and Refresh.
+    /// Breadcrumb row, the Tree | Flat switch of a hierarchical store, the
+    /// store-side search and Refresh, plus the notice of a failed region
+    /// listing.
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut refresh = Button::new(
             "secret-refresh",
@@ -232,10 +333,13 @@ impl SecretStoreDocument {
                 div()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(self.render_breadcrumb(cx)),
+                    .child(self.render_breadcrumb_row(cx)),
             )
             .child(div().flex_1())
             .when(hierarchical, |bar| bar.child(self.render_path_mode(cx)))
+            .when(self.region_switchable, |bar| {
+                bar.children(self.render_region_failure(cx))
+            })
             .child(
                 div()
                     .flex()

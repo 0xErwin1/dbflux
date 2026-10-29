@@ -668,6 +668,26 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
             "secret-refresh",
             KeyboardPath::Command(Command::RefreshSchema),
         ),
+        // The region picker of a driver that can switch regions. The
+        // clickable element is the dropdown's trigger, named by the path
+        // suffix (`secret-region.dropdown-trigger`): no key of this surface
+        // opens the picker, and the pane actions do not list it yet.
+        (
+            "secret-region.*",
+            KeyboardPath::MouseOnly(
+                "gap: the region picker has no keyboard path yet: no key of this \
+                 surface opens it",
+            ),
+        ),
+        // The retry of a failed region listing: no key runs it, and the pane
+        // actions do not list it yet.
+        (
+            "secret-region-retry",
+            KeyboardPath::MouseOnly(
+                "gap: the region-list retry has no keyboard path yet: the pane actions \
+                 do not list it",
+            ),
+        ),
         (
             "secret-path-crumb-*",
             KeyboardPath::Command(Command::ColumnLeft),

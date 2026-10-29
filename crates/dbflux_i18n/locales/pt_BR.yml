@@ -3420,6 +3420,10 @@ document:
       refresh: "Atualizar"
     load_more: "Carregar a próxima página"
     loading_more: "Carregando a próxima página…"
+    region:
+      label: "Região"
+      retry: "Tentar novamente"
+      switch_failed: "Não foi possível mudar para a região %{region}: %{error}"
     columns:
       name: "Nome"
       description: "Descrição"

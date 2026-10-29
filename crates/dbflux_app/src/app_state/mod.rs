@@ -819,7 +819,6 @@ impl AppState {
         );
     }
 
-    #[allow(dead_code)]
     pub fn prepare_switch_region(
         &self,
         profile_id: Uuid,
@@ -832,7 +831,6 @@ impl AppState {
         )
     }
 
-    #[allow(dead_code)]
     pub fn apply_switch_region(
         &mut self,
         profile_id: Uuid,
