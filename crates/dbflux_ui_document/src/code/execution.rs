@@ -960,23 +960,32 @@ impl CodeDocument {
                 // The editor is released as soon as its task is cancelled, so a
                 // cancel that lands before this worker runs must keep the
                 // statement from reaching the database at all.
-                if dispatch_token.is_cancelled() {
-                    let skipped = super::execution_session::SessionExecution {
-                        result: Err(DbError::Cancelled),
-                        isolated: false,
-                    };
-                    return (false, skipped);
-                }
-
-                let execution = if on_session {
-                    session_binding.execute(connection, session_database, &request)
+                let execution = if dispatch_token.is_cancelled() {
+                    None
+                } else if on_session {
+                    session_binding.execute_unless_cancelled(
+                        connection,
+                        session_database,
+                        &request,
+                        &dispatch_token,
+                    )
                 } else {
-                    super::execution_session::SessionExecution {
+                    Some(super::execution_session::SessionExecution {
                         result: connection.execute(&request),
                         isolated: false,
-                    }
+                    })
                 };
-                (true, execution)
+
+                match execution {
+                    Some(execution) => (true, execution),
+                    None => {
+                        let skipped = super::execution_session::SessionExecution {
+                            result: Err(DbError::Cancelled),
+                            isolated: false,
+                        };
+                        (false, skipped)
+                    }
+                }
             }
         });
 
