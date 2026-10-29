@@ -8,7 +8,13 @@ use crate::driver::AwsSecretsProfileConfig;
 /// only AWS's own message.
 pub(crate) enum ErrorTarget<'a> {
     Store(&'a str),
-    Secret { store: &'a str, name: &'a str },
+    Secret {
+        store: &'a str,
+        name: &'a str,
+    },
+    /// An operation that belongs to no store, such as listing the regions the
+    /// connection can move to.
+    None,
 }
 
 impl ErrorTarget<'_> {
@@ -16,6 +22,7 @@ impl ErrorTarget<'_> {
         match self {
             ErrorTarget::Store(store) => format!("store={store}"),
             ErrorTarget::Secret { store, name } => format!("store={store}, name=\"{name}\""),
+            ErrorTarget::None => String::new(),
         }
     }
 }
@@ -187,7 +194,13 @@ pub(crate) fn format_sdk_message(
 }
 
 fn with_target_prefix(target: &ErrorTarget, diagnostic_detail: String) -> String {
-    format!("{}, {diagnostic_detail}", target.detail_fragment())
+    let fragment = target.detail_fragment();
+
+    if fragment.is_empty() {
+        return diagnostic_detail;
+    }
+
+    format!("{fragment}, {diagnostic_detail}")
 }
 
 /// Maps a formatted error onto the `DbError` that fits a connect or probe

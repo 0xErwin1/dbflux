@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 
 use aws_config::{AppName, BehaviorVersion, Region, SdkConfig};
 use aws_sdk_secretsmanager::config::Credentials;
@@ -13,6 +13,7 @@ use dbflux_core::{
     SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TransferFamily, field, field_required,
 };
 
+use crate::error_formatter::{ErrorTarget, classify_operation_error, format_service_error};
 use crate::parameter_store::ParameterStore;
 use crate::secrets_manager::SecretsManagerStore;
 
@@ -25,7 +26,9 @@ pub static AWS_SECRETS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Dri
     deployment_class: Some(DeploymentClass::CloudManaged),
     query_language: QueryLanguage::Custom("AWS Secrets".into()),
     capabilities: DriverCapabilities::from_bits_truncate(
-        DriverCapabilities::AUTHENTICATION.bits() | DriverCapabilities::SECRET_STORE.bits(),
+        DriverCapabilities::AUTHENTICATION.bits()
+            | DriverCapabilities::SECRET_STORE.bits()
+            | DriverCapabilities::REGION_SWITCH.bits(),
     ),
     default_port: None,
     uri_scheme: "aws-secrets".into(),
@@ -196,6 +199,35 @@ impl DbDriver for AwsSecretsDriver {
     fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), DbError> {
         connect_internal(profile, None).map(|_connection| ())
     }
+
+    /// A connection reaches one region, so moving it keeps every other part of
+    /// the config: the credential source, the endpoint override and whatever
+    /// else the profile carries decide who connects and how, and none of that
+    /// changes with the region.
+    fn with_region(&self, config: &DbConfig, region: &str) -> Option<DbConfig> {
+        let DbConfig::AwsSecrets {
+            profile,
+            access_key_id,
+            endpoint,
+            ..
+        } = config
+        else {
+            return None;
+        };
+
+        let region = region.trim();
+
+        if region.is_empty() {
+            return None;
+        }
+
+        Some(DbConfig::AwsSecrets {
+            region: region.to_string(),
+            profile: profile.clone(),
+            access_key_id: access_key_id.clone(),
+            endpoint: endpoint.clone(),
+        })
+    }
 }
 
 fn connect_internal(
@@ -210,7 +242,10 @@ fn connect_internal(
             secrets_manager_client(&sdk_config, &config),
             config.clone(),
         ),
-        parameter_store: ParameterStore::new(ssm_client(&sdk_config, &config), config),
+        parameter_store: ParameterStore::new(ssm_client(&sdk_config, &config), config.clone()),
+        ec2: ec2_client(&sdk_config, &config),
+        config,
+        regions: RegionCatalog::new(),
     };
 
     connection.probe()?;
@@ -339,6 +374,104 @@ fn secrets_manager_client(
     aws_sdk_secretsmanager::Client::from_conf(builder.build())
 }
 
+/// The provider's region list for one connection, fetched at most once.
+///
+/// `DescribeRegions` answers the same list for every request made with the same
+/// credentials, so the control that offers the regions asks the provider once
+/// and reuses the answer. A failed fetch is not cached: a missing
+/// `ec2:DescribeRegions` permission or a throttled call must be retriable
+/// without reconnecting.
+#[derive(Debug, Default)]
+pub(crate) struct RegionCatalog {
+    cached: Mutex<Option<Vec<String>>>,
+}
+
+impl RegionCatalog {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns the regions, calling `fetch` only when nothing was cached yet.
+    pub(crate) fn regions<F>(&self, fetch: F) -> Result<Vec<String>, DbError>
+    where
+        F: FnOnce() -> Result<Vec<String>, DbError>,
+    {
+        if let Some(regions) = self.lock().clone() {
+            return Ok(regions);
+        }
+
+        let regions = fetch()?;
+        *self.lock() = Some(regions.clone());
+
+        Ok(regions)
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Vec<String>>> {
+        self.cached.lock().unwrap_or_else(|poisoned| {
+            log::warn!("AWS Secrets region catalog lock was poisoned, recovering...");
+            poisoned.into_inner()
+        })
+    }
+}
+
+/// Trimmed, sorted and deduplicated region names: `DescribeRegions` reports
+/// them in no guaranteed order and a repeated name would render twice in the
+/// control that offers them.
+pub(crate) fn normalize_regions(names: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut regions: Vec<String> = names
+        .into_iter()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect();
+
+    regions.sort();
+    regions.dedup();
+    regions
+}
+
+/// Builds the `DescribeRegions` client. It shares the credentials and the
+/// endpoint override of the secret stores, so a local endpoint such as
+/// LocalStack answers it too.
+fn ec2_client(
+    sdk_config: &ResolvedSdkConfig,
+    config: &AwsSecretsProfileConfig,
+) -> aws_sdk_ec2::Client {
+    let mut builder = aws_sdk_ec2::config::Builder::from(&sdk_config.shared);
+
+    if let Some(credentials) = &sdk_config.static_credentials {
+        builder = builder.credentials_provider(credentials.clone());
+    }
+
+    if let Some(endpoint) = &config.endpoint {
+        builder = builder.endpoint_url(endpoint);
+    }
+
+    aws_sdk_ec2::Client::from_conf(builder.build())
+}
+
+/// The regions this connection can move to, as the provider reports them for
+/// these credentials. Regions the account has not enabled are left out: moving
+/// there would only fail on the next call, and the control must not offer a
+/// destination that cannot be reached.
+fn describe_regions(
+    client: &aws_sdk_ec2::Client,
+    config: &AwsSecretsProfileConfig,
+) -> Result<Vec<String>, DbError> {
+    let output = runtime()
+        .block_on(client.describe_regions().send())
+        .map_err(|error| {
+            classify_operation_error(format_service_error(&error, config, &ErrorTarget::None))
+        })?;
+
+    Ok(normalize_regions(
+        output
+            .regions()
+            .iter()
+            .filter_map(|region| region.region_name())
+            .map(str::to_string),
+    ))
+}
+
 fn ssm_client(
     sdk_config: &ResolvedSdkConfig,
     config: &AwsSecretsProfileConfig,
@@ -380,6 +513,12 @@ pub(crate) fn smithy_datetime_to_chrono(
 pub(crate) struct AwsSecretsConnection {
     secrets_manager: SecretsManagerStore,
     parameter_store: ParameterStore,
+    /// Answers `DescribeRegions` with the connection's own credentials.
+    ec2: aws_sdk_ec2::Client,
+    /// The config the connection was built from, kept so the region in use is
+    /// reported without asking any store.
+    config: AwsSecretsProfileConfig,
+    regions: RegionCatalog,
 }
 
 impl AwsSecretsConnection {
@@ -443,6 +582,15 @@ impl Connection for AwsSecretsConnection {
 
     fn secret_stores(&self) -> Vec<&dyn SecretStoreSource> {
         vec![&self.secrets_manager, &self.parameter_store]
+    }
+
+    fn current_region(&self) -> Option<String> {
+        Some(self.config.region.clone())
+    }
+
+    fn available_regions(&self) -> Result<Vec<String>, DbError> {
+        self.regions
+            .regions(|| describe_regions(&self.ec2, &self.config))
     }
 }
 

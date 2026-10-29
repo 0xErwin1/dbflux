@@ -139,3 +139,124 @@ fn profile_config_rejects_a_blank_region() {
 
     assert!(matches!(error, DbError::InvalidProfile(_)));
 }
+
+fn secrets_config(region: &str) -> DbConfig {
+    DbConfig::AwsSecrets {
+        region: region.to_string(),
+        profile: Some("11111111-1111-1111-1111-111111111111".to_string()),
+        access_key_id: None,
+        endpoint: Some("http://localhost:4566".to_string()),
+    }
+}
+
+#[test]
+fn metadata_advertises_the_region_switch() {
+    assert!(
+        AWS_SECRETS_METADATA
+            .capabilities
+            .contains(DriverCapabilities::REGION_SWITCH)
+    );
+}
+
+#[test]
+fn with_region_rewrites_only_the_region() {
+    let config = secrets_config("us-east-1");
+
+    let switched = AwsSecretsDriver::new()
+        .with_region(&config, " eu-west-1 ")
+        .expect("the aws secrets driver supports a region");
+
+    match (&config, &switched) {
+        (
+            DbConfig::AwsSecrets {
+                profile: before_profile,
+                access_key_id: before_keys,
+                endpoint: before_endpoint,
+                ..
+            },
+            DbConfig::AwsSecrets {
+                region,
+                profile,
+                access_key_id,
+                endpoint,
+            },
+        ) => {
+            assert_eq!(region, "eu-west-1");
+            assert_eq!(profile, before_profile);
+            assert_eq!(access_key_id, before_keys);
+            assert_eq!(endpoint, before_endpoint);
+        }
+        other => panic!("expected two DbConfig::AwsSecrets, got {other:?}"),
+    }
+}
+
+#[test]
+fn with_region_refuses_an_empty_region() {
+    let config = secrets_config("us-east-1");
+
+    assert!(
+        AwsSecretsDriver::new()
+            .with_region(&config, "   ")
+            .is_none()
+    );
+}
+
+#[test]
+fn with_region_ignores_another_drivers_config() {
+    let config = DbConfig::default_s3();
+
+    assert!(
+        AwsSecretsDriver::new()
+            .with_region(&config, "eu-west-1")
+            .is_none()
+    );
+}
+
+#[test]
+fn region_names_come_back_sorted_trimmed_and_distinct() {
+    let names = normalize_regions([
+        "us-west-2".to_string(),
+        " eu-west-1 ".to_string(),
+        "us-west-2".to_string(),
+        String::new(),
+        "ap-south-1".to_string(),
+    ]);
+
+    assert_eq!(names, ["ap-south-1", "eu-west-1", "us-west-2"]);
+}
+
+#[test]
+fn the_region_catalog_fetches_once_and_reuses_the_answer() {
+    let catalog = RegionCatalog::new();
+    let mut fetches = 0;
+
+    for _ in 0..2 {
+        let regions = catalog
+            .regions(|| {
+                fetches += 1;
+                Ok(vec!["eu-west-1".to_string()])
+            })
+            .expect("regions");
+        assert_eq!(regions, ["eu-west-1"]);
+    }
+
+    assert_eq!(fetches, 1);
+}
+
+#[test]
+fn the_region_catalog_does_not_cache_a_failure() {
+    let catalog = RegionCatalog::new();
+
+    let failed = catalog.regions(|| {
+        Err(DbError::PermissionDenied(dbflux_core::FormattedError::new(
+            "denied",
+        )))
+    });
+    assert!(failed.is_err());
+
+    let regions = catalog
+        .regions(|| Ok(vec!["eu-west-1".to_string()]))
+        .expect("the retry reaches the provider");
+
+    assert_eq!(regions, ["eu-west-1"]);
+}

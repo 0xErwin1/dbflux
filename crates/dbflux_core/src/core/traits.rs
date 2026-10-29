@@ -417,6 +417,17 @@ pub trait DbDriver: Send + Sync {
         None
     }
 
+    /// Build a config targeting a specific cloud region, when supported.
+    ///
+    /// Drivers whose connections reach one region can override this to return
+    /// an updated config, which is what lets the user move a live connection to
+    /// another region without editing the profile. Drivers without a region
+    /// should return `None`, so a region switch is refused instead of silently
+    /// connecting to the same place.
+    fn with_region(&self, _config: &DbConfig, _region: &str) -> Option<DbConfig> {
+        None
+    }
+
     /// Whether this database type requires authentication.
     ///
     /// Default implementation checks for the AUTHENTICATION capability.
@@ -1345,6 +1356,29 @@ pub trait Connection: Send + Sync {
     /// Returns the currently active database, if any.
     fn active_database(&self) -> Option<String> {
         None
+    }
+
+    /// Returns the cloud region this connection reaches, if it reaches one.
+    ///
+    /// Drivers that advertise `DriverCapabilities::REGION_SWITCH` report the
+    /// region they connected with, which is also the value a region switch
+    /// starts from. Drivers without a region keep the `None` default.
+    fn current_region(&self) -> Option<String> {
+        None
+    }
+
+    /// Lists the cloud regions this connection can be moved to.
+    ///
+    /// Drivers that advertise `DriverCapabilities::REGION_SWITCH` ask the
+    /// provider for its regions with this connection's credentials, so a
+    /// caller sees exactly the regions this connection can reach. A driver
+    /// without a region inherits the default and reports `NotSupported` rather
+    /// than an empty list, because an empty list reads as "there is nowhere to
+    /// go" while the truth is "this connection has no regions".
+    fn available_regions(&self) -> Result<Vec<String>, DbError> {
+        Err(DbError::NotSupported(
+            "region listing not supported".to_string(),
+        ))
     }
 
     /// Returns the database kind for this connection.
