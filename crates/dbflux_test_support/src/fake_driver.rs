@@ -2034,10 +2034,13 @@ impl SecretStoreSource for FakeSecretStore {
                 .map_err(|_| DbError::query_failed(format!("Invalid page token {token}")))?,
             None => 0,
         };
+        // `default_page_size` stands in for the service's own maximum, so a
+        // request for a larger page is clamped instead of honored: that is
+        // what a real store does with `max_results`.
         let page_size = request
             .page_size
             .map_or(self.default_page_size, |size| size as usize)
-            .max(1);
+            .clamp(1, self.default_page_size);
 
         let end = (start + page_size).min(entries.len());
         let page: Vec<SecretSummary> = entries
