@@ -1,6 +1,6 @@
 [package]
 name = "bolt"
-description = "Bolt, the design system shared by DBFlux and Relay: tokens, theme and generic GPUI components."
+description = "Bolt, the product-agnostic design system: tokens, theme and generic GPUI components."
 edition.workspace = true
 version.workspace = true
 authors.workspace = true
@@ -24,6 +24,9 @@ gpui.workspace = true
 gpui-component.workspace = true
 gpui-base = { path = "../../vendor/gpui-base" }
 log.workspace = true
+# The syntax-recoloring helpers restyle gpui-component's private style fields
+# through their serde representation.
+serde_json.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

@@ -274,14 +274,19 @@ fn custom_font_settings_reach_the_theme_and_survive_a_palette_change(cx: &mut Te
 }
 
 #[test]
-fn theme_module_keeps_palette_and_font_mapping_but_not_shared_chrome_helpers() {
+fn theme_module_keeps_the_brand_and_setting_mapping_but_not_the_palette_mapping() {
     let source = read_theme_source();
 
     assert!(source.contains("pub use crate::typography::AppFonts;"));
     assert!(source.contains("load_bundled_fonts(cx);"));
     assert!(source.contains("ThemeSetting::System"));
-    assert!(source.contains("apply_palette(&palette, style, cx);"));
-    assert!(source.contains("theme.popover = palette.panel;"));
+    assert!(source.contains("bolt::brand::install(brand(), cx);"));
+    assert!(source.contains("bolt_theme::apply_theme("));
+    assert!(source.contains("ThemeSettingGlobal::set(cx, resolved);"));
+    // The palette mapping lives in `bolt` now; a product adapter that writes theme
+    // fields again would be a second, divergent palette.
+    assert!(!source.contains("theme.primary ="));
+    assert!(!source.contains("theme.popover ="));
     assert!(!source.contains("apply_ayu_"));
     assert!(!source.contains("pub fn surface_highest_color()"));
 }

@@ -1985,6 +1985,7 @@ dependencies = [
  "gpui-component",
  "gpui-pre",
  "log",
+ "serde_json",
 ]
 
 [[package]]

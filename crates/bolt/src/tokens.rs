@@ -184,7 +184,7 @@ impl ModalMetrics {
 }
 
 /// Geometry of the three tab kinds (document, result, inline), taken from the
-/// Isl* (document tabs), AppByzEditor and P1ConnForm boards.
+/// the document-tab, editor and connection-form boards.
 pub struct TabMetrics;
 
 impl TabMetrics {
@@ -227,12 +227,12 @@ impl TabMetrics {
     pub const INLINE_TAB_PADDING_X: Pixels = px(14.0);
     /// Horizontal padding of the inline tab bar.
     pub const INLINE_BAR_PADDING_X: Pixels = px(12.0);
-    /// Thickness of the byzantine edge that marks the active tab.
+    /// Thickness of the accent edge that marks the active tab.
     pub const ACTIVE_EDGE: Pixels = px(2.0);
 }
 
-/// Geometry of the panel and section headers, taken from AppByzTable and
-/// P1SettingsGeneral.
+/// Geometry of the panel and section headers, taken from the design board and
+/// the settings board.
 pub struct HeaderMetrics;
 
 impl HeaderMetrics {
@@ -271,8 +271,8 @@ impl HeaderMetrics {
 }
 
 /// Geometry of `controls::Button` and `composites::SplitButton`. The default
-/// size matches the 30 px buttons of the DSApp "Buttons" row, the
-/// AppByzTable and AppByzEditor toolbars and the P1SettingsGeneral footer;
+/// size matches the 30 px buttons of the board's "Buttons" row, the
+/// table and editor toolbars and the settings footer;
 /// the inline size follows the small row buttons of the key-value boards
 /// ("Scan more", "Load more") shrunk to 24 px; the large size is kept for
 /// the rare call-to-action a board draws at 44 px.
@@ -331,7 +331,7 @@ impl ButtonMetrics {
     pub const DISABLED_OPACITY: f32 = 0.45;
 }
 
-/// Geometry of `primitives::Kbd`, from the keycaps in AppByzTable and DSApp.
+/// Geometry of `primitives::Kbd`, from the board's keycaps.
 pub struct KbdMetrics;
 
 impl KbdMetrics {
@@ -565,7 +565,8 @@ impl ChromeColors {
         theme.border
     }
 
-    /// Text-accent tint: `#D48CC8` on dark, byzantine `#702963` on light.
+    /// Text-accent tint: the accent tint on dark surfaces, the accent itself on
+    /// light ones.
     ///
     /// The palette assigns the tint to the focus ring, so this reads `ring`.
     pub fn tint(theme: &gpui_component::Theme) -> Hsla {
@@ -601,7 +602,7 @@ impl ChromeColors {
     }
 }
 
-/// Syntax roles of the Bolt Byzantium palette, per variant.
+/// Syntax roles of the palette, per variant.
 ///
 /// The code editor's highlight theme and the schema-tree icons both read these
 /// roles, so SQL text and tree glyphs share one color language.
@@ -759,7 +760,7 @@ impl RowColors {
 }
 
 /// Geometry of the status and feedback components (badge, environment tag,
-/// status diamond, banner, toast, spinner), measured from the Bolt Byzantium
+/// status diamond, banner, toast, spinner), measured from the
 /// app boards.
 pub struct Feedback;
 
@@ -836,7 +837,7 @@ impl Feedback {
 }
 
 /// Geometry of context menus (`composites::menu_item`), from the cell menu in
-/// AppByzMenu and the DSApp "Context menu".
+/// the board and its context menu.
 pub struct MenuMetrics;
 
 impl MenuMetrics {
@@ -881,7 +882,7 @@ impl MenuMetrics {
 }
 
 /// Geometry of trees (`TreeNav` rows and the connections sidebar), from the
-/// sidebar in AppByzTable, P1Sidebar and the DSApp "Tree".
+/// sidebar and the board's tree.
 pub struct TreeMetrics;
 
 impl TreeMetrics {
@@ -908,8 +909,8 @@ impl TreeMetrics {
     pub const SELECTION_BAR: Pixels = px(2.0);
 }
 
-/// Geometry of the result grid (`components::DataTable`), from AppByzTable
-/// and the DSApp "Result grid".
+/// Geometry of the result grid (`components::DataTable`), from the
+/// board's result grid.
 pub struct GridMetrics;
 
 impl GridMetrics {
@@ -938,7 +939,7 @@ impl GridMetrics {
 }
 
 /// Geometry of the result chrome: the footer under a result grid and the
-/// view-switch row above it (AppByzTable, AppByzEditor).
+/// view-switch row above it.
 pub struct ResultMetrics;
 
 impl ResultMetrics {
@@ -1036,7 +1037,7 @@ impl PaletteMetrics {
 }
 
 /// Geometry of the wizard stepper (`composites::wizard_rail`), from P1Migrate
-/// and the DSAppPlan "Stepper".
+/// and the board's stepper.
 pub struct StepperMetrics;
 
 impl StepperMetrics {
@@ -1067,7 +1068,7 @@ impl StepperMetrics {
     pub const INLINE_FONT: Rems = ui(12.5);
 }
 
-/// Geometry of the table view's header and filter rows (AppByzTable).
+/// Geometry of the table view's header and filter rows (design board).
 pub struct TableViewMetrics;
 
 impl TableViewMetrics {
@@ -1193,7 +1194,7 @@ impl CollectionMetrics {
 }
 
 /// Geometry of the query editor's context bar, production banner and
-/// toolbar (AppByzEditor).
+/// toolbar (design board).
 pub struct EditorMetrics;
 
 impl EditorMetrics {
@@ -1278,7 +1279,7 @@ impl HistoryPanelMetrics {
     pub const SELECTED_FILL_ALPHA: f32 = 0.10;
 }
 
-/// Geometry of the row inspector rail (AppByzTable, DSAppPlan "RowInspector").
+/// Geometry of the row inspector rail (design board).
 pub struct InspectorMetrics;
 
 impl InspectorMetrics {
@@ -1507,7 +1508,7 @@ impl ConsoleMetrics {
 }
 
 /// Geometry of the extracted navigation helpers: breadcrumb, empty state and
-/// list rows (AppByzTable header, DSAppPlan).
+/// list rows (design board).
 pub struct NavigationMetrics;
 
 impl NavigationMetrics {
@@ -1543,7 +1544,7 @@ impl NavigationMetrics {
 }
 
 /// Geometry of the application shell: title bar, activity rail, sidebar
-/// island, status bar and the empty workspace (Isl* boards, P1Empty).
+/// island, status bar and the empty workspace (design board).
 pub struct ShellMetrics;
 
 impl ShellMetrics {
@@ -1802,7 +1803,7 @@ impl NotificationMetrics {
 }
 
 /// Geometry of the islands: the chamfered panes that float on the desk
-/// (Isl* boards).
+/// (design board).
 pub struct IslandMetrics;
 
 impl IslandMetrics {
@@ -1820,8 +1821,8 @@ impl IslandMetrics {
     pub const WINDOW_TITLE_PADDING_X: Pixels = px(16.0);
 }
 
-/// Geometry of the master list of a master-detail page (P1SettingsMcp,
-/// P1SettingsSsh): a 12 px toolbar with 8 px between its buttons, rows with
+/// Geometry of the master list of a master-detail page (design board,
+/// settings pages): a 12 px toolbar with 8 px between its buttons, rows with
 /// 10 by 14 px padding, 3 px between their lines, a 14 px icon 8 px before
 /// the name and an 11.5 px mono detail line.
 pub struct MasterListMetrics;

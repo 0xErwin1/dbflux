@@ -61,6 +61,18 @@ pub fn active_style(cx: &App) -> AppStyle {
 }
 
 // ---------------------------------------------------------------------------
+// Mapping onto bolt
+// ---------------------------------------------------------------------------
+
+/// Maps the persisted style setting onto the shared `bolt` density tier.
+pub fn bolt_density(style: AppStyle) -> bolt::density::Density {
+    match style {
+        AppStyle::Default => bolt::density::Density::Default,
+        AppStyle::Compact => bolt::density::Density::Compact,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Font-size accessors
 // ---------------------------------------------------------------------------
 
@@ -206,6 +218,18 @@ mod tests {
             assert_eq!(font_xs(cx), ui(12.0));
             assert_eq!(radius_sm(cx), px(0.0));
         });
+    }
+
+    #[gpui::test]
+    fn app_style_maps_onto_the_bolt_density(_cx: &mut TestAppContext) {
+        assert_eq!(
+            bolt_density(AppStyle::Default),
+            bolt::density::Density::Default
+        );
+        assert_eq!(
+            bolt_density(AppStyle::Compact),
+            bolt::density::Density::Compact
+        );
     }
 
     #[gpui::test]
