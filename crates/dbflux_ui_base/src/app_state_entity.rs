@@ -64,9 +64,7 @@ pub fn resolve_font_settings(
     settings: &dbflux_core::GeneralSettings,
     cx: &gpui::App,
 ) -> dbflux_components::fonts::FontSettings {
-    let installed = dbflux_components::fonts::installed_font_names(cx);
-
-    dbflux_components::fonts::FontSettings::from_general(settings, &installed)
+    dbflux_components::font_settings::resolve(settings, cx)
 }
 
 fn apply_font_settings(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {

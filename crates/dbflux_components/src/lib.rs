@@ -12,13 +12,12 @@ pub mod density;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod accessibility;
-pub mod fonts;
+pub mod font_settings;
 pub mod helpers;
 pub mod icon;
 pub mod semantic;
-// Moved to `bolt`; re-exported at this path so call sites keep compiling.
-pub use bolt::tokens;
-pub mod typography;
+// Moved to `bolt`; re-exported at these paths so call sites keep compiling.
+pub use bolt::{fonts, tokens, typography};
 
 pub mod category;
 pub mod chart;

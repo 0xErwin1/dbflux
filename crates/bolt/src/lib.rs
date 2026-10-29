@@ -12,5 +12,7 @@
 // Required by the `#[gpui::test]` attribute macro expansion in test modules.
 #![recursion_limit = "512"]
 
+pub mod fonts;
 pub mod palette;
 pub mod tokens;
+pub mod typography;

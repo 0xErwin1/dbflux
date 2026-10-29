@@ -209,7 +209,7 @@ fn rgb_to_hsla_alpha(hex: u32, alpha: f32) -> Hsla {
 /// gpui-component's 16 px at the default interface size and follows the
 /// interface scale.
 fn persist_font_config(theme: &mut Theme, fonts: &FontSettings) {
-    let rem_size = BASE_REM * fonts.ui_size / dbflux_core::GeneralSettings::DEFAULT_UI_FONT_SIZE;
+    let rem_size = BASE_REM * fonts.ui_size / bolt::fonts::DEFAULT_UI_FONT_SIZE;
 
     let apply = |config: &mut ThemeConfig| {
         config.font_family = Some(fonts.ui_family.clone());

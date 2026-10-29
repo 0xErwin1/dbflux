@@ -1,4 +1,4 @@
-use dbflux_components::typography::{AppFonts, BUNDLED_FONT_ASSETS, bundled_font_data};
+use bolt::typography::{AppFonts, BUNDLED_FONT_ASSETS, bundled_font_data};
 use std::path::Path;
 
 const FONT_DIRECTORY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/fonts");

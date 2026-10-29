@@ -1,20 +1,65 @@
-//! Runtime font settings: the interface, editor and data-grid families and
-//! sizes the user chose in Settings > General.
+//! Runtime font settings: the interface, editor and data-grid families and sizes.
 //!
-//! `FontSettings` is the resolved form of the persisted
-//! `dbflux_core::GeneralSettings` font fields: sizes are clamped and every
-//! family is one the text system can load. It is stored in the
-//! `FontSettingsGlobal` cx-global, and the accessors below read it with a
-//! fallback to `FontSettings::default()`, which reproduces the bundled fonts
-//! and sizes DBFlux rendered before the settings existed.
+//! A product resolves the choices its user made into a [`FontChoices`], Bolt clamps
+//! the sizes and drops every family the text system cannot load, and the result is a
+//! [`FontSettings`]. It is stored in the `FontSettingsGlobal` cx-global, and the
+//! accessors below read it with a fallback to `FontSettings::default()`, which is the
+//! bundled typography at the default sizes.
 
 use std::sync::{Arc, LazyLock, OnceLock};
 
-use dbflux_core::GeneralSettings;
 use gpui::{AbsoluteLength, App, Global, Pixels, Rems, SharedString, px};
 
 use crate::tokens::{BASE_REM, EditorMetrics, GridMetrics};
 use crate::typography::{AppFonts, BUNDLED_FONT_ASSETS};
+
+/// Default interface font size. [`BASE_REM`] is the rem size at this size.
+pub const DEFAULT_UI_FONT_SIZE: f32 = 13.0;
+/// Default editor font size.
+pub const DEFAULT_EDITOR_FONT_SIZE: f32 = 13.0;
+/// Default data-grid font size.
+pub const DEFAULT_GRID_FONT_SIZE: f32 = 12.5;
+/// Smallest font size Bolt resolves.
+pub const MIN_FONT_SIZE: f32 = 8.0;
+/// Largest font size Bolt resolves.
+pub const MAX_FONT_SIZE: f32 = 32.0;
+
+/// `size` clamped to [`MIN_FONT_SIZE`]`..=`[`MAX_FONT_SIZE`].
+///
+/// A non-finite size carries no usable intent, so it becomes `default`.
+pub fn clamp_size(size: f32, default: f32) -> f32 {
+    if size.is_finite() {
+        size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE)
+    } else {
+        default
+    }
+}
+
+/// The families and sizes a product asks for, before Bolt resolves them.
+///
+/// `None` and a blank family both mean "the bundled default for that role".
+#[derive(Debug, Clone, PartialEq)]
+pub struct FontChoices {
+    pub ui_family: Option<String>,
+    pub ui_size: f32,
+    pub editor_family: Option<String>,
+    pub editor_size: f32,
+    pub grid_family: Option<String>,
+    pub grid_size: f32,
+}
+
+impl Default for FontChoices {
+    fn default() -> Self {
+        Self {
+            ui_family: None,
+            ui_size: DEFAULT_UI_FONT_SIZE,
+            editor_family: None,
+            editor_size: DEFAULT_EDITOR_FONT_SIZE,
+            grid_family: None,
+            grid_size: DEFAULT_GRID_FONT_SIZE,
+        }
+    }
+}
 
 /// Height of a record-mode field row at the default grid size.
 const RECORD_ROW_HEIGHT: f32 = 30.0;
@@ -39,53 +84,43 @@ impl Default for FontSettings {
     fn default() -> Self {
         Self {
             ui_family: SharedString::from(AppFonts::INTERFACE),
-            ui_size: GeneralSettings::DEFAULT_UI_FONT_SIZE,
+            ui_size: DEFAULT_UI_FONT_SIZE,
             editor_family: SharedString::from(AppFonts::MONO),
-            editor_size: GeneralSettings::DEFAULT_EDITOR_FONT_SIZE,
+            editor_size: DEFAULT_EDITOR_FONT_SIZE,
             grid_family: SharedString::from(AppFonts::MONO),
-            grid_size: GeneralSettings::DEFAULT_GRID_FONT_SIZE,
+            grid_size: DEFAULT_GRID_FONT_SIZE,
         }
     }
 }
 
 impl FontSettings {
-    /// Resolves the persisted settings against the installed font families.
+    /// Resolves `choices` against the installed font families.
     ///
     /// Sizes are clamped to the supported range. A family that is neither
     /// bundled nor in `installed` falls back to the bundled default, because
     /// laying out text in a family the text system cannot find panics. The
     /// grid uses the resolved editor family unless its own family is set and
     /// loadable.
-    pub fn from_general(settings: &GeneralSettings, installed: &[SharedString]) -> Self {
+    pub fn resolve(choices: &FontChoices, installed: &[SharedString]) -> Self {
         let editor_family = resolve_family(
-            &settings.editor_font_family,
+            &choices.editor_family,
             SharedString::from(AppFonts::MONO),
             installed,
         );
-        let grid_family =
-            resolve_family(&settings.grid_font_family, editor_family.clone(), installed);
+        let grid_family = resolve_family(&choices.grid_family, editor_family.clone(), installed);
         let ui_family = resolve_family(
-            &settings.ui_font_family,
+            &choices.ui_family,
             SharedString::from(AppFonts::INTERFACE),
             installed,
         );
 
         Self {
             ui_family,
-            ui_size: GeneralSettings::clamp_font_size(
-                settings.ui_font_size,
-                GeneralSettings::DEFAULT_UI_FONT_SIZE,
-            ),
+            ui_size: clamp_size(choices.ui_size, DEFAULT_UI_FONT_SIZE),
             editor_family,
-            editor_size: GeneralSettings::clamp_font_size(
-                settings.editor_font_size,
-                GeneralSettings::DEFAULT_EDITOR_FONT_SIZE,
-            ),
+            editor_size: clamp_size(choices.editor_size, DEFAULT_EDITOR_FONT_SIZE),
             grid_family,
-            grid_size: GeneralSettings::clamp_font_size(
-                settings.grid_font_size,
-                GeneralSettings::DEFAULT_GRID_FONT_SIZE,
-            ),
+            grid_size: clamp_size(choices.grid_size, DEFAULT_GRID_FONT_SIZE),
         }
     }
 }
@@ -137,7 +172,7 @@ pub fn installed_font_names(cx: &App) -> Arc<[SharedString]> {
 
 /// Interface scale factor: the chosen interface size over the 13 px default.
 pub fn ui_scale(cx: &App) -> f32 {
-    active(cx).ui_size / GeneralSettings::DEFAULT_UI_FONT_SIZE
+    active(cx).ui_size / DEFAULT_UI_FONT_SIZE
 }
 
 /// Resolves an interface length in rems to pixels at the current interface
@@ -183,7 +218,7 @@ pub fn editor_family(cx: &App) -> SharedString {
 /// Scales an editor-surface measurement drawn for the default editor size,
 /// such as the console's monospace text, by the chosen editor size.
 pub fn editor_scaled(cx: &App, value: Pixels) -> Pixels {
-    value * active(cx).editor_size / GeneralSettings::DEFAULT_EDITOR_FONT_SIZE
+    value * active(cx).editor_size / DEFAULT_EDITOR_FONT_SIZE
 }
 
 pub fn editor_font_size(cx: &App) -> Pixels {
@@ -260,11 +295,19 @@ fn active(cx: &App) -> &FontSettings {
 }
 
 fn grid_scale(cx: &App) -> f32 {
-    active(cx).grid_size / GeneralSettings::DEFAULT_GRID_FONT_SIZE
+    active(cx).grid_size / DEFAULT_GRID_FONT_SIZE
 }
 
 fn scaled_grid_height(cx: &App, default_height: f32) -> Pixels {
     px((default_height * grid_scale(cx)).round())
+}
+
+/// `family` trimmed, or `None` when it is absent or blank.
+fn normalize_family(family: Option<&str>) -> Option<String> {
+    family
+        .map(str::trim)
+        .filter(|family| !family.is_empty())
+        .map(str::to_string)
 }
 
 /// The normalized `family` when the text system can load it, else `fallback`.
@@ -273,7 +316,7 @@ fn resolve_family(
     fallback: SharedString,
     installed: &[SharedString],
 ) -> SharedString {
-    let Some(family) = GeneralSettings::normalize_font_family(family.clone()) else {
+    let Some(family) = normalize_family(family.as_deref()) else {
         return fallback;
     };
 
@@ -299,8 +342,10 @@ mod tests {
         names.iter().map(|name| SharedString::from(*name)).collect()
     }
 
-    fn general() -> GeneralSettings {
-        GeneralSettings::default()
+    /// The choices of a fresh install, taken from a call so a test that overrides
+    /// one field reads as a variation of the defaults.
+    fn default_choices() -> FontChoices {
+        FontChoices::default()
     }
 
     #[test]
@@ -316,20 +361,20 @@ mod tests {
     }
 
     #[test]
-    fn default_general_settings_resolve_to_the_defaults() {
-        let resolved = FontSettings::from_general(&general(), &[]);
+    fn default_choices_resolve_to_the_defaults() {
+        let resolved = FontSettings::resolve(&FontChoices::default(), &[]);
 
         assert_eq!(resolved, FontSettings::default());
     }
 
     #[test]
     fn installed_and_bundled_families_are_kept() {
-        let mut settings = general();
-        settings.ui_font_family = Some("  Inter ".to_string());
-        settings.editor_font_family = Some("Fira Code".to_string());
-        settings.grid_font_family = Some(AppFonts::INTERFACE.to_string());
+        let mut choices = default_choices();
+        choices.ui_family = Some("  Inter ".to_string());
+        choices.editor_family = Some("Fira Code".to_string());
+        choices.grid_family = Some(AppFonts::INTERFACE.to_string());
 
-        let resolved = FontSettings::from_general(&settings, &installed(&["Fira Code", "Inter"]));
+        let resolved = FontSettings::resolve(&choices, &installed(&["Fira Code", "Inter"]));
 
         assert_eq!(resolved.ui_family, SharedString::from("Inter"));
         assert_eq!(resolved.editor_family, SharedString::from("Fira Code"));
@@ -341,12 +386,12 @@ mod tests {
 
     #[test]
     fn unknown_families_fall_back_to_the_bundled_defaults() {
-        let mut settings = general();
-        settings.ui_font_family = Some("Missing Sans".to_string());
-        settings.editor_font_family = Some("Missing Mono".to_string());
-        settings.grid_font_family = Some("Missing Grid".to_string());
+        let mut choices = default_choices();
+        choices.ui_family = Some("Missing Sans".to_string());
+        choices.editor_family = Some("Missing Mono".to_string());
+        choices.grid_family = Some("Missing Grid".to_string());
 
-        let resolved = FontSettings::from_general(&settings, &installed(&["Inter"]));
+        let resolved = FontSettings::resolve(&choices, &installed(&["Inter"]));
 
         assert_eq!(resolved.ui_family, SharedString::from(AppFonts::INTERFACE));
         assert_eq!(resolved.editor_family, SharedString::from(AppFonts::MONO));
@@ -355,38 +400,38 @@ mod tests {
 
     #[test]
     fn unknown_grid_family_falls_back_to_the_editor_family() {
-        let mut settings = general();
-        settings.editor_font_family = Some("Fira Code".to_string());
-        settings.grid_font_family = Some("Missing Grid".to_string());
+        let mut choices = default_choices();
+        choices.editor_family = Some("Fira Code".to_string());
+        choices.grid_family = Some("Missing Grid".to_string());
 
-        let resolved = FontSettings::from_general(&settings, &installed(&["Fira Code"]));
+        let resolved = FontSettings::resolve(&choices, &installed(&["Fira Code"]));
 
         assert_eq!(resolved.grid_family, SharedString::from("Fira Code"));
     }
 
     #[test]
     fn grid_without_a_family_uses_the_editor_family() {
-        let mut settings = general();
-        settings.editor_font_family = Some("Fira Code".to_string());
-        settings.grid_font_family = Some("   ".to_string());
+        let mut choices = default_choices();
+        choices.editor_family = Some("Fira Code".to_string());
+        choices.grid_family = Some("   ".to_string());
 
-        let resolved = FontSettings::from_general(&settings, &installed(&["Fira Code"]));
+        let resolved = FontSettings::resolve(&choices, &installed(&["Fira Code"]));
 
         assert_eq!(resolved.grid_family, SharedString::from("Fira Code"));
     }
 
     #[test]
     fn sizes_are_clamped_and_non_finite_sizes_use_the_defaults() {
-        let mut settings = general();
-        settings.ui_font_size = 2.0;
-        settings.editor_font_size = 99.0;
-        settings.grid_font_size = f32::NAN;
+        let mut choices = default_choices();
+        choices.ui_size = 2.0;
+        choices.editor_size = 99.0;
+        choices.grid_size = f32::NAN;
 
-        let resolved = FontSettings::from_general(&settings, &[]);
+        let resolved = FontSettings::resolve(&choices, &[]);
 
-        assert_eq!(resolved.ui_size, GeneralSettings::MIN_FONT_SIZE);
-        assert_eq!(resolved.editor_size, GeneralSettings::MAX_FONT_SIZE);
-        assert_eq!(resolved.grid_size, GeneralSettings::DEFAULT_GRID_FONT_SIZE);
+        assert_eq!(resolved.ui_size, MIN_FONT_SIZE);
+        assert_eq!(resolved.editor_size, MAX_FONT_SIZE);
+        assert_eq!(resolved.grid_size, DEFAULT_GRID_FONT_SIZE);
     }
 
     #[gpui::test]
