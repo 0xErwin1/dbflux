@@ -629,7 +629,7 @@ pub struct SyntaxColors {
 impl SyntaxColors {
     pub fn dark() -> Self {
         Self {
-            keyword: rgb(0xD48CC8).into(),
+            keyword: rgb(0x8E8996).into(),
             string: rgb(0x7BE0A0).into(),
             number: rgb(0xB79CFF).into(),
             comment: rgb(0x8E8996).into(),
@@ -644,7 +644,7 @@ impl SyntaxColors {
 
     pub fn light() -> Self {
         Self {
-            keyword: rgb(0x702963).into(),
+            keyword: rgb(0x6B6572).into(),
             string: rgb(0x1C7F45).into(),
             number: rgb(0x6B4FD8).into(),
             comment: rgb(0x6B6572).into(),
@@ -657,14 +657,35 @@ impl SyntaxColors {
         }
     }
 
-    /// Return the `SyntaxColors` for the currently active palette.
+    /// Return the `SyntaxColors` for the currently active palette and brand.
     ///
-    /// Reads the palette the product published; falls back to Dark when absent.
+    /// Reads the palette and the brand the product published; falls back to the
+    /// dark variant with a neutral accent when absent.
     pub fn for_current(cx: &gpui::App) -> Self {
-        match crate::palette::resolved_mode(cx) {
+        let colors = match crate::palette::resolved_mode(cx) {
             crate::palette::PaletteMode::Light => Self::light(),
             crate::palette::PaletteMode::Dark | crate::palette::PaletteMode::System => Self::dark(),
+        };
+
+        colors.with_keyword(Self::keyword_for_current(cx))
+    }
+
+    /// The accent role a keyword takes: the accent tint on dark, the accent on light.
+    pub fn keyword_for_current(cx: &gpui::App) -> Hsla {
+        let brand = crate::brand::brand(cx);
+
+        match crate::palette::resolved_mode(cx) {
+            crate::palette::PaletteMode::Light => brand.accent,
+            crate::palette::PaletteMode::Dark | crate::palette::PaletteMode::System => {
+                brand.accent_tint
+            }
         }
+    }
+
+    /// These roles with `keyword` replaced by the product accent.
+    pub fn with_keyword(mut self, keyword: Hsla) -> Self {
+        self.keyword = keyword;
+        self
     }
 
     /// Schema-tree table icon.

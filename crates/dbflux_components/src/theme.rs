@@ -80,8 +80,9 @@ pub fn apply_fonts(cx: &mut App) {
 ///
 /// `ThemeSetting::System` resolves through the OS appearance (the window's when
 /// one is given, which is more reliable on Linux). The resolved Dark or Light
-/// variant is published through `ThemeSettingGlobal` so semantic color
-/// accessors follow the palette that is actually on screen.
+/// variant is published to `bolt` so semantic color accessors follow the
+/// palette that is actually on screen, and recorded in `ThemeSettingGlobal`
+/// as the product-side setting.
 pub fn apply_theme(
     setting: ThemeSetting,
     style: AppStyle,
@@ -313,17 +314,32 @@ mod tests {
     }
 
     /// The SQL editor's highlight theme and the tint accessor follow the
-    /// palette's syntax roles in both variants. The syntax keyword doubles as
-    /// the byzantine tint, so the coupling between the accent and the editor
-    /// is pinned here, on the product side.
+    /// palette's syntax roles in both variants, and the syntax keyword takes
+    /// the byzantine accent role: `#D48CC8` on dark, `#702963` on light. The
+    /// coupling between the accent and the editor is pinned here, on the
+    /// product side, because it is DBFlux's rule, not Bolt's.
     #[gpui::test]
     fn editor_syntax_and_tint_follow_the_palette(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
 
-        for (setting, expected) in [
-            (ThemeSetting::Dark, bolt::tokens::SyntaxColors::dark()),
-            (ThemeSetting::Light, bolt::tokens::SyntaxColors::light()),
+        for (setting, expected, keyword_hex) in [
+            (
+                ThemeSetting::Dark,
+                bolt::tokens::SyntaxColors::dark().with_keyword(brand().accent_tint),
+                ACCENT_TINT,
+            ),
+            (
+                ThemeSetting::Light,
+                bolt::tokens::SyntaxColors::light().with_keyword(brand().accent),
+                ACCENT,
+            ),
         ] {
+            assert_eq!(
+                hex_of(expected.keyword),
+                keyword_hex,
+                "{setting:?}: keyword role"
+            );
+
             cx.update(|cx| apply_theme(setting, AppStyle::Default, None, cx));
             cx.update(|cx| {
                 let theme = Theme::global(cx);

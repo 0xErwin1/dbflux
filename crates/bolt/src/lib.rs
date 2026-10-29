@@ -15,6 +15,7 @@ pub mod brand;
 pub mod density;
 pub mod fonts;
 pub mod palette;
+pub mod semantic;
 pub mod theme;
 pub mod tokens;
 pub mod typography;

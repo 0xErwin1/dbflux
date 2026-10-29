@@ -461,7 +461,7 @@ impl Palette {
             overlay: rgb_to_hsla_alpha(0x050507, 0.62),
             progress: brand.accent_tint,
 
-            syntax: SyntaxColors::dark(),
+            syntax: SyntaxColors::dark().with_keyword(brand.accent_tint),
         }
     }
 
@@ -505,7 +505,7 @@ impl Palette {
             overlay: rgb_to_hsla_alpha(0x1E1423, 0.28),
             progress: brand.accent,
 
-            syntax: SyntaxColors::light(),
+            syntax: SyntaxColors::light().with_keyword(brand.accent),
         }
     }
 }
@@ -786,8 +786,14 @@ mod tests {
         cx.update(gpui_component::init);
 
         for (mode, colors) in [
-            (PaletteMode::Dark, SyntaxColors::dark()),
-            (PaletteMode::Light, SyntaxColors::light()),
+            (
+                PaletteMode::Dark,
+                SyntaxColors::dark().with_keyword(test_brand().accent_tint),
+            ),
+            (
+                PaletteMode::Light,
+                SyntaxColors::light().with_keyword(test_brand().accent),
+            ),
         ] {
             cx.update(|cx| {
                 install(test_brand(), mode, Density::Default, cx);
