@@ -14,7 +14,9 @@
 pub mod brand;
 pub mod density;
 pub mod fonts;
+pub mod icon;
 pub mod palette;
+pub mod primitives;
 pub mod semantic;
 pub mod theme;
 pub mod tokens;

@@ -58,7 +58,7 @@ impl Icon {
         self
     }
 
-    /// Accent icon: the palette tint (`ChromeColors::tint`), not the byzantine fill.
+    /// Accent icon: the palette tint (`ChromeColors::tint`), not the accent fill.
     pub fn primary(mut self) -> Self {
         self.tone = Some(IconTone::Primary);
         self

@@ -4,7 +4,6 @@ mod chamfer;
 mod divider;
 mod file_picker;
 mod focus_ring;
-mod icon;
 mod kbd;
 mod label;
 mod loading_state;
@@ -28,7 +27,8 @@ pub use focus_ring::{
     FOCUS_MARKER_SELECTOR, FOCUS_RING_SELECTOR, FocusShape, WhenFocusVisible, focus_ring,
     focus_underline, focus_visible, is_focus_visible, is_keyboard_modality,
 };
-pub use icon::Icon;
+// Moved to `bolt`; re-exported at this path so call sites keep compiling.
+pub use bolt::primitives::Icon;
 pub use kbd::{Kbd, KbdTone, key_label};
 pub use label::Label;
 pub use loading_state::{LoadingState, Spinner};
