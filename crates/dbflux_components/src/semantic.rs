@@ -80,10 +80,23 @@ pub struct ThemeSettingGlobal {
 
 impl Global for ThemeSettingGlobal {}
 
+/// The Bolt palette that corresponds to a persisted theme setting.
+fn palette_mode(setting: ThemeSetting) -> bolt::palette::PaletteMode {
+    match setting {
+        ThemeSetting::System => bolt::palette::PaletteMode::System,
+        ThemeSetting::Dark => bolt::palette::PaletteMode::Dark,
+        ThemeSetting::Light => bolt::palette::PaletteMode::Light,
+    }
+}
+
 impl ThemeSettingGlobal {
     /// Register (or update) the active `ThemeSetting` in the GPUI context.
+    ///
+    /// Publishes the matching palette to `bolt` in the same call, so a role that reads the
+    /// palette (`bolt::tokens::SyntaxColors::for_current`) cannot disagree with the theme.
     pub fn set(cx: &mut App, setting: ThemeSetting) {
         cx.set_global(ThemeSettingGlobal { setting });
+        bolt::palette::set_mode(cx, palette_mode(setting));
     }
 
     /// Read the active `ThemeSetting`. Falls back to `ThemeSetting::Dark` when

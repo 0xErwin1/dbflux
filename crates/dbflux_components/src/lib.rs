@@ -16,7 +16,8 @@ pub mod fonts;
 pub mod helpers;
 pub mod icon;
 pub mod semantic;
-pub mod tokens;
+// Moved to `bolt`; re-exported at this path so call sites keep compiling.
+pub use bolt::tokens;
 pub mod typography;
 
 pub mod category;

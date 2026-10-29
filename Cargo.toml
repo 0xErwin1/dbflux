@@ -8,6 +8,7 @@ members = [
     "crates/dbflux_ui_windows",
     "crates/dbflux_ui_sidebar",
     "crates/dbflux_components",
+    "crates/bolt",
     "crates/dbflux_core",
     "crates/dbflux_lua",
     "crates/dbflux_js",
@@ -115,6 +116,7 @@ dbflux_driver_s3 = { path = "crates/dbflux_driver_s3" }
 dbflux_driver_aws_secrets = { path = "crates/dbflux_driver_aws_secrets" }
 dbflux_app = { path = "crates/dbflux_app" }
 dbflux_components = { path = "crates/dbflux_components" }
+bolt = { path = "crates/bolt" }
 dbflux_ui_base = { path = "crates/dbflux_ui_base" }
 dbflux_ui_document = { path = "crates/dbflux_ui_document" }
 dbflux_ui_windows = { path = "crates/dbflux_ui_windows" }

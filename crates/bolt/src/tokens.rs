@@ -656,13 +656,13 @@ impl SyntaxColors {
         }
     }
 
-    /// Return the `SyntaxColors` for the currently active theme.
+    /// Return the `SyntaxColors` for the currently active palette.
     ///
-    /// Reads `ThemeSettingGlobal` from `cx`; falls back to Dark when absent.
+    /// Reads the palette the product published; falls back to Dark when absent.
     pub fn for_current(cx: &gpui::App) -> Self {
-        match crate::semantic::ThemeSettingGlobal::get(cx) {
-            dbflux_core::ThemeSetting::Light => Self::light(),
-            dbflux_core::ThemeSetting::Dark | dbflux_core::ThemeSetting::System => Self::dark(),
+        match crate::palette::resolved_mode(cx) {
+            crate::palette::PaletteMode::Light => Self::light(),
+            crate::palette::PaletteMode::Dark | crate::palette::PaletteMode::System => Self::dark(),
         }
     }
 

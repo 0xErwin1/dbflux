@@ -1,0 +1,29 @@
+[package]
+name = "bolt"
+description = "Bolt, the design system shared by DBFlux and Relay: tokens, theme and generic GPUI components."
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+
+[features]
+default = []
+# Enables the `test-support` feature of gpui, which the accessibility checks a
+# rendered-surface test runs against a captured frame require.
+test-support = ["gpui/test-support"]
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+gpui-base = { path = "../../vendor/gpui-base" }
+log.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
