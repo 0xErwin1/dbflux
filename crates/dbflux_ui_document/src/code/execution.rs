@@ -955,20 +955,42 @@ impl CodeDocument {
         let task = cx.background_executor().spawn({
             let connection = connection.clone();
             let session_binding = session_binding.clone();
+            let dispatch_token = cancel_token.clone();
             async move {
-                if on_session {
-                    session_binding.execute(connection, session_database, &request)
+                // The editor is released as soon as its task is cancelled, so a
+                // cancel that lands before this worker runs must keep the
+                // statement from reaching the database at all.
+                let execution = if dispatch_token.is_cancelled() {
+                    None
+                } else if on_session {
+                    session_binding.execute_unless_cancelled(
+                        connection,
+                        session_database,
+                        &request,
+                        &dispatch_token,
+                    )
                 } else {
-                    super::execution_session::SessionExecution {
+                    Some(super::execution_session::SessionExecution {
                         result: connection.execute(&request),
                         isolated: false,
+                    })
+                };
+
+                match execution {
+                    Some(execution) => (true, execution),
+                    None => {
+                        let skipped = super::execution_session::SessionExecution {
+                            result: Err(DbError::Cancelled),
+                            isolated: false,
+                        };
+                        (false, skipped)
                     }
                 }
             }
         });
 
         cx.spawn(async move |this, cx| {
-            let session_execution = task.await;
+            let (dispatched, session_execution) = task.await;
             let session_isolated = session_execution.isolated;
             let result = session_execution.result;
 
@@ -996,7 +1018,10 @@ impl CodeDocument {
             } else if cancel_token.is_cancelled() {
                 log::info!("Query was cancelled, discarding result");
 
-                if let Err(error) = connection.cleanup_after_cancel() {
+                // The cleanup rolls back the connection's transaction. A query
+                // that never reached the driver left nothing to undo, and
+                // rolling back would discard a transaction the user opened.
+                if dispatched && let Err(error) = connection.cleanup_after_cancel() {
                     log::warn!("Cleanup after cancel failed: {error}");
                 }
 
@@ -2174,15 +2199,47 @@ impl CodeDocument {
         self.execute_query_internal(query, false, ReadOnlyEnforcement::None, window, cx);
     }
 
+    /// Releases the editor when its running query task was cancelled outside
+    /// it, from the Background tasks panel. The driver call keeps running
+    /// until the database answers the cancel, and its completion still records
+    /// the cancellation; without this the editor kept showing a run the user
+    /// had already cancelled for as long as that call blocked.
+    pub(super) fn sync_external_query_cancellation(&mut self, cx: &mut Context<Self>) {
+        if self.state != DocumentState::Executing {
+            return;
+        }
+
+        let Some(task) = self.execution.active_query_task.as_ref() else {
+            return;
+        };
+
+        let cancelled = self
+            .app_state
+            .read(cx)
+            .tasks()
+            .get(task.task_id)
+            .is_some_and(|task| task.status == dbflux_core::TaskStatus::Cancelled);
+
+        if cancelled {
+            self.release_cancelled_execution(cx);
+        }
+    }
+
+    fn release_cancelled_execution(&mut self, cx: &mut Context<Self>) {
+        if let Some(index) = self.execution.active_execution_index
+            && let Some(record) = self.execution.execution_history.get_mut(index)
+            && record.finished_at.is_none()
+        {
+            record.finished_at = Some(Instant::now());
+        }
+
+        self.state = DocumentState::Clean;
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
+    }
+
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
         if self.runner.cancel_primary(cx) {
-            if let Some(index) = self.execution.active_execution_index
-                && let Some(record) = self.execution.execution_history.get_mut(index)
-                && record.finished_at.is_none()
-            {
-                record.finished_at = Some(Instant::now());
-            }
-
             if let Some(task) = self.execution.active_query_task.as_ref() {
                 if !task.uses_isolated_session {
                     self.app_state
@@ -2204,9 +2261,7 @@ impl CodeDocument {
                 self.app_state.read(cx).cancel_query_for_target(&target);
             }
 
-            self.state = DocumentState::Clean;
-            cx.emit(DocumentEvent::MetaChanged);
-            cx.notify();
+            self.release_cancelled_execution(cx);
         }
     }
 
