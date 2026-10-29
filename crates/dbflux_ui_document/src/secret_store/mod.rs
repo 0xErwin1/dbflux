@@ -33,6 +33,7 @@ use dbflux_core::{
     Connection, DriverCapabilities, RefreshPolicy, SecretDetails, SecretStoreCapabilities,
     SecretStoreDescriptor, SecretSummary,
 };
+use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::AppStateEntity;
 use gpui::*;
 use uuid::Uuid;
@@ -224,6 +225,14 @@ impl SecretStoreDocument {
 
         let mut subscriptions = vec![search_subscription];
         subscriptions.extend(region_subscription);
+        // The live connection can be replaced (or moved to another region)
+        // outside this document; the subscription keeps the region and the
+        // listing on what the connection actually reaches.
+        subscriptions.push(
+            cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
+                this.adopt_connection_region(cx);
+            }),
+        );
 
         let mut doc = Self {
             id: DocumentId::new(),
@@ -775,6 +784,34 @@ impl SecretStoreDocument {
                     Command::ColumnLeft,
                 )
                 .enabled(self.path.is_some()),
+            );
+        }
+
+        // The region picker and the retry of a failed listing are clickable
+        // toolbar controls, so the pane actions are their keyboard path too.
+        if self.region_switchable {
+            if let Some(dropdown) = self.region_dropdown.clone() {
+                actions.push(
+                    PaneAction::callback(
+                        "secret-region",
+                        dbflux_i18n::t!("document.secret_store.region.label"),
+                        move |window, cx| {
+                            dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+                        },
+                    )
+                    .icon(AppIcon::Globe)
+                    .enabled(matches!(self.regions, RegionListState::Loaded(_))),
+                );
+            }
+            actions.push(
+                callback_action(
+                    &target,
+                    "secret-region-retry",
+                    "document.secret_store.region.retry",
+                    Self::load_regions,
+                )
+                .icon(AppIcon::RefreshCcw)
+                .enabled(matches!(self.regions, RegionListState::Failed(_))),
             );
         }
 

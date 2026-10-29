@@ -392,16 +392,27 @@ impl RegionCatalog {
     }
 
     /// Returns the regions, calling `fetch` only when nothing was cached yet.
+    ///
+    /// The lock is held from the cache check through the cache write, so two
+    /// callers of a cold catalog share one fetch instead of each asking the
+    /// provider.
+    /// Returns the regions, calling `fetch` only when nothing was cached yet.
+    ///
+    /// The lock is held from the cache check through the cache write, so two
+    /// callers of a cold catalog share one fetch instead of each asking the
+    /// provider.
     pub(crate) fn regions<F>(&self, fetch: F) -> Result<Vec<String>, DbError>
     where
         F: FnOnce() -> Result<Vec<String>, DbError>,
     {
-        if let Some(regions) = self.lock().clone() {
+        let mut cached = self.lock();
+
+        if let Some(regions) = cached.clone() {
             return Ok(regions);
         }
 
         let regions = fetch()?;
-        *self.lock() = Some(regions.clone());
+        *cached = Some(regions.clone());
 
         Ok(regions)
     }

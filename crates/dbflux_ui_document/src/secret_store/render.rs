@@ -203,6 +203,10 @@ impl SecretStoreDocument {
     /// out: "which region am I reading" is the same question as "which store
     /// is this", so it sits between the store and the path rather than in the
     /// toolbar among the controls.
+    ///
+    /// While the region list is loading or failed, the picker cannot be
+    /// offered; the region then stays visible as a plain segment, so the
+    /// listing never loses the answer to which region it was loaded under.
     fn render_breadcrumb_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut row = div()
             .flex()
@@ -213,6 +217,17 @@ impl SecretStoreDocument {
 
         if let Some(picker) = self.render_region_picker() {
             row = row.child(Self::breadcrumb_separator(cx)).child(picker);
+        } else if self.region_switchable
+            && let Some(region) = self.region.clone()
+        {
+            row = row.child(Self::breadcrumb_separator(cx)).child(
+                // The same wrapper id the picker carries, so the plain
+                // segment reaches the accessibility tree too.
+                div()
+                    .id("secret-region-plain")
+                    .flex_shrink_0()
+                    .child(Breadcrumb::new(vec![BreadcrumbSegment::new(region)])),
+            );
         }
 
         let path = self.store_path_segments(cx);

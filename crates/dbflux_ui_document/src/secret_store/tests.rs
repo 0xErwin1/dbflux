@@ -17,7 +17,8 @@ use dbflux_test_support::fake_driver::{
     FAKE_KMS_DENIED_MESSAGE, FAKE_PARAMETER_STORE_ID, FAKE_SECRET_BINARY, FAKE_SECRET_PASSWORD,
     FAKE_SECRET_PLAINTEXT, FAKE_SECRETS_STORE_ID, FakeDriver,
 };
-use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::app_state_entity::AppStateGlobal;
+use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -788,6 +789,15 @@ fn open_region_doc<'a>(
     driver.set_region_list_error(list_error);
     let (app_state, profile_id) = connected_aws_app_state(cx, &driver);
 
+    // `report_error` reaches the error seam through the `AppStateGlobal`
+    // registration; without it a reported failure is invisible to these
+    // tests.
+    cx.update(|cx| {
+        cx.set_global(AppStateGlobal {
+            entity: app_state.clone(),
+        });
+    });
+
     let state = app_state.clone();
     let store_id = FAKE_SECRETS_STORE_ID.to_string();
 
@@ -847,8 +857,10 @@ fn the_region_control_offers_the_regions_the_connection_lists(cx: &mut TestAppCo
     assert!(text.contains(CURRENT_REGION), "{text}");
 }
 
-/// A failed region listing is shown with a retry and never as an empty
-/// picker; retrying asks the connection again.
+/// A failed region listing is reported through the error seam, shown with a
+/// retry and never as an empty picker; the region itself stays visible as a
+/// breadcrumb while the picker cannot be offered. Retrying asks the
+/// connection again.
 #[gpui::test]
 fn a_failed_region_list_is_reported_and_retriable(cx: &mut TestAppContext) {
     let message = "AccessDenied: not authorized to perform ec2:DescribeRegions";
@@ -865,7 +877,15 @@ fn a_failed_region_list_is_reported_and_retriable(cx: &mut TestAppContext) {
         text.contains(&dbflux_i18n::t!("document.secret_store.region.retry")),
         "{text}"
     );
-    assert!(!text.contains(CURRENT_REGION), "no picker: {text}");
+    assert!(
+        text.contains(CURRENT_REGION),
+        "the region stays visible while the picker cannot be offered: {text}"
+    );
+
+    let reported = opened
+        .window
+        .update(|_, cx| opened.app_state.read(cx).unread_error_count);
+    assert_eq!(reported, 1, "the failed listing must reach the error seam");
 
     opened.driver.set_region_list_error(None);
     opened.update(|doc, cx| doc.load_regions(cx));
@@ -887,7 +907,13 @@ fn switching_the_region_reloads_the_listing(cx: &mut TestAppContext) {
     opened.update(|doc, cx| doc.retrieve_selected_value(cx));
     assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
 
-    let lists_before = opened.driver.secret_store_calls().list_requests.len();
+    let lists_before = opened
+        .driver
+        .secret_store_calls()
+        .list_requests
+        .iter()
+        .filter(|(_, request)| request.page_token.is_none())
+        .count();
 
     let region = OTHER_REGION.to_string();
     opened.update(|doc, cx| doc.switch_region(region, cx));
@@ -909,19 +935,147 @@ fn switching_the_region_reloads_the_listing(cx: &mut TestAppContext) {
     assert_eq!(live_region.as_deref(), Some(OTHER_REGION));
 
     let calls = opened.driver.secret_store_calls();
-    assert_eq!(calls.list_requests.len(), lists_before + 1);
-    assert_eq!(
-        calls
-            .list_requests
-            .last()
-            .and_then(|(_, request)| request.page_token.clone()),
-        None
-    );
+    // The switch asks the store for a first page again (a fresh page token);
+    // the listing's own continuations keep their cost out of the assertion.
+    let first_pages_after = calls
+        .list_requests
+        .iter()
+        .filter(|(_, request)| request.page_token.is_none())
+        .count();
+    assert_eq!(first_pages_after, lists_before + 1);
 
     assert!(opened.read(|doc| doc.selected().is_none()));
     assert!(opened.read(|doc| matches!(doc.details(), DetailsState::Idle)));
     assert!(opened.read(|doc| matches!(doc.value(), ValueState::NotLoaded)));
     assert!(!opened.read(|doc| doc.region_switch_in_flight()));
+}
+
+/// A region change this document did not start — another document of the same
+/// profile switched, or the profile reconnected elsewhere — is adopted: the
+/// listing reloads its first page under the live region and the selection,
+/// its details and any retrieved value are dropped.
+#[gpui::test]
+fn a_region_change_installed_elsewhere_is_adopted(cx: &mut TestAppContext) {
+    let mut opened = open_with_regions(cx, &[OTHER_REGION, CURRENT_REGION]);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+
+    let profile_id = opened.read(|doc| doc.connection_id().expect("connection"));
+    let app_state = opened.app_state.clone();
+
+    // Another surface moves the live connection in place and announces it.
+    let first_pages_before = opened
+        .driver
+        .secret_store_calls()
+        .list_requests
+        .iter()
+        .filter(|(_, request)| request.page_token.is_none())
+        .count();
+
+    opened.window.update(|_, cx| {
+        let result = {
+            let params = app_state
+                .read(cx)
+                .prepare_switch_region(profile_id, OTHER_REGION)
+                .expect("prepare switch");
+            params.execute().expect("reconnect")
+        };
+
+        app_state.update(cx, |state, cx| {
+            assert!(state.apply_switch_region(
+                result.profile_id,
+                result.original_profile,
+                result.connection,
+                result.schema,
+                result.session_generation,
+            ));
+            cx.emit(AppStateChanged);
+        });
+    });
+    opened.window.run_until_parked();
+
+    assert_eq!(
+        opened.read(|doc| doc.region().map(str::to_string)),
+        Some(OTHER_REGION.to_string())
+    );
+    assert!(opened.read(|doc| doc.selected().is_none()));
+    assert!(opened.read(|doc| matches!(doc.details(), DetailsState::Idle)));
+    assert!(opened.read(|doc| matches!(doc.value(), ValueState::NotLoaded)));
+
+    // The adopted region reloads from the first page; the listing's own
+    // continuations keep their cost out of the assertion.
+    let first_pages_after = opened
+        .driver
+        .secret_store_calls()
+        .list_requests
+        .iter()
+        .filter(|(_, request)| request.page_token.is_none())
+        .count();
+    assert_eq!(first_pages_after, first_pages_before + 1);
+}
+
+/// A switch whose reconnect finished after the profile's connection was
+/// replaced elsewhere is refused: the document keeps the region, the listing,
+/// the selection, its details and the retrieved value it already shows,
+/// clears its in-flight flag and reports neither success nor an error.
+#[gpui::test]
+fn a_refused_region_switch_leaves_the_document_exactly_as_it_was(cx: &mut TestAppContext) {
+    let mut opened = open_with_regions(cx, &[OTHER_REGION, CURRENT_REGION]);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+
+    let entries_before = opened.entry_names();
+    let errors_before = opened
+        .window
+        .update(|_, cx| opened.app_state.read(cx).unread_error_count);
+
+    let profile_id = opened.read(|doc| doc.connection_id().expect("connection"));
+    let app_state = opened.app_state.clone();
+    let doc = opened.doc.clone();
+
+    // The switch reconnects on the background executor; before it lands, the
+    // profile's connection is replaced elsewhere and the session generation
+    // moves on.
+    opened.window.update(|_, cx| {
+        doc.update(cx, |doc, cx| {
+            doc.switch_region(OTHER_REGION.to_string(), cx)
+        })
+    });
+    assert!(opened.read(|doc| doc.region_switch_in_flight()));
+
+    let (current_profile, current_connection) = opened.window.update(|_, cx| {
+        let connected = app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .expect("connected");
+        (connected.profile.clone(), connected.connection.clone())
+    });
+    opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| {
+            state.apply_switch_database(profile_id, current_profile, current_connection, None);
+        });
+    });
+
+    // The in-flight switch lands against a session that no longer exists.
+    opened.window.run_until_parked();
+
+    assert!(!opened.read(|doc| doc.region_switch_in_flight()));
+    assert_eq!(
+        opened.read(|doc| doc.region().map(str::to_string)),
+        Some(CURRENT_REGION.to_string())
+    );
+    assert_eq!(opened.entry_names(), entries_before);
+    assert!(opened.read(|doc| doc.selected().is_some()));
+    assert!(opened.read(|doc| matches!(doc.details(), DetailsState::Loaded(_))));
+    assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+
+    let errors_after = opened
+        .window
+        .update(|_, cx| opened.app_state.read(cx).unread_error_count);
+    assert_eq!(errors_after, errors_before, "a refusal is not an error");
 }
 
 /// A failed reconnect keeps the region, the stores and the listing exactly
@@ -1050,6 +1204,26 @@ fn the_region_controls_are_covered(cx: &mut TestAppContext) {
             .iter()
             .any(|path| path.ends_with("secret-region-retry")),
         "a failed region listing renders its retry: {paths:?}"
+    );
+
+    // Both controls are pane actions too: the entries above validate that the
+    // registry's Menu paths name real entries.
+    let action_ids: Vec<String> = failing.window.update(|_, cx| {
+        failing
+            .doc
+            .read(cx)
+            .pane_actions(&failing.doc)
+            .into_iter()
+            .map(|action| action.id.to_string())
+            .collect()
+    });
+    assert!(
+        action_ids.iter().any(|id| id == "secret-region"),
+        "the picker has a pane action: {action_ids:?}"
+    );
+    assert!(
+        action_ids.iter().any(|id| id == "secret-region-retry"),
+        "the retry has a pane action: {action_ids:?}"
     );
 }
 

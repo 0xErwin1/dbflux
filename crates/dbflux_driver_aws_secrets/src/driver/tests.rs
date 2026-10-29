@@ -260,3 +260,42 @@ fn the_region_catalog_does_not_cache_a_failure() {
 
     assert_eq!(regions, ["eu-west-1"]);
 }
+
+/// Two concurrent callers of a cold catalog share one fetch: the lock is held
+/// from the cache check through the cache write, so the second caller waits
+/// for the first one's answer instead of asking the provider again.
+#[test]
+fn concurrent_callers_of_a_cold_catalog_share_one_fetch() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let catalog = Arc::new(RegionCatalog::new());
+    let fetches = Arc::new(AtomicUsize::new(0));
+    let start = Arc::new(std::sync::Barrier::new(2));
+
+    let callers: Vec<_> = (0..2)
+        .map(|_| {
+            let catalog = catalog.clone();
+            let fetches = fetches.clone();
+            let start = start.clone();
+
+            std::thread::spawn(move || {
+                start.wait();
+                catalog
+                    .regions(|| {
+                        fetches.fetch_add(1, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        Ok(vec!["eu-west-1".to_string()])
+                    })
+                    .expect("regions")
+            })
+        })
+        .collect();
+
+    for caller in callers {
+        let regions = caller.join().expect("caller thread");
+        assert_eq!(regions, ["eu-west-1"]);
+    }
+
+    assert_eq!(fetches.load(Ordering::SeqCst), 1);
+}

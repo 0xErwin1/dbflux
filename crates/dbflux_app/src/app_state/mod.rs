@@ -837,13 +837,15 @@ impl AppState {
         original_profile: ConnectionProfile,
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
-    ) {
+        session_generation: u64,
+    ) -> bool {
         self.facade.connections.apply_switch_region(
             profile_id,
             original_profile,
             connection,
             schema,
-        );
+            session_generation,
+        )
     }
 
     pub fn add_database_connection(

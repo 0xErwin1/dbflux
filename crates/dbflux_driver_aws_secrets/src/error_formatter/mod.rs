@@ -58,7 +58,13 @@ const AUTH_CODES: &[&str] = &[
     "ExpiredTokenException",
 ];
 
-const PERMISSION_CODES: &[&str] = &["AccessDeniedException", "AccessDenied"];
+/// EC2 reports a denied `DescribeRegions` as `UnauthorizedOperation`, so a
+/// region catalog fetched without the permission reads as a denial.
+const PERMISSION_CODES: &[&str] = &[
+    "AccessDeniedException",
+    "AccessDenied",
+    "UnauthorizedOperation",
+];
 
 /// Codes for a value the caller may not decrypt. Secrets Manager reports a
 /// missing `kms:Decrypt` as `DecryptionFailure`.

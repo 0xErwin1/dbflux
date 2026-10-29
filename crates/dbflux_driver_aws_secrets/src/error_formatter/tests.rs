@@ -33,6 +33,27 @@ fn access_denied_maps_to_permission_denied_with_the_aws_message() {
     }
 }
 
+/// A denied `ec2:DescribeRegions` comes back as EC2's own
+/// `UnauthorizedOperation` code, and the region catalog must read it as a
+/// permission error, not a generic failure.
+#[test]
+fn unauthorized_operation_maps_to_permission_denied() {
+    match classify(
+        "UnauthorizedOperation",
+        "not authorized to perform: ec2:DescribeRegions",
+        ErrorTarget::None,
+    ) {
+        DbError::PermissionDenied(details) => {
+            assert_eq!(details.code.as_deref(), Some("UnauthorizedOperation"));
+            assert_eq!(
+                details.message,
+                "not authorized to perform: ec2:DescribeRegions"
+            );
+        }
+        other => panic!("expected PermissionDenied, got {other:?}"),
+    }
+}
+
 #[test]
 fn kms_decrypt_denial_maps_to_permission_denied_and_names_kms() {
     let cases = [

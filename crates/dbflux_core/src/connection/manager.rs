@@ -1653,6 +1653,7 @@ impl ConnectionManager {
             driver,
             secret_store: secret_store.clone(),
             session_password: self.session_passwords.get(&profile_id).cloned(),
+            session_generation: self.current_session_generation(profile_id),
         })
     }
 
@@ -1752,14 +1753,29 @@ impl ConnectionManager {
     /// Applies a prepared region switch: the live connection of the profile is
     /// replaced in place while the profile on record keeps the region it was
     /// saved with.
+    ///
+    /// Returns `false` without installing anything when the profile's session
+    /// moved on while the switch reconnected: the profile disconnected, or a
+    /// reconnect or another switch replaced its connection. The prepared switch
+    /// belongs to a session that no longer exists, so installing it would
+    /// overwrite whatever the newer session reached; the caller must treat
+    /// `false` as "nothing happened".
     pub fn apply_switch_region(
         &mut self,
         profile_id: Uuid,
         original_profile: ConnectionProfile,
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
-    ) {
+        session_generation: u64,
+    ) -> bool {
+        if self.current_session_generation(profile_id) != session_generation
+            || !self.connections.contains_key(&profile_id)
+        {
+            return false;
+        }
+
         self.install_reconnected_connection(profile_id, original_profile, connection, schema);
+        true
     }
 
     /// Installs a reconnected connection for a profile in place.
@@ -2881,7 +2897,9 @@ const PASSWORD_VALUE_REF: &str = "password";
 /// have no stored keyring password. Resolve those refs again here instead
 /// of silently connecting without a password. Refs that need a provider or
 /// auth context cannot be resolved on this path and fail explicitly rather
-/// than falling back to the stored password. `destination` names where the
+/// than falling back to the stored password, and so does a keyring read
+/// failure: connecting without the password could reach the database as a
+/// different identity through the default credential chain. `destination` names where the
 /// reconnect goes (for example `database 'analytics'`), for the error
 /// messages.
 fn resolve_switch_password(
@@ -2891,9 +2909,14 @@ fn resolve_switch_password(
     secret_store: &Arc<RwLock<Box<dyn SecretStore>>>,
 ) -> Result<Option<SecretString>, String> {
     match profile.value_refs.get(PASSWORD_VALUE_REF) {
-        None => Ok(session_password
-            .cloned()
-            .or_else(|| get_stored_password(profile, secret_store))),
+        None => {
+            if let Some(password) = session_password {
+                return Ok(Some(password.clone()));
+            }
+
+            get_stored_password(profile, secret_store)
+                .map_err(|error| format!("Failed to resolve password for {destination}: {error}"))
+        }
         Some(ValueRef::Literal { value }) => Ok(Some(SecretString::from(value.clone()))),
         Some(ValueRef::Env { key }) => CompositeValueResolver::resolve_env_ref(key)
             .map(|value| Some(SecretString::from(value)))
@@ -2911,12 +2934,16 @@ fn resolve_switch_password(
     }
 }
 
+/// The password stored in the keyring for `profile`, if it saves one. A keyring
+/// read failure is an error, not an absence: a switch that cannot prove who it
+/// reconnects as must fail instead of handing the driver an empty password and
+/// letting the default credential chain answer.
 fn get_stored_password(
     profile: &ConnectionProfile,
     secret_store: &Arc<RwLock<Box<dyn SecretStore>>>,
-) -> Option<SecretString> {
+) -> Result<Option<SecretString>, String> {
     if !profile.save_password {
-        return None;
+        return Ok(None);
     }
 
     let store = match secret_store.read() {
@@ -2928,10 +2955,10 @@ fn get_stored_password(
     };
 
     match store.get(&profile.secret_ref()) {
-        Ok(pwd) => pwd,
+        Ok(pwd) => Ok(pwd),
         Err(e) => {
             error!("Failed to get password: {:?}", e);
-            None
+            Err(e.to_string())
         }
     }
 }
@@ -3007,6 +3034,9 @@ pub struct SwitchRegionParams {
     pub secret_store: Arc<RwLock<Box<dyn SecretStore>>>,
     /// Password supplied when the profile connected, preferred over the keyring.
     pub session_password: Option<SecretString>,
+    /// The profile's session generation at prepare time. `apply_switch_region`
+    /// refuses to install the result when the generation no longer matches.
+    pub session_generation: u64,
 }
 
 impl SwitchRegionParams {
@@ -3046,6 +3076,7 @@ impl SwitchRegionParams {
             original_profile: self.original_profile,
             connection: connection.into(),
             schema,
+            session_generation: self.session_generation,
         })
     }
 }
@@ -3055,6 +3086,9 @@ pub struct SwitchRegionResult {
     pub original_profile: ConnectionProfile,
     pub connection: Arc<dyn Connection>,
     pub schema: Option<SchemaSnapshot>,
+    /// The session generation the switch was prepared against, for
+    /// `ConnectionManager::apply_switch_region` to fence on.
+    pub session_generation: u64,
 }
 
 pub struct FetchDatabaseSchemaParams {
@@ -6626,6 +6660,34 @@ mod tests {
         ))))
     }
 
+    /// A keyring that fails every read, for proving a switch refuses to
+    /// reconnect when it cannot prove who it connects as.
+    struct FailingSecretStore;
+
+    impl SecretStore for FailingSecretStore {
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn get(&self, _secret_ref: &str) -> Result<Option<SecretString>, DbError> {
+            Err(DbError::ValueResolutionFailed(
+                "keyring is locked".to_string(),
+            ))
+        }
+
+        fn set(&self, _secret_ref: &str, _value: &SecretString) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn delete(&self, _secret_ref: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+    }
+
+    fn failing_secret_store() -> Arc<RwLock<Box<dyn SecretStore>>> {
+        Arc::new(RwLock::new(Box::new(FailingSecretStore)))
+    }
+
     /// Connects a profile (with an optional `password` value ref) against the
     /// recording per-database driver and returns the connection record.
     fn switch_manager_with(
@@ -6920,6 +6982,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_failed_keyring_read_fails_the_database_switch_instead_of_connecting_without_a_password() {
+        let (manager, profile, recorded) = switch_manager_with(None, true);
+
+        let params = manager
+            .prepare_database_connection(profile.id, "analytics", &failing_secret_store())
+            .expect("prepare database connection should succeed");
+
+        let Err(error) = params.execute() else {
+            panic!("a keyring read failure must fail the switch, not connect without a password");
+        };
+
+        assert!(
+            error.contains("Failed to resolve password for database 'analytics'"),
+            "unexpected error: {error}"
+        );
+        assert!(error.contains("keyring is locked"), "{error}");
+        assert!(
+            recorded_connect_calls(&recorded).is_empty(),
+            "the driver must not be asked to connect without the password"
+        );
+    }
+
     // --- Region switch ---
 
     /// A connection bound to one cloud region, so region-switch tests can
@@ -7132,6 +7217,29 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_keyring_read_fails_the_region_switch_instead_of_connecting_without_a_password() {
+        let (manager, profile, recorded) = region_switch_manager(true);
+
+        let params = manager
+            .prepare_switch_region(profile.id, "eu-west-1", &failing_secret_store())
+            .expect("prepare switch should succeed");
+
+        let Err(error) = params.execute() else {
+            panic!("a keyring read failure must fail the switch, not connect without a password");
+        };
+
+        assert!(
+            error.contains("Failed to resolve password for region 'eu-west-1'"),
+            "unexpected error: {error}"
+        );
+        assert!(error.contains("keyring is locked"), "{error}");
+        assert!(
+            recorded_connect_calls(&recorded).is_empty(),
+            "the driver must not be asked to connect without the password"
+        );
+    }
+
+    #[test]
     fn switch_region_params_carry_the_rewritten_config_and_keep_the_credential_source() {
         let (manager, profile, recorded) = region_switch_manager(true);
 
@@ -7168,6 +7276,81 @@ mod tests {
             panic!("the original profile must keep its config shape");
         };
         assert_eq!(region, "us-east-1");
+    }
+
+    #[test]
+    fn apply_switch_region_refuses_a_switch_prepared_before_the_connection_was_replaced() {
+        let (mut manager, profile, _recorded) = region_switch_manager(true);
+        let profile_id = profile.id;
+
+        // The switch is prepared against the connection as it is now ...
+        let stale = manager
+            .prepare_switch_region(profile_id, "eu-west-1", &noop_secret_store())
+            .expect("prepare the stale switch should succeed");
+
+        // ... and the connection is replaced while it reconnects.
+        let replacement = manager
+            .prepare_switch_region(profile_id, "ap-south-1", &noop_secret_store())
+            .expect("prepare the replacement switch")
+            .execute()
+            .expect("execute the replacement");
+        assert!(manager.apply_switch_region(
+            profile_id,
+            replacement.original_profile,
+            replacement.connection,
+            replacement.schema,
+            replacement.session_generation,
+        ));
+
+        let stale_result = stale.execute().expect("the stale reconnect still succeeds");
+        assert!(
+            !manager.apply_switch_region(
+                profile_id,
+                stale_result.original_profile,
+                stale_result.connection,
+                stale_result.schema,
+                stale_result.session_generation,
+            ),
+            "a switch prepared before the connection was replaced must be refused"
+        );
+
+        let connected = manager
+            .connections
+            .get(&profile_id)
+            .expect("the profile stays connected");
+        assert_eq!(
+            connected.connection.current_region().as_deref(),
+            Some("ap-south-1"),
+            "the refused switch must not replace the newer connection"
+        );
+    }
+
+    #[test]
+    fn apply_switch_region_refuses_a_switch_for_a_disconnected_profile() {
+        let (mut manager, profile, _recorded) = region_switch_manager(true);
+        let profile_id = profile.id;
+
+        let params = manager
+            .prepare_switch_region(profile_id, "eu-west-1", &noop_secret_store())
+            .expect("prepare switch should succeed");
+
+        let _teardown = manager.disconnect(profile_id);
+
+        let result = params.execute().expect("the reconnect still succeeds");
+        assert!(
+            !manager.apply_switch_region(
+                profile_id,
+                result.original_profile,
+                result.connection,
+                result.schema,
+                result.session_generation,
+            ),
+            "a switch for a disconnected profile must be refused"
+        );
+        assert!(
+            !manager.connections.contains_key(&profile_id),
+            "a refused switch must not reconnect the profile"
+        );
     }
 
     #[test]
@@ -7215,12 +7398,13 @@ mod tests {
             .expect("prepare switch should succeed");
         let result = params.execute().expect("execute should succeed");
 
-        manager.apply_switch_region(
+        assert!(manager.apply_switch_region(
             profile_id,
             result.original_profile,
             result.connection,
             result.schema,
-        );
+            result.session_generation,
+        ));
 
         assert_eq!(
             policy(&manager),

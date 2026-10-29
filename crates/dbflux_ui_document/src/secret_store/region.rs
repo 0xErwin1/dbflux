@@ -5,6 +5,7 @@
 //! this module owns how it is loaded, shown and switched.
 
 use super::SecretStoreDocument;
+use crate::object_text::db_error_to_user_facing;
 use dbflux_components::controls::DropdownItem;
 use dbflux_core::{DbError, SwitchRegionResult};
 use dbflux_ui_base::AppStateChanged;
@@ -71,7 +72,13 @@ impl SecretStoreDocument {
                 regions.sort();
                 RegionListState::Loaded(regions)
             }
-            Err(error) => RegionListState::Failed(error.to_string()),
+            Err(error) => {
+                // First catch site of the discovery and of the user-triggered
+                // retry: report through the error seam and keep the inline
+                // retry, which renders below with the store's message.
+                report_error(db_error_to_user_facing(&error), cx);
+                RegionListState::Failed(error.to_string())
+            }
         };
         self.sync_region_dropdown(cx);
         cx.notify();
@@ -156,15 +163,33 @@ impl SecretStoreDocument {
 
         match result {
             Ok(switch) => {
-                self.app_state.update(cx, |state, cx| {
-                    state.apply_switch_region(
+                let installed = self.app_state.update(cx, |state, cx| {
+                    let installed = state.apply_switch_region(
                         switch.profile_id,
                         switch.original_profile,
                         switch.connection,
                         switch.schema,
+                        switch.session_generation,
                     );
-                    cx.emit(AppStateChanged);
+                    if installed {
+                        cx.emit(AppStateChanged);
+                    }
+                    installed
                 });
+
+                if !installed {
+                    // The profile's session moved on while the switch was
+                    // reconnecting: the connection was replaced or the profile
+                    // disconnected elsewhere, so installing would overwrite
+                    // whatever the newer session reached. Leave the region,
+                    // the listing, the selection and the value as they are;
+                    // the in-flight flag is already cleared, and the picker
+                    // goes back to the region the document still shows
+                    // instead of keeping the pick that did not happen.
+                    self.sync_region_dropdown(cx);
+                    cx.notify();
+                    return;
+                }
 
                 self.region = Some(region);
                 self.sync_region_dropdown(cx);
@@ -188,6 +213,35 @@ impl SecretStoreDocument {
             cx,
         );
         self.sync_region_dropdown(cx);
+        cx.notify();
+    }
+
+    /// A region change this document did not ask for (the profile was
+    /// reconnected elsewhere, or another document of the same profile
+    /// switched) leaves the connection on a region the listing was not loaded
+    /// under. Adopting the live region reloads the first page and drops the
+    /// selection, its details and any retrieved value, so the tab never shows
+    /// one region's secrets under another region's connection. A document
+    /// that switched for itself already shows the new region and does not
+    /// reload again.
+    pub(crate) fn adopt_connection_region(&mut self, cx: &mut Context<Self>) {
+        let Some(live_region) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&self.profile_id)
+            .and_then(|connected| connected.connection.current_region())
+        else {
+            return;
+        };
+
+        if self.region.as_deref() == Some(live_region.as_str()) {
+            return;
+        }
+
+        self.region = Some(live_region);
+        self.sync_region_dropdown(cx);
+        self.load_first_page(cx);
         cx.notify();
     }
 }
