@@ -1605,6 +1605,57 @@ impl ConnectionManager {
         })
     }
 
+    /// Prepare switching a live connection to another region.
+    ///
+    /// The driver rewrites the profile's config, the caller reconnects on the
+    /// background executor, and `apply_switch_region` installs the result in
+    /// place. A driver without the region hook and the region the connection
+    /// already reaches are both refused before anything reconnects.
+    pub fn prepare_switch_region(
+        &self,
+        profile_id: Uuid,
+        region: &str,
+        secret_store: &Arc<RwLock<Box<dyn SecretStore>>>,
+    ) -> Result<SwitchRegionParams, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| "Profile not connected".to_string())?;
+
+        let driver_id = connected.profile.driver_id();
+        let driver = self
+            .drivers
+            .get(&driver_id)
+            .cloned()
+            .ok_or_else(|| format!("Driver '{}' not available", driver_id))?;
+
+        let mut new_profile = connected.profile.clone();
+        new_profile.config = driver
+            .with_region(&new_profile.config, region)
+            .ok_or_else(|| {
+                format!(
+                    "Driver '{}' does not support region switching",
+                    driver.display_name()
+                )
+            })?;
+
+        if connected.connection.current_region().as_deref() == Some(region) {
+            return Err(format!("Already connected to region '{}'", region));
+        }
+
+        let original_profile = connected.profile.clone();
+
+        Ok(SwitchRegionParams {
+            profile_id,
+            region: region.to_string(),
+            new_profile,
+            original_profile,
+            driver,
+            secret_store: secret_store.clone(),
+            session_password: self.session_passwords.get(&profile_id).cloned(),
+        })
+    }
+
     /// Prepare a per-database connection without replacing the primary.
     /// Rejects only if a connection to this database already exists.
     pub fn prepare_database_connection(
@@ -1695,9 +1746,35 @@ impl ConnectionManager {
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
     ) {
+        self.install_reconnected_connection(profile_id, original_profile, connection, schema);
+    }
+
+    /// Applies a prepared region switch: the live connection of the profile is
+    /// replaced in place while the profile on record keeps the region it was
+    /// saved with.
+    pub fn apply_switch_region(
+        &mut self,
+        profile_id: Uuid,
+        original_profile: ConnectionProfile,
+        connection: Arc<dyn Connection>,
+        schema: Option<SchemaSnapshot>,
+    ) {
+        self.install_reconnected_connection(profile_id, original_profile, connection, schema);
+    }
+
+    /// Installs a reconnected connection for a profile in place.
+    ///
+    /// Shared by the database and region switch paths.
+    fn install_reconnected_connection(
+        &mut self,
+        profile_id: Uuid,
+        original_profile: ConnectionProfile,
+        connection: Arc<dyn Connection>,
+        schema: Option<SchemaSnapshot>,
+    ) {
         // Keep per-database connections, proxy tunnel and the mutation policy
-        // resolved at connect time from the old entry: switching databases
-        // does not change who connected or how the profile is configured.
+        // resolved at connect time from the old entry: switching databases or
+        // regions does not change who connected or how the profile is configured.
         let (prev_db_connections, prev_proxy_tunnel, prev_mutation_policy, prev_read_only_reason) =
             self.connections
                 .get_mut(&profile_id)
@@ -2796,6 +2873,69 @@ pub struct ConnectProfileResult {
 /// pipeline's field convention in `pipeline::resolve`.
 const PASSWORD_VALUE_REF: &str = "password";
 
+/// Resolves the password for a reconnect that replaces a live connection in
+/// place (a database or region switch).
+///
+/// The connect pipeline resolves a `password` value ref (literal, env or
+/// dotenv) before the driver sees the profile, so a profile connected that way may
+/// have no stored keyring password. Resolve those refs again here instead
+/// of silently connecting without a password. Refs that need a provider or
+/// auth context cannot be resolved on this path and fail explicitly rather
+/// than falling back to the stored password. `destination` names where the
+/// reconnect goes (for example `database 'analytics'`), for the error
+/// messages.
+fn resolve_switch_password(
+    profile: &ConnectionProfile,
+    destination: &str,
+    session_password: Option<&SecretString>,
+    secret_store: &Arc<RwLock<Box<dyn SecretStore>>>,
+) -> Result<Option<SecretString>, String> {
+    match profile.value_refs.get(PASSWORD_VALUE_REF) {
+        None => Ok(session_password
+            .cloned()
+            .or_else(|| get_stored_password(profile, secret_store))),
+        Some(ValueRef::Literal { value }) => Ok(Some(SecretString::from(value.clone()))),
+        Some(ValueRef::Env { key }) => CompositeValueResolver::resolve_env_ref(key)
+            .map(|value| Some(SecretString::from(value)))
+            .map_err(|error| format!("Failed to resolve password for {destination}: {error}")),
+        Some(ValueRef::Dotenv { path, key }) => {
+            CompositeValueResolver::resolve_dotenv_ref(path, key)
+                .map(|value| Some(SecretString::from(value)))
+                .map_err(|error| format!("Failed to resolve password for {destination}: {error}"))
+        }
+        Some(_) => Err(format!(
+            "Password for profile '{}' comes from a provider or auth reference, which \
+             cannot be resolved while switching to {destination}.",
+            profile.name
+        )),
+    }
+}
+
+fn get_stored_password(
+    profile: &ConnectionProfile,
+    secret_store: &Arc<RwLock<Box<dyn SecretStore>>>,
+) -> Option<SecretString> {
+    if !profile.save_password {
+        return None;
+    }
+
+    let store = match secret_store.read() {
+        Ok(guard) => guard,
+        Err(poison_err) => {
+            log::warn!("Secret store RwLock poisoned during password retrieval, recovering...");
+            poison_err.into_inner()
+        }
+    };
+
+    match store.get(&profile.secret_ref()) {
+        Ok(pwd) => pwd,
+        Err(e) => {
+            error!("Failed to get password: {:?}", e);
+            None
+        }
+    }
+}
+
 pub struct SwitchDatabaseParams {
     pub profile_id: Uuid,
     pub database: String,
@@ -2811,7 +2951,12 @@ impl SwitchDatabaseParams {
     pub fn execute(self) -> Result<SwitchDatabaseResult, String> {
         info!("Switching to database: {}", self.database);
 
-        let password = self.resolve_password()?;
+        let password = resolve_switch_password(
+            &self.original_profile,
+            &format!("database '{}'", self.database),
+            self.session_password.as_ref(),
+            &self.secret_store,
+        )?;
 
         let connection = self
             .driver
@@ -2841,69 +2986,71 @@ impl SwitchDatabaseParams {
             schema,
         })
     }
-
-    /// Resolves the password for the switched connection.
-    ///
-    /// The connect pipeline resolves a `password` value ref (literal, env or
-    /// dotenv) before the driver sees the profile, so a profile connected that way may
-    /// have no stored keyring password. Resolve those refs again here instead
-    /// of silently connecting without a password. Refs that need a provider or
-    /// auth context cannot be resolved on this path and fail explicitly rather
-    /// than falling back to the stored password.
-    fn resolve_password(&self) -> Result<Option<SecretString>, String> {
-        match self.original_profile.value_refs.get(PASSWORD_VALUE_REF) {
-            None => Ok(self
-                .session_password
-                .clone()
-                .or_else(|| self.get_password())),
-            Some(ValueRef::Literal { value }) => Ok(Some(SecretString::from(value.clone()))),
-            Some(ValueRef::Env { key }) => CompositeValueResolver::resolve_env_ref(key)
-                .map(|value| Some(SecretString::from(value)))
-                .map_err(|error| self.password_resolution_error(error)),
-            Some(ValueRef::Dotenv { path, key }) => {
-                CompositeValueResolver::resolve_dotenv_ref(path, key)
-                    .map(|value| Some(SecretString::from(value)))
-                    .map_err(|error| self.password_resolution_error(error))
-            }
-            Some(_) => Err(format!(
-                "Password for profile '{}' comes from a provider or auth reference, which \
-                 cannot be resolved while switching to database '{}'.",
-                self.original_profile.name, self.database
-            )),
-        }
-    }
-
-    fn password_resolution_error(&self, error: DbError) -> String {
-        format!(
-            "Failed to resolve password for database '{}': {}",
-            self.database, error
-        )
-    }
-
-    fn get_password(&self) -> Option<SecretString> {
-        if !self.original_profile.save_password {
-            return None;
-        }
-
-        let store = match self.secret_store.read() {
-            Ok(guard) => guard,
-            Err(poison_err) => {
-                log::warn!("Secret store RwLock poisoned during password retrieval, recovering...");
-                poison_err.into_inner()
-            }
-        };
-
-        match store.get(&self.original_profile.secret_ref()) {
-            Ok(pwd) => pwd,
-            Err(e) => {
-                error!("Failed to get password: {:?}", e);
-                None
-            }
-        }
-    }
 }
 
 pub struct SwitchDatabaseResult {
+    pub profile_id: Uuid,
+    pub original_profile: ConnectionProfile,
+    pub connection: Arc<dyn Connection>,
+    pub schema: Option<SchemaSnapshot>,
+}
+
+/// A prepared region switch: the driver has already rewritten the config, so
+/// `execute` only has to reconnect and the caller applies the result with
+/// `ConnectionManager::apply_switch_region`.
+pub struct SwitchRegionParams {
+    pub profile_id: Uuid,
+    pub region: String,
+    pub new_profile: ConnectionProfile,
+    pub original_profile: ConnectionProfile,
+    pub driver: Arc<dyn DbDriver>,
+    pub secret_store: Arc<RwLock<Box<dyn SecretStore>>>,
+    /// Password supplied when the profile connected, preferred over the keyring.
+    pub session_password: Option<SecretString>,
+}
+
+impl SwitchRegionParams {
+    pub fn execute(self) -> Result<SwitchRegionResult, String> {
+        info!("Switching to region: {}", self.region);
+
+        let password = resolve_switch_password(
+            &self.original_profile,
+            &format!("region '{}'", self.region),
+            self.session_password.as_ref(),
+            &self.secret_store,
+        )?;
+
+        let connection = self
+            .driver
+            .connect_with_password(&self.new_profile, password.as_ref())
+            .map_err(|e| format!("Failed to connect to region '{}': {:?}", self.region, e))?;
+
+        let schema = match connection.schema() {
+            Ok(s) => {
+                info!(
+                    "Switched to region {}: {} schemas, {} tables",
+                    self.region,
+                    s.schemas().len(),
+                    s.schemas().iter().map(|s| s.tables.len()).sum::<usize>()
+                );
+                Some(s)
+            }
+            Err(e) => {
+                error!("Failed to fetch schema for region {}: {:?}", self.region, e);
+                None
+            }
+        };
+
+        Ok(SwitchRegionResult {
+            profile_id: self.profile_id,
+            original_profile: self.original_profile,
+            connection: connection.into(),
+            schema,
+        })
+    }
+}
+
+pub struct SwitchRegionResult {
     pub profile_id: Uuid,
     pub original_profile: ConnectionProfile,
     pub connection: Arc<dyn Connection>,
@@ -6770,6 +6917,347 @@ mod tests {
                 "analytics".to_string(),
                 Some(KEYRING_PASSWORD_VALUE.to_string())
             )]
+        );
+    }
+
+    // --- Region switch ---
+
+    /// A connection bound to one cloud region, so region-switch tests can
+    /// assert which region the driver actually connected to.
+    struct RegionBoundConnection {
+        metadata: DriverMetadata,
+        region: String,
+    }
+
+    impl RegionBoundConnection {
+        fn new(region: &str) -> Self {
+            Self {
+                metadata: postgres_metadata("test-region-switch"),
+                region: region.to_string(),
+            }
+        }
+
+        fn boxed(region: &str) -> Box<Self> {
+            Box::new(Self::new(region))
+        }
+
+        fn arc(region: &str) -> Arc<Self> {
+            Arc::new(Self::new(region))
+        }
+    }
+
+    impl Connection for RegionBoundConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, _req: &crate::QueryRequest) -> Result<crate::QueryResult, DbError> {
+            Err(DbError::NotSupported("test connection".to_string()))
+        }
+
+        fn cancel(&self, _handle: &crate::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+
+        fn kind(&self) -> DbKind {
+            DbKind::DynamoDB
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::LazyPerDatabase
+        }
+
+        fn dialect(&self) -> &dyn crate::SqlDialect {
+            &crate::DefaultSqlDialect
+        }
+
+        fn current_region(&self) -> Option<String> {
+            Some(self.region.clone())
+        }
+    }
+
+    /// A driver whose configs carry a region (`DbConfig::DynamoDB`) and that
+    /// implements `with_region`, so region-switch tests exercise the real
+    /// manager rules end to end.
+    struct RegionSwitchDriver {
+        metadata: DriverMetadata,
+        form: &'static DriverFormDef,
+        /// `(bound region, password)` pairs received by
+        /// `connect_with_secrets`, so the region path can assert what the
+        /// driver actually received.
+        passwords: RecordedConnects,
+    }
+
+    impl RegionSwitchDriver {
+        fn recording() -> (Arc<Self>, RecordedConnects) {
+            let passwords = Arc::new(Mutex::new(Vec::new()));
+            (
+                Arc::new(Self {
+                    metadata: postgres_metadata("test-region-switch"),
+                    form: &TEST_FORM,
+                    passwords: passwords.clone(),
+                }),
+                passwords,
+            )
+        }
+    }
+
+    impl DbDriver for RegionSwitchDriver {
+        fn kind(&self) -> DbKind {
+            DbKind::DynamoDB
+        }
+
+        fn metadata(&self) -> &DriverMetadata {
+            &self.metadata
+        }
+
+        fn form_definition(&self) -> &DriverFormDef {
+            self.form
+        }
+
+        fn driver_key(&self) -> crate::DriverKey {
+            "builtin:test-region-switch".to_string()
+        }
+
+        fn build_config(&self, _values: &FormValues) -> Result<DbConfig, DbError> {
+            Ok(DbConfig::default_dynamodb())
+        }
+
+        fn extract_values(&self, _config: &DbConfig) -> FormValues {
+            FormValues::new()
+        }
+
+        fn connect_with_secrets(
+            &self,
+            profile: &ConnectionProfile,
+            password: Option<&SecretString>,
+            _ssh_secret: Option<&SecretString>,
+        ) -> Result<Box<dyn Connection>, DbError> {
+            let region = match &profile.config {
+                DbConfig::DynamoDB { region, .. } => region.clone(),
+                _ => "unknown".to_string(),
+            };
+            self.passwords
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((
+                    region.clone(),
+                    password.map(|secret| secret.expose_secret().to_string()),
+                ));
+            Ok(RegionBoundConnection::boxed(&region))
+        }
+
+        fn test_connection(&self, _profile: &ConnectionProfile) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn with_region(&self, config: &DbConfig, region: &str) -> Option<DbConfig> {
+            match config {
+                DbConfig::DynamoDB {
+                    profile,
+                    endpoint,
+                    table,
+                    ..
+                } => Some(DbConfig::DynamoDB {
+                    region: region.to_string(),
+                    profile: profile.clone(),
+                    endpoint: endpoint.clone(),
+                    table: table.clone(),
+                }),
+                _ => None,
+            }
+        }
+    }
+
+    /// Connects a region-carrying profile against the region-switch driver
+    /// and returns the connection record, mirroring
+    /// `switch_manager_with` for the database path.
+    fn region_switch_manager(
+        save_password: bool,
+    ) -> (ConnectionManager, ConnectionProfile, RecordedConnects) {
+        let mut profile = ConnectionProfile::new("aws", DbConfig::default_dynamodb());
+        profile.save_password = save_password;
+
+        let (driver, recorded) = RegionSwitchDriver::recording();
+        let mut manager = ConnectionManager::new(HashMap::new());
+        manager.drivers.insert("dynamodb".to_string(), driver);
+
+        connect_profile_with_schema(
+            &mut manager,
+            &profile,
+            RegionBoundConnection::arc("us-east-1"),
+            None,
+        );
+
+        (manager, profile, recorded)
+    }
+
+    #[test]
+    fn prepare_switch_region_refuses_a_driver_without_the_region_hook() {
+        let (manager, profile, _recorded) = switch_manager_with_password_ref(None);
+
+        let Err(error) =
+            manager.prepare_switch_region(profile.id, "eu-west-1", &noop_secret_store())
+        else {
+            panic!("a driver without with_region must refuse a region switch");
+        };
+
+        assert!(error.contains("TestPG"), "unexpected error: {error}");
+        assert!(error.contains("does not support region switching"));
+    }
+
+    #[test]
+    fn prepare_switch_region_refuses_the_region_already_in_use() {
+        let (manager, profile, _recorded) = region_switch_manager(true);
+
+        let Err(error) =
+            manager.prepare_switch_region(profile.id, "us-east-1", &noop_secret_store())
+        else {
+            panic!("the region the connection already reaches must be refused");
+        };
+
+        assert!(error.contains("us-east-1"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn switch_region_params_carry_the_rewritten_config_and_keep_the_credential_source() {
+        let (manager, profile, recorded) = region_switch_manager(true);
+
+        let params = manager
+            .prepare_switch_region(profile.id, "eu-west-1", &fixed_secret_store())
+            .expect("prepare switch should succeed");
+
+        let DbConfig::DynamoDB {
+            region,
+            profile: aws_profile,
+            endpoint,
+            table,
+        } = &params.new_profile.config
+        else {
+            panic!("region switch must keep the config shape");
+        };
+        assert_eq!(region, "eu-west-1");
+        assert!(aws_profile.is_none() && endpoint.is_none() && table.is_none());
+        assert_eq!(params.region, "eu-west-1");
+
+        let result = params
+            .execute()
+            .expect("execute should use the stored keyring password");
+
+        assert_eq!(
+            recorded_connect_calls(&recorded),
+            vec![(
+                "eu-west-1".to_string(),
+                Some(KEYRING_PASSWORD_VALUE.to_string())
+            )]
+        );
+        assert_eq!(result.profile_id, profile.id);
+        let DbConfig::DynamoDB { region, .. } = &result.original_profile.config else {
+            panic!("the original profile must keep its config shape");
+        };
+        assert_eq!(region, "us-east-1");
+    }
+
+    #[test]
+    fn apply_switch_region_replaces_the_connection_and_fences_the_previous_session() {
+        let mut profile = ConnectionProfile::new("aws", DbConfig::default_dynamodb());
+        profile.read_only_flag = true;
+        profile.save_password = true;
+        let profile_id = profile.id;
+
+        let (driver, _recorded) = RegionSwitchDriver::recording();
+        let mut manager = ConnectionManager::new(HashMap::new());
+        manager.drivers.insert("dynamodb".to_string(), driver);
+        manager.add_connection(
+            profile.clone(),
+            RegionBoundConnection::arc("us-east-1"),
+            None,
+            None,
+            false,
+            WritePrivilege::Writable,
+        );
+
+        let policy = |manager: &ConnectionManager| {
+            let connected = manager
+                .connections
+                .get(&profile_id)
+                .expect("profile is connected");
+            (connected.mutation_policy, connected.read_only_reason)
+        };
+        assert_eq!(
+            policy(&manager),
+            (
+                MutationPolicy::ReadOnly,
+                Some(ReadOnlyReason::ProfileSetting)
+            ),
+            "connecting a read-only profile resolves to ReadOnly"
+        );
+        let generation_before = manager
+            .session_generations
+            .get(&profile_id)
+            .copied()
+            .expect("connecting assigns a session generation");
+
+        let params = manager
+            .prepare_switch_region(profile_id, "eu-west-1", &noop_secret_store())
+            .expect("prepare switch should succeed");
+        let result = params.execute().expect("execute should succeed");
+
+        manager.apply_switch_region(
+            profile_id,
+            result.original_profile,
+            result.connection,
+            result.schema,
+        );
+
+        assert_eq!(
+            policy(&manager),
+            (
+                MutationPolicy::ReadOnly,
+                Some(ReadOnlyReason::ProfileSetting)
+            ),
+            "switching regions keeps the profile read-only"
+        );
+        let connected = manager
+            .connections
+            .get(&profile_id)
+            .expect("profile stays connected");
+        assert_eq!(
+            connected.profile.id, profile_id,
+            "the stored profile is the original one"
+        );
+        let DbConfig::DynamoDB { region, .. } = &connected.profile.config else {
+            panic!("the stored profile must keep its config shape");
+        };
+        assert_eq!(
+            region, "us-east-1",
+            "the profile on record keeps its saved region"
+        );
+        assert_eq!(
+            connected.connection.current_region().as_deref(),
+            Some("eu-west-1"),
+            "the live connection now reaches the requested region"
+        );
+        let generation_after = manager
+            .session_generations
+            .get(&profile_id)
+            .copied()
+            .expect("switching regions assigns a session generation");
+        assert!(
+            generation_after > generation_before,
+            "switching regions must hand out a fresh session generation"
         );
     }
 

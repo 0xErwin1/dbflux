@@ -819,6 +819,35 @@ impl AppState {
         );
     }
 
+    #[allow(dead_code)]
+    pub fn prepare_switch_region(
+        &self,
+        profile_id: Uuid,
+        region: &str,
+    ) -> Result<dbflux_core::connection_manager::SwitchRegionParams, String> {
+        self.facade.connections.prepare_switch_region(
+            profile_id,
+            region,
+            &self.facade.secrets.secret_store_arc(),
+        )
+    }
+
+    #[allow(dead_code)]
+    pub fn apply_switch_region(
+        &mut self,
+        profile_id: Uuid,
+        original_profile: ConnectionProfile,
+        connection: Arc<dyn Connection>,
+        schema: Option<SchemaSnapshot>,
+    ) {
+        self.facade.connections.apply_switch_region(
+            profile_id,
+            original_profile,
+            connection,
+            schema,
+        );
+    }
+
     pub fn add_database_connection(
         &mut self,
         profile_id: Uuid,
