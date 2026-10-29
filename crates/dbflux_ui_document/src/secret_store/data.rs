@@ -3,7 +3,7 @@
 //! through a generation check, so a result that a newer call replaced is
 //! dropped. The first catch site of a user-triggered failure reports it.
 
-use super::listing::PathMode;
+use super::listing::{LARGEST_PAGE_ENTRIES, PathMode, keeps_loading};
 use super::value::{RetrievalTarget, RetrievedValue, ValueFailure, value_retrieval_event};
 use super::{CallTiming, DetailsState, SecretRowKey, SecretStoreDocument, StoreCall, ValueState};
 use crate::object_text::db_error_to_user_facing;
@@ -40,7 +40,7 @@ impl SecretStoreDocument {
             recursive: hierarchical && self.path_mode == PathMode::Flat,
             name_filter,
             page_token,
-            page_size: None,
+            page_size: Some(LARGEST_PAGE_ENTRIES),
         }
     }
 
@@ -123,6 +123,9 @@ impl SecretStoreDocument {
         millis: u128,
         cx: &mut Context<Self>,
     ) {
+        let loaded_before = self.listing.entries.len();
+        let paths_before = self.listing.child_paths.len();
+
         let applied = match result {
             Ok(page) => {
                 let count = page.entries.len();
@@ -140,8 +143,23 @@ impl SecretStoreDocument {
             Err(error) => self.listing.apply_error(generation, error.to_string()),
         };
 
-        if applied {
-            cx.notify();
+        if !applied {
+            return;
+        }
+
+        cx.notify();
+
+        // A page that landed under the limit asks for the next one instead of
+        // making the user click for it; the manual row remains for the rest.
+        //
+        // A page that added nothing stops the chain regardless: a store that
+        // keeps handing back a token while returning no entries would
+        // otherwise be asked forever.
+        let made_progress = self.listing.entries.len() > loaded_before
+            || self.listing.child_paths.len() > paths_before;
+
+        if made_progress && keeps_loading(self.listing.entries.len(), self.listing.has_more()) {
+            self.load_more(cx);
         }
     }
 

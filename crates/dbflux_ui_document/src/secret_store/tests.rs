@@ -1,4 +1,7 @@
-use super::listing::{SecretListing, child_path_label, parent_path, path_segments};
+use super::listing::{
+    AUTO_CONTINUE_ENTRY_LIMIT, LARGEST_PAGE_ENTRIES, SecretListing, child_path_label,
+    keeps_loading, parent_path, path_segments,
+};
 use super::value::{
     RetrievalTarget, ValueContent, ValueFailure, encode_base64, value_retrieval_event,
 };
@@ -204,17 +207,12 @@ fn paths_split_into_navigable_segments() {
 /// Opening a flat store lists its first page without reading a value, and
 /// the next page appends to it with the store's page token.
 #[gpui::test]
-fn the_listing_is_paged_and_never_reads_a_value(cx: &mut TestAppContext) {
+fn the_listing_loads_its_following_pages_on_its_own(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
-
-    assert_eq!(opened.entry_names().len(), 4);
-    assert!(opened.read(|doc| doc.listing().has_more()));
-    assert!(opened.read(|doc| doc.rows().contains(&SecretRowKey::LoadMore)));
-
-    assert!(opened.command(Command::ResultsNextPage));
 
     assert_eq!(opened.entry_names().len(), 6);
     assert!(!opened.read(|doc| doc.listing().has_more()));
+    assert!(!opened.read(|doc| doc.rows().contains(&SecretRowKey::LoadMore)));
 
     let calls = opened.driver.secret_store_calls();
     let tokens: Vec<Option<String>> = calls
@@ -228,6 +226,35 @@ fn the_listing_is_paged_and_never_reads_a_value(cx: &mut TestAppContext) {
         "{:?}",
         calls.value_requests
     );
+}
+
+/// Every page request asks for the largest page the store will give, instead
+/// of leaving the size to the service: the service default is what made a
+/// listing of a few hundred secrets look like it ended after twenty.
+#[gpui::test]
+fn every_page_request_asks_for_the_largest_page(cx: &mut TestAppContext) {
+    let opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+
+    let calls = opened.driver.secret_store_calls();
+    assert!(!calls.list_requests.is_empty());
+
+    for (store, request) in &calls.list_requests {
+        assert_eq!(
+            request.page_size,
+            Some(LARGEST_PAGE_ENTRIES),
+            "{store} page request left the page size to the service"
+        );
+    }
+}
+
+/// The continuation is bounded: past the limit the manual row carries the
+/// rest, and a listing with nothing left never continues.
+#[test]
+fn the_continuation_stops_at_the_entry_limit() {
+    assert!(keeps_loading(0, true));
+    assert!(keeps_loading(AUTO_CONTINUE_ENTRY_LIMIT - 1, true));
+    assert!(!keeps_loading(AUTO_CONTINUE_ENTRY_LIMIT, true));
+    assert!(!keeps_loading(0, false));
 }
 
 /// The search runs on the store: the filter goes out as `name_filter` and
