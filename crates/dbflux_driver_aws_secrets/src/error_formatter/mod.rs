@@ -125,9 +125,7 @@ fn permission_hint(target: &ErrorTarget) -> &'static str {
 
 fn store_permission_hint(store: &str) -> &'static str {
     match store {
-        crate::secrets_manager::SECRETS_MANAGER_ID => {
-            "Check the IAM permissions for this secret."
-        }
+        crate::secrets_manager::SECRETS_MANAGER_ID => "Check the IAM permissions for this secret.",
         crate::parameter_store::PARAMETER_STORE_ID => {
             "Check the IAM permissions for this parameter."
         }
