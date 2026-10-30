@@ -35,6 +35,9 @@ impl SecretStoreDocument {
             return;
         }
 
+        self.regions_generation = self.regions_generation.wrapping_add(1);
+        let generation = self.regions_generation;
+
         let Some(connection) = self
             .app_state
             .read(cx)
@@ -60,13 +63,32 @@ impl SecretStoreDocument {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
             cx.update(|cx| {
-                entity.update(cx, |doc, cx| doc.apply_regions(result, cx));
+                entity.update(cx, |doc, cx| doc.apply_regions(generation, result, cx));
             });
         })
         .detach();
     }
 
-    fn apply_regions(&mut self, result: Result<Vec<String>, DbError>, cx: &mut Context<Self>) {
+    /// The generation of the region discovery in flight, for tests that need
+    /// to land a result the way a replaced connection would.
+    #[cfg(test)]
+    pub(crate) fn region_discovery_generation(&self) -> u64 {
+        self.regions_generation
+    }
+
+    /// Lands one discovery. A result from a discovery a newer one replaced —
+    /// or from a connection that was replaced under it — belongs to a session
+    /// that no longer exists, so it is dropped instead of shown.
+    pub(crate) fn apply_regions(
+        &mut self,
+        generation: u64,
+        result: Result<Vec<String>, DbError>,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.regions_generation {
+            return;
+        }
+
         self.regions = match result {
             Ok(mut regions) => {
                 regions.sort();
@@ -240,6 +262,18 @@ impl SecretStoreDocument {
         }
 
         self.region = Some(live_region);
+
+        // A discovery still running was asked of the previous connection, so
+        // its answer is dropped rather than shown. The offered regions belong
+        // to the credentials, not to the region, so a list already loaded
+        // stays: asking again on every switch would be a call for nothing.
+        self.regions_generation = self.regions_generation.wrapping_add(1);
+
+        if !matches!(self.regions, RegionListState::Loaded(_)) {
+            self.regions = RegionListState::Idle;
+            self.load_regions(cx);
+        }
+
         self.sync_region_dropdown(cx);
         self.load_first_page(cx);
         cx.notify();
