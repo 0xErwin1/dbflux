@@ -116,6 +116,9 @@ pub struct SecretStoreDocument {
     region: Option<String>,
     /// The regions the connection offers.
     regions: RegionListState,
+    /// Bumped by every region discovery, so a result that a newer discovery or
+    /// a replaced connection made stale is dropped instead of shown.
+    regions_generation: u64,
     /// A region switch is reconnecting on the background executor.
     region_switch_in_flight: bool,
     /// The toolbar region picker, built only when the driver can switch.
@@ -265,6 +268,7 @@ impl SecretStoreDocument {
             region_switchable,
             region,
             regions: RegionListState::Idle,
+            regions_generation: 0,
             region_switch_in_flight: false,
             region_dropdown,
             _subscriptions: subscriptions,

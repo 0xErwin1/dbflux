@@ -1322,3 +1322,19 @@ fn the_breadcrumb_names_the_region_while_the_list_loads(cx: &mut TestAppContext)
         opened.rendered_text()
     );
 }
+
+/// A discovery asked of a connection that has since been replaced belongs to
+/// a session that no longer exists: its answer is dropped, not rendered.
+#[gpui::test]
+fn a_discovery_result_from_a_replaced_connection_is_dropped(cx: &mut TestAppContext) {
+    let mut opened = open_with_regions(cx, &[OTHER_REGION, CURRENT_REGION]);
+    let stale = opened.read(|doc| doc.region_discovery_generation().wrapping_sub(1));
+
+    opened.update(|doc, cx| {
+        doc.apply_regions(stale, Ok(vec!["mars-north-1".to_string()]), cx);
+    });
+
+    let text = opened.rendered_text();
+    assert!(text.contains(CURRENT_REGION), "{text}");
+    assert!(!text.contains("mars-north-1"), "{text}");
+}
