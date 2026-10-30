@@ -8,7 +8,13 @@ use crate::driver::AwsSecretsProfileConfig;
 /// only AWS's own message.
 pub(crate) enum ErrorTarget<'a> {
     Store(&'a str),
-    Secret { store: &'a str, name: &'a str },
+    Secret {
+        store: &'a str,
+        name: &'a str,
+    },
+    /// An operation that belongs to no store, such as listing the regions the
+    /// connection can move to.
+    None,
 }
 
 impl ErrorTarget<'_> {
@@ -16,6 +22,7 @@ impl ErrorTarget<'_> {
         match self {
             ErrorTarget::Store(store) => format!("store={store}"),
             ErrorTarget::Secret { store, name } => format!("store={store}, name=\"{name}\""),
+            ErrorTarget::None => String::new(),
         }
     }
 }
@@ -51,7 +58,13 @@ const AUTH_CODES: &[&str] = &[
     "ExpiredTokenException",
 ];
 
-const PERMISSION_CODES: &[&str] = &["AccessDeniedException", "AccessDenied"];
+/// EC2 reports a denied `DescribeRegions` as `UnauthorizedOperation`, so a
+/// region catalog fetched without the permission reads as a denial.
+const PERMISSION_CODES: &[&str] = &[
+    "AccessDeniedException",
+    "AccessDenied",
+    "UnauthorizedOperation",
+];
 
 /// Codes for a value the caller may not decrypt. Secrets Manager reports a
 /// missing `kms:Decrypt` as `DecryptionFailure`.
@@ -96,7 +109,7 @@ fn is_kms_denial(code: Option<&str>, message: &str) -> bool {
         || (has_code(code, PERMISSION_CODES) && message.to_lowercase().contains("kms"))
 }
 
-fn hint_for(code: Option<&str>, message: &str) -> Option<&'static str> {
+fn hint_for(code: Option<&str>, message: &str, target: &ErrorTarget) -> Option<&'static str> {
     if is_kms_denial(code, message) {
         return Some(KMS_DECRYPT_HINT);
     }
@@ -108,6 +121,13 @@ fn hint_for(code: Option<&str>, message: &str) -> Option<&'static str> {
     }
 
     if has_code(code, PERMISSION_CODES) {
+        // A denial with no store behind it is the region catalog: EC2 reports
+        // it as `UnauthorizedOperation`, and the policy it needs has nothing
+        // to do with secrets or parameters.
+        if matches!(target, ErrorTarget::None) {
+            return Some("Check that these credentials may call ec2:DescribeRegions.");
+        }
+
         return Some("Check the IAM permissions for this secret or parameter.");
     }
 
@@ -142,7 +162,7 @@ pub(crate) fn format_from_code(
         formatted = formatted.with_code(code.to_string());
     }
 
-    if let Some(hint) = hint_for(code, message) {
+    if let Some(hint) = hint_for(code, message, target) {
         formatted = formatted.with_hint(hint);
     }
 
@@ -187,7 +207,13 @@ pub(crate) fn format_sdk_message(
 }
 
 fn with_target_prefix(target: &ErrorTarget, diagnostic_detail: String) -> String {
-    format!("{}, {diagnostic_detail}", target.detail_fragment())
+    let fragment = target.detail_fragment();
+
+    if fragment.is_empty() {
+        return diagnostic_detail;
+    }
+
+    format!("{fragment}, {diagnostic_detail}")
 }
 
 /// Maps a formatted error onto the `DbError` that fits a connect or probe

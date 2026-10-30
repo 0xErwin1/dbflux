@@ -650,7 +650,9 @@ pub(crate) const BUCKETS: SurfaceRegistry = SurfaceRegistry {
 
 /// A secret store tab: its listing and details pane. The pane actions (`m`)
 /// list Retrieve value, the copy actions, Hide all, the error actions, Load
-/// next page, Refresh and, on a hierarchical store, the path mode and Up.
+/// next page, Refresh and, on a hierarchical store, the path mode and Up; on
+/// a region-capable driver also the region picker and the retry of a failed
+/// region listing.
 pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
     name: "secret store",
     contexts: &[ContextId::Results, ContextId::ContextMenu],
@@ -667,6 +669,16 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
         (
             "secret-refresh",
             KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        // The region picker of a driver that can switch regions. The
+        // clickable element is the dropdown's trigger, named by the path
+        // suffix (`secret-region.dropdown-trigger`); the pane actions list an
+        // entry that opens it.
+        ("secret-region.*", KeyboardPath::Menu("secret-region")),
+        // The retry of a failed region listing, also in the pane actions.
+        (
+            "secret-region-retry",
+            KeyboardPath::Menu("secret-region-retry"),
         ),
         (
             "secret-path-crumb-*",

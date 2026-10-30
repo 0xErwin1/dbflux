@@ -3420,6 +3420,10 @@ document:
       refresh: "새로 고침"
     load_more: "다음 페이지 불러오기"
     loading_more: "다음 페이지를 불러오는 중…"
+    region:
+      label: "리전"
+      retry: "다시 시도"
+      switch_failed: "리전 %{region}(으)로 전환하지 못했습니다: %{error}"
     columns:
       name: "이름"
       description: "설명"

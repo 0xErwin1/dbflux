@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "chosen": "01-isl-secrets.html",
+  "handoffs": {
+    "01-isl-secrets.html": {
+      "status": "implemented",
+      "queued": false,
+      "sentAt": "2026-10-29T22:17:10.884Z",
+      "startedAt": null,
+      "implementedAt": "2026-10-29T22:17:10.884Z",
+      "note": "Shipped in #1213: the region is the last identity segment of the document breadcrumb, rendered with the app's shared Dropdown (toolbar styling, mono label) — no tinted chip and no custom focus ring. The artboards in both themes show the control styled that way."
+    }
+  }
+}

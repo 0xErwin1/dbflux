@@ -16,6 +16,7 @@ path = "src/lib.rs"
 dbflux_core.workspace = true
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-secretsmanager = "1"
+aws-sdk-ec2 = "1"
 aws-sdk-ssm = "1"
 aws-smithy-types = "1"
 chrono = { workspace = true }

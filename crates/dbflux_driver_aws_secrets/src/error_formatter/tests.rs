@@ -33,6 +33,27 @@ fn access_denied_maps_to_permission_denied_with_the_aws_message() {
     }
 }
 
+/// A denied `ec2:DescribeRegions` comes back as EC2's own
+/// `UnauthorizedOperation` code, and the region catalog must read it as a
+/// permission error, not a generic failure.
+#[test]
+fn unauthorized_operation_maps_to_permission_denied() {
+    match classify(
+        "UnauthorizedOperation",
+        "not authorized to perform: ec2:DescribeRegions",
+        ErrorTarget::None,
+    ) {
+        DbError::PermissionDenied(details) => {
+            assert_eq!(details.code.as_deref(), Some("UnauthorizedOperation"));
+            assert_eq!(
+                details.message,
+                "not authorized to perform: ec2:DescribeRegions"
+            );
+        }
+        other => panic!("expected PermissionDenied, got {other:?}"),
+    }
+}
+
 #[test]
 fn kms_decrypt_denial_maps_to_permission_denied_and_names_kms() {
     let cases = [
@@ -173,5 +194,37 @@ fn missing_credentials_dispatch_message_is_actionable() {
             .unwrap_or_default()
             .to_lowercase()
             .contains("credentials")
+    );
+}
+
+/// A denied region listing has no store behind it, so the permission hint
+/// names the EC2 action instead of pointing at secret or parameter IAM.
+#[test]
+fn a_denied_region_listing_names_ec2_describe_regions() {
+    let formatted = format_from_code(
+        Some("UnauthorizedOperation"),
+        "You are not authorized to perform this operation.",
+        &config(),
+        &ErrorTarget::None,
+    );
+
+    assert_eq!(
+        formatted.hint.as_deref(),
+        Some("Check that these credentials may call ec2:DescribeRegions.")
+    );
+}
+
+#[test]
+fn a_denied_secret_still_names_its_own_permissions() {
+    let formatted = format_from_code(
+        Some("AccessDeniedException"),
+        "not allowed",
+        &config(),
+        &ErrorTarget::Store("secrets-manager"),
+    );
+
+    assert_eq!(
+        formatted.hint.as_deref(),
+        Some("Check the IAM permissions for this secret or parameter.")
     );
 }
