@@ -12,6 +12,7 @@
 #![recursion_limit = "512"]
 
 pub mod brand;
+pub mod controls;
 pub mod density;
 pub mod fonts;
 pub mod icon;

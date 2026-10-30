@@ -49,6 +49,7 @@ pub fn init(cx: &mut App) {
     gpui_component::init(cx);
     crate::highlighting::register_languages();
     load_bundled_fonts(cx);
+    crate::controls::install_dropdown_seams(cx);
     apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx);
 }
 

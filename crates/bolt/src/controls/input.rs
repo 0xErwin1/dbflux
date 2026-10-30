@@ -21,7 +21,7 @@ pub use gpui_component::input::{
 };
 
 actions!(
-    dbflux_input,
+    bolt_input,
     [
         /// Manually open the completion popover for the focused single-line
         /// input. Bound to `ctrl-space` by default.
@@ -29,9 +29,8 @@ actions!(
     ]
 );
 
-/// Key context of `gpui-component`'s input element. The keymap binds
-/// [`InputMoveDown`], [`InputMoveUp`] and [`TriggerCompletion`] in it (see
-/// `dbflux_ui_base::keymap`).
+/// Key context of `gpui-component`'s input element. The host keymap binds
+/// [`InputMoveDown`], [`InputMoveUp`] and [`TriggerCompletion`] in it.
 pub const INPUT_CONTEXT: &str = "Input";
 
 /// Text field built on `gpui_component::input::Input`.
@@ -444,7 +443,15 @@ mod tests {
 
     #[gpui::test]
     fn input_rings_after_tab_but_not_after_a_click(cx: &mut TestAppContext) {
-        cx.update(crate::theme::init);
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::install(
+                crate::brand::Brand::neutral(),
+                crate::palette::PaletteMode::Dark,
+                crate::density::Density::Default,
+                cx,
+            );
+        });
 
         let pair_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
         let (_, visual) = cx.add_window_view({
@@ -780,7 +787,7 @@ mod tests {
         assert_eq!(value.len(), 4, "one character was typed into {value:?}");
     }
 
-    /// The builder chains the read-only editors of DBFlux's views use.
+    /// The builder chains the read-only editors a host's views use.
     #[derive(Clone, Copy, Debug)]
     enum ReadOnlyLayout {
         /// The audit viewer's event details.

@@ -5,7 +5,6 @@
 mod badge;
 mod banner;
 mod file_picker;
-mod type_to_confirm;
 
 pub use badge::{
     Badge, BadgeTone, EnvTag, environment_badge_tone, environment_label, environment_short_label,
@@ -25,4 +24,6 @@ pub use bolt::primitives::{
     status_diamond, stepped_segment, surface, transition_color, vdivider,
 };
 pub use file_picker::{FilePicker, file_picker_label};
-pub use type_to_confirm::{TypeToConfirm, TypeToConfirmEvent};
+// The confirmation input moved to `bolt` with the controls it is built on
+// (`controls::Input`); re-exported at its old primitives path.
+pub use bolt::controls::{TypeToConfirm, TypeToConfirmEvent};
