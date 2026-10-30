@@ -16,8 +16,9 @@ workspace = true
 [features]
 default = []
 # Enables `accessibility`, the accessible-name checks a rendered-surface test
-# runs against a captured frame. Enabled only by dev-dependencies.
-test-support = ["gpui/test-support"]
+# runs against a captured frame. Enabled only by dev-dependencies. The checks
+# live in `bolt`, so the feature forwards to Bolt's own `test-support`.
+test-support = ["gpui/test-support", "bolt/test-support"]
 
 [dependencies]
 bolt.workspace = true
@@ -43,6 +44,9 @@ uuid = { workspace = true }
 chrono.workspace = true
 
 [dev-dependencies]
+# The accessibility checks this crate's tests use live in `bolt` behind its
+# `test-support` feature, which a plain dependency build does not enable.
+bolt = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 serde_json.workspace = true
 tempfile = "3"

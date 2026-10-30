@@ -13,7 +13,7 @@ use crate::primitives::{
 };
 use crate::tokens::{ButtonMetrics, ChamferCut, ChromeColors, Fields};
 
-/// Color treatment of a [`Button`] (DSStates).
+/// Color treatment of a [`Button`] (the states board).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ButtonVariant {
     /// The accent fill, on-accent content. One per toolbar or dialog.
@@ -38,7 +38,7 @@ impl ButtonVariant {
     }
 }
 
-/// Height of a [`Button`] (canonical sizes, canvas v43).
+/// Height of a [`Button`] (canonical sizes from the design canvas).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ButtonSize {
     /// 24 px, cut 6: inside table rows, list rows, chips and card rows.
@@ -123,7 +123,7 @@ pub struct ButtonFills {
     pub pressed: Hsla,
 }
 
-/// Fills and content color of a variant (DSStates). A selected ghost or
+/// Fills and content color of a variant (the states board). A selected ghost or
 /// secondary button takes a soft tint fill and tint content.
 pub fn button_colors(theme: &Theme, variant: ButtonVariant, selected: bool) -> (ButtonFills, Hsla) {
     let soft = |color: Hsla| ButtonFills {
@@ -977,5 +977,154 @@ mod tests {
         window.run_until_parked();
         press(window, "enter");
         assert_eq!(*clicks.borrow(), vec!["first", "first", "parent"]);
+    }
+
+    /// Accessible-name tests for the button. An icon-only button draws no
+    /// text, so the name assistive technology reads comes from its label (the
+    /// tooltip), an explicit `aria_label`, or the text beside a leading icon.
+    /// The icons come from the generic component set: the product catalogs are
+    /// a product asset, and these tests assert names, not glyphs.
+    mod accessible_names {
+        use super::*;
+        use crate::accessibility::{
+            FrameCapture, accessibility_node, accessible_name, unnamed_clickables,
+        };
+
+        /// A window whose whole body is the buttons under test.
+        ///
+        /// The buttons come from a factory because a button is a one-shot
+        /// element: a repaint of the window needs to build them again.
+        struct ButtonRow(std::sync::Arc<dyn Fn() -> Vec<Button>>);
+
+        impl Render for ButtonRow {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut gpui::Context<Self>,
+            ) -> impl IntoElement {
+                div().size_full().children((self.0)())
+            }
+        }
+
+        /// Renders the buttons of `build` and returns the window's frame.
+        fn frame_with_buttons(
+            build: impl Fn() -> Vec<Button> + 'static,
+            cx: &mut gpui::TestAppContext,
+        ) -> gpui::AccessibilityFrame {
+            install_test_theme(cx);
+
+            let capture = std::sync::Arc::new(FrameCapture::default());
+            let capture_for_window = capture.clone();
+            let (_, window) = cx.add_window_view(move |window, _cx| {
+                window.observe_frames(&capture_for_window);
+                window.refresh();
+                ButtonRow(std::sync::Arc::new(build))
+            });
+            window.run_until_parked();
+
+            capture.frame(window)
+        }
+
+        fn name_of(frame: &gpui::AccessibilityFrame, id: &str) -> Option<String> {
+            accessible_name(frame, id)
+        }
+
+        #[gpui::test]
+        fn a_label_button_is_named_by_its_visible_text(cx: &mut gpui::TestAppContext) {
+            let frame = frame_with_buttons(|| vec![Button::new("save", "Save")], cx);
+
+            assert_eq!(name_of(&frame, "save").as_deref(), Some("Save"));
+            assert_eq!(unnamed_clickables(&frame), Vec::<String>::new());
+        }
+
+        /// An icon-only button draws no text, so its label — which becomes the
+        /// tooltip — names it for assistive technology.
+        #[gpui::test]
+        fn an_icon_only_button_is_named_by_its_label(cx: &mut gpui::TestAppContext) {
+            let frame = frame_with_buttons(
+                || {
+                    vec![
+                        Button::new("save", "Save file")
+                            .icon_only()
+                            .icon(gpui_component::IconName::Close),
+                    ]
+                },
+                cx,
+            );
+
+            assert_eq!(name_of(&frame, "save").as_deref(), Some("Save file"));
+        }
+
+        /// An icon-only button may carry no label (the caller names the action
+        /// with `aria_label` or a tooltip instead), and it may also be
+        /// disabled.
+        #[gpui::test]
+        fn an_icon_only_button_is_named_by_its_aria_label_or_tooltip(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let frame = frame_with_buttons(
+                || {
+                    vec![
+                        Button::new("close", "")
+                            .icon_only()
+                            .icon(gpui_component::IconName::CircleX)
+                            .aria_label("Close the dialog"),
+                        Button::new("remove", "")
+                            .icon_only()
+                            .icon(gpui_component::IconName::Delete)
+                            .tooltip("Delete the row")
+                            .disabled(true),
+                    ]
+                },
+                cx,
+            );
+
+            assert_eq!(
+                name_of(&frame, "close").as_deref(),
+                Some("Close the dialog")
+            );
+            assert_eq!(name_of(&frame, "remove").as_deref(), Some("Delete the row"));
+        }
+
+        /// A toolbar toggle says whether it is on; its fill alone cannot carry
+        /// that to assistive technology.
+        #[gpui::test]
+        fn a_toggled_button_announces_its_state(cx: &mut gpui::TestAppContext) {
+            let frame = frame_with_buttons(
+                || {
+                    vec![
+                        Button::new("stats", "Stats").selected(true).toggled(true),
+                        Button::new("run", "Run"),
+                    ]
+                },
+                cx,
+            );
+
+            let on = accessibility_node(&frame, "stats").expect("the toggle is an accessible node");
+            assert_eq!(on.toggled(), Some(Toggled::True));
+
+            let plain =
+                accessibility_node(&frame, "run").expect("the action is an accessible node");
+            assert_eq!(
+                plain.toggled(),
+                None,
+                "a plain action carries no toggle state"
+            );
+        }
+
+        /// `aria_label` wins over the label the button draws, for a control
+        /// whose visible text is an abbreviation of the action.
+        #[gpui::test]
+        fn aria_label_overrides_the_drawn_text(cx: &mut gpui::TestAppContext) {
+            let frame = frame_with_buttons(
+                || vec![Button::new("zoom", "1:1").aria_label("Reset the zoom to 100%")],
+                cx,
+            );
+
+            assert_eq!(
+                name_of(&frame, "zoom").as_deref(),
+                Some("Reset the zoom to 100%")
+            );
+        }
     }
 }

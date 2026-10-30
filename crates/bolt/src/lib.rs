@@ -12,6 +12,13 @@
 #![recursion_limit = "512"]
 
 pub mod brand;
+
+/// Accessibility checks for rendered surfaces: the accessible-name helpers a
+/// surface test asserts with. Gated like the product crates' `test-support`
+/// features, so a normal build of the design system carries none of it.
+#[cfg(any(test, feature = "test-support"))]
+pub mod accessibility;
+
 pub mod controls;
 pub mod density;
 pub mod fonts;

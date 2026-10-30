@@ -110,7 +110,7 @@ impl ChamferCut {
     pub const MODAL: Pixels = px(18.0);
 }
 
-/// Geometry of `modals::Modal`, taken from the P1Modals board.
+/// Geometry of `modals::Modal`, taken from the modals design board.
 pub struct ModalMetrics;
 
 impl ModalMetrics {
@@ -322,7 +322,7 @@ impl ButtonMetrics {
     pub const SPLIT_SEAM: Pixels = px(1.0);
 
     /// Fill alphas of the danger variant (rest, hover, pressed) and of a
-    /// selected ghost or secondary button (DSStates).
+    /// selected ghost or secondary button (the states board).
     pub const SOFT_FILL_REST: f32 = 0.14;
     pub const SOFT_FILL_HOVER: f32 = 0.22;
     pub const SOFT_FILL_PRESSED: f32 = 0.30;
@@ -988,7 +988,7 @@ impl ResultMetrics {
     pub const SEARCH_WIDTH: Rems = ui(240.0);
 }
 
-/// Geometry of the migrate wizard's Run phase, from P1Migrate.
+/// Geometry of the migrate wizard's Run phase, from the wizard design board.
 pub struct MigrateRunMetrics;
 
 impl MigrateRunMetrics {
@@ -1014,7 +1014,7 @@ impl MigrateRunMetrics {
     pub const PERCENT_CAPTION_FONT: Rems = ui(11.0);
 }
 
-/// Geometry of the command palette, from P1Palette.
+/// Geometry of the command palette, from the palette design board.
 pub struct PaletteMetrics;
 
 impl PaletteMetrics {
@@ -1057,8 +1057,8 @@ impl PaletteMetrics {
     pub const FOOTER_FONT: Rems = ui(12.0);
 }
 
-/// Geometry of the wizard stepper (`composites::wizard_rail`), from P1Migrate
-/// and the board's stepper.
+/// Geometry of the wizard stepper (`composites::wizard_rail`), from the wizard
+/// design board's stepper.
 pub struct StepperMetrics;
 
 impl StepperMetrics {
@@ -1079,7 +1079,7 @@ impl StepperMetrics {
     /// Step label size. (13 px)
     pub const FONT: Rems = ui(13.0);
 
-    /// Horizontal stepper at the top of a dialog body (P1Flows): 22 px
+    /// Horizontal stepper at the top of a dialog body (the flows design board): 22 px
     /// badges holding a 12 px check, 8 px between badge, label and the
     /// 20 x 1 px connectors, 12.5 px labels.
     pub const INLINE_BADGE: Rems = ui(22.0);
@@ -1111,7 +1111,7 @@ impl TableViewMetrics {
     pub const FILTER_ROW_GAP: Pixels = px(8.0);
 }
 
-/// Geometry of a document collection (P1DocTable, P2DocNested, P1DocSchema).
+/// Geometry of a document collection (the document design boards).
 pub struct CollectionMetrics;
 
 impl CollectionMetrics {
@@ -1351,8 +1351,8 @@ impl InspectorMetrics {
     pub const FOOTER_GAP: Pixels = px(8.0);
 }
 
-/// Geometry of the key-value browser (P1KvHash, P1KvString, P2KvZset,
-/// P2KvStream, P2KvFilter): toolbars, the key list, the value pane, the
+/// Geometry of the key-value browser (the key-value design boards):
+/// toolbars, the key list, the value pane, the
 /// expiry popover and the bulk-delete confirmation.
 pub struct KeyValueMetrics;
 
@@ -1859,9 +1859,9 @@ impl MasterListMetrics {
     pub const ROW_DETAIL_FONT: Rems = ui(11.5);
 }
 
-/// Geometry shared by the document views (P1Audit, P1Approvals, P1Dashboard,
-/// P1Chart, P1Buckets, P1Objects, P1ObjectEditor, P1Builder, P1Schema,
-/// P2Series): the document header and toolbar rows, the event and object
+/// Geometry shared by the document views (the audit, approvals, dashboard,
+/// chart, buckets, objects, object-editor, builder, schema and series
+/// design boards): the document header and toolbar rows, the event and object
 /// tables, the detail blocks and the footer.
 pub struct DocumentMetrics;
 
@@ -1927,8 +1927,8 @@ impl DocumentMetrics {
     pub const TIMELINE_BUCKETS: i64 = 48;
 }
 
-/// Geometry of the object-storage views (P1Buckets, P1Objects,
-/// P1ObjectEditor): their tables, the bucket details strip and the object
+/// Geometry of the object-storage views (the buckets and object-browser
+/// design boards): their tables, the bucket details strip and the object
 /// preview rail.
 pub struct ObjectStoreMetrics;
 
@@ -2012,7 +2012,7 @@ impl SecretStoreMetrics {
     pub const VALUE_KEY_WIDTH: Rems = ui(110.0);
 }
 
-/// Geometry of the object preview rail (P1Objects): its header, the
+/// Geometry of the object preview rail (the object-browser design board): its header, the
 /// "Interpret as" row, the metadata section and the action row.
 pub struct PreviewRailMetrics;
 
@@ -2032,7 +2032,7 @@ impl PreviewRailMetrics {
     pub const ACTIONS_GAP: Pixels = px(6.0);
 }
 
-/// Geometry of the MCP approvals view (P1Approvals): the pending list, the
+/// Geometry of the MCP approvals view (the approvals design board): the pending list, the
 /// detail title, its field grid and payload block, and the action row.
 pub struct ApprovalsMetrics;
 
@@ -2131,7 +2131,7 @@ impl ChartGeometry {
     pub const DROPDOWN_PANEL: Pixels = px(140.0);
 }
 
-/// Geometry of the schema diagram (P1Schema): the toolbar, the table
+/// Geometry of the schema diagram (the schema-diagram design board): the toolbar, the table
 /// cards and the dot grid.
 pub struct SchemaMetrics;
 
@@ -2164,7 +2164,7 @@ impl SchemaMetrics {
     pub const TOGGLE_HEIGHT: Rems = ui(24.0);
 }
 
-/// Geometry of the schema inspector rail (P1Schema): 12 by 14 px padding,
+/// Geometry of the schema inspector rail (the schema-inspector design board): 12 by 14 px padding,
 /// 14 px between blocks, 6 px between rows, a 12.5 px summary, 12 px mono
 /// rows with an 11 px icon 6 px before the value.
 pub struct SchemaInspectorMetrics;
@@ -2215,7 +2215,7 @@ impl DocumentInspectorMetrics {
     pub const PENDING_EDGE: Pixels = px(2.0);
 }
 
-/// Geometry of the visual query builder rail (P1Builder): its header, the
+/// Geometry of the visual query builder rail (the query-builder design board): its header, the
 /// mode switch, the section cards and the footer.
 pub struct BuilderMetrics;
 
@@ -2264,7 +2264,7 @@ impl BuilderMetrics {
     pub const CURSOR_REVEAL_MARGIN: Pixels = px(8.0);
 }
 
-/// Geometry of the dashboard grid (P1Dashboard): the grid padding and
+/// Geometry of the dashboard grid (the dashboard design board): the grid padding and
 /// gutter, the panel card and its header, the section dividers and the
 /// resize affordances.
 pub struct DashboardMetrics;
@@ -2296,7 +2296,7 @@ impl DashboardMetrics {
     pub const EMPTY_HEIGHT: Pixels = px(240.0);
 }
 
-/// Geometry of the chart document (P1Chart): the axis row, the chart area
+/// Geometry of the chart document (the chart design board): the axis row, the chart area
 /// padding and the Stats rail.
 pub struct ChartDocumentMetrics;
 
@@ -2323,7 +2323,7 @@ impl ChartDocumentMetrics {
     pub const PICKER_WIDTH: Rems = ui(320.0);
 }
 
-/// Geometry of the chart axis row (P1Chart): the X, Y, Group and Agg
+/// Geometry of the chart axis row (the chart design board): the X, Y, Group and Agg
 /// selects with their role labels.
 pub struct AxisBarMetrics;
 
