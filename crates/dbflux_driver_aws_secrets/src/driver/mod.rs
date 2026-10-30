@@ -248,14 +248,17 @@ fn require_static_secret(
     password: Option<&SecretString>,
 ) -> Result<(), DbError> {
     let DbConfig::AwsSecrets {
-        access_key_id: Some(_),
+        access_key_id: Some(access_key_id),
         ..
     } = config
     else {
         return Ok(());
     };
 
-    if password.is_some() {
+    // `profile_config` trims the field and treats a blank one as "no static
+    // keys", so the guard has to read it the same way: a whitespace-only id is
+    // absence, not a key missing its secret.
+    if access_key_id.trim().is_empty() || password.is_some() {
         return Ok(());
     }
 

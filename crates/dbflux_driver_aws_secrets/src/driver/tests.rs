@@ -362,3 +362,11 @@ fn connecting_a_static_key_profile_without_its_secret_fails_before_any_aws_call(
 
     assert!(matches!(error, DbError::InvalidProfile(_)), "{error:?}");
 }
+
+/// A blank Access Key ID means "no static keys" everywhere else — `profile_config`
+/// trims it away — so the guard must not treat it as a key that lost its secret.
+#[test]
+fn a_blank_access_key_id_counts_as_no_static_key() {
+    require_static_secret(&static_key_config(Some("   ")), None)
+        .expect("a blank id reaches the default credential chain");
+}
