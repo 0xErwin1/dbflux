@@ -4,7 +4,6 @@ use secrecy::ExposeSecret;
 
 use super::*;
 
-#[cfg(unix)]
 #[test]
 fn file_owned_by_the_process_user_is_read() {
     use std::os::unix::fs::PermissionsExt;
@@ -22,7 +21,6 @@ fn file_owned_by_the_process_user_is_read() {
     assert_eq!(content.expose_secret(), "value");
 }
 
-#[cfg(unix)]
 #[test]
 fn file_owned_by_another_user_is_rejected() {
     for label in ["Secret file", "Dotenv file"] {

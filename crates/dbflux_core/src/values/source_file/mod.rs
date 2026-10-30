@@ -194,5 +194,7 @@ fn check_owner(
     Ok(())
 }
 
-#[cfg(test)]
+// The reader's portable rules are covered through the dotenv and secret file
+// tests; these cover the Unix-only owner check.
+#[cfg(all(test, unix))]
 mod tests;
