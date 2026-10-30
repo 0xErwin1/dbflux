@@ -299,3 +299,66 @@ fn concurrent_callers_of_a_cold_catalog_share_one_fetch() {
 
     assert_eq!(fetches.load(Ordering::SeqCst), 1);
 }
+
+fn static_key_config(access_key_id: Option<&str>) -> DbConfig {
+    DbConfig::AwsSecrets {
+        region: "us-east-1".to_string(),
+        profile: None,
+        access_key_id: access_key_id.map(str::to_string),
+        endpoint: Some("http://localhost:4566".to_string()),
+    }
+}
+
+/// A profile that names an Access Key ID must not connect without its secret:
+/// the SDK would build no static credentials and answer with whatever identity
+/// the default chain finds.
+#[test]
+fn an_access_key_id_without_its_secret_is_refused() {
+    let error = require_static_secret(&static_key_config(Some("AKIAEXAMPLE")), None)
+        .expect_err("the secret access key is missing");
+
+    match error {
+        DbError::InvalidProfile(message) => {
+            assert!(message.contains("Access Key ID"), "{message}");
+            assert!(message.contains("secret access key"), "{message}");
+        }
+        other => panic!("expected InvalidProfile, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_access_key_id_with_its_secret_passes_the_guard() {
+    let secret = SecretString::from("secret".to_string());
+
+    require_static_secret(&static_key_config(Some("AKIAEXAMPLE")), Some(&secret))
+        .expect("the key is present");
+}
+
+/// The guard belongs to the secret-bearing path only: a profile without an
+/// Access Key ID reaches the default credential chain on purpose.
+#[test]
+fn a_profile_without_static_keys_passes_the_guard_without_a_password() {
+    require_static_secret(&static_key_config(None), None).expect("no static key to guard");
+
+    require_static_secret(&DbConfig::default_s3(), None)
+        .expect("another driver's config is not this driver's concern");
+}
+
+/// The guard runs on the path the connect pipeline and both switch paths use,
+/// before any AWS call, so a profile that lost its stored secret fails with a
+/// message instead of connecting as whatever identity the SDK finds.
+#[test]
+fn connecting_a_static_key_profile_without_its_secret_fails_before_any_aws_call() {
+    let profile = ConnectionProfile::new_with_driver(
+        "static-keys",
+        DbKind::AwsSecrets,
+        "builtin:aws_secrets",
+        static_key_config(Some("AKIAEXAMPLE")),
+    );
+
+    let Err(error) = AwsSecretsDriver::new().connect_with_secrets(&profile, None, None) else {
+        panic!("a static-key profile without its secret must not connect");
+    };
+
+    assert!(matches!(error, DbError::InvalidProfile(_)), "{error:?}");
+}

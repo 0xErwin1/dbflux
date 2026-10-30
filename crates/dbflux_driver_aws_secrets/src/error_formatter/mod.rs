@@ -109,7 +109,7 @@ fn is_kms_denial(code: Option<&str>, message: &str) -> bool {
         || (has_code(code, PERMISSION_CODES) && message.to_lowercase().contains("kms"))
 }
 
-fn hint_for(code: Option<&str>, message: &str) -> Option<&'static str> {
+fn hint_for(code: Option<&str>, message: &str, target: &ErrorTarget) -> Option<&'static str> {
     if is_kms_denial(code, message) {
         return Some(KMS_DECRYPT_HINT);
     }
@@ -121,6 +121,13 @@ fn hint_for(code: Option<&str>, message: &str) -> Option<&'static str> {
     }
 
     if has_code(code, PERMISSION_CODES) {
+        // A denial with no store behind it is the region catalog: EC2 reports
+        // it as `UnauthorizedOperation`, and the policy it needs has nothing
+        // to do with secrets or parameters.
+        if matches!(target, ErrorTarget::None) {
+            return Some("Check that these credentials may call ec2:DescribeRegions.");
+        }
+
         return Some("Check the IAM permissions for this secret or parameter.");
     }
 
@@ -155,7 +162,7 @@ pub(crate) fn format_from_code(
         formatted = formatted.with_code(code.to_string());
     }
 
-    if let Some(hint) = hint_for(code, message) {
+    if let Some(hint) = hint_for(code, message, target) {
         formatted = formatted.with_hint(hint);
     }
 

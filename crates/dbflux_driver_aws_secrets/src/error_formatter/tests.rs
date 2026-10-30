@@ -196,3 +196,35 @@ fn missing_credentials_dispatch_message_is_actionable() {
             .contains("credentials")
     );
 }
+
+/// A denied region listing has no store behind it, so the permission hint
+/// names the EC2 action instead of pointing at secret or parameter IAM.
+#[test]
+fn a_denied_region_listing_names_ec2_describe_regions() {
+    let formatted = format_from_code(
+        Some("UnauthorizedOperation"),
+        "You are not authorized to perform this operation.",
+        &config(),
+        &ErrorTarget::None,
+    );
+
+    assert_eq!(
+        formatted.hint.as_deref(),
+        Some("Check that these credentials may call ec2:DescribeRegions.")
+    );
+}
+
+#[test]
+fn a_denied_secret_still_names_its_own_permissions() {
+    let formatted = format_from_code(
+        Some("AccessDeniedException"),
+        "not allowed",
+        &config(),
+        &ErrorTarget::Store("secrets-manager"),
+    );
+
+    assert_eq!(
+        formatted.hint.as_deref(),
+        Some("Check the IAM permissions for this secret or parameter.")
+    );
+}

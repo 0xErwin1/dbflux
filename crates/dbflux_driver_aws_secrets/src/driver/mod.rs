@@ -193,6 +193,8 @@ impl DbDriver for AwsSecretsDriver {
         password: Option<&SecretString>,
         _ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
+        require_static_secret(&profile.config, password)?;
+
         Ok(Box::new(connect_internal(profile, password)?))
     }
 
@@ -228,6 +230,40 @@ impl DbDriver for AwsSecretsDriver {
             endpoint: endpoint.clone(),
         })
     }
+}
+
+/// A profile that names an Access Key ID needs its secret access key.
+///
+/// Without one the SDK builds no static credentials and the default provider
+/// chain answers instead, which authenticates as whatever identity the
+/// machine happens to have — the wrong account, silently. A missing keyring
+/// entry reaches this path as `None`, so the connect fails with a message the
+/// user can act on instead of connecting as someone else.
+///
+/// `connect_with_secrets` is where this belongs, not `connect_internal`:
+/// `test_connection` calls the latter with no password on purpose, and an
+/// access-key profile must still be testable before the key is entered.
+fn require_static_secret(
+    config: &DbConfig,
+    password: Option<&SecretString>,
+) -> Result<(), DbError> {
+    let DbConfig::AwsSecrets {
+        access_key_id: Some(_),
+        ..
+    } = config
+    else {
+        return Ok(());
+    };
+
+    if password.is_some() {
+        return Ok(());
+    }
+
+    Err(DbError::InvalidProfile(
+        "This profile uses an Access Key ID but no secret access key was found for it. \
+         Enter the secret access key again to connect."
+            .to_string(),
+    ))
 }
 
 fn connect_internal(
