@@ -21,8 +21,8 @@ const LABEL: &str = "Secret file";
 /// Reads the secret stored in the file at `path`.
 ///
 /// `path` must be absolute or start with `~/`. The file must be a regular
-/// file, at most [`MAX_FILE_BYTES`] long, valid UTF-8, and on Unix readable
-/// and writable by its owner only.
+/// file, at most [`MAX_FILE_BYTES`] long, valid UTF-8, and on Unix owned by the user DBFlux runs as and
+/// readable and writable by that owner only.
 ///
 /// Without `json_key` the value is the whole file with exactly one trailing
 /// `\n` or `\r\n` removed. With `json_key` the file must be a JSON object and
@@ -30,9 +30,7 @@ const LABEL: &str = "Secret file";
 /// its exact text in the file.
 pub fn read_secret_file(path: &str, json_key: Option<&str>) -> Result<SecretString, DbError> {
     if json_key.is_some_and(str::is_empty) {
-        return Err(error(
-            "JSON key in secret file reference is empty".to_string(),
-        ));
+        return Err(error(format!("JSON key in secret file '{path}' is empty")));
     }
 
     let content = source_file::read_owner_only_file(LABEL, path)?;
@@ -62,7 +60,11 @@ fn whole_file_value(path: &str, content: &str) -> Result<SecretString, DbError> 
 
 fn json_field_value(path: &str, content: &str, key: &str) -> Result<SecretString, DbError> {
     // serde_json's error text can quote the content, so it is never surfaced.
-    let not_an_object = || error(format!("{LABEL} '{path}' is not a JSON object"));
+    let not_an_object = || {
+        error(format!(
+            "{LABEL} '{path}' is not a valid JSON object, so key '{key}' cannot be read"
+        ))
+    };
 
     // Raw values keep a number's text from the file; parsing it into a
     // `serde_json::Number` would rewrite long or exponent forms.

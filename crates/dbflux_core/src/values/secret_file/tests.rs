@@ -110,7 +110,7 @@ fn json_key_errors_name_the_key_and_file() {
     );
     assert_eq!(
         error_message(read_secret_file(&path, Some(""))),
-        "JSON key in secret file reference is empty"
+        format!("JSON key in secret file '{path}' is empty")
     );
 }
 
@@ -129,7 +129,9 @@ fn json_key_requires_a_json_object() {
 
         assert_eq!(
             message,
-            format!("Secret file '{path}' is not a JSON object")
+            format!(
+                "Secret file '{path}' is not a valid JSON object, so key 'password' cannot be read"
+            )
         );
         assert!(!message.contains(DISTINCTIVE_SECRET));
     }

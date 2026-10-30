@@ -205,7 +205,7 @@ SSM 需要 `PATH` 中有 AWS CLI 和 Session Manager 插件。在 macOS 和 Linu
 补充说明：
 
 - AWS 云密钥管理 / AWS 参数存储来源可以指向 JSON 密钥中的某个 **JSON 键**，因此一份 JSON 文档就能为多个字段供值。
-- 解析结果会缓存 **5 分钟**，避免每次重连都重新获取。
+- 从 Secret Manager 和 Parameter Store 引用解析的值会缓存 **5 分钟**，避免每次重连都重新获取。环境变量、dotenv 文件和密钥文件的值在每次使用时读取。
 - 由认证提供程序支持的 AWS 云密钥管理 / AWS 参数存储来源**要求连接上配置了认证配置文件**（连接前强制校验）。
 - 要访问 LocalStack 或 VPC 终端节点，请在 AWS 认证配置文件中设置 **Endpoint URL**。AWS SDK 也会读取 `AWS_ENDPOINT_URL_SECRETS_MANAGER` 和 `AWS_ENDPOINT_URL_SSM`。
 
@@ -224,7 +224,7 @@ dotenv 文件必须满足以下规则，否则连接会失败，错误信息会�
 
 - 路径为绝对路径或以 `~/` 开头。
 - 是不超过 64 KiB、1024 个条目的 UTF-8 普通文件（指向普通文件的符号链接会被跟随）。
-- 在 Linux 和 macOS 上，只有文件所有者可以读写（`chmod 600`）。
+- 在 Linux 和 macOS 上，只有文件所有者可以读写（`chmod 600`），且所有者必须是运行 DBFlux 的用户。
 - 每一行是空行、`#` 注释，或 `KEY=value`（可带 `export` 前缀）。值可以不加引号（末尾的 ` # 注释` 会被去掉）、使用单引号（按原样读取）或使用双引号（解析 `\n`、`\t`、`\"`、`\\` 和 `\$`）。值只占一行，`${VAR}` 不会展开。同一个键出现两次时，以最后一次定义为准。
 
 | 问题 | 错误 |
@@ -234,6 +234,7 @@ dotenv 文件必须满足以下规则，否则连接会失败，错误信息会�
 | 文件不存在 | `Dotenv file '~/prod.env' does not exist` |
 | 文件不可读 | `Dotenv file '~/prod.env' cannot be read: permission denied` |
 | 其他用户可访问该文件 | `Dotenv file '~/prod.env' can be read or changed by other users (mode 644); restrict it with chmod 600` |
+| 文件属于其他用户 | `Dotenv file '~/prod.env' is owned by another user; DBFlux only reads files owned by the user it runs as` |
 | 某一行不是条目 | `Dotenv file '~/prod.env' has a malformed entry on line 4` |
 | 文件中没有该键 | `Key 'DB_PASSWORD' is not defined in dotenv file '~/prod.env'` |
 | 键的值为空 | `Key 'DB_PASSWORD' in dotenv file '~/prod.env' is empty` |
@@ -244,7 +245,7 @@ dotenv 文件必须满足以下规则，否则连接会失败，错误信息会�
 
 ### 密钥文件
 
-密钥文件来源读取由其他工具写入的文件，例如由 sops-nix 或 systemd 凭据提供的密钥。DBFlux 每次使用该值时（连接时和切换数据库时）都会读取文件，因此通过原子重命名或替换符号链接轮换的文件，无需重启 DBFlux 即可在下一次连接中生效。DBFlux 只保存引用，从不保存文件内容：
+密钥文件来源读取由其他工具写入的文件，例如由 sops-nix 或 systemd 凭据提供的密钥。DBFlux 每次连接时都会读取文件，因此通过原子重命名或替换符号链接轮换的文件，无需重启 DBFlux 即可在下一次连接中生效。在已打开的连接上切换数据库时，只有密码字段会从其文件重新读取；其他由文件提供的字段保留连接时解析的值。DBFlux 只保存引用，从不保存文件内容：
 
 ```json
 {"source": "file", "path": "~/.config/dbflux/db.json", "json_key": "password"}
@@ -262,6 +263,7 @@ dotenv 文件必须满足以下规则，否则连接会失败，错误信息会�
 - 路径为绝对路径或以 `~/` 开头。
 - 是不超过 64 KiB 的 UTF-8 普通文件（指向普通文件的符号链接会被跟随；目录和 FIFO 会被拒绝）。
 - 在 Linux 和 macOS 上，只有文件所有者可以读写。组或其他用户的任何读写位都会被拒绝；`0400` 和 `0600` 模式可以使用。
+- 在 Linux 和 macOS 上，文件必须属于运行 DBFlux 的用户。属于其他用户（包括 root）的文件即使模式允许读取也会被拒绝。
 
 | 问题 | 错误 |
 | --- | --- |
@@ -271,8 +273,10 @@ dotenv 文件必须满足以下规则，否则连接会失败，错误信息会�
 | 文件过大 | `Secret file '/run/secrets/db_password' is larger than 64 KiB` |
 | 内容不是 UTF-8 | `Secret file '/run/secrets/db_password' is not valid UTF-8` |
 | 其他用户可访问该文件 | `Secret file '/run/secrets/db_password' can be read or changed by other users (mode 440); restrict it with chmod 600` |
+| 文件属于其他用户 | `Secret file '/run/secrets/db_password' is owned by another user; DBFlux only reads files owned by the user it runs as` |
 | 文件为空 | `Secret file '/run/secrets/db_password' is empty` |
-| 指定了键但内容不是 JSON 对象 | `Secret file '~/.config/dbflux/db.json' is not a JSON object` |
+| 指定了键但内容不是有效的 JSON 或不是对象 | `Secret file '~/.config/dbflux/db.json' is not a valid JSON object, so key 'password' cannot be read` |
+| `#` 后的键为空 | `JSON key in secret file '~/.config/dbflux/db.json' is empty` |
 | 对象中没有该键 | `Key 'password' is not defined in secret file '~/.config/dbflux/db.json'` |
 | 键的值是对象、数组或 null | `Key 'password' in secret file '~/.config/dbflux/db.json' is not a string, number or boolean` |
 | 键的值为空字符串 | `Key 'password' in secret file '~/.config/dbflux/db.json' is empty` |

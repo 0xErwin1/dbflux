@@ -22,8 +22,9 @@ const UNSAFE_MODE_BITS: u32 = 0o066;
 /// Reads the whole file at `path` as UTF-8.
 ///
 /// `path` must be absolute or start with `~/`. The file must be a regular
-/// file, at most [`MAX_FILE_BYTES`] long, valid UTF-8, and on Unix readable
-/// and writable by its owner only. `label` starts every error message, for
+/// file, at most [`MAX_FILE_BYTES`] long, valid UTF-8, and on Unix owned by the
+/// user this process runs as and readable and writable by that owner only.
+/// `label` starts every error message, for
 /// example `"Dotenv file"`.
 pub(crate) fn read_owner_only_file(label: &str, path: &str) -> Result<SecretString, DbError> {
     let resolved_path = resolve_path(label, path)?;
@@ -143,7 +144,7 @@ fn check_permissions(
     display_path: &str,
     metadata: &std::fs::Metadata,
 ) -> Result<(), DbError> {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     let mode = metadata.permissions().mode() & 0o777;
 
@@ -153,7 +154,7 @@ fn check_permissions(
         )));
     }
 
-    Ok(())
+    check_owner(label, display_path, metadata.uid(), effective_uid())
 }
 
 #[cfg(not(unix))]
@@ -164,3 +165,34 @@ fn check_permissions(
 ) -> Result<(), DbError> {
     Ok(())
 }
+
+#[cfg(unix)]
+#[expect(
+    unsafe_code,
+    reason = "libc FFI: `geteuid` takes no arguments, has no preconditions and cannot fail"
+)]
+fn effective_uid() -> u32 {
+    // SAFETY: `geteuid` only reads the process credentials.
+    unsafe { libc::geteuid() }
+}
+
+/// A file owned by another user can be swapped or read by that user, so
+/// only files owned by the effective user of this process are read.
+#[cfg(unix)]
+fn check_owner(
+    label: &str,
+    display_path: &str,
+    file_uid: u32,
+    process_uid: u32,
+) -> Result<(), DbError> {
+    if file_uid != process_uid {
+        return Err(error(format!(
+            "{label} '{display_path}' is owned by another user; DBFlux only reads files owned by the user it runs as"
+        )));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;

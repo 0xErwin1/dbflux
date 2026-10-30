@@ -286,7 +286,9 @@ macOS와 Linux에서 DBFlux를 터미널 밖(Finder, Dock, 데스크톱 항목)�
 
 - Secret/Parameter 소스는 JSON 시크릿 내부의 **JSON 키**를 대상으로 할 수
   있으므로, 하나의 저장된 JSON 문서가 여러 필드를 공급할 수 있습니다.
-- 확인된 값은 재연결 때마다 다시 가져오지 않도록 **5분** 동안 캐시됩니다.
+- Secret Manager와 Parameter Store 참조에서 확인된 값은 재연결 때마다 다시
+  가져오지 않도록 **5분** 동안 캐시됩니다. 환경 변수, dotenv 파일, 시크릿 파일
+  값은 사용할 때마다 읽습니다.
 - 인증 공급자에 의해 지원되는 Secret/Parameter 소스는 연결에 **인증 프로필이
   필요**합니다(연결 전에 강제됩니다).
 - LocalStack 또는 VPC 엔드포인트에 연결하려면 AWS 인증 프로필에 **Endpoint
@@ -316,7 +318,8 @@ dotenv 파일은 다음 규칙을 지켜야 합니다. 그렇지 않으면 파�
 - 경로는 절대 경로이거나 `~/`로 시작합니다.
 - 최대 64 KiB, 1024개 항목의 UTF-8 일반 파일입니다(일반 파일을 가리키는 심볼릭
   링크는 따라갑니다).
-- Linux와 macOS에서는 소유자만 읽고 쓸 수 있어야 합니다(`chmod 600`).
+- Linux와 macOS에서는 소유자만 읽고 쓸 수 있어야 하며(`chmod 600`), 그
+  소유자는 DBFlux를 실행하는 사용자여야 합니다.
 - 각 줄은 빈 줄, `#` 주석, 또는 선택적인 `export` 접두사가 붙은 `KEY=value`입니다.
   값은 따옴표 없이(끝의 ` # comment`는 제거), 작은따옴표로(그대로 사용), 또는
   큰따옴표로(`\n`, `\t`, `\"`, `\\`, `\$`를 해석) 쓸 수 있습니다. 값은 한 줄이며
@@ -329,6 +332,7 @@ dotenv 파일은 다음 규칙을 지켜야 합니다. 그렇지 않으면 파�
 | 파일 없음 | `Dotenv file '~/prod.env' does not exist` |
 | 파일을 읽을 수 없음 | `Dotenv file '~/prod.env' cannot be read: permission denied` |
 | 다른 사용자에게 열린 파일 | `Dotenv file '~/prod.env' can be read or changed by other users (mode 644); restrict it with chmod 600` |
+| 다른 사용자 소유의 파일 | `Dotenv file '~/prod.env' is owned by another user; DBFlux only reads files owned by the user it runs as` |
 | 항목이 아닌 줄 | `Dotenv file '~/prod.env' has a malformed entry on line 4` |
 | 파일에 키가 없음 | `Key 'DB_PASSWORD' is not defined in dotenv file '~/prod.env'` |
 | 값이 빈 키 | `Key 'DB_PASSWORD' in dotenv file '~/prod.env' is empty` |
@@ -343,9 +347,10 @@ dotenv 파일은 다음 규칙을 지켜야 합니다. 그렇지 않으면 파�
 ### 시크릿 파일
 
 Secret File 소스는 sops-nix나 systemd 자격 증명이 프로비저닝한 시크릿처럼 다른
-도구가 기록한 파일을 읽습니다. DBFlux는 값을 사용할 때마다(연결할 때와
-데이터베이스를 전환할 때) 파일을 읽으므로, 원자적 rename이나 심볼릭 링크 교체로
-교체된 파일은 DBFlux를 재시작하지 않아도 다음 연결에서 사용됩니다. DBFlux는
+도구가 기록한 파일을 읽습니다. DBFlux는 연결할 때마다 파일을 읽으므로,
+원자적 rename이나 심볼릭 링크 교체로 교체된 파일은 DBFlux를 재시작하지 않아도
+다음 연결에서 사용됩니다. 열린 연결에서 데이터베이스를 전환하면 비밀번호 필드만
+파일에서 다시 읽고, 파일 기반의 다른 필드는 연결할 때 확인된 값을 유지합니다. DBFlux는
 참조만 저장하고 파일 내용은 저장하지 않습니다:
 
 ```json
@@ -368,6 +373,8 @@ Secret File 소스는 sops-nix나 systemd 자격 증명이 프로비저닝한 �
 - Linux와 macOS에서는 소유자만 읽거나 쓸 수 있어야 합니다. 그룹이나 다른
   사용자의 읽기 또는 쓰기 비트가 있으면 거부하며, `0400`과 `0600` 모드는
   동작합니다.
+- Linux와 macOS에서는 DBFlux를 실행하는 사용자가 소유한 파일이어야 합니다.
+  root를 포함한 다른 사용자 소유의 파일은 모드가 읽기를 허용해도 거부합니다.
 
 | 문제 | 오류 |
 |------|------|
@@ -377,8 +384,10 @@ Secret File 소스는 sops-nix나 systemd 자격 증명이 프로비저닝한 �
 | 파일이 너무 큼 | `Secret file '/run/secrets/db_password' is larger than 64 KiB` |
 | 내용이 UTF-8이 아님 | `Secret file '/run/secrets/db_password' is not valid UTF-8` |
 | 다른 사용자에게 열린 파일 | `Secret file '/run/secrets/db_password' can be read or changed by other users (mode 440); restrict it with chmod 600` |
+| 다른 사용자 소유의 파일 | `Secret file '/run/secrets/db_password' is owned by another user; DBFlux only reads files owned by the user it runs as` |
 | 빈 파일 | `Secret file '/run/secrets/db_password' is empty` |
-| 키를 지정했지만 내용이 JSON 객체가 아님 | `Secret file '~/.config/dbflux/db.json' is not a JSON object` |
+| 키를 지정했지만 내용이 올바른 JSON이 아니거나 객체가 아님 | `Secret file '~/.config/dbflux/db.json' is not a valid JSON object, so key 'password' cannot be read` |
+| `#` 뒤의 키가 비어 있음 | `JSON key in secret file '~/.config/dbflux/db.json' is empty` |
 | 객체에 키가 없음 | `Key 'password' is not defined in secret file '~/.config/dbflux/db.json'` |
 | 키 값이 객체, 배열 또는 null | `Key 'password' in secret file '~/.config/dbflux/db.json' is not a string, number or boolean` |
 | 키 값이 빈 문자열 | `Key 'password' in secret file '~/.config/dbflux/db.json' is empty` |

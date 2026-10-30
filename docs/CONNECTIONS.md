@@ -298,8 +298,9 @@ Notes:
 
 - Secret/Parameter sources can target a **JSON key** inside a JSON secret, so one
   stored JSON document can feed several fields.
-- Resolved values are cached for **5 minutes** to avoid re-fetching on every
-  reconnect.
+- Values resolved from Secret Manager and Parameter Store references are cached
+  for **5 minutes** to avoid re-fetching on every reconnect. Environment
+  variable, dotenv file and secret file values are read on every use.
 - Secret/Parameter sources backed by an auth provider **require an Auth Profile**
   on the connection (enforced before connecting).
 - To reach LocalStack or a VPC endpoint, set **Endpoint URL** on the AWS Auth
@@ -331,7 +332,8 @@ names the file and the key but never shows a value:
 - The path is absolute or starts with `~/`.
 - It is a regular file (a symlink to one is followed) of at most 64 KiB and
   1024 entries, encoded as UTF-8.
-- On Linux and macOS, only its owner can read or write it (`chmod 600`).
+- On Linux and macOS, only its owner can read or write it (`chmod 600`), and
+  that owner is the user DBFlux runs as.
 - Every line is blank, a `#` comment, or `KEY=value`, optionally prefixed with
   `export`. A value can be unquoted (a trailing ` # comment` is removed), in
   single quotes (taken as written) or in double quotes (`\n`, `\t`, `\"`, `\\`
@@ -345,6 +347,7 @@ names the file and the key but never shows a value:
 | File missing | `Dotenv file '~/prod.env' does not exist` |
 | File not readable | `Dotenv file '~/prod.env' cannot be read: permission denied` |
 | File open to other users | `Dotenv file '~/prod.env' can be read or changed by other users (mode 644); restrict it with chmod 600` |
+| File owned by another user | `Dotenv file '~/prod.env' is owned by another user; DBFlux only reads files owned by the user it runs as` |
 | Line that is not an entry | `Dotenv file '~/prod.env' has a malformed entry on line 4` |
 | Key not in the file | `Key 'DB_PASSWORD' is not defined in dotenv file '~/prod.env'` |
 | Key with an empty value | `Key 'DB_PASSWORD' in dotenv file '~/prod.env' is empty` |
@@ -360,10 +363,11 @@ in the keyring for that field.
 ### Secret files
 
 A Secret File source reads a file that another tool writes, such as a secret
-provisioned by sops-nix or systemd credentials. DBFlux reads the file each time
-the value is used (on connect and when switching database), so a file rotated by
-an atomic rename or a symlink swap is used on the next connection without
-restarting DBFlux. DBFlux stores only the reference, never the file's content:
+provisioned by sops-nix or systemd credentials. DBFlux reads the file on every
+connect, so a file rotated by an atomic rename or a symlink swap is used on the
+next connection without restarting DBFlux. When you switch database on an open
+connection, only the password field is read from its file again; other
+file-backed fields keep the value resolved on connect. DBFlux stores only the reference, never the file's content:
 
 ```json
 {"source": "file", "path": "~/.config/dbflux/db.json", "json_key": "password"}
@@ -384,6 +388,8 @@ names the file and the key but never shows the file's content:
   rejected) of at most 64 KiB, encoded as UTF-8.
 - On Linux and macOS, only its owner can read or write it. Any read or write
   bit for the group or other users is rejected; modes `0400` and `0600` work.
+- On Linux and macOS, it is owned by the user DBFlux runs as. A file owned by
+  another user, root included, is rejected even when its mode allows reading.
 
 | Problem | Error |
 |---------|-------|
@@ -393,8 +399,10 @@ names the file and the key but never shows the file's content:
 | File too large | `Secret file '/run/secrets/db_password' is larger than 64 KiB` |
 | Content not UTF-8 | `Secret file '/run/secrets/db_password' is not valid UTF-8` |
 | File open to other users | `Secret file '/run/secrets/db_password' can be read or changed by other users (mode 440); restrict it with chmod 600` |
+| File owned by another user | `Secret file '/run/secrets/db_password' is owned by another user; DBFlux only reads files owned by the user it runs as` |
 | File empty | `Secret file '/run/secrets/db_password' is empty` |
-| Key given, content not a JSON object | `Secret file '~/.config/dbflux/db.json' is not a JSON object` |
+| Key given, content not valid JSON or not an object | `Secret file '~/.config/dbflux/db.json' is not a valid JSON object, so key 'password' cannot be read` |
+| Empty key after `#` | `JSON key in secret file '~/.config/dbflux/db.json' is empty` |
 | Key not in the object | `Key 'password' is not defined in secret file '~/.config/dbflux/db.json'` |
 | Key holds an object, array or null | `Key 'password' in secret file '~/.config/dbflux/db.json' is not a string, number or boolean` |
 | Key holds an empty string | `Key 'password' in secret file '~/.config/dbflux/db.json' is empty` |
