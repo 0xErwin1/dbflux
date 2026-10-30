@@ -176,6 +176,7 @@ components:
     literal: Literal
     env: Variável de ambiente
     dotenv: "Arquivo dotenv"
+    file: "Arquivo de segredo"
     secret: Secret Manager
     parameter: Parameter Store
     auth: Campo da sessão de autenticação
@@ -183,10 +184,13 @@ components:
     placeholder:
       env: "NOME_DA_VARIAVEL"
       dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+      file: "/run/secrets/db_password"
     hint:
       env: "Lido da variável de ambiente %{name} sempre que o DBFlux se conecta. O DBFlux não guarda o valor."
       dotenv: "Lido de %{key} em %{path} sempre que o DBFlux se conecta. Somente você deve poder ler o arquivo."
       dotenv_missing_key: "Adicione a chave depois do caminho: ~/caminho/do/arquivo.env#CHAVE"
+      file: "Lido de %{path} sempre que o DBFlux se conecta. Somente você deve poder ler o arquivo."
+      file_with_key: "Lido de %{key} no arquivo JSON %{path} sempre que o DBFlux se conecta. Somente você deve poder ler o arquivo."
   file_picker:
     browse: "Procurar…"
   column_projection:

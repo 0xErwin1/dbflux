@@ -176,6 +176,7 @@ components:
     literal: 리터럴
     env: 환경 변수
     dotenv: "Dotenv 파일"
+    file: "시크릿 파일"
     secret: 시크릿 매니저
     parameter: 파라미터 스토어
     auth: 인증 세션 필드
@@ -183,10 +184,13 @@ components:
     placeholder:
       env: "VARIABLE_NAME"
       dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+      file: "/run/secrets/db_password"
     hint:
       env: "DBFlux가 연결할 때마다 환경 변수 %{name}에서 읽습니다. DBFlux는 값을 저장하지 않습니다."
       dotenv: "DBFlux가 연결할 때마다 %{path}의 %{key}에서 읽습니다. 파일은 본인만 읽을 수 있어야 합니다."
       dotenv_missing_key: "경로 뒤에 키를 추가하세요: ~/path/to/file.env#KEY"
+      file: "DBFlux가 연결할 때마다 %{path}에서 읽습니다. 파일은 본인만 읽을 수 있어야 합니다."
+      file_with_key: "DBFlux가 연결할 때마다 JSON 파일 %{path}의 %{key}에서 읽습니다. 파일은 본인만 읽을 수 있어야 합니다."
   file_picker:
     browse: "찾아보기…"
   column_projection:

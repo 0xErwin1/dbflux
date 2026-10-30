@@ -12,6 +12,7 @@ enum ValueSourceKind {
     Literal,
     Env,
     Dotenv,
+    File,
     Secret,
     Parameter,
     Auth,
@@ -29,6 +30,7 @@ impl ValueSourceKind {
         match value {
             "env" => Self::Env,
             "dotenv" => Self::Dotenv,
+            "file" => Self::File,
             "secret" => Self::Secret,
             "parameter" => Self::Parameter,
             "auth" => Self::Auth,
@@ -41,6 +43,7 @@ impl ValueSourceKind {
             Some(ValueRef::Literal { .. }) | None => Self::Literal,
             Some(ValueRef::Env { .. }) => Self::Env,
             Some(ValueRef::Dotenv { .. }) => Self::Dotenv,
+            Some(ValueRef::File { .. }) => Self::File,
             Some(ValueRef::Secret { provider, .. }) if provider == AWS_SECRETS_MANAGER_PROVIDER => {
                 Self::Secret
             }
@@ -70,6 +73,7 @@ fn source_items(
         ),
         DropdownItem::with_value(dbflux_i18n::t!("components.value_source.env"), "env"),
         DropdownItem::with_value(dbflux_i18n::t!("components.value_source.dotenv"), "dotenv"),
+        DropdownItem::with_value(dbflux_i18n::t!("components.value_source.file"), "file"),
         DropdownItem::with_value(dbflux_i18n::t!("components.value_source.secret"), "secret"),
         DropdownItem::with_value(
             dbflux_i18n::t!("components.value_source.parameter"),
@@ -113,6 +117,11 @@ fn value_ref_for_source(source_kind: &ValueSourceKind, primary_value: &str) -> O
 
             Some(ValueRef::dotenv(path, key))
         }
+        ValueSourceKind::File => {
+            let (path, json_key) = parse_secret_inline_reference(primary_value);
+
+            Some(ValueRef::file(path, json_key))
+        }
         ValueSourceKind::Secret => {
             let (locator, json_key) = parse_secret_inline_reference(primary_value);
 
@@ -145,6 +154,9 @@ fn primary_value_for_ref(value_ref: Option<&ValueRef>) -> String {
         Some(ValueRef::Literal { .. }) | None => String::new(),
         Some(ValueRef::Env { key }) => key.clone(),
         Some(ValueRef::Dotenv { path, key }) => format_inline_reference(path, Some(key)),
+        Some(ValueRef::File { path, json_key }) => {
+            format_inline_reference(path, json_key.as_deref())
+        }
         Some(ValueRef::Secret {
             locator, json_key, ..
         }) => format_inline_reference(locator, json_key.as_deref()),
@@ -160,6 +172,7 @@ fn selected_index_for(items: &[DropdownItem], source_kind: &ValueSourceKind) -> 
         ValueSourceKind::Literal => "literal".to_string(),
         ValueSourceKind::Env => "env".to_string(),
         ValueSourceKind::Dotenv => "dotenv".to_string(),
+        ValueSourceKind::File => "file".to_string(),
         ValueSourceKind::Secret => "secret".to_string(),
         ValueSourceKind::Parameter => "parameter".to_string(),
         ValueSourceKind::Auth => "auth".to_string(),
@@ -283,14 +296,14 @@ impl ValueSourceSelector {
         self.selected_source(cx) == ValueSourceKind::Literal
     }
 
-    /// Example of what the field's input holds for an environment or dotenv
-    /// source, or `None` for any other source.
+    /// Example of what the field's input holds for an environment, dotenv or
+    /// file source, or `None` for any other source.
     pub fn source_placeholder(&self, cx: &App) -> Option<String> {
         source_placeholder(self.selected_source(cx))
     }
 
-    /// One line telling the user where an environment or dotenv value is read
-    /// from and when, built from the reference typed in the field's input.
+    /// One line telling the user where an environment, dotenv or file value is
+    /// read from and when, built from the reference typed in the field's input.
     /// `None` for any other source or an empty reference.
     pub fn source_hint(&self, primary_value: &str, cx: &App) -> Option<String> {
         source_hint(self.selected_source(cx), primary_value)
@@ -375,6 +388,7 @@ fn source_placeholder(kind: ValueSourceKind) -> Option<String> {
     let key = match kind {
         ValueSourceKind::Env => "components.value_source.placeholder.env",
         ValueSourceKind::Dotenv => "components.value_source.placeholder.dotenv",
+        ValueSourceKind::File => "components.value_source.placeholder.file",
         ValueSourceKind::Literal
         | ValueSourceKind::Secret
         | ValueSourceKind::SecretProvider(_)
@@ -412,6 +426,17 @@ fn source_hint(kind: ValueSourceKind, primary_value: &str) -> Option<String> {
                 path = path
             ))
         }
+        ValueSourceKind::File => match parse_secret_inline_reference(primary_value) {
+            (path, Some(key)) => Some(dbflux_i18n::t!(
+                "components.value_source.hint.file_with_key",
+                key = key,
+                path = path
+            )),
+            (path, None) => Some(dbflux_i18n::t!(
+                "components.value_source.hint.file",
+                path = path
+            )),
+        },
         ValueSourceKind::Literal
         | ValueSourceKind::Secret
         | ValueSourceKind::SecretProvider(_)
@@ -561,7 +586,7 @@ mod tests {
         let items = source_items(&vault_providers(), None);
         let index = selected_index_for(&items, &ValueSourceKind::for_value_ref(Some(&value_ref)));
 
-        assert_eq!(index, Some(6));
+        assert_eq!(index, Some(7));
         assert_same_ref(round_trip(&value_ref, &vault_providers()), Some(value_ref));
     }
 
@@ -588,7 +613,58 @@ mod tests {
         );
         assert_same_ref(round_trip(&secret, &vault_providers()), Some(secret));
         assert_same_ref(round_trip(&parameter, &[]), Some(parameter));
-        assert_eq!(source_items(&[], None).len(), 6);
+        assert_eq!(source_items(&[], None).len(), 7);
+    }
+
+    #[test]
+    fn value_source_file_refs_round_trip_with_and_without_json_key() {
+        let plain = ValueRef::file("/run/secrets/db_password", None);
+        let keyed = ValueRef::file("/run/secrets/db#1.json", Some("password".to_string()));
+
+        assert_eq!(
+            ValueSourceKind::for_value_ref(Some(&plain)),
+            ValueSourceKind::File
+        );
+        assert_eq!(
+            primary_value_for_ref(Some(&keyed)),
+            "/run/secrets/db#1.json#password"
+        );
+        assert_eq!(
+            selected_index_for(&source_items(&[], None), &ValueSourceKind::File),
+            Some(3)
+        );
+        assert_same_ref(round_trip(&plain, &[]), Some(plain));
+        assert_same_ref(round_trip(&keyed, &[]), Some(keyed));
+    }
+
+    #[test]
+    fn file_source_has_placeholder_and_hints() {
+        assert_eq!(
+            source_placeholder(ValueSourceKind::File),
+            Some(dbflux_i18n::t!("components.value_source.placeholder.file"))
+        );
+        assert_eq!(source_hint(ValueSourceKind::File, " "), None);
+
+        let plain =
+            source_hint(ValueSourceKind::File, "/run/secrets/db_password").expect("file hint");
+        assert_eq!(
+            plain,
+            dbflux_i18n::t!(
+                "components.value_source.hint.file",
+                path = "/run/secrets/db_password"
+            )
+        );
+
+        let keyed = source_hint(ValueSourceKind::File, "/run/secrets/db.json#password")
+            .expect("file hint with key");
+        assert_eq!(
+            keyed,
+            dbflux_i18n::t!(
+                "components.value_source.hint.file_with_key",
+                key = "password",
+                path = "/run/secrets/db.json"
+            )
+        );
     }
 
     #[test]
@@ -597,13 +673,17 @@ mod tests {
             "components.value_source.literal",
             "components.value_source.env",
             "components.value_source.dotenv",
+            "components.value_source.file",
             "components.value_source.secret",
             "components.value_source.parameter",
             "components.value_source.auth",
             "components.value_source.json_key_placeholder",
             "components.value_source.placeholder.env",
             "components.value_source.placeholder.dotenv",
+            "components.value_source.placeholder.file",
             "components.value_source.hint.env",
+            "components.value_source.hint.file",
+            "components.value_source.hint.file_with_key",
             "components.value_source.hint.dotenv",
             "components.value_source.hint.dotenv_missing_key",
         ];

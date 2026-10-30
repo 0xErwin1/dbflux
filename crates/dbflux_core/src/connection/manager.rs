@@ -2892,8 +2892,8 @@ const PASSWORD_VALUE_REF: &str = "password";
 /// Resolves the password for a reconnect that replaces a live connection in
 /// place (a database or region switch).
 ///
-/// The connect pipeline resolves a `password` value ref (literal, env or
-/// dotenv) before the driver sees the profile, so a profile connected that way may
+/// The connect pipeline resolves a `password` value ref (literal, env,
+/// dotenv or secret file) before the driver sees the profile, so a profile connected that way may
 /// have no stored keyring password. Resolve those refs again here instead
 /// of silently connecting without a password. Refs that need a provider or
 /// auth context cannot be resolved on this path and fail explicitly rather
@@ -2923,6 +2923,11 @@ fn resolve_switch_password(
             .map_err(|error| format!("Failed to resolve password for {destination}: {error}")),
         Some(ValueRef::Dotenv { path, key }) => {
             CompositeValueResolver::resolve_dotenv_ref(path, key)
+                .map(|value| Some(SecretString::from(value)))
+                .map_err(|error| format!("Failed to resolve password for {destination}: {error}"))
+        }
+        Some(ValueRef::File { path, json_key }) => {
+            CompositeValueResolver::resolve_file_ref(path, json_key.as_deref())
                 .map(|value| Some(SecretString::from(value)))
                 .map_err(|error| format!("Failed to resolve password for {destination}: {error}"))
         }
@@ -6928,6 +6933,66 @@ mod tests {
 
         assert!(
             error.contains("does not exist"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            recorded_connect_calls(&recorded).is_empty(),
+            "driver must not be called when the password cannot be resolved"
+        );
+    }
+
+    #[test]
+    fn switch_database_file_password_reads_the_file() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("db-password");
+        std::fs::write(&path, "from-secret-file\n").expect("write secret file");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .expect("restrict secret file");
+        }
+
+        let (manager, profile, recorded) =
+            switch_manager_with(Some(ValueRef::file(path.to_string_lossy(), None)), false);
+
+        let params = manager
+            .prepare_database_connection(profile.id, "analytics", &noop_secret_store())
+            .expect("prepare database connection should succeed");
+
+        params
+            .execute()
+            .expect("switch should resolve the password from the secret file");
+
+        assert_eq!(
+            recorded_connect_calls(&recorded),
+            vec![(
+                "analytics".to_string(),
+                Some("from-secret-file".to_string())
+            )]
+        );
+    }
+
+    #[test]
+    fn switch_database_missing_secret_file_fails_without_keyring_fallback() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("absent");
+        let path_text = path.to_string_lossy().into_owned();
+
+        let (manager, profile, recorded) =
+            switch_manager_with_password_ref(Some(ValueRef::file(path_text.clone(), None)));
+
+        let params = manager
+            .prepare_switch_database(profile.id, "analytics", &fixed_secret_store())
+            .expect("prepare switch should succeed");
+
+        let Err(error) = params.execute() else {
+            panic!("a missing secret file must fail instead of using the keyring password");
+        };
+
+        assert!(
+            error.contains(&format!("Secret file '{path_text}' does not exist")),
             "unexpected error: {error}"
         );
         assert!(
