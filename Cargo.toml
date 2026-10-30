@@ -220,7 +220,7 @@ arrow-schema = "59.3"
 # detection adds no second copy; `rust_xlsxwriter` writes xls values into a new
 # xlsx and builds test fixtures.
 calamine = "0.36"
-zip = { version = "8.6", default-features = false, features = ["deflate"] }
+zip = { version = "9.0", default-features = false, features = ["deflate"] }
 rust_xlsxwriter = "0.99"
 bytes = "1"
 snap = "1"
