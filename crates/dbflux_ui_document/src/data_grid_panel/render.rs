@@ -3731,6 +3731,9 @@ impl DataGridPanel {
                     self.rows_footer(row_count)
                 },
             ))
+            .when(self.limited_rows.loading_next, |d| {
+                d.child(Text::caption(crate::labels::loading_next_rows_label()))
+            })
             // A result with rows has no room for the notices in its body, so
             // the footer carries them, cut to the space it has.
             .when(!self.is_statement_without_result_set(), |d| {
