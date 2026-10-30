@@ -11,12 +11,12 @@ use super::{
     P_INST_FOLDER, P_INST_INSPECTOR_LEAF, P_INST_INSPECTORS_FOLDER, P_INST_METRIC_LEAF,
     P_INST_METRICS_FOLDER, P_INST_OVERVIEW_LEAF, P_LOADING, P_METRIC_LEAF, P_METRIC_NS_FOLDER,
     P_METRICS_FOLDER, P_PLACEHOLDER, P_PROFILE, P_REMOTE_DASHBOARD_ITEM,
-    P_REMOTE_DASHBOARDS_FOLDER, P_ROUTINE, P_ROUTINES_FOLDER, P_ROUTINES_LOADING,
-    P_SAVED_CHART_ITEM, P_SAVED_CHARTS_FOLDER, P_SCHEMA, P_SCHEMA_FK, P_SCHEMA_FK_FOLDER,
-    P_SCHEMA_FK_LOADING, P_SCHEMA_IDX_FOLDER, P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE,
-    P_SCRIPTS_FOLDER, P_SCRIPTS_ROOT, P_SECRET_PATH, P_SECRET_STORE, P_STORAGE_HINT_ITEM,
-    P_STORAGE_HINTS_FOLDER, P_TABLE, P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW,
-    P_VIEWS_FOLDER,
+    P_REMOTE_DASHBOARDS_FOLDER, P_ROOT_SECTION, P_ROOT_SECTION_ITEM, P_ROOT_SECTION_MORE,
+    P_ROUTINE, P_ROUTINES_FOLDER, P_ROUTINES_LOADING, P_SAVED_CHART_ITEM, P_SAVED_CHARTS_FOLDER,
+    P_SCHEMA, P_SCHEMA_FK, P_SCHEMA_FK_FOLDER, P_SCHEMA_FK_LOADING, P_SCHEMA_IDX_FOLDER,
+    P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE, P_SCRIPTS_FOLDER, P_SCRIPTS_ROOT,
+    P_SECRET_PATH, P_SECRET_STORE, P_STORAGE_HINT_ITEM, P_STORAGE_HINTS_FOLDER, P_TABLE,
+    P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW, P_VIEWS_FOLDER,
 };
 
 impl fmt::Display for SchemaNodeId {
@@ -101,6 +101,23 @@ impl fmt::Display for SchemaNodeId {
 
             Self::Bucket { profile_id, name } => write!(f, "{}|{}|{}", P_BUCKET, profile_id, name),
             Self::BucketsFolder { profile_id } => write!(f, "{}|{}", P_BUCKETS_FOLDER, profile_id),
+            Self::RootSection {
+                profile_id,
+                section_id,
+            } => write!(f, "{}|{}|{}", P_ROOT_SECTION, profile_id, section_id),
+            Self::RootSectionItem {
+                profile_id,
+                section_id,
+                item_id,
+            } => write!(
+                f,
+                "{}|{}|{}|{}",
+                P_ROOT_SECTION_ITEM, profile_id, section_id, item_id
+            ),
+            Self::RootSectionLoadMore {
+                profile_id,
+                section_id,
+            } => write!(f, "{}|{}|{}", P_ROOT_SECTION_MORE, profile_id, section_id),
             Self::SecretStore {
                 profile_id,
                 store_id,

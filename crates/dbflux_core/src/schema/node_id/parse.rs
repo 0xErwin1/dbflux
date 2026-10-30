@@ -13,12 +13,12 @@ use super::{
     P_INST_FOLDER, P_INST_INSPECTOR_LEAF, P_INST_INSPECTORS_FOLDER, P_INST_METRIC_LEAF,
     P_INST_METRICS_FOLDER, P_INST_OVERVIEW_LEAF, P_LOADING, P_METRIC_LEAF, P_METRIC_NS_FOLDER,
     P_METRICS_FOLDER, P_PLACEHOLDER, P_PROFILE, P_REMOTE_DASHBOARD_ITEM,
-    P_REMOTE_DASHBOARDS_FOLDER, P_ROUTINE, P_ROUTINES_FOLDER, P_ROUTINES_LOADING,
-    P_SAVED_CHART_ITEM, P_SAVED_CHARTS_FOLDER, P_SCHEMA, P_SCHEMA_FK, P_SCHEMA_FK_FOLDER,
-    P_SCHEMA_FK_LOADING, P_SCHEMA_IDX_FOLDER, P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE,
-    P_SCRIPTS_FOLDER, P_SCRIPTS_ROOT, P_SECRET_PATH, P_SECRET_STORE, P_STORAGE_HINT_ITEM,
-    P_STORAGE_HINTS_FOLDER, P_TABLE, P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW,
-    P_VIEWS_FOLDER,
+    P_REMOTE_DASHBOARDS_FOLDER, P_ROOT_SECTION, P_ROOT_SECTION_ITEM, P_ROOT_SECTION_MORE,
+    P_ROUTINE, P_ROUTINES_FOLDER, P_ROUTINES_LOADING, P_SAVED_CHART_ITEM, P_SAVED_CHARTS_FOLDER,
+    P_SCHEMA, P_SCHEMA_FK, P_SCHEMA_FK_FOLDER, P_SCHEMA_FK_LOADING, P_SCHEMA_IDX_FOLDER,
+    P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE, P_SCRIPTS_FOLDER, P_SCRIPTS_ROOT,
+    P_SECRET_PATH, P_SECRET_STORE, P_STORAGE_HINT_ITEM, P_STORAGE_HINTS_FOLDER, P_TABLE,
+    P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW, P_VIEWS_FOLDER,
 };
 
 impl FromStr for SchemaNodeId {
@@ -116,6 +116,10 @@ impl FromStr for SchemaNodeId {
             | P_INST_FOLDER
             | P_BUCKET
             | P_BUCKETS_FOLDER => parse_instance_variants(prefix, &parts, err),
+
+            P_ROOT_SECTION | P_ROOT_SECTION_ITEM | P_ROOT_SECTION_MORE => {
+                parse_root_section_variants(prefix, &parts, err)
+            }
 
             P_SECRET_STORE | P_SECRET_PATH => parse_secret_store_variants(prefix, &parts, err),
 
@@ -880,6 +884,45 @@ fn parse_instance_variants(
         P_BUCKETS_FOLDER => {
             let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
             Ok(SchemaNodeId::BucketsFolder { profile_id })
+        }
+
+        _ => Err(err()),
+    }
+}
+
+fn parse_root_section_variants(
+    prefix: &str,
+    parts: &[&str],
+    err: impl Fn() -> ParseSchemaNodeIdError + Copy,
+) -> Result<SchemaNodeId, ParseSchemaNodeIdError> {
+    let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+    let section_id = parts.get(2).ok_or_else(err)?.to_string();
+
+    match prefix {
+        P_ROOT_SECTION => Ok(SchemaNodeId::RootSection {
+            profile_id,
+            section_id,
+        }),
+
+        P_ROOT_SECTION_MORE => Ok(SchemaNodeId::RootSectionLoadMore {
+            profile_id,
+            section_id,
+        }),
+
+        P_ROOT_SECTION_ITEM => {
+            // An item id may hold the separator, so everything after the
+            // section id is the item id.
+            let item_id = parts
+                .get(3..)
+                .filter(|rest| !rest.is_empty())
+                .ok_or_else(err)?
+                .join("|");
+
+            Ok(SchemaNodeId::RootSectionItem {
+                profile_id,
+                section_id,
+                item_id,
+            })
         }
 
         _ => Err(err()),

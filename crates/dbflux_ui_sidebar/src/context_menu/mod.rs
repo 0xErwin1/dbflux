@@ -116,6 +116,9 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
         | SchemaNodeKind::DependentItem
         | SchemaNodeKind::Bucket
         | SchemaNodeKind::BucketsFolder
+        | SchemaNodeKind::RootSection
+        | SchemaNodeKind::RootSectionItem
+        | SchemaNodeKind::RootSectionLoadMore
         | SchemaNodeKind::SecretStore
         | SchemaNodeKind::SecretPath
         | SchemaNodeKind::InstanceFolder => false,
@@ -2566,6 +2569,9 @@ mod menu_availability_tests {
         let mut all_kinds = ALL_KINDS.to_vec();
         all_kinds.push(SchemaNodeKind::Bucket);
         all_kinds.push(SchemaNodeKind::BucketsFolder);
+        all_kinds.push(SchemaNodeKind::RootSection);
+        all_kinds.push(SchemaNodeKind::RootSectionItem);
+        all_kinds.push(SchemaNodeKind::RootSectionLoadMore);
         all_kinds.push(SchemaNodeKind::SecretStore);
         all_kinds.push(SchemaNodeKind::SecretPath);
 

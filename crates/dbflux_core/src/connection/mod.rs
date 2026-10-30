@@ -15,6 +15,7 @@ pub(crate) mod profile;
 pub mod profile_manager;
 pub(crate) mod proxy;
 pub mod proxy_manager;
+pub(crate) mod root_section;
 pub(crate) mod secret_store;
 pub mod ssh_tunnel_manager;
 pub(crate) mod tree;

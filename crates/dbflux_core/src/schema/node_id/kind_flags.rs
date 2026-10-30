@@ -51,6 +51,9 @@ impl SchemaNodeKind {
                 | Self::InstanceOverviewLeaf
                 | Self::Bucket
                 | Self::BucketsFolder
+                | Self::RootSection
+                | Self::RootSectionItem
+                | Self::RootSectionLoadMore
                 | Self::SecretStore
                 | Self::SecretPath
         )
@@ -90,6 +93,7 @@ impl SchemaNodeKind {
                 | Self::InstanceInspectorsFolder
                 | Self::InstanceFolder
                 | Self::BucketsFolder
+                | Self::RootSection
                 | Self::SecretStore
                 | Self::SecretPath
         )
@@ -114,6 +118,9 @@ impl SchemaNodeKind {
                 | Self::InstanceOverviewLeaf
                 | Self::Bucket
                 | Self::BucketsFolder
+                | Self::RootSection
+                | Self::RootSectionItem
+                | Self::RootSectionLoadMore
                 | Self::SecretStore
                 | Self::SecretPath
         )
