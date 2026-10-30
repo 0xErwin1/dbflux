@@ -215,7 +215,7 @@ fn entry_names(bytes: &[u8]) -> Vec<String> {
     zip::ZipArchive::new(Cursor::new(bytes))
         .unwrap()
         .file_names()
-        .map(str::to_string)
+        .map(|name| name.unwrap().into_owned())
         .collect()
 }
 

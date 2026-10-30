@@ -82,7 +82,7 @@ pub fn patch_xlsx<S: ByteSource>(
         let (name, part) = sheet_part(&workbook, &relationships, index)?;
         let encoded = encode_cells(name, cells, workbook.date_1904)?;
 
-        let entry_name = package.entry_name(&part).ok_or_else(|| {
+        let entry_name = package.entry_name(&part)?.ok_or_else(|| {
             SheetWriteError::malformed(format!("the package has no `{part}` part for `{name}`"))
         })?;
         let xml = package.require_part(&entry_name)?;
@@ -156,11 +156,14 @@ fn request_recalculation<R: Read + Seek>(
     patched_entries: &mut HashMap<String, Vec<u8>>,
     removed_entries: &mut HashSet<String>,
 ) -> Result<(), SheetWriteError> {
-    let entry_name =
-        |package: &Package<R>, part: &str| package.entry_name(part).unwrap_or(part.to_string());
+    let entry_name = |package: &Package<R>, part: &str| -> Result<String, SheetWriteError> {
+        Ok(package
+            .entry_name(part)?
+            .unwrap_or_else(|| part.to_string()))
+    };
 
     if let Some(workbook_xml) = request_full_calculation(parts.workbook_xml)? {
-        patched_entries.insert(entry_name(package, WORKBOOK_PART), workbook_xml);
+        patched_entries.insert(entry_name(package, WORKBOOK_PART)?, workbook_xml);
     }
 
     let calc_chains: Vec<&Relationship> = parts
@@ -179,7 +182,7 @@ fn request_recalculation<R: Read + Seek>(
         .collect();
     let relationships_part = relationships_part(WORKBOOK_PART);
     patched_entries.insert(
-        entry_name(package, &relationships_part),
+        entry_name(package, &relationships_part)?,
         remove_relationships(parts.relationships_xml, &ids)?,
     );
 
@@ -189,7 +192,7 @@ fn request_recalculation<R: Read + Seek>(
     for relationship in calc_chains {
         let part = resolve_target(WORKBOOK_PART, &relationship.target);
 
-        if let Some(name) = package.entry_name(&part) {
+        if let Some(name) = package.entry_name(&part)? {
             removed_entries.insert(name);
         }
 
@@ -201,7 +204,7 @@ fn request_recalculation<R: Read + Seek>(
     if let Some(xml) = content_types
         && original_content_types.as_deref() != Some(xml.as_slice())
     {
-        patched_entries.insert(entry_name(package, CONTENT_TYPES_PART), xml);
+        patched_entries.insert(entry_name(package, CONTENT_TYPES_PART)?, xml);
     }
 
     Ok(())
@@ -374,14 +377,15 @@ pub(crate) fn write_package<R: Read + Seek>(
         let entry = archive
             .by_index_raw(index)
             .map_err(SheetWriteError::from_read)?;
+        let entry_name = entry.name().map_err(SheetWriteError::from_read)?;
 
-        if removed_entries.contains(entry.name()) {
+        if removed_entries.contains(entry_name.as_ref()) {
             continue;
         }
 
-        match patched_entries.get(entry.name()) {
+        match patched_entries.get(entry_name.as_ref()) {
             Some(bytes) => {
-                let name = entry.name().to_string();
+                let name = entry_name.into_owned();
                 let options = entry.options();
                 drop(entry);
 
