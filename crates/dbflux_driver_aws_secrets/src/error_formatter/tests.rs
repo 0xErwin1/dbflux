@@ -214,8 +214,10 @@ fn a_denied_region_listing_names_ec2_describe_regions() {
     );
 }
 
+/// A denial names the object of the store it belongs to: a reader looking for
+/// `secretsmanager:GetSecretValue` should not be sent to the parameter page.
 #[test]
-fn a_denied_secret_still_names_its_own_permissions() {
+fn a_denied_secret_names_the_secret_permission() {
     let formatted = format_from_code(
         Some("AccessDeniedException"),
         "not allowed",
@@ -225,6 +227,39 @@ fn a_denied_secret_still_names_its_own_permissions() {
 
     assert_eq!(
         formatted.hint.as_deref(),
-        Some("Check the IAM permissions for this secret or parameter.")
+        Some("Check the IAM permissions for this secret.")
+    );
+}
+
+#[test]
+fn a_denied_parameter_names_the_parameter_permission() {
+    let formatted = format_from_code(
+        Some("AccessDeniedException"),
+        "not allowed",
+        &config(),
+        &ErrorTarget::Secret {
+            store: "parameter-store",
+            name: "/app/prod/db",
+        },
+    );
+
+    assert_eq!(
+        formatted.hint.as_deref(),
+        Some("Check the IAM permissions for this parameter.")
+    );
+}
+
+#[test]
+fn a_denied_store_this_driver_does_not_know_stays_generic() {
+    let formatted = format_from_code(
+        Some("AccessDenied"),
+        "not allowed",
+        &config(),
+        &ErrorTarget::Store("some-other-store"),
+    );
+
+    assert_eq!(
+        formatted.hint.as_deref(),
+        Some("Check the IAM permissions for this item.")
     );
 }

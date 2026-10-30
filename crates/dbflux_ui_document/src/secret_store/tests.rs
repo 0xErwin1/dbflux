@@ -1286,6 +1286,43 @@ fn the_tab_dedups_by_store_and_navigates_to_a_path(cx: &mut TestAppContext) {
     }));
 }
 
+/// While discovery is in flight the picker cannot be offered, and the region
+/// must not disappear from the document: the breadcrumb keeps naming the
+/// region the listing is using until the picker is there to replace it.
+#[gpui::test]
+fn the_breadcrumb_names_the_region_while_the_list_loads(cx: &mut TestAppContext) {
+    use dbflux_ui_base::keyboard_coverage::{FrameCapture, clickable_elements};
+
+    let mut opened = open_with_regions(cx, &[OTHER_REGION, CURRENT_REGION]);
+
+    let triggers = |opened: &mut Opened<'_>| -> Vec<String> {
+        let capture = FrameCapture::observe(opened.window);
+        let frame = capture.frame(opened.window);
+        clickable_elements(&frame)
+            .into_iter()
+            .map(|element| element.path)
+            .filter(|path| path.ends_with("secret-region.dropdown-trigger"))
+            .collect()
+    };
+
+    assert_eq!(triggers(&mut opened).len(), 1, "loaded before the reload");
+
+    // A real discovery resolves on the next frame the test reads, so the
+    // loading state is set directly: this is what a slow `DescribeRegions`
+    // leaves the document in until the answer lands.
+    opened.update(|doc, _cx| doc.mark_regions_loading());
+
+    assert!(
+        triggers(&mut opened).is_empty(),
+        "a region list that is loading offers no picker"
+    );
+    assert!(
+        opened.rendered_text().contains(CURRENT_REGION),
+        "the region stays visible while the list loads: {}",
+        opened.rendered_text()
+    );
+}
+
 /// A discovery asked of a connection that has since been replaced belongs to
 /// a session that no longer exists: its answer is dropped, not rendered.
 #[gpui::test]

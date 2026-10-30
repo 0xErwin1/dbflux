@@ -27,6 +27,14 @@ pub enum RegionListState {
 impl SecretStoreDocument {
     // -- Region -----------------------------------------------------------
 
+    /// Puts the discovery in the state a slow store leaves it in, so the
+    /// loading render can be asserted without racing the executor: a real
+    /// discovery resolves on the next frame the test reads.
+    #[cfg(test)]
+    pub(crate) fn mark_regions_loading(&mut self) {
+        self.regions = RegionListState::Loading;
+    }
+
     /// Fetches the connection's offered regions, on the background executor:
     /// the seam is synchronous and may block on the network, so it never runs
     /// on the foreground. A retry calls the connection again.

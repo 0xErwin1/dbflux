@@ -109,6 +109,30 @@ fn is_kms_denial(code: Option<&str>, message: &str) -> bool {
         || (has_code(code, PERMISSION_CODES) && message.to_lowercase().contains("kms"))
 }
 
+/// The policy a permission denial points at.
+///
+/// Each store needs its own permission, and a denial that belongs to no store
+/// is the region catalog: EC2 reports it as `UnauthorizedOperation`, and
+/// `ec2:DescribeRegions` has nothing to do with secrets or parameters. Naming
+/// the wrong policy sends the reader to the wrong page of their IAM console.
+fn permission_hint(target: &ErrorTarget) -> &'static str {
+    match target {
+        ErrorTarget::None => "Check that these credentials may call ec2:DescribeRegions.",
+        ErrorTarget::Store(store) => store_permission_hint(store),
+        ErrorTarget::Secret { store, .. } => store_permission_hint(store),
+    }
+}
+
+fn store_permission_hint(store: &str) -> &'static str {
+    match store {
+        crate::secrets_manager::SECRETS_MANAGER_ID => "Check the IAM permissions for this secret.",
+        crate::parameter_store::PARAMETER_STORE_ID => {
+            "Check the IAM permissions for this parameter."
+        }
+        _ => "Check the IAM permissions for this item.",
+    }
+}
+
 fn hint_for(code: Option<&str>, message: &str, target: &ErrorTarget) -> Option<&'static str> {
     if is_kms_denial(code, message) {
         return Some(KMS_DECRYPT_HINT);
@@ -121,14 +145,7 @@ fn hint_for(code: Option<&str>, message: &str, target: &ErrorTarget) -> Option<&
     }
 
     if has_code(code, PERMISSION_CODES) {
-        // A denial with no store behind it is the region catalog: EC2 reports
-        // it as `UnauthorizedOperation`, and the policy it needs has nothing
-        // to do with secrets or parameters.
-        if matches!(target, ErrorTarget::None) {
-            return Some("Check that these credentials may call ec2:DescribeRegions.");
-        }
-
-        return Some("Check the IAM permissions for this secret or parameter.");
+        return Some(permission_hint(target));
     }
 
     if has_code(code, KMS_KEY_STATE_CODES) {
