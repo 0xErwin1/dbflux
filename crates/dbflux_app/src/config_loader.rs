@@ -803,6 +803,12 @@ fn value_ref_to_dto(
             path.clone(),
             dotenv_key.clone(),
         ),
+        ValueRef::File { path, json_key } => ConnectionProfileValueRefDto::new_file(
+            profile_id.to_string(),
+            key.to_string(),
+            path.clone(),
+            json_key.clone(),
+        ),
         ValueRef::Secret {
             provider,
             locator,
@@ -1642,6 +1648,12 @@ fn load_profiles(
                             ValueRef::Dotenv {
                                 path: vr.ref_value,
                                 key,
+                            }
+                        }
+                        dbflux_storage::repositories::connection_profile_value_refs::RefKind::File => {
+                            ValueRef::File {
+                                path: vr.ref_value,
+                                json_key: vr.ref_json_key,
                             }
                         }
                         dbflux_storage::repositories::connection_profile_value_refs::RefKind::Secret => {
@@ -2511,6 +2523,40 @@ mod tests {
         assert!(matches!(
             reloaded.value_refs.get("user"),
             Some(dbflux_core::ValueRef::Env { key }) if key == "DB_USER"
+        ));
+    }
+
+    #[test]
+    fn file_value_refs_round_trip_with_and_without_a_json_key() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut profile = ConnectionProfile::new("file-sourced", DbConfig::default_postgres());
+        profile.value_refs.insert(
+            "password".to_string(),
+            dbflux_core::ValueRef::file("/run/user/1000/credentials/db-password", None),
+        );
+        profile.value_refs.insert(
+            "user".to_string(),
+            dbflux_core::ValueRef::file("~/.config/dbflux/db.json", Some("user".to_string())),
+        );
+
+        save_profiles(&runtime, std::slice::from_ref(&profile)).expect("save file profile");
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let reloaded = loaded
+            .iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("reloaded profile");
+
+        assert!(matches!(
+            reloaded.value_refs.get("password"),
+            Some(dbflux_core::ValueRef::File { path, json_key: None })
+                if path == "/run/user/1000/credentials/db-password"
+        ));
+        assert!(matches!(
+            reloaded.value_refs.get("user"),
+            Some(dbflux_core::ValueRef::File { path, json_key: Some(json_key) })
+                if path == "~/.config/dbflux/db.json" && json_key == "user"
         ));
     }
 

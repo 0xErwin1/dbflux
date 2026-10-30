@@ -38,7 +38,7 @@ impl ValueSourceKind {
 
     fn for_value_ref(value_ref: Option<&ValueRef>) -> Self {
         match value_ref {
-            Some(ValueRef::Literal { .. }) | None => Self::Literal,
+            Some(ValueRef::Literal { .. } | ValueRef::File { .. }) | None => Self::Literal,
             Some(ValueRef::Env { .. }) => Self::Env,
             Some(ValueRef::Dotenv { .. }) => Self::Dotenv,
             Some(ValueRef::Secret { provider, .. }) if provider == AWS_SECRETS_MANAGER_PROVIDER => {
@@ -142,7 +142,7 @@ fn value_ref_for_source(source_kind: &ValueSourceKind, primary_value: &str) -> O
 
 fn primary_value_for_ref(value_ref: Option<&ValueRef>) -> String {
     match value_ref {
-        Some(ValueRef::Literal { .. }) | None => String::new(),
+        Some(ValueRef::Literal { .. } | ValueRef::File { .. }) | None => String::new(),
         Some(ValueRef::Env { key }) => key.clone(),
         Some(ValueRef::Dotenv { path, key }) => format_inline_reference(path, Some(key)),
         Some(ValueRef::Secret {
