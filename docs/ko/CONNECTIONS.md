@@ -277,6 +277,7 @@ macOS와 Linux에서 DBFlux를 터미널 밖(Finder, Dock, 데스크톱 항목)�
 | **Literal** | 직접 입력한 값입니다(기본값). |
 | **Environment Variable** | 이름으로 환경 변수를 읽습니다. |
 | **Dotenv File** | 사용자가 소유한 `.env` 파일에서 키 하나를 읽습니다. `path#KEY` 형식으로 입력합니다. |
+| **Secret File** | 사용자가 소유한 파일 전체 또는 JSON 파일의 키 하나를 읽습니다. `path` 또는 `path#json_key` 형식으로 입력합니다. |
 | **Secret Manager** | 시크릿 공급자(AWS Secrets Manager)에서 가져옵니다. |
 | **Parameter Store** | 파라미터 공급자(AWS SSM Parameter Store)에서 가져옵니다. |
 | **Auth Session Field** | 확인된 인증 프로필의 세션/자격 증명에서 필드를 가져옵니다. |
@@ -338,6 +339,72 @@ dotenv 파일은 다음 규칙을 지켜야 합니다. 그렇지 않으면 파�
 > **주의:** 데스크톱 런처는 셸이 아니라 세션의 환경으로 DBFlux를 시작합니다.
 > `~/.zshrc`나 `~/.bashrc`에서만 export한 변수는 애플리케이션 메뉴에서 시작한
 > DBFlux에 보이지 않습니다. dotenv 파일을 사용하거나 세션 환경에 변수를 설정하세요.
+
+### 시크릿 파일
+
+Secret File 소스는 sops-nix나 systemd 자격 증명이 프로비저닝한 시크릿처럼 다른
+도구가 기록한 파일을 읽습니다. DBFlux는 값을 사용할 때마다(연결할 때와
+데이터베이스를 전환할 때) 파일을 읽으므로, 원자적 rename이나 심볼릭 링크 교체로
+교체된 파일은 DBFlux를 재시작하지 않아도 다음 연결에서 사용됩니다. DBFlux는
+참조만 저장하고 파일 내용은 저장하지 않습니다:
+
+```json
+{"source": "file", "path": "~/.config/dbflux/db.json", "json_key": "password"}
+```
+
+| 필드 입력 | 값 |
+|-----------|----|
+| `/run/secrets/db_password` | 파일 전체에서 마지막 줄바꿈(`\n` 또는 `\r\n`) 정확히 하나를 제거한 값 |
+| `~/.config/dbflux/db.json#password` | JSON 객체의 최상위 `password` 필드. 문자열, 숫자 또는 불리언이어야 합니다 |
+
+입력은 마지막 `#`에서 나뉘며, 키 부분은 선택 사항입니다.
+
+시크릿 파일은 다음 규칙을 지켜야 하며, 그렇지 않으면 파일과 키 이름은 알려 주지만
+파일 내용은 절대 보여 주지 않는 오류와 함께 연결이 실패합니다:
+
+- 경로는 절대 경로이거나 `~/`로 시작합니다.
+- 최대 64 KiB의 UTF-8 일반 파일입니다(일반 파일을 가리키는 심볼릭 링크는
+  따라가며, 디렉터리와 FIFO는 거부합니다).
+- Linux와 macOS에서는 소유자만 읽거나 쓸 수 있어야 합니다. 그룹이나 다른
+  사용자의 읽기 또는 쓰기 비트가 있으면 거부하며, `0400`과 `0600` 모드는
+  동작합니다.
+
+| 문제 | 오류 |
+|------|------|
+| 파일 없음 | `Secret file '/run/secrets/db_password' does not exist` |
+| 파일을 읽을 수 없음 | `Secret file '/run/secrets/db_password' cannot be read: permission denied` |
+| 디렉터리, FIFO 등 일반 파일이 아님 | `Secret file '/run/secrets/db_password' is not a regular file` |
+| 파일이 너무 큼 | `Secret file '/run/secrets/db_password' is larger than 64 KiB` |
+| 내용이 UTF-8이 아님 | `Secret file '/run/secrets/db_password' is not valid UTF-8` |
+| 다른 사용자에게 열린 파일 | `Secret file '/run/secrets/db_password' can be read or changed by other users (mode 440); restrict it with chmod 600` |
+| 빈 파일 | `Secret file '/run/secrets/db_password' is empty` |
+| 키를 지정했지만 내용이 JSON 객체가 아님 | `Secret file '~/.config/dbflux/db.json' is not a JSON object` |
+| 객체에 키가 없음 | `Key 'password' is not defined in secret file '~/.config/dbflux/db.json'` |
+| 키 값이 객체, 배열 또는 null | `Key 'password' in secret file '~/.config/dbflux/db.json' is not a string, number or boolean` |
+| 키 값이 빈 문자열 | `Key 'password' in secret file '~/.config/dbflux/db.json' is empty` |
+
+파일이 없거나 잠겨 있거나 접근이 거부되면 눈에 보이는 오류와 함께 연결이
+중단됩니다. DBFlux는 해당 필드에 대해 키링에 저장된 비밀번호로 대체하지 않습니다.
+
+#### sops-nix, secretspec, systemd 자격 증명의 파일
+
+DBFlux는 파일을 읽기만 합니다. 파일을 소유하고 복호화하는 것은 이 도구들이며,
+DBFlux는 이 도구들을 실행하지 않습니다.
+
+| 도구 | 설정할 내용 |
+|------|-------------|
+| sops-nix (NixOS 모듈) | 시크릿은 `/run/secrets/<name>`에 나타납니다. 시크릿의 `owner`를 사용자 계정으로, `mode = "0400"`으로 설정하세요. 그룹이 읽을 수 있는 기본 모드는 거부됩니다. |
+| sops-nix (Home Manager 모듈) | 시크릿은 `$XDG_RUNTIME_DIR/secrets.d`에 있고 `~/.config/sops-nix/secrets/`의 심볼릭 링크로 노출됩니다. 필드에 심볼릭 링크를 지정하세요. |
+| secretspec | 확인된 시크릿을 사용자가 소유한 `0600` 모드 파일에 기록하고 필드에 그 파일을 지정하세요. |
+| systemd 자격 증명 | 아래를 참고하세요. |
+
+`LoadCredential=`, `LoadCredentialEncrypted=`, `SetCredential=`은
+`$CREDENTIALS_DIRECTORY` 아래의 파일을 해당 유닛의 프로세스에만 노출합니다. 이
+디렉터리는 서비스 전용이므로, 그 유닛 밖에서 시작한 데스크톱 DBFlux는 읽을 수
+없으며 접근할 수 있다고 가정해서는 안 됩니다. 유닛 안에서 실행한 DBFlux(예:
+`LoadCredential=`을 지정한 `systemd-run --user` 임시 서비스)만
+`$CREDENTIALS_DIRECTORY/<name>`을 사용할 수 있습니다. DBFlux는 경로의 환경 변수를
+확장하지 않으므로 확장된 절대 경로를 입력하세요.
 
 ---
 

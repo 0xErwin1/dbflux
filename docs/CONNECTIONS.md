@@ -289,6 +289,7 @@ field and choose:
 | **Literal** | The value you type (default). |
 | **Environment Variable** | Read from an env var by name. |
 | **Dotenv File** | Read one key from a `.env` file you own, written as `path#KEY`. |
+| **Secret File** | Read a whole file you own, or one key of a JSON file, written as `path` or `path#json_key`. |
 | **Secret Manager** | Fetch from a secret provider (AWS Secrets Manager). |
 | **Parameter Store** | Fetch from a parameter provider (AWS SSM Parameter Store). |
 | **Auth Session Field** | Pull a field from the resolved Auth Profile's session/credentials. |
@@ -355,6 +356,71 @@ in the keyring for that field.
 > environment, not your shell's. A variable exported only in `~/.zshrc` or
 > `~/.bashrc` is not visible to DBFlux started from the application menu; use a
 > dotenv file instead, or set the variable in your session environment.
+
+### Secret files
+
+A Secret File source reads a file that another tool writes, such as a secret
+provisioned by sops-nix or systemd credentials. DBFlux reads the file each time
+the value is used (on connect and when switching database), so a file rotated by
+an atomic rename or a symlink swap is used on the next connection without
+restarting DBFlux. DBFlux stores only the reference, never the file's content:
+
+```json
+{"source": "file", "path": "~/.config/dbflux/db.json", "json_key": "password"}
+```
+
+| Field input | Value |
+|-------------|-------|
+| `/run/secrets/db_password` | The whole file, with exactly one trailing newline (`\n` or `\r\n`) removed |
+| `~/.config/dbflux/db.json#password` | The top-level `password` field of a JSON object, which must be a string, number or boolean |
+
+The input is split at its last `#`, and the key part is optional.
+
+A secret file must meet these rules, or the connection fails with an error that
+names the file and the key but never shows the file's content:
+
+- The path is absolute or starts with `~/`.
+- It is a regular file (a symlink to one is followed; directories and FIFOs are
+  rejected) of at most 64 KiB, encoded as UTF-8.
+- On Linux and macOS, only its owner can read or write it. Any read or write
+  bit for the group or other users is rejected; modes `0400` and `0600` work.
+
+| Problem | Error |
+|---------|-------|
+| File missing | `Secret file '/run/secrets/db_password' does not exist` |
+| File not readable | `Secret file '/run/secrets/db_password' cannot be read: permission denied` |
+| Directory, FIFO or other non-regular file | `Secret file '/run/secrets/db_password' is not a regular file` |
+| File too large | `Secret file '/run/secrets/db_password' is larger than 64 KiB` |
+| Content not UTF-8 | `Secret file '/run/secrets/db_password' is not valid UTF-8` |
+| File open to other users | `Secret file '/run/secrets/db_password' can be read or changed by other users (mode 440); restrict it with chmod 600` |
+| File empty | `Secret file '/run/secrets/db_password' is empty` |
+| Key given, content not a JSON object | `Secret file '~/.config/dbflux/db.json' is not a JSON object` |
+| Key not in the object | `Key 'password' is not defined in secret file '~/.config/dbflux/db.json'` |
+| Key holds an object, array or null | `Key 'password' in secret file '~/.config/dbflux/db.json' is not a string, number or boolean` |
+| Key holds an empty string | `Key 'password' in secret file '~/.config/dbflux/db.json' is empty` |
+
+A missing, locked or denied file stops the connection with a visible error.
+DBFlux never falls back to a password saved in the keyring for that field.
+
+#### Files from sops-nix, secretspec and systemd credentials
+
+DBFlux only reads files. These tools own the files and decrypt them; DBFlux
+never runs them.
+
+| Tool | What to set up |
+|------|----------------|
+| sops-nix (NixOS module) | Secrets appear under `/run/secrets/<name>`. Set the secret's `owner` to your user and `mode = "0400"`: the default group-readable modes are rejected. |
+| sops-nix (Home Manager module) | Secrets live under `$XDG_RUNTIME_DIR/secrets.d` and are exposed through symlinks in `~/.config/sops-nix/secrets/`; point the field at the symlink. |
+| secretspec | Write the resolved secret to a file you own with mode `0600`, and point the field at it. |
+| systemd credentials | See below. |
+
+`LoadCredential=`, `LoadCredentialEncrypted=` and `SetCredential=` expose files
+under `$CREDENTIALS_DIRECTORY` only to the processes of that unit. The directory
+is private to the service: a desktop DBFlux started outside that unit cannot
+read it and must not assume access. Only DBFlux launched inside the unit, for
+example as a `systemd-run --user` transient service with `LoadCredential=`, can
+use `$CREDENTIALS_DIRECTORY/<name>`. DBFlux does not expand environment
+variables in paths, so enter the expanded absolute path.
 
 ---
 

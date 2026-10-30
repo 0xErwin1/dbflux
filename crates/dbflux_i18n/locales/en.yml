@@ -176,6 +176,7 @@ components:
     literal: Literal
     env: Environment Variable
     dotenv: "Dotenv File"
+    file: "Secret File"
     secret: Secret Manager
     parameter: Parameter Store
     auth: Auth Session Field
@@ -183,10 +184,13 @@ components:
     placeholder:
       env: "VARIABLE_NAME"
       dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+      file: "/run/secrets/db_password"
     hint:
       env: "Read from the environment variable %{name} each time DBFlux connects. DBFlux does not store the value."
       dotenv: "Read from %{key} in %{path} each time DBFlux connects. The file must be readable only by you."
       dotenv_missing_key: "Add the key after the path: ~/path/to/file.env#KEY"
+      file: "Read from %{path} each time DBFlux connects. The file must be readable only by you."
+      file_with_key: "Read from %{key} in the JSON file %{path} each time DBFlux connects. The file must be readable only by you."
   file_picker:
     browse: "Browse…"
   column_projection:

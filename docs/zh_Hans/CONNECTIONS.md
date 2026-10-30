@@ -197,6 +197,7 @@ SSM 需要 `PATH` 中有 AWS CLI 和 Session Manager 插件。在 macOS 和 Linu
 | **字符**（Literal） | 直接输入的值（默认）。 |
 | **环境变量**（Environment Variable） | 按名称从环境变量读取。 |
 | **Dotenv 文件**（Dotenv File） | 从你拥有的 `.env` 文件中读取一个键，写作 `路径#键`。 |
+| **密钥文件**（Secret File） | 读取你拥有的整个文件，或 JSON 文件中的一个键，写作 `路径` 或 `路径#JSON键`。 |
 | **AWS 云密钥管理**（Secret Manager） | 从密钥提供程序（AWS Secrets Manager）获取。 |
 | **AWS 参数存储**（Parameter Store） | 从参数提供程序（AWS SSM Parameter Store）获取。 |
 | **认证会话字段**（Auth Session Field） | 从已解析的认证配置文件会话或凭据中提取指定字段。 |
@@ -240,6 +241,56 @@ dotenv 文件必须满足以下规则，否则连接会失败，错误信息会�
 读取失败会中止连接。DBFlux 绝不会为该字段改用密钥环中保存的密码。
 
 > **注意：**桌面启动器使用会话环境而不是 shell 环境启动 DBFlux。仅在 `~/.zshrc` 或 `~/.bashrc` 中导出的变量，对从应用菜单启动的 DBFlux 不可见；请改用 dotenv 文件，或在会话环境中设置该变量。
+
+### 密钥文件
+
+密钥文件来源读取由其他工具写入的文件，例如由 sops-nix 或 systemd 凭据提供的密钥。DBFlux 每次使用该值时（连接时和切换数据库时）都会读取文件，因此通过原子重命名或替换符号链接轮换的文件，无需重启 DBFlux 即可在下一次连接中生效。DBFlux 只保存引用，从不保存文件内容：
+
+```json
+{"source": "file", "path": "~/.config/dbflux/db.json", "json_key": "password"}
+```
+
+| 字段输入 | 值 |
+| --- | --- |
+| `/run/secrets/db_password` | 整个文件，去掉末尾恰好一个换行符（`\n` 或 `\r\n`） |
+| `~/.config/dbflux/db.json#password` | JSON 对象的顶层 `password` 字段，必须是字符串、数字或布尔值 |
+
+输入在最后一个 `#` 处拆分，键部分可省略。
+
+密钥文件必须满足以下规则，否则连接会失败，错误信息会指出文件和键，但绝不会显示文件内容：
+
+- 路径为绝对路径或以 `~/` 开头。
+- 是不超过 64 KiB 的 UTF-8 普通文件（指向普通文件的符号链接会被跟随；目录和 FIFO 会被拒绝）。
+- 在 Linux 和 macOS 上，只有文件所有者可以读写。组或其他用户的任何读写位都会被拒绝；`0400` 和 `0600` 模式可以使用。
+
+| 问题 | 错误 |
+| --- | --- |
+| 文件不存在 | `Secret file '/run/secrets/db_password' does not exist` |
+| 文件不可读 | `Secret file '/run/secrets/db_password' cannot be read: permission denied` |
+| 目录、FIFO 或其他非普通文件 | `Secret file '/run/secrets/db_password' is not a regular file` |
+| 文件过大 | `Secret file '/run/secrets/db_password' is larger than 64 KiB` |
+| 内容不是 UTF-8 | `Secret file '/run/secrets/db_password' is not valid UTF-8` |
+| 其他用户可访问该文件 | `Secret file '/run/secrets/db_password' can be read or changed by other users (mode 440); restrict it with chmod 600` |
+| 文件为空 | `Secret file '/run/secrets/db_password' is empty` |
+| 指定了键但内容不是 JSON 对象 | `Secret file '~/.config/dbflux/db.json' is not a JSON object` |
+| 对象中没有该键 | `Key 'password' is not defined in secret file '~/.config/dbflux/db.json'` |
+| 键的值是对象、数组或 null | `Key 'password' in secret file '~/.config/dbflux/db.json' is not a string, number or boolean` |
+| 键的值为空字符串 | `Key 'password' in secret file '~/.config/dbflux/db.json' is empty` |
+
+文件不存在、被锁定或拒绝访问时，连接会中止并显示错误。DBFlux 绝不会为该字段改用密钥环中保存的密码。
+
+#### 来自 sops-nix、secretspec 和 systemd 凭据的文件
+
+DBFlux 只读取文件。这些工具拥有并解密这些文件；DBFlux 从不运行它们。
+
+| 工具 | 需要设置的内容 |
+| --- | --- |
+| sops-nix（NixOS 模块） | 密钥出现在 `/run/secrets/<name>`。将密钥的 `owner` 设为你的用户，并设置 `mode = "0400"`：默认的组可读模式会被拒绝。 |
+| sops-nix（Home Manager 模块） | 密钥位于 `$XDG_RUNTIME_DIR/secrets.d`，并通过 `~/.config/sops-nix/secrets/` 中的符号链接提供；将字段指向该符号链接。 |
+| secretspec | 将解析出的密钥写入你拥有、模式为 `0600` 的文件，并将字段指向该文件。 |
+| systemd 凭据 | 见下文。 |
+
+`LoadCredential=`、`LoadCredentialEncrypted=` 和 `SetCredential=` 只向该单元的进程提供 `$CREDENTIALS_DIRECTORY` 下的文件。该目录为服务私有：在该单元之外启动的桌面版 DBFlux 无法读取它，也不应假定拥有访问权限。只有在该单元内启动的 DBFlux（例如带 `LoadCredential=` 的 `systemd-run --user` 临时服务）才能使用 `$CREDENTIALS_DIRECTORY/<name>`。DBFlux 不会展开路径中的环境变量，因此请填写展开后的绝对路径。
 
 ---
 
