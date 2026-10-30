@@ -429,7 +429,7 @@ descifran; DBFlux nunca las ejecuta.
 
 | Herramienta | Qué configurar |
 |-------------|----------------|
-| sops-nix (módulo de NixOS) | Los secretos aparecen en `/run/secrets/<nombre>`. Define el `owner` del secreto como tu usuario y `mode = "0400"`: los modos por defecto, legibles por el grupo, se rechazan. |
+| sops-nix (módulo de NixOS) | Los secretos aparecen en `/run/secrets/<nombre>`. Por defecto pertenecen a root, así que define el `owner` del secreto como tu usuario. Mantén el `mode = "0400"` por defecto: un modo legible por el grupo, como `0440`, se rechaza. |
 | sops-nix (módulo de Home Manager) | Los secretos viven en `$XDG_RUNTIME_DIR/secrets.d` y se exponen con symlinks en `~/.config/sops-nix/secrets/`; apunta el campo al symlink. |
 | secretspec | Escribe el secreto resuelto en un archivo tuyo con modo `0600` y apunta el campo a él. |
 | Credenciales de systemd | Ver abajo. |

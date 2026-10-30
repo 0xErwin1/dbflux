@@ -285,7 +285,7 @@ DBFlux 只读取文件。这些工具拥有并解密这些文件；DBFlux 从不
 
 | 工具 | 需要设置的内容 |
 | --- | --- |
-| sops-nix（NixOS 模块） | 密钥出现在 `/run/secrets/<name>`。将密钥的 `owner` 设为你的用户，并设置 `mode = "0400"`：默认的组可读模式会被拒绝。 |
+| sops-nix（NixOS 模块） | 密钥出现在 `/run/secrets/<name>`。默认情况下密钥属于 root，因此请将密钥的 `owner` 设为你的用户。保留默认的 `mode = "0400"`：`0440` 等组可读模式会被拒绝。 |
 | sops-nix（Home Manager 模块） | 密钥位于 `$XDG_RUNTIME_DIR/secrets.d`，并通过 `~/.config/sops-nix/secrets/` 中的符号链接提供；将字段指向该符号链接。 |
 | secretspec | 将解析出的密钥写入你拥有、模式为 `0600` 的文件，并将字段指向该文件。 |
 | systemd 凭据 | 见下文。 |

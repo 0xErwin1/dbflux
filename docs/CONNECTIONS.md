@@ -409,7 +409,7 @@ never runs them.
 
 | Tool | What to set up |
 |------|----------------|
-| sops-nix (NixOS module) | Secrets appear under `/run/secrets/<name>`. Set the secret's `owner` to your user and `mode = "0400"`: the default group-readable modes are rejected. |
+| sops-nix (NixOS module) | Secrets appear under `/run/secrets/<name>`. By default they belong to root, so set the secret's `owner` to your user. Keep the default `mode = "0400"`: a group-readable mode such as `0440` is rejected. |
 | sops-nix (Home Manager module) | Secrets live under `$XDG_RUNTIME_DIR/secrets.d` and are exposed through symlinks in `~/.config/sops-nix/secrets/`; point the field at the symlink. |
 | secretspec | Write the resolved secret to a file you own with mode `0600`, and point the field at it. |
 | systemd credentials | See below. |

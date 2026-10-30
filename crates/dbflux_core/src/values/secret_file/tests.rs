@@ -317,3 +317,18 @@ fn no_error_message_contains_the_file_content() {
         assert!(!message.contains(DISTINCTIVE_SECRET), "leaked: {message}");
     }
 }
+
+#[test]
+fn json_key_numbers_keep_their_source_text() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let path = write_secret(
+        directory.path(),
+        "secret.json",
+        br#"{"big":123456789012345678901234,"exp":1e3,"dec":1.50,"negative":-0}"#,
+    );
+
+    assert_eq!(read(&path, Some("big")), "123456789012345678901234");
+    assert_eq!(read(&path, Some("exp")), "1e3");
+    assert_eq!(read(&path, Some("dec")), "1.50");
+    assert_eq!(read(&path, Some("negative")), "-0");
+}

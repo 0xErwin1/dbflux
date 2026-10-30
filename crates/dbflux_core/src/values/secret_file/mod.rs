@@ -5,7 +5,10 @@
 //! without restarting. Every error names the file and the key but never its
 //! content.
 
+use std::collections::HashMap;
+
 use secrecy::{ExposeSecret, SecretString};
+use serde_json::value::RawValue;
 
 use crate::DbError;
 use crate::values::source_file;
@@ -24,7 +27,7 @@ const LABEL: &str = "Secret file";
 /// Without `json_key` the value is the whole file with exactly one trailing
 /// `\n` or `\r\n` removed. With `json_key` the file must be a JSON object and
 /// the value is that top-level field: a string as is, a number or boolean as
-/// its JSON text.
+/// its exact text in the file.
 pub fn read_secret_file(path: &str, json_key: Option<&str>) -> Result<SecretString, DbError> {
     if json_key.is_some_and(str::is_empty) {
         return Err(error(
@@ -61,26 +64,22 @@ fn json_field_value(path: &str, content: &str, key: &str) -> Result<SecretString
     // serde_json's error text can quote the content, so it is never surfaced.
     let not_an_object = || error(format!("{LABEL} '{path}' is not a JSON object"));
 
-    let parsed: serde_json::Value = serde_json::from_str(content).map_err(|_| not_an_object())?;
-    let serde_json::Value::Object(mut fields) = parsed else {
-        return Err(not_an_object());
+    // Raw values keep a number's text from the file; parsing it into a
+    // `serde_json::Number` would rewrite long or exponent forms.
+    let mut fields: HashMap<String, Box<RawValue>> =
+        serde_json::from_str(content).map_err(|_| not_an_object())?;
+
+    let Some(raw) = fields.remove(key) else {
+        return Err(error(format!(
+            "Key '{key}' is not defined in secret file '{path}'"
+        )));
     };
 
-    let value = match fields.remove(key) {
-        None => {
-            return Err(error(format!(
-                "Key '{key}' is not defined in secret file '{path}'"
-            )));
-        }
-        Some(serde_json::Value::String(text)) => text,
-        Some(serde_json::Value::Number(number)) => number.to_string(),
-        Some(serde_json::Value::Bool(flag)) => flag.to_string(),
-        Some(_) => {
-            return Err(error(format!(
-                "Key '{key}' in secret file '{path}' is not a string, number or boolean"
-            )));
-        }
-    };
+    let value = scalar_text(&raw).ok_or_else(|| {
+        error(format!(
+            "Key '{key}' in secret file '{path}' is not a string, number or boolean"
+        ))
+    })?;
 
     if value.is_empty() {
         return Err(error(format!(
@@ -89,6 +88,18 @@ fn json_field_value(path: &str, content: &str, key: &str) -> Result<SecretString
     }
 
     Ok(SecretString::from(value))
+}
+
+/// The text of a string, number or boolean JSON value; `None` for null,
+/// arrays and objects. Numbers and booleans keep their exact source text.
+fn scalar_text(raw: &RawValue) -> Option<String> {
+    let text = raw.get();
+
+    match text.as_bytes().first()? {
+        b'"' => serde_json::from_str::<String>(text).ok(),
+        b't' | b'f' | b'-' | b'0'..=b'9' => Some(text.to_string()),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

@@ -393,7 +393,7 @@ DBFlux는 이 도구들을 실행하지 않습니다.
 
 | 도구 | 설정할 내용 |
 |------|-------------|
-| sops-nix (NixOS 모듈) | 시크릿은 `/run/secrets/<name>`에 나타납니다. 시크릿의 `owner`를 사용자 계정으로, `mode = "0400"`으로 설정하세요. 그룹이 읽을 수 있는 기본 모드는 거부됩니다. |
+| sops-nix (NixOS 모듈) | 시크릿은 `/run/secrets/<name>`에 나타납니다. 기본적으로 root 소유이므로 시크릿의 `owner`를 사용자 계정으로 설정하세요. 기본값 `mode = "0400"`을 유지하세요. `0440`처럼 그룹이 읽을 수 있는 모드는 거부됩니다. |
 | sops-nix (Home Manager 모듈) | 시크릿은 `$XDG_RUNTIME_DIR/secrets.d`에 있고 `~/.config/sops-nix/secrets/`의 심볼릭 링크로 노출됩니다. 필드에 심볼릭 링크를 지정하세요. |
 | secretspec | 확인된 시크릿을 사용자가 소유한 `0600` 모드 파일에 기록하고 필드에 그 파일을 지정하세요. |
 | systemd 자격 증명 | 아래를 참고하세요. |
