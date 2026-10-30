@@ -1,44 +1,28 @@
+// The generic primitives moved to `bolt`; re-exported at these paths so call
+// sites keep compiling. The modules that read a `dbflux_core` type or
+// interface copy stay here as thin extensions over the generic primitives.
+
 mod badge;
 mod banner;
-mod chamfer;
-mod divider;
 mod file_picker;
-mod focus_ring;
-mod kbd;
-mod label;
-mod loading_state;
-mod segmented_control;
-mod status;
-mod surface;
-mod text;
 mod type_to_confirm;
 
-pub use badge::{Badge, BadgeTone, EnvTag, environment_label, environment_short_label};
+pub use badge::{
+    Badge, BadgeTone, EnvTag, environment_badge_tone, environment_label, environment_short_label,
+};
 pub use banner::{BannerBlock, BannerVariant};
-pub use chamfer::{
-    Chamfer, ChamferColors, ChamferCorners, ChamferEdge, ChamferFillKind, ChamferRing,
-    chamfer_border_polygons, chamfer_bottom_edge_polygon, chamfer_left_edge_polygon,
-    chamfer_outside_polygons, chamfer_points, chamfer_ring_points, chamfer_top_edge_polygon,
-    clamp_cut, motion_ease, snap_bounds_to_device, snap_length_to_device, transition_color,
+pub use bolt::primitives::{
+    Chamfer, ChamferColors, ChamferCorners, ChamferEdge, ChamferFillKind, ChamferRing, DividerTone,
+    FOCUS_MARKER_SELECTOR, FOCUS_RING_SELECTOR, FocusShape, Icon, Kbd, KbdTone, Label,
+    LoadingState, SegmentedControl, SegmentedItem, Spinner, Status, StatusIndicator,
+    SurfaceInspection, SurfaceRole, Text, TextColorSelection, TextDefaultColor, TextInspection,
+    TextRoleContract, TextVariant, WhenFocusVisible, chamfer_border_polygons,
+    chamfer_bottom_edge_polygon, chamfer_left_edge_polygon, chamfer_outside_polygons,
+    chamfer_points, chamfer_ring_points, chamfer_top_edge_polygon, clamp_cut, divider, focus_ring,
+    focus_underline, focus_visible, format_latency, hdivider, inspect_surface_role,
+    is_focus_visible, is_keyboard_modality, key_label, motion_ease, new_active_id, overlay_bg,
+    segmented_group_id, segmented_item_id, snap_bounds_to_device, snap_length_to_device,
+    status_diamond, stepped_segment, surface, transition_color, vdivider,
 };
-pub use divider::{DividerTone, divider, hdivider, vdivider};
 pub use file_picker::{FilePicker, file_picker_label};
-pub use focus_ring::{
-    FOCUS_MARKER_SELECTOR, FOCUS_RING_SELECTOR, FocusShape, WhenFocusVisible, focus_ring,
-    focus_underline, focus_visible, is_focus_visible, is_keyboard_modality,
-};
-// Moved to `bolt`; re-exported at this path so call sites keep compiling.
-pub use bolt::primitives::Icon;
-pub use kbd::{Kbd, KbdTone, key_label};
-pub use label::Label;
-pub use loading_state::{LoadingState, Spinner};
-pub use segmented_control::{
-    SegmentedControl, SegmentedItem, new_active_id, segmented_group_id, segmented_item_id,
-    stepped_segment,
-};
-pub use status::{Status, StatusIndicator, format_latency, status_diamond};
-pub use surface::{SurfaceInspection, SurfaceRole, inspect_surface_role, overlay_bg, surface};
-pub use text::{
-    Text, TextColorSelection, TextDefaultColor, TextInspection, TextRoleContract, TextVariant,
-};
 pub use type_to_confirm::{TypeToConfirm, TypeToConfirmEvent};

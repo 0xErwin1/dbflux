@@ -11,7 +11,7 @@ use crate::typography::AppFonts;
 /// Tracking of the uppercase `Label` role, in em.
 const LABEL_TRACKING_EM: f32 = 0.14;
 
-/// The eight text roles of the design system (DSFoundations, DSAppPlan).
+/// The eight text roles of the design system.
 ///
 /// Every piece of interface copy picks one of these; size, weight, family
 /// and default color come from the role, and builder overrides adjust a
@@ -198,7 +198,7 @@ impl Text {
         self
     }
 
-    /// Accent text: the palette tint (`ChromeColors::tint`), not the byzantine fill.
+    /// Accent text: the palette tint (`ChromeColors::tint`), not the accent fill.
     pub fn primary(mut self) -> Self {
         self.color_override = Some(TextColorSelection::Primary);
         self
@@ -288,7 +288,7 @@ impl TextVariant {
     }
 
     /// The font this role renders with: the role's bundled family resolved
-    /// to the family chosen in Settings, with the role's fallbacks.
+    /// to the family the product chose, with the role's fallbacks.
     pub fn resolved_font(self, cx: &App) -> Font {
         let contract = self.role_contract();
         let mut text_font = font(crate::fonts::family_for(cx, contract.family));

@@ -10,7 +10,7 @@ use gpui::prelude::*;
 use gpui::{AccessibleAction, App, Role, SharedString, Toggled, Window, div};
 use gpui_component::ActiveTheme;
 
-use crate::icons::AppIcon;
+use crate::icon::IconSource;
 use crate::primitives::{Chamfer, Icon, focus_underline};
 use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes};
 
@@ -19,7 +19,7 @@ use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes};
 pub struct SegmentedItem {
     pub id: SharedString,
     pub label: SharedString,
-    pub icon: Option<AppIcon>,
+    pub icon: Option<IconSource>,
 }
 
 impl SegmentedItem {
@@ -32,8 +32,8 @@ impl SegmentedItem {
     }
 
     /// Draws `icon` before the label.
-    pub fn icon(mut self, icon: AppIcon) -> Self {
-        self.icon = Some(icon);
+    pub fn icon(mut self, icon: impl Into<IconSource>) -> Self {
+        self.icon = Some(icon.into());
         self
     }
 }
@@ -303,7 +303,15 @@ mod tests {
         focused_item: Option<&str>,
         cx: &'a mut TestAppContext,
     ) -> (Entity<SegmentsHost>, &'a mut VisualTestContext) {
-        cx.update(crate::theme::init);
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::install(
+                crate::brand::Brand::neutral(),
+                crate::palette::PaletteMode::Dark,
+                crate::density::Density::Default,
+                cx,
+            );
+        });
 
         let focused_item = focused_item.map(|id| SharedString::from(id.to_string()));
         let (host, window) = cx.add_window_view(move |_, cx| SegmentsHost {
@@ -417,7 +425,15 @@ mod tests {
 
     #[gpui::test]
     fn named_segments_are_radio_buttons_with_stable_ids(cx: &mut TestAppContext) {
-        cx.update(crate::theme::init);
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::install(
+                crate::brand::Brand::neutral(),
+                crate::palette::PaletteMode::Dark,
+                crate::density::Density::Default,
+                cx,
+            );
+        });
 
         let capture = std::sync::Arc::new(FrameCapture::default());
         let capture_for_window = capture.clone();

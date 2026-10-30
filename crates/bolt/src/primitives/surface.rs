@@ -5,11 +5,11 @@ use gpui_component::ActiveTheme;
 use crate::primitives::Chamfer;
 use crate::tokens::{ChamferCut, ChromeColorSlot};
 
-/// The five surfaces of the design system (DSAppPlan "Surface").
+/// The five surfaces of the design system.
 ///
 /// - `Panel`: panes and document areas, square, panel fill and line border.
 /// - `Card`: palettes and framed content, cut 14, panel fill and line-2 border.
-/// - `Raised`: inset blocks such as SQL previews and chips, square, raised fill.
+/// - `Raised`: inset blocks such as read-only previews and chips, square, raised fill.
 /// - `Overlay`: popovers and floating menus, cut 12, panel fill and line-2 border.
 /// - `Modal`: dialog cards, cut 18, panel fill and line-2 border.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -9,12 +9,11 @@ use crate::tokens::Borders;
 /// Which palette line a divider is drawn in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DividerTone {
-    /// The palette line (`#232128` dark, `#E3DEE6` light): separators between
-    /// regions and inside panels.
+    /// The palette line: separators between regions and inside panels.
     #[default]
     Line,
-    /// The stronger line-2 (`#37333D` dark, `#CBC4D1` light): edges that sit
-    /// on raised surfaces or need to read against a fill.
+    /// The stronger line-2: edges that sit on raised surfaces or need to read
+    /// against a fill.
     Strong,
 }
 

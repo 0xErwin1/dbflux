@@ -179,7 +179,15 @@ mod tests {
     }
 
     fn open_host(cx: &mut TestAppContext) -> (gpui::Entity<ModalityHost>, &mut VisualTestContext) {
-        cx.update(crate::theme::init);
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::install(
+                crate::brand::Brand::neutral(),
+                crate::palette::PaletteMode::Dark,
+                crate::density::Density::Default,
+                cx,
+            );
+        });
 
         let (host, window) = cx.add_window_view(|_, cx| ModalityHost {
             focus_handle: cx.focus_handle(),
