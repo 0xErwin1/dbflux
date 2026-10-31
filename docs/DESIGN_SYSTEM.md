@@ -1,7 +1,7 @@
 # Design system
 
 DBFlux's interface is built on **Bolt**, a design-system crate shared with
-[Relay](https://github.com/0xErwin1/relay). Bolt owns everything a product does
+[ReqFlux](https://github.com/0xErwin1/reqflux). Bolt owns everything a product does
 not: the palettes, the color and typography roles, the spacing and chrome
 metrics, the cut corners, the theme mapping onto gpui-component, and the generic
 GPUI components. A product supplies its accent, name and any token of its own.
@@ -44,7 +44,7 @@ a database or a design board: a source-scanning guardrail in
 - **Its font choices.** `FontChoices` carries the families and sizes the user
   picked; Bolt clamps them and drops the families the text system cannot load.
 - **Its icon catalogue.** `IconSource` is a name or a path; DBFlux's 162-variant
-  `AppIcon` and Relay's Lucide set both plug in.
+  `AppIcon` and ReqFlux's Lucide set both plug in.
 - **Its keymap and its copy.** The dropdown takes the action ids it answers and
   a translated placeholder through globals the product installs, so Bolt needs
   neither the keymap nor the i18n crate.
@@ -77,7 +77,7 @@ placeholder over `FilePicker`, and `DropdownEnvironment` over `Dropdown`.
 
 ## Consuming Bolt from another repository
 
-Relay carries its own copy of this design system today, with the same layering
+ReqFlux carries its own copy of this design system today, with the same layering
 and a smaller token set. The swap is a dependency change plus a brand:
 
 1. Add the dependency, pinned to a tag so a build is reproducible:
@@ -87,22 +87,22 @@ and a smaller token set. The swap is a dependency change plus a brand:
    bolt = { git = "https://github.com/0xErwin1/dbflux", tag = "bolt-v0.1.0" }
    ```
 
-2. Delete `crates/bolt` from Relay and re-export the shared crate at the old
-   path, so Relay's screens keep compiling:
+2. Delete `crates/bolt` from ReqFlux and re-export the shared crate at the old
+   path, so ReqFlux's screens keep compiling:
 
    ```rust
-   // the module Relay's screens already import
+   // the module ReqFlux's screens already import
    pub use bolt::*;
    ```
 
 3. Install the brand before the first window, and drop the copied theme code:
 
    ```rust
-   bolt::brand::install(relay_brand(), cx);
+   bolt::brand::install(reqflux_brand(), cx);
    bolt::theme::apply_theme(bolt::palette::PaletteMode::Dark, bolt::density::Density::Compact, None, cx);
    ```
 
-4. Keep Relay's own tokens — HTTP method colors, the draft marker — where they
+4. Keep ReqFlux's own tokens — HTTP method colors, the draft marker — where they
    are. They are product data, not design-system roles.
 
 Two differences to expect when moving from the earlier copy: sizes follow the
