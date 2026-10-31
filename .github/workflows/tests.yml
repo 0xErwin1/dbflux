@@ -431,7 +431,7 @@ jobs:
             exit 1
           fi
 
-  # The required contexts here are "Cross-platform check macos-14" and
+  # The required contexts here are "Cross-platform check macos-15" and
   # "Cross-platform check windows-latest", one per matrix leg. A job-level
   # scope `if` would prevent matrix expansion entirely, so both contexts would
   # never report; `always()` keeps the matrix expanding even when the `changes`
@@ -460,7 +460,7 @@ jobs:
         include:
           # Native arm64; vendored-openssl matches build.yml (the runner has no
           # pkg-config-discoverable OpenSSL, so openssl-sys must build it).
-          - os: macos-14
+          - os: macos-15
             extra_features: ",vendored-openssl"
           # Native x86_64-msvc; OpenSSL is resolved on the runner as in build.yml.
           - os: windows-latest

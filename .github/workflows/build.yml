@@ -525,10 +525,10 @@ jobs:
           # x86_64 is a trivial same-OS cross (universal SDK, shared linker),
           # so this cuts the Intel build from ~1h to the arm64 build's time.
           - arch: amd64
-            runs_on: macos-14
+            runs_on: macos-15
             target: x86_64-apple-darwin
           - arch: arm64
-            runs_on: macos-14
+            runs_on: macos-15
             target: aarch64-apple-darwin
 
     steps:
