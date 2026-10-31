@@ -1611,8 +1611,11 @@ flujo de release/nightly en sí está documentado en `docs/RELEASE.md`.
   - CRUD completo desde la UI: upload, delete recursivo con confirmación por
     escritura, creación de folder/bucket con degradación graceful por endpoint,
     rename (copy-then-delete), URLs presignadas
-  - Cada mutation se audita bajo `EventCategory::ObjectStorage`; las
-    credenciales y URLs presignadas nunca se registran ni persisten
+  - Cada mutation hecha desde la tabla de buckets o el explorador de objetos
+    se audita bajo `EventCategory::ObjectStorage`; la acción Delete bucket del
+    sidebar es una acción de root section y se audita bajo
+    `EventCategory::Governance`. Las credenciales y URLs presignadas nunca se
+    registran ni persisten
 - **AWS Secrets**: `crates/dbflux_driver_aws_secrets/` — driver
   `aws-sdk-secretsmanager` + `aws-sdk-ssm` (`DatabaseCategory::SecretStore`):
   - Expone dos almacenes con `Connection::secret_stores()` y el seam neutral al

@@ -3,6 +3,7 @@ use dbflux_core::{
 };
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::{App, Context};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use super::{
@@ -12,7 +13,8 @@ use super::{
 use crate::Sidebar;
 
 /// The declarations a connection can show, and the ids of the declarations
-/// rejected because they cannot be embedded in a node id.
+/// rejected because they cannot be embedded in a node id or repeat the id of
+/// an earlier declaration, whose node they would share.
 struct DeclaredSections {
     sections: Vec<RootSectionDef>,
     invalid_ids: Vec<String>,
@@ -23,7 +25,8 @@ struct DeclaredSections {
 /// A section whose presentation opens an object-store document is hidden on
 /// a connection without `object_store_api`, since every load of that document
 /// would fail. A section id with the node id separator is rejected, since
-/// every node built from it would be misparsed.
+/// every node built from it would be misparsed. A repeated section id is
+/// rejected and the first declaration kept, since both would share one node.
 #[allow(clippy::result_large_err)]
 fn declared_sections(connection: &dyn Connection) -> Result<DeclaredSections, DbError> {
     let source = connection
@@ -35,8 +38,9 @@ fn declared_sections(connection: &dyn Connection) -> Result<DeclaredSections, Db
         sections: Vec::new(),
         invalid_ids: Vec::new(),
     };
+    let mut seen_ids = HashSet::new();
     for section in source.sections()? {
-        if !section.has_valid_id() {
+        if !section.has_valid_id() || !seen_ids.insert(section.id.clone()) {
             declared.invalid_ids.push(section.id);
         } else if section.requires_object_store() && !has_object_store {
             log::warn!(
@@ -167,10 +171,11 @@ impl Sidebar {
                 profile_id,
                 section_id: None,
             });
-        let activation_pending = self.pending_root_section_activations.remove(&profile_id);
 
         match result {
             Ok(declared) => {
+                let activation_pending = self.pending_root_section_activations.remove(&profile_id);
+
                 for section_id in &declared.invalid_ids {
                     report_error(
                         UserFacingError::new(
@@ -408,6 +413,11 @@ impl Sidebar {
             self.app_state
                 .update(cx, |state, _| state.cancel_task(task_id));
         }
+    }
+
+    /// Whether `item_id` is a root section retry row.
+    pub(crate) fn is_root_section_retry_row(item_id: &str) -> bool {
+        item_id.starts_with(DECLARATIONS_RETRY_PREFIX) || item_id.starts_with(LISTING_RETRY_PREFIX)
     }
 
     /// Activates the retry row `item_id` when it is one: fetches the failed

@@ -2010,6 +2010,16 @@ impl Sidebar {
 
         self.set_selection_anchor(item_id);
 
+        // Retry rows parse as placeholders, which have no click behavior of
+        // their own; the second click of a double click must not fetch again.
+        if Self::is_root_section_retry_row(item_id) {
+            if click_count == 1 {
+                self.execute_item(item_id, cx);
+            }
+            cx.notify();
+            return;
+        }
+
         let node_kind = parse_node_kind(item_id);
 
         if matches!(

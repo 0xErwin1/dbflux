@@ -5278,7 +5278,7 @@ sidebar:
       read_only_profile: "%{action} não foi executada: o perfil desta conexão está configurado como somente leitura."
       read_only_server: "%{action} não foi executada: o servidor rejeitou alterações para esta conexão."
       approval_unavailable: "%{action} não foi executada: esta conexão exige aprovação, que ainda não está disponível para ações da barra lateral."
-    root_section_invalid_id: "O driver declarou a seção raiz \"%{section}\", que foi ignorada: ids de seção não podem conter \"|\"."
+    root_section_invalid_id: "O driver declarou a seção raiz \"%{section}\", que foi ignorada: ids de seção devem ser únicos e não podem conter \"|\"."
     code_generation_failed: "Falha na geração de código: %{error}"
     loading_event_streams: Carregando fluxos de eventos…
     load_schema_failed: "Falha ao carregar o schema: %{error}"

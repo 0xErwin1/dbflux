@@ -1224,3 +1224,79 @@ async fn an_audit_failure_is_reported_without_failing_the_action(cx: &mut TestAp
         "the successful action still lists the section again"
     );
 }
+
+/// Two declarations with the same id would share one folder node, so the
+/// second never shows; the first is kept and the repeat reported.
+#[gpui::test]
+async fn a_repeated_section_id_keeps_the_first_and_is_reported(cx: &mut TestAppContext) {
+    let log = Arc::default();
+    let repeated = RootSectionDef {
+        label: dbflux_core::LocalizedText::plain("Repeated"),
+        ..buckets_section()
+    };
+    let connection = SectionConnection::new(&log).declaring(vec![buckets_section(), repeated]);
+    let (sidebar, cx) = loaded_sidebar(connection, cx);
+
+    let cached = sidebar.update(cx, |sidebar, _| {
+        sidebar.root_section_cache.get(&PROFILE_ID).cloned()
+    });
+    assert_eq!(
+        cached.map(|cached| cached.sections),
+        Some(vec![buckets_section()])
+    );
+    assert_eq!(
+        last_toast(cx),
+        Some(dbflux_i18n::t!(
+            "sidebar.toast.root_section_invalid_id",
+            section = "buckets"
+        ))
+    );
+}
+
+/// A connection row activated while the declarations fail still opens its
+/// section once a retry loads them.
+#[gpui::test]
+async fn a_profile_activation_survives_a_failed_declaration_fetch(cx: &mut TestAppContext) {
+    let log = Arc::default();
+    let connection = SectionConnection::new(&log).failing_first_declarations(1);
+    let (sidebar, cx) = connected_sidebar(connection, cx);
+    let (events, _subscription) = record_open_events(&sidebar, cx);
+
+    sidebar.update(cx, |sidebar, cx| sidebar.execute_item(&profile_node(), cx));
+    cx.run_until_parked();
+    assert!(events.lock().expect("event log").is_empty());
+
+    let retry_row = format!("{}{PROFILE_ID}", super::DECLARATIONS_RETRY_PREFIX);
+    sidebar.update(cx, |sidebar, cx| sidebar.execute_item(&retry_row, cx));
+    cx.run_until_parked();
+
+    assert_eq!(
+        events.lock().expect("event log").clone(),
+        vec!["section buckets ObjectContainerTable"]
+    );
+}
+
+/// A single click on a retry row fetches again, like the keyboard does.
+#[gpui::test]
+async fn a_single_click_on_a_retry_row_fetches_again(cx: &mut TestAppContext) {
+    let log: Arc<Mutex<SourceLog>> = Arc::default();
+    let connection = SectionConnection::new(&log)
+        .failing_first_declarations(1)
+        .failing_first_listings(1);
+    let (sidebar, cx) = loaded_sidebar(connection, cx);
+
+    let declarations_retry = format!("{}{PROFILE_ID}", super::DECLARATIONS_RETRY_PREFIX);
+    sidebar.update(cx, |sidebar, cx| {
+        sidebar.handle_item_click(&declarations_retry, 1, false, false, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(log.lock().expect("source log").declarations, 2);
+    assert!(cached_ids(&sidebar, cx).is_empty());
+
+    let listing_retry = format!("{}{PROFILE_ID}|buckets", super::LISTING_RETRY_PREFIX);
+    sidebar.update(cx, |sidebar, cx| {
+        sidebar.handle_item_click(&listing_retry, 1, false, false, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(cached_ids(&sidebar, cx), vec!["alpha"]);
+}

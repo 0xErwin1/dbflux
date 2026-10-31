@@ -5278,7 +5278,7 @@ sidebar:
       read_only_profile: "%{action} was not run: this connection's profile is set to read-only."
       read_only_server: "%{action} was not run: the server rejected mutations for this connection."
       approval_unavailable: "%{action} was not run: this connection requires approval, which is not available for sidebar actions yet."
-    root_section_invalid_id: "The driver declared the root section \"%{section}\", which was skipped: section ids cannot contain \"|\"."
+    root_section_invalid_id: "The driver declared the root section \"%{section}\", which was skipped: section ids must be unique and cannot contain \"|\"."
     code_generation_failed: "Code generation failed: %{error}"
     loading_event_streams: Loading event streams…
     load_schema_failed: "Failed to load schema: %{error}"
