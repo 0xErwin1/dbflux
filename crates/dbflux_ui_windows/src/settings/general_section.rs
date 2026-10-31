@@ -6,7 +6,10 @@ use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::SegmentedItem;
 use dbflux_components::typography::AppFonts;
-use dbflux_core::{AppStyle, GeneralSettings, RefreshPolicySetting, StartupFocus, ThemeSetting};
+use dbflux_core::{
+    AppStyle, GeneralSettings, RefreshPolicySetting, ScrollbarVisibility, StartupFocus,
+    ThemeSetting,
+};
 use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
 use gpui::*;
@@ -29,6 +32,7 @@ const TOAST_TIMEOUT_CHOICES: [u32; 4] = [4, 8, 15, 0];
 pub(super) enum GeneralFormRow {
     Theme,
     Style,
+    Scrollbars,
     Language,
     UiFontFamily,
     UiFontSize,
@@ -630,6 +634,35 @@ impl GeneralSection {
         }
     }
 
+    /// Scrollbar visibility segments, in index order (see
+    /// [`Self::scrollbar_visibility_index`]).
+    pub(super) fn scrollbar_visibility_items() -> Vec<SegmentedItem> {
+        [
+            ("while-scrolling", ScrollbarVisibility::WhileScrolling),
+            ("on-hover", ScrollbarVisibility::OnHover),
+            ("always", ScrollbarVisibility::Always),
+        ]
+        .into_iter()
+        .map(|(id, visibility)| {
+            SegmentedItem::new(id, Self::scrollbar_visibility_label(visibility))
+        })
+        .collect()
+    }
+
+    fn scrollbar_visibility_label(visibility: ScrollbarVisibility) -> String {
+        match visibility {
+            ScrollbarVisibility::WhileScrolling => {
+                dbflux_i18n::t!("settings.general.scrollbars.option.while_scrolling")
+            }
+            ScrollbarVisibility::OnHover => {
+                dbflux_i18n::t!("settings.general.scrollbars.option.on_hover")
+            }
+            ScrollbarVisibility::Always => {
+                dbflux_i18n::t!("settings.general.scrollbars.option.always")
+            }
+        }
+    }
+
     fn language_items() -> Vec<DropdownItem> {
         let system_language =
             dbflux_i18n::resolve(None, dbflux_i18n::detect_system_locale().as_deref());
@@ -764,6 +797,22 @@ impl GeneralSection {
         }
     }
 
+    pub(super) fn scrollbar_visibility_index(visibility: ScrollbarVisibility) -> usize {
+        match visibility {
+            ScrollbarVisibility::WhileScrolling => 0,
+            ScrollbarVisibility::OnHover => 1,
+            ScrollbarVisibility::Always => 2,
+        }
+    }
+
+    pub(super) fn scrollbar_visibility_for_index(index: usize) -> ScrollbarVisibility {
+        match index {
+            1 => ScrollbarVisibility::OnHover,
+            2 => ScrollbarVisibility::Always,
+            _ => ScrollbarVisibility::WhileScrolling,
+        }
+    }
+
     fn language_index(persisted: &str) -> usize {
         match dbflux_i18n::LanguagePreference::from_storage_str(persisted) {
             dbflux_i18n::LanguagePreference::System => 0,
@@ -874,7 +923,7 @@ impl Render for GeneralSection {
 #[cfg(test)]
 mod tests {
     use super::{FontFamilyField, FontFamilyOption, GeneralFormRow, GeneralSection};
-    use dbflux_core::{AppStyle, ThemeSetting};
+    use dbflux_core::{AppStyle, ScrollbarVisibility, ThemeSetting};
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_ui_base::AppStateEntity;
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
@@ -1833,6 +1882,60 @@ mod tests {
         assert_eq!(GeneralSection::style_for_index(1), AppStyle::Compact);
         // Out-of-range falls back to Default
         assert_eq!(GeneralSection::style_for_index(99), AppStyle::Default);
+    }
+
+    #[test]
+    fn scrollbar_segments_label_every_visibility_in_every_locale() {
+        let labels: Vec<_> = GeneralSection::scrollbar_visibility_items()
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert_eq!(labels, vec!["While scrolling", "On hover", "Always"]);
+
+        for key in [
+            "settings.general.scrollbars.label",
+            "settings.general.scrollbars.help",
+            "settings.general.scrollbars.option.while_scrolling",
+            "settings.general.scrollbars.option.on_hover",
+            "settings.general.scrollbars.option.always",
+        ] {
+            for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty() && value != format!("{locale}.{key}"),
+                    "{key} missing in {locale}"
+                );
+            }
+        }
+        assert_eq!(
+            dbflux_i18n::t!("settings.general.scrollbars.label", locale = "en"),
+            "Show scrollbars"
+        );
+    }
+
+    #[test]
+    fn scrollbar_visibility_index_and_reverse_mapping_cover_all_variants() {
+        let variants = [
+            ScrollbarVisibility::WhileScrolling,
+            ScrollbarVisibility::OnHover,
+            ScrollbarVisibility::Always,
+        ];
+
+        for (index, visibility) in variants.into_iter().enumerate() {
+            assert_eq!(
+                GeneralSection::scrollbar_visibility_index(visibility),
+                index
+            );
+            assert_eq!(
+                GeneralSection::scrollbar_visibility_for_index(index),
+                visibility
+            );
+        }
+        assert_eq!(
+            GeneralSection::scrollbar_visibility_for_index(99),
+            ScrollbarVisibility::WhileScrolling
+        );
     }
 
     #[test]

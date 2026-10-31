@@ -6,8 +6,8 @@ pub use app::{
     AppConfig, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
     EXTERNAL_SERVICES_CONFIG_KEY, EffectiveSettings, GeneralSettings, GlobalOverrides,
     GovernanceSettings, LoadedAppConfig, PolicyRoleConfig, RefreshPolicySetting, RpcServiceKind,
-    ServiceConfig, ServiceRpcApiContract, StartupFocus, ThemeSetting, ToolPolicyConfig,
-    TrustedClientConfig, driver_maps_differ, migrate_app_config,
+    ScrollbarVisibility, ServiceConfig, ServiceRpcApiContract, StartupFocus, ThemeSetting,
+    ToolPolicyConfig, TrustedClientConfig, driver_maps_differ, migrate_app_config,
 };
 pub use refresh_policy::RefreshPolicy;
 pub use scripts_directory::{

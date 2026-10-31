@@ -40,6 +40,7 @@ Integration](MCP_AI_INTEGRATION.md).
 | ------------ | ------------------------ | ------- |
 | **Theme**    | Follow system, Dark, Light | Dark  |
 | **Density**  | Default, Compact         | Default |
+| **Show scrollbars** | While scrolling, On hover, Always | While scrolling |
 | **Language** | System y todos los idiomas con un catálogo de traducción incluido | System  |
 | **Fuente de la interfaz** | Predeterminada (Archivo) o cualquier fuente instalada | Predeterminada |
 | **Tamaño de fuente de la interfaz** | De 8 a 32 px, admite decimales | 13 |
@@ -47,6 +48,15 @@ Integration](MCP_AI_INTEGRATION.md).
 | **Tamaño de fuente del editor** | De 8 a 32 px, admite decimales | 13 |
 | **Fuente de la tabla de datos** | Igual que el editor o cualquier fuente instalada | Igual que el editor |
 | **Tamaño de fuente de la tabla de datos** | De 8 a 32 px, admite decimales | 12.5 |
+
+**Show scrollbars** decide cuándo aparecen las barras de desplazamiento de
+todas las ventanas: solo mientras el contenido se desplaza, mientras el puntero
+está sobre un área desplazable, o siempre. Se aplica a todas las ventanas
+abiertas en cuanto guardas.
+
+La barra horizontal de la cuadrícula de datos es la excepción: se muestra
+siempre, porque la mueve un desplazador aparte que nunca recibe eventos de la
+rueda y, de otro modo, quedaría oculta.
 
 Los cambios de fuente se aplican a todas las ventanas abiertas en cuanto
 guardas; no hace falta reiniciar. La fuente del editor también define el texto

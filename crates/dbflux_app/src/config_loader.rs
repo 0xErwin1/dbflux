@@ -113,6 +113,8 @@ pub fn save_general_settings(
         grid_font_size: f64::from(settings.grid_font_size),
         toast_auto_dismiss_secs: i64::from(settings.toast_auto_dismiss_secs),
         grid_fk_labels: if settings.grid_fk_labels { 1 } else { 0 },
+        scrollbar_visibility: scrollbar_visibility_to_storage(settings.scrollbar_visibility)
+            .to_string(),
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1146,6 +1148,7 @@ fn load_general_settings(
         toast_auto_dismiss_secs: u32::try_from(dto.toast_auto_dismiss_secs)
             .unwrap_or(GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS),
         grid_fk_labels: dto.grid_fk_labels != 0,
+        scrollbar_visibility: scrollbar_visibility_from_storage(&dto.scrollbar_visibility),
     }
 }
 
@@ -1191,6 +1194,26 @@ fn app_style_from_storage(style: &str) -> dbflux_core::AppStyle {
     match style {
         "compact" => dbflux_core::AppStyle::Compact,
         _ => dbflux_core::AppStyle::Default,
+    }
+}
+
+fn scrollbar_visibility_to_storage(visibility: dbflux_core::ScrollbarVisibility) -> &'static str {
+    match visibility {
+        dbflux_core::ScrollbarVisibility::WhileScrolling => "while_scrolling",
+        dbflux_core::ScrollbarVisibility::OnHover => "on_hover",
+        dbflux_core::ScrollbarVisibility::Always => "always",
+    }
+}
+
+/// Maps a storage `scrollbar_visibility` string to `ScrollbarVisibility`.
+///
+/// Unknown values fall back to `WhileScrolling`, the behavior before the
+/// setting existed.
+fn scrollbar_visibility_from_storage(visibility: &str) -> dbflux_core::ScrollbarVisibility {
+    match visibility {
+        "on_hover" => dbflux_core::ScrollbarVisibility::OnHover,
+        "always" => dbflux_core::ScrollbarVisibility::Always,
+        _ => dbflux_core::ScrollbarVisibility::WhileScrolling,
     }
 }
 
@@ -2741,6 +2764,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
             updated_at: String::new(),
         };
 
@@ -2839,6 +2863,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
             updated_at: String::new(),
         };
         runtime
@@ -2960,6 +2985,45 @@ mod tests {
         assert_eq!(dto.theme, "system");
         assert_eq!(dto.max_history_entries, 77);
         assert_eq!(dto.auto_save_interval_ms, 1234);
+    }
+
+    #[test]
+    fn scrollbar_visibility_round_trips_through_save_and_load() {
+        use dbflux_core::ScrollbarVisibility;
+
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let loaded = load_config(&runtime).expect("load default configuration");
+        assert_eq!(
+            loaded.general_settings.scrollbar_visibility,
+            ScrollbarVisibility::WhileScrolling
+        );
+
+        for (visibility, stored) in [
+            (ScrollbarVisibility::OnHover, "on_hover"),
+            (ScrollbarVisibility::Always, "always"),
+            (ScrollbarVisibility::WhileScrolling, "while_scrolling"),
+        ] {
+            let settings = GeneralSettings {
+                scrollbar_visibility: visibility,
+                ..Default::default()
+            };
+            super::save_general_settings(&runtime, &settings).expect("save visibility");
+
+            let dto = runtime
+                .general_settings()
+                .get()
+                .expect("load saved dto")
+                .expect("general settings row");
+            assert_eq!(dto.scrollbar_visibility, stored);
+
+            let loaded = load_config(&runtime).expect("load configuration");
+            assert_eq!(loaded.general_settings.scrollbar_visibility, visibility);
+        }
+
+        assert_eq!(
+            super::scrollbar_visibility_from_storage("unknown"),
+            ScrollbarVisibility::WhileScrolling
+        );
     }
 
     #[test]
@@ -3188,6 +3252,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
             updated_at: String::new(),
         };
         runtime

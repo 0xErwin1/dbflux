@@ -4072,6 +4072,13 @@ settings:
       option:
         default: "Default"
         compact: "Compact"
+    scrollbars:
+      help: "Applies to every window."
+      label: "Show scrollbars"
+      option:
+        while_scrolling: "While scrolling"
+        on_hover: "On hover"
+        always: "Always"
     language:
       label: Language
       option:

@@ -809,7 +809,7 @@ impl DriversSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(
+            .child(layout::scrolled_list_viewport(
                 div()
                     .id("drivers-list-scroll")
                     .flex_1()
@@ -824,7 +824,8 @@ impl DriversSection {
                         )))
                     })
                     .children(rows),
-            )
+                &self.drv_list_scroll_handle,
+            ))
     }
 
     fn render_driver_editor(&self, cx: &mut Context<Self>) -> impl IntoElement {

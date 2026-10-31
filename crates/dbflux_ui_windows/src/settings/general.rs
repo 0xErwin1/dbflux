@@ -34,6 +34,7 @@ impl GeneralSection {
         let setting_changes = [
             current.theme != saved.theme,
             current.style != saved.style,
+            current.scrollbar_visibility != saved.scrollbar_visibility,
             current.language != saved.language,
             current.ui_font_family != saved.ui_font_family,
             current.editor_font_family != saved.editor_font_family,
@@ -114,6 +115,7 @@ impl GeneralSection {
         let mut rows = vec![
             GeneralFormRow::Theme,
             GeneralFormRow::Style,
+            GeneralFormRow::Scrollbars,
             GeneralFormRow::Language,
             GeneralFormRow::UiFontFamily,
             GeneralFormRow::UiFontSize,
@@ -204,7 +206,8 @@ impl GeneralSection {
         self.gen_form_cursor = self.gen_form_rows().len().saturating_sub(1);
     }
 
-    /// Left and Right on a segmented row (theme, style, startup focus) move
+    /// Left and Right on a segmented row (theme, style, scrollbars, startup
+    /// focus) move
     /// its choice, stopping at either end. Returns whether the cursor was on
     /// such a row.
     pub(super) fn gen_step_segmented(&mut self, step: isize) -> bool {
@@ -223,6 +226,14 @@ impl GeneralSection {
             Some(GeneralFormRow::Style) => {
                 let next = stepped(Self::style_index(self.gen_settings.style), 2);
                 self.gen_settings.style = Self::style_for_index(next);
+                true
+            }
+            Some(GeneralFormRow::Scrollbars) => {
+                let next = stepped(
+                    Self::scrollbar_visibility_index(self.gen_settings.scrollbar_visibility),
+                    3,
+                );
+                self.gen_settings.scrollbar_visibility = Self::scrollbar_visibility_for_index(next);
                 true
             }
             Some(GeneralFormRow::DefaultFocus) => {
@@ -251,6 +262,13 @@ impl GeneralSection {
             Some(GeneralFormRow::Style) => {
                 let next = (Self::style_index(self.gen_settings.style) + 1) % 2;
                 self.gen_settings.style = Self::style_for_index(next);
+                cx.notify();
+            }
+            Some(GeneralFormRow::Scrollbars) => {
+                let next =
+                    (Self::scrollbar_visibility_index(self.gen_settings.scrollbar_visibility) + 1)
+                        % 3;
+                self.gen_settings.scrollbar_visibility = Self::scrollbar_visibility_for_index(next);
                 cx.notify();
             }
             Some(GeneralFormRow::Language) => {
@@ -885,6 +903,8 @@ impl GeneralSection {
     pub(super) fn render_general_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme_index = Self::theme_index(self.gen_settings.theme);
         let style_index = Self::style_index(self.gen_settings.style);
+        let scrollbars_index =
+            Self::scrollbar_visibility_index(self.gen_settings.scrollbar_visibility);
         let focus_index = Self::startup_focus_index(self.gen_settings.default_focus_on_startup);
 
         let appearance = div()
@@ -913,6 +933,19 @@ impl GeneralSection {
                 GeneralFormRow::Style,
                 "density",
                 |this, index| this.gen_settings.style = Self::style_for_index(index),
+                cx,
+            ))
+            .child(self.render_gen_segmented(
+                dbflux_i18n::t!("settings.general.scrollbars.label"),
+                Some(dbflux_i18n::t!("settings.general.scrollbars.help")),
+                Self::scrollbar_visibility_items(),
+                scrollbars_index,
+                GeneralFormRow::Scrollbars,
+                "scrollbars",
+                |this, index| {
+                    this.gen_settings.scrollbar_visibility =
+                        Self::scrollbar_visibility_for_index(index)
+                },
                 cx,
             ))
             .child(self.render_gen_dropdown(
