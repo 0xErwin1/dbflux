@@ -122,6 +122,14 @@ búsqueda, `Tab` / `Shift+Tab` alternan entre el campo de consulta y el de
 reemplazo mientras el campo de reemplazo está visible; si no, mueven el foco
 entre paneles, igual que fuera del editor.
 
+Con un menú de sugerencias abierto, `Tab` escribe la sugerencia resaltada en
+lugar de la palabra que se está completando, y cada `Tab` / `Shift+Tab` siguiente
+la reemplaza por la siguiente / anterior, volviendo al principio o al final del
+menú. Una vez que `Tab` insertó una sugerencia, las flechas también actualizan el
+texto. `Enter`, o escribir cualquier otro carácter, conserva la sugerencia
+insertada y cierra el menú; `Escape` restaura la palabra escrita. Todo el ciclo
+es un único paso de deshacer.
+
 La barra de acciones del borde izquierdo del editor también es un menú. `Shift+F10` abre el menú de **acciones
 del panel** desde el texto del editor, en cualquier modo de Vim y sin Vim.
 `Ctrl+k` mueve el foco a la barra de contexto de ejecución, donde `m` (o
