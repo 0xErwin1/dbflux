@@ -8,8 +8,8 @@
 
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    BucketCreateOptions, BucketEncryption, ConnectionProfile, DbConfig, DbError, DbKind,
-    ObjectStoreConnection, PresignMethod, VersioningStatus,
+    BucketCreateOptions, BucketEncryption, Connection, ConnectionProfile, DbConfig, DbDriver,
+    DbError, DbKind, ObjectStoreConnection, PresignMethod, VersioningStatus,
 };
 use dbflux_driver_s3::S3Driver;
 use dbflux_test_support::containers::{self, MinioConfig};
@@ -332,6 +332,58 @@ fn minio_delete_bucket_requires_empty_bucket() -> Result<(), DbError> {
 
         let buckets = store.list_buckets()?;
         assert!(!buckets.iter().any(|b| b.name == bucket));
+
+        Ok(())
+    })
+}
+
+fn connect_minio_connection(minio: &MinioConfig) -> Result<Box<dyn Connection>, DbError> {
+    let driver = S3Driver::new();
+    let profile = minio_profile(minio);
+    let secret = SecretString::from(minio.secret_access_key.clone());
+
+    containers::retry_db_operation(Duration::from_secs(30), || {
+        driver.connect_with_secrets(&profile, Some(&secret), None)
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn minio_buckets_root_section_lists_and_deletes_through_the_seam() -> Result<(), DbError> {
+    containers::with_minio_endpoint(|minio| {
+        let connection = connect_minio_connection(&minio)?;
+        let store = connection
+            .object_store_api()
+            .expect("S3 connections expose the object store");
+        let source = connection
+            .root_section_source()
+            .expect("S3 connections declare root sections");
+
+        create_bucket(store, "dbflux-root-section-a")?;
+        create_bucket(store, "dbflux-root-section-b")?;
+
+        let page = source.list_items("buckets", None)?;
+        let ids: Vec<_> = page.items.iter().map(|item| item.id.as_str()).collect();
+        assert!(ids.contains(&"dbflux-root-section-a"), "{ids:?}");
+        assert!(ids.contains(&"dbflux-root-section-b"), "{ids:?}");
+        assert!(page.items.iter().all(|item| item.id == item.label));
+        assert_eq!(page.next_page_token, None);
+
+        source.execute_action("buckets", "dbflux-root-section-a", "delete_bucket")?;
+
+        let after = source.list_items("buckets", None)?;
+        assert!(
+            !after
+                .items
+                .iter()
+                .any(|item| item.id == "dbflux-root-section-a")
+        );
+        assert!(
+            after
+                .items
+                .iter()
+                .any(|item| item.id == "dbflux-root-section-b")
+        );
 
         Ok(())
     })
