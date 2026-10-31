@@ -38,6 +38,7 @@ Integration](MCP_AI_INTEGRATION.md).
 |---------|---------|---------|
 | **Theme** | Follow system, Dark, Light | Dark |
 | **Density** | Default, Compact | Default |
+| **Show scrollbars** | While scrolling, On hover, Always | While scrolling |
 | **Language** | System, then every language with a shipped translation catalog | System |
 | **Interface font** | Default (Archivo), or any installed font | Default |
 | **Interface font size** | 8 to 32 px, decimals allowed | 13 |
@@ -45,6 +46,10 @@ Integration](MCP_AI_INTEGRATION.md).
 | **Editor font size** | 8 to 32 px, decimals allowed | 13 |
 | **Data grid font** | Same as editor, or any installed font | Same as editor |
 | **Data grid font size** | 8 to 32 px, decimals allowed | 12.5 |
+
+**Show scrollbars** decides when the scrollbars of every window appear: only
+while the content scrolls, while the pointer is over a scrollable area, or all
+the time. It applies to every open window as soon as you save.
 
 Font changes apply to every open window as soon as you save; no restart is
 needed. The editor font also sets the monospace text in the interface
