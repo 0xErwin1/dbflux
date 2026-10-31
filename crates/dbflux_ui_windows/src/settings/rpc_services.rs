@@ -939,7 +939,7 @@ impl ServicesSection {
             .flex()
             .flex_col()
             .child(toolbar)
-            .child(
+            .child(layout::scrolled_list_viewport(
                 div()
                     .id("services-list-scroll")
                     .flex_1()
@@ -952,7 +952,8 @@ impl ServicesSection {
                         list.child(layout::master_list_empty(empty_services_message()))
                     })
                     .children(rows),
-            )
+                &self.svc_list_scroll_handle,
+            ))
     }
 
     /// Whether the keyboard cursor is on `row` (and on `column` of it).
