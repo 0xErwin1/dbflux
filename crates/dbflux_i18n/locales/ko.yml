@@ -3953,6 +3953,12 @@ palette:
       name: 사이드바 전환
     toggle_full_screen:
       name: 전체 화면 전환
+    increase_interface_size:
+      name: "인터페이스 크기 키우기"
+    decrease_interface_size:
+      name: "인터페이스 크기 줄이기"
+    reset_interface_size:
+      name: "인터페이스 크기 초기화"
     toggle_editor:
       name: 편집기 패널 전환
     toggle_results:
@@ -4373,6 +4379,9 @@ settings:
       clear_finished_tasks: 완료된 작업 지우기
       toggle_sidebar: 사이드바 전환
       toggle_full_screen: 전체 화면 전환
+      increase_interface_size: "인터페이스 크기 키우기"
+      decrease_interface_size: "인터페이스 크기 줄이기"
+      reset_interface_size: "인터페이스 크기 초기화"
       open_settings: 설정 열기
       open_login_modal: 인증 프로필 로그인 열기
       open_sso_wizard: AWS SSO 마법사 열기

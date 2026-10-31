@@ -2015,6 +2015,21 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.view"),
             ),
             PaletteCommand::new(
+                "increase_interface_size",
+                dbflux_i18n::t!("palette.command.increase_interface_size.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "decrease_interface_size",
+                dbflux_i18n::t!("palette.command.decrease_interface_size.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "reset_interface_size",
+                dbflux_i18n::t!("palette.command.reset_interface_size.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
                 "toggle_editor",
                 dbflux_i18n::t!("palette.command.toggle_editor.name"),
                 dbflux_i18n::t!("palette.category.view"),

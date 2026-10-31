@@ -3953,6 +3953,12 @@ palette:
       name: Alternar barra lateral
     toggle_full_screen:
       name: Alternar tela cheia
+    increase_interface_size:
+      name: "Aumentar tamanho da interface"
+    decrease_interface_size:
+      name: "Diminuir tamanho da interface"
+    reset_interface_size:
+      name: "Redefinir tamanho da interface"
     toggle_editor:
       name: Alternar painel do editor
     toggle_results:
@@ -4373,6 +4379,9 @@ settings:
       clear_finished_tasks: Limpar tarefas concluídas
       toggle_sidebar: Alternar barra lateral
       toggle_full_screen: Alternar tela cheia
+      increase_interface_size: "Aumentar tamanho da interface"
+      decrease_interface_size: "Diminuir tamanho da interface"
+      reset_interface_size: "Redefinir tamanho da interface"
       open_settings: Abrir configurações
       open_login_modal: Abrir login do perfil de autenticação
       open_sso_wizard: Abrir assistente AWS SSO

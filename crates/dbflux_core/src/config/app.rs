@@ -447,12 +447,23 @@ pub struct GeneralSettings {
     pub grid_font_size: f32,
 }
 
+/// A change the interface size commands make to the font sizes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InterfaceSizeChange {
+    Increase,
+    Decrease,
+    Reset,
+}
+
 impl GeneralSettings {
     pub const DEFAULT_UI_FONT_SIZE: f32 = 13.0;
     pub const DEFAULT_EDITOR_FONT_SIZE: f32 = 13.0;
     pub const DEFAULT_GRID_FONT_SIZE: f32 = 12.5;
     pub const MIN_FONT_SIZE: f32 = 8.0;
     pub const MAX_FONT_SIZE: f32 = 32.0;
+    /// Pixels one interface size command adds to or removes from each font
+    /// size.
+    pub const INTERFACE_SIZE_STEP: f32 = 1.0;
     pub const DEFAULT_TOAST_AUTO_DISMISS_SECS: u32 = 8;
 
     /// Clamps a font size to `[MIN_FONT_SIZE, MAX_FONT_SIZE]`. A non-finite
@@ -464,6 +475,30 @@ impl GeneralSettings {
         } else {
             default
         }
+    }
+
+    /// Moves the interface, editor and data grid font sizes together, as the
+    /// interface size commands do. A step changes each size by
+    /// [`Self::INTERFACE_SIZE_STEP`] and stops it at the supported range, so
+    /// a size already at a limit stays there while the others still move.
+    pub fn change_interface_size(&mut self, change: InterfaceSizeChange) {
+        let step = match change {
+            InterfaceSizeChange::Increase => Self::INTERFACE_SIZE_STEP,
+            InterfaceSizeChange::Decrease => -Self::INTERFACE_SIZE_STEP,
+            InterfaceSizeChange::Reset => {
+                self.ui_font_size = Self::DEFAULT_UI_FONT_SIZE;
+                self.editor_font_size = Self::DEFAULT_EDITOR_FONT_SIZE;
+                self.grid_font_size = Self::DEFAULT_GRID_FONT_SIZE;
+                return;
+            }
+        };
+
+        self.ui_font_size =
+            Self::clamp_font_size(self.ui_font_size + step, Self::DEFAULT_UI_FONT_SIZE);
+        self.editor_font_size =
+            Self::clamp_font_size(self.editor_font_size + step, Self::DEFAULT_EDITOR_FONT_SIZE);
+        self.grid_font_size =
+            Self::clamp_font_size(self.grid_font_size + step, Self::DEFAULT_GRID_FONT_SIZE);
     }
 
     /// Trims a font family name. A missing or blank name becomes `None`,
@@ -563,7 +598,7 @@ impl Default for GeneralSettings {
 
 #[cfg(test)]
 mod font_settings_tests {
-    use super::GeneralSettings;
+    use super::{GeneralSettings, InterfaceSizeChange};
 
     #[test]
     fn font_defaults_use_bundled_families_and_default_sizes() {
@@ -604,6 +639,75 @@ mod font_settings_tests {
             GeneralSettings::clamp_font_size(f32::NEG_INFINITY, default),
             12.5
         );
+    }
+
+    fn sizes(settings: &GeneralSettings) -> (f32, f32, f32) {
+        (
+            settings.ui_font_size,
+            settings.editor_font_size,
+            settings.grid_font_size,
+        )
+    }
+
+    #[test]
+    fn interface_size_steps_move_every_font_size_by_one_pixel() {
+        let mut settings = GeneralSettings::default();
+
+        settings.change_interface_size(InterfaceSizeChange::Increase);
+        assert_eq!(sizes(&settings), (14.0, 14.0, 13.5));
+
+        settings.change_interface_size(InterfaceSizeChange::Decrease);
+        settings.change_interface_size(InterfaceSizeChange::Decrease);
+        assert_eq!(sizes(&settings), (12.0, 12.0, 11.5));
+    }
+
+    #[test]
+    fn interface_size_steps_stop_each_size_at_its_limit() {
+        let mut settings = GeneralSettings {
+            ui_font_size: 32.0,
+            editor_font_size: 31.5,
+            grid_font_size: 20.0,
+            ..GeneralSettings::default()
+        };
+
+        settings.change_interface_size(InterfaceSizeChange::Increase);
+        assert_eq!(sizes(&settings), (32.0, 32.0, 21.0));
+
+        let mut settings = GeneralSettings {
+            ui_font_size: 8.0,
+            editor_font_size: 8.5,
+            grid_font_size: 10.0,
+            ..GeneralSettings::default()
+        };
+
+        settings.change_interface_size(InterfaceSizeChange::Decrease);
+        assert_eq!(sizes(&settings), (8.0, 8.0, 9.0));
+    }
+
+    #[test]
+    fn interface_size_reset_restores_the_default_sizes_only() {
+        let mut settings = GeneralSettings {
+            ui_font_size: 20.0,
+            editor_font_size: 9.0,
+            grid_font_size: f32::NAN,
+            editor_font_family: Some("Fira Code".to_string()),
+            ..GeneralSettings::default()
+        };
+
+        settings.change_interface_size(InterfaceSizeChange::Reset);
+        assert_eq!(sizes(&settings), (13.0, 13.0, 12.5));
+        assert_eq!(settings.editor_font_family.as_deref(), Some("Fira Code"));
+    }
+
+    #[test]
+    fn interface_size_step_replaces_a_non_finite_size_with_its_default() {
+        let mut settings = GeneralSettings {
+            grid_font_size: f32::NAN,
+            ..GeneralSettings::default()
+        };
+
+        settings.change_interface_size(InterfaceSizeChange::Increase);
+        assert_eq!(settings.grid_font_size, 12.5);
     }
 
     #[test]

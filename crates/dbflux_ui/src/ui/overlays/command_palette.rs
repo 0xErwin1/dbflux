@@ -365,6 +365,8 @@ fn command_icon(id: &str) -> AppIcon {
         "focus_tasks" | "toggle_tasks" => AppIcon::Loader,
         "toggle_editor" => AppIcon::SquareTerminal,
         "toggle_results_position" => AppIcon::PanelRight,
+        "increase_interface_size" => AppIcon::ZoomIn,
+        "decrease_interface_size" => AppIcon::ZoomOut,
         "open_settings" => AppIcon::Settings,
         "open_login_modal" | "open_sso_wizard" => AppIcon::KeyRound,
         "open_mcp_approvals" | "refresh_mcp_governance" => AppIcon::Bot,
@@ -1741,6 +1743,26 @@ mod tests {
             .expect("the palette must list Toggle full screen");
         assert_eq!(entry.name, "Toggle full screen");
         assert_eq!(entry.category, "View");
+    }
+
+    #[test]
+    fn command_palette_lists_the_interface_size_commands_under_view() {
+        use super::super::super::views::workspace::Workspace;
+
+        let commands = Workspace::palette_commands_for_test();
+
+        for (id, name) in [
+            ("increase_interface_size", "Increase interface size"),
+            ("decrease_interface_size", "Decrease interface size"),
+            ("reset_interface_size", "Reset interface size"),
+        ] {
+            let entry = commands
+                .iter()
+                .find(|command| command.id == id)
+                .unwrap_or_else(|| panic!("the palette must list {name}"));
+            assert_eq!(entry.name, name);
+            assert_eq!(entry.category, "View");
+        }
     }
 
     #[test]
