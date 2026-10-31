@@ -560,10 +560,48 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Opens what a driver-declared root section folder presents.
+    pub(in crate::ui::views::workspace) fn open_root_section(
+        &mut self,
+        profile_id: uuid::Uuid,
+        section_id: &str,
+        presentation: dbflux_core::RootSectionPresentation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match presentation {
+            dbflux_core::RootSectionPresentation::ObjectContainerTable => {
+                self.open_object_store_buckets_document(profile_id, window, cx);
+            }
+            other => {
+                log::warn!("Root section {section_id} declares unsupported presentation {other:?}")
+            }
+        }
+    }
+
+    /// Opens what an item of a driver-declared root section presents.
+    pub(in crate::ui::views::workspace) fn open_root_section_item(
+        &mut self,
+        profile_id: uuid::Uuid,
+        item_id: String,
+        presentation: dbflux_core::RootItemPresentation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match presentation {
+            dbflux_core::RootItemPresentation::ObjectBrowser => {
+                self.open_object_browser(profile_id, item_id, window, cx);
+            }
+            other => log::warn!(
+                "Root section item {item_id} declares unsupported presentation {other:?}"
+            ),
+        }
+    }
+
     /// Opens the prefix/object tree browser for a single bucket, or focuses
     /// the existing one for that `(profile_id, bucket)` pair. Reached from
-    /// the buckets table's Enter-on-row action and the sidebar's
-    /// `OpenObjectStoreBucket` event.
+    /// the buckets table's Enter-on-row action and from activating an item
+    /// of a root section that presents an object browser.
     pub(in crate::ui::views::workspace) fn open_object_browser(
         &mut self,
         profile_id: uuid::Uuid,

@@ -5199,6 +5199,11 @@ sidebar:
     dashboards: "仪表板"
     connections: 连接
     scripts: 脚本
+  root_section:
+    confirm_message: "要对“%{item}”执行“%{action}”吗？"
+    action:
+      delete_bucket: "删除存储桶"
+      delete_bucket_description: "删除该存储桶。只能删除空存储桶，且此操作无法撤销。"
   task:
     connecting: "正在连接 %{name}"
     disconnecting: "正在断开 %{name}"
@@ -5207,7 +5212,7 @@ sidebar:
     disconnect_hook_cancelled: 断开 Hook 已取消
     post_disconnect_hook_cancelled: 断开后 Hook 已取消
     loading_event_streams: "正在加载事件流：%{name}"
-    listing_buckets: "正在列出存储桶：%{name}"
+    listing_root_section: "正在列出%{section}：%{name}"
     loading_database_schema: "正在加载 Schema：%{name}"
     connecting_to_database: "正在连接数据库：%{name}"
     refreshing_database: "正在刷新数据库：%{name}"
@@ -5255,7 +5260,8 @@ sidebar:
       indexes: "加载索引失败：%{error}"
       foreign_keys: "加载外键失败：%{error}"
       routines: "加载例程失败：%{error}"
-    list_buckets_failed: "列出存储桶失败：%{error}"
+    list_root_section_failed: "列出%{section}失败：%{error}"
+    root_section_action_failed: "对 %{item} 执行%{action}失败：%{error}"
     code_generation_failed: "代码生成失败：%{error}"
     loading_event_streams: 正在加载事件流…
     load_schema_failed: "加载 Schema 失败：%{error}"
@@ -5327,6 +5333,7 @@ sidebar:
       error_retry: "错误：%{error} — 点击重试"
       connect_failed: "连接失败：%{error}"
       remote_listing_count: "%{label}（%{count}）"
+      load_more: "加载更多"
       remote_dashboards_error_retry: "错误：%{error} — 折叠再展开以重试"
       used_by_objects:
         one: 被 1 个对象使用

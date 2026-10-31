@@ -320,6 +320,13 @@ pub fn translate(key: &str) -> String {
     translate_in(&current_locale(), key)
 }
 
+/// Translates `key` with the active locale, or returns `None` when no catalog
+/// knows it. Lets callers that receive keys from outside the catalog (for
+/// example driver declarations) fall back to their own text.
+pub fn try_translate(key: &str) -> Option<String> {
+    lookup_translation(&current_locale(), key)
+}
+
 /// Translates `key` for an explicit `locale`, ignoring the process-wide
 /// active locale.
 pub fn translate_in(locale: &str, key: &str) -> String {
@@ -391,6 +398,15 @@ mod tests {
     #[test]
     fn resolve_es419_maps_to_spanish() {
         assert_eq!(resolve(None, Some("es-419")), spanish());
+    }
+
+    #[test]
+    fn try_translate_returns_none_for_an_unknown_key() {
+        assert_eq!(try_translate("no.such.catalog.key"), None);
+        assert_eq!(
+            try_translate("sidebar.tree.folder.buckets").as_deref(),
+            Some("Buckets")
+        );
     }
 
     #[test]

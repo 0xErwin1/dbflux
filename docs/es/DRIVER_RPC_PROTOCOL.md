@@ -104,7 +104,7 @@ las versiones menores se negocian de forma determinista dentro de esa línea
 mayor. Hasta v1.7 las versiones menores son aditivas; v1.8 es una corrección
 del formato de wire que cambia cómo se codifican algunos payloads existentes, y
 toda forma que se decodificaba antes es idéntica byte a byte (ver **Corrección
-del formato de wire** más abajo).
+del formato de wire** más abajo). v1.9 vuelve a ser aditiva.
 
 Solicitud del cliente:
 
@@ -122,6 +122,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 6),
         ProtocolVersion::new(1, 7),
         ProtocolVersion::new(1, 8),
+        ProtocolVersion::new(1, 9),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -340,6 +341,36 @@ decodificaba antes de v1.8 es idéntica byte a byte en v1.8; solo cambian los
 bytes de las formas que ningún peer podía decodificar, así que los peers con
 versiones menores anteriores siguen funcionando.
 
+### Secciones raíz (v1.9+)
+
+Un driver puede declarar secciones que se muestran en la raíz de su conexión en
+la barra lateral, como los buckets de S3. Los payloads son los tipos de sección
+raíz de `dbflux_core`, transportados tal cual:
+
+| Solicitud | Respuesta |
+| --- | --- |
+| `RootSections` | `RootSections { sections }`, un `Vec<RootSectionDef>` en orden de visualización |
+| `RootSectionItems { section_id, page_token }` | `RootSectionPage { page }`; `page_token` es `None` para la primera página y el `next_page_token` de la página anterior después |
+| `ExecuteRootSectionAction { section_id, item_id, action_id }` | `RootSectionActionDone` |
+
+El host despacha las tres solicitudes a `Connection::root_section_source` de la
+conexión. Un driver sin fuente responde `UnsupportedMethod`
+(`Driver does not declare root sections`), y un error del driver responde como
+cualquier otro `Error`. En una sesión que negoció una versión menor anterior, el
+host rechaza las solicitudes con `VersionMismatch`
+(`root section requests require driver RPC protocol 1.9 or newer`) sin llamar al
+driver.
+
+Las seis variantes se agregan después de la última variante de v1.8 de su enum,
+por la razón de índices en el wire descrita arriba. El cliente expone las
+secciones raíz solo cuando la sesión negoció v1.9 o posterior y los metadatos
+del driver declaran `DriverCapabilities::ROOT_SECTIONS`; si no, `IpcConnection`
+quita esa capacidad y no envía nada. `IpcConnection` obtiene la declaración una
+vez por conexión y la guarda en caché; si la obtención falla, no muestra
+secciones y vuelve a intentarlo en la siguiente lectura. Cada
+`RootSectionAction` lleva su `ExecutionClassification`, así que el host confirma
+y audita las acciones de los drivers externos igual que las de los integrados.
+
 ## Contrato RPC de auth-provider
 
 La familia activa de la API auth-provider RPC es `auth_provider_rpc` en `1.3`.
@@ -471,6 +502,7 @@ de nuevo los campos obligatorios del lado del servidor.
 | `Execute` → `ExecuteResult` (`ExecuteResultSets` desde v1.7) | ejecución de query |
 | `Schema` → `Schema`              | snapshot de schema                              |
 | `ListDatabases` → `Databases`    | listado de bases de datos                       |
+| `RootSections` → `RootSections`, `RootSectionItems` → `RootSectionPage`, `ExecuteRootSectionAction` → `RootSectionActionDone` (v1.9+) | secciones raíz de la barra lateral |
 
 El protocolo también soporta operaciones de browse, CRUD, key-value y generación
 de código. Ver `crates/dbflux_ipc/src/driver_protocol.rs` para el conjunto

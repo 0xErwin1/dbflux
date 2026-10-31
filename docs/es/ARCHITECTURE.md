@@ -1064,9 +1064,9 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
   (colecciones o mediciones) o es un keyspace. El sidebar
   (`tree_builder/object_folder.rs`) construye el contenido de cada base de datos a
   partir de esa descripción, y su menú contextual lee las facetas del objeto y el
-  mismo layout. El único chequeo de categoría que queda en el árbol es la lista
-  de buckets de una conexión de almacenamiento de objetos, que se obtiene por su
-  propio camino en lugar de leerse de un snapshot.
+  mismo layout. Los tipos de objeto que un driver muestra en la raíz de la
+  conexión, como los buckets de S3, no están en el snapshot; vienen de las
+  secciones raíz del driver (ver Sistema de drivers).
 - `dbflux_ui_base::object_tree` proporciona una jerarquía genérica de carga
   diferida con un coordinador por `AppStateEntity`. Los límites de core/app
   delimitan la aplicación por sesión y slot de conexión de destino; los adaptadores del
@@ -1164,6 +1164,32 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
     `CollectionPresentation::ObjectBrowser` y `PaneHandle::status_segments()`
     permiten que la UI abra y decore documents de object-storage sin bifurcar
     según driver ID.
+  - `RootSectionSource` (`crates/dbflux_core/src/connection/root_section/mod.rs`),
+    alcanzado vía `Connection::root_section_source()` y habilitado por
+    `DriverCapabilities::ROOT_SECTIONS`, declara los tipos de objeto que se
+    muestran en la raíz de una conexión en el sidebar. Cada `RootSectionDef`
+    lleva un id estable, una etiqueta, una etiqueta para el estado vacío, una
+    `RootSectionPresentation` opcional para la carpeta, la
+    `RootItemPresentation` en la que se abren sus items, si activar la fila de
+    la conexión abre la sección, y sus acciones por item. `list_items` devuelve
+    `RootSectionPage`s de `RootSectionItem`s con un `next_page_token`. Los ids
+    de nodo `SchemaNodeId::RootSection`, `RootSectionItem` y
+    `RootSectionLoadMore` llevan el id de la sección, así que un tipo de objeto
+    nuevo no necesita una variante de `SchemaNodeKind`. Un único renderer
+    genérico (`crates/dbflux_ui_sidebar/src/root_sections/`) construye las
+    carpetas, cachea los listados por perfil y carga más páginas bajo demanda;
+    el workspace enruta la activación según la presentación declarada
+    (`ObjectContainerTable` abre la tabla de contenedores, `ObjectBrowser` el
+    explorador de objetos). Las etiquetas son `LocalizedText`: una clave
+    opcional del catálogo i18n del host más un fallback en inglés obligatorio,
+    resueltos con `dbflux_i18n::try_translate`. Cada `RootSectionAction` lleva
+    una `ExecutionClassification`: `Destructive`, `Admin` y `AdminDestructive`
+    piden confirmación, y cada ejecución, exitosa o no, registra una fila de
+    auditoría `Governance`. Los drivers externos alcanzan el seam por driver
+    RPC 1.9 (`RootSections`, `RootSectionItems`, `ExecuteRootSectionAction`).
+    S3 es la implementación de referencia: una sección `buckets` cuyos items se
+    abren en el explorador de objetos, con una acción Delete bucket clasificada
+    `AdminDestructive`.
   - `TableViewFeatures` (`crates/dbflux_core/src/data/column_profile.rs`),
     informado por `Connection::table_view_features()`, habilita las vistas
     Columnas y Particiones de una tabla, la estimación de lectura, el perfil de

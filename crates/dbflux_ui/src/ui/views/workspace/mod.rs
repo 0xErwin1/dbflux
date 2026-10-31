@@ -1116,11 +1116,26 @@ impl Workspace {
                 } => {
                     this.open_console_document(*profile_id, Some(database.clone()), window, cx);
                 }
-                SidebarEvent::OpenObjectStoreBuckets { profile_id } => {
-                    this.open_object_store_buckets_document(*profile_id, window, cx);
+                SidebarEvent::OpenRootSection {
+                    profile_id,
+                    section_id,
+                    presentation,
+                } => {
+                    this.open_root_section(*profile_id, section_id, *presentation, window, cx);
                 }
-                SidebarEvent::OpenObjectStoreBucket { profile_id, bucket } => {
-                    this.open_object_browser(*profile_id, bucket.clone(), window, cx);
+                SidebarEvent::OpenRootSectionItem {
+                    profile_id,
+                    item_id,
+                    presentation,
+                    ..
+                } => {
+                    this.open_root_section_item(
+                        *profile_id,
+                        item_id.clone(),
+                        *presentation,
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::OpenSecretStore {
                     profile_id,

@@ -93,8 +93,8 @@ pub enum ListingRow {
 }
 
 /// Object browser opened for a single bucket under an object-storage
-/// connection (routed from `BucketsTableDocument`'s Enter-on-row and the
-/// sidebar's `OpenObjectStoreBucket` event).
+/// connection (routed from `BucketsTableDocument`'s Enter-on-row and from
+/// sidebar root section items that present an object browser).
 ///
 /// The tree/pagination state lives in `tree: ObjectTree` (`tree.rs`, a pure
 /// data model); this entity owns the GPUI plumbing — background loading via

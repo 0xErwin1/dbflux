@@ -5201,6 +5201,11 @@ sidebar:
     dashboards: "Dashboards"
     connections: CONEXÕES
     scripts: SCRIPTS
+  root_section:
+    confirm_message: "Executar \"%{action}\" em \"%{item}\"?"
+    action:
+      delete_bucket: "Excluir bucket"
+      delete_bucket_description: "Exclui o bucket. Apenas um bucket vazio pode ser excluído, e isso não pode ser desfeito."
   task:
     connecting: "Conectando a %{name}"
     disconnecting: "Desconectando %{name}"
@@ -5209,7 +5214,7 @@ sidebar:
     disconnect_hook_cancelled: Hook de desconexão cancelado
     post_disconnect_hook_cancelled: Hook de pós-desconexão cancelado
     loading_event_streams: "Carregando fluxos de eventos: %{name}"
-    listing_buckets: "Listando buckets: %{name}"
+    listing_root_section: "Listando %{section}: %{name}"
     loading_database_schema: "Carregando schema: %{name}"
     connecting_to_database: "Conectando ao banco de dados: %{name}"
     refreshing_database: "Atualizando o banco de dados: %{name}"
@@ -5257,7 +5262,8 @@ sidebar:
       indexes: "Falha ao carregar os índices: %{error}"
       foreign_keys: "Falha ao carregar as chaves estrangeiras: %{error}"
       routines: "Falha ao carregar as rotinas: %{error}"
-    list_buckets_failed: "Falha ao listar os buckets: %{error}"
+    list_root_section_failed: "Falha ao listar %{section}: %{error}"
+    root_section_action_failed: "%{action} falhou para %{item}: %{error}"
     code_generation_failed: "Falha na geração de código: %{error}"
     loading_event_streams: Carregando fluxos de eventos…
     load_schema_failed: "Falha ao carregar o schema: %{error}"
@@ -5329,6 +5335,7 @@ sidebar:
       error_retry: "Erro: %{error} — clique para tentar novamente"
       connect_failed: "Falha na conexão: %{error}"
       remote_listing_count: "%{label} (%{count})"
+      load_more: "Carregar mais"
       remote_dashboards_error_retry: "Erro: %{error} — recolha e expanda para tentar novamente"
       used_by_objects:
         one: Usado por 1 objeto
