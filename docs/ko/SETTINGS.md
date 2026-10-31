@@ -36,7 +36,16 @@ MCP 관련 섹션(Clients, Roles, Policies)은 바이너리가 `mcp` 기능과 �
 |---------|---------|---------|
 | **Theme** | Follow system, Dark, Light | Dark |
 | **Density** | Default, Compact | Default |
+| **Show scrollbars** | While scrolling, On hover, Always | While scrolling |
 | **Language** | System, 그 뒤에 번역 카탈로그가 함께 제공되는 모든 언어 | System |
+
+**Show scrollbars**는 모든 창의 스크롤바가 언제 표시될지 정합니다. 내용이
+스크롤되는 동안만, 포인터가 스크롤 영역 위에 있는 동안, 또는 항상 표시할 수
+있습니다. 저장하면 열려 있는 모든 창에 바로 적용됩니다.
+
+데이터 그리드의 가로 스크롤바는 예외로 항상 표시됩니다. 마우스 휠 이벤트를
+받지 않는 별도의 스크롤러가 이 스크롤바를 움직이므로, 그렇지 않으면 숨겨진
+채로 남기 때문입니다.
 
 언어 목록은 DBFlux가 함께 제공하는 번역 카탈로그에서 도출됩니다. 영어가 먼저
 표시되고, 나머지 언어는 결정적인 순서로 이어지며 고유 언어명으로 표시됩니다.

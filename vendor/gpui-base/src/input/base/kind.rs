@@ -27,7 +27,9 @@ use gpui::{Div, Entity, Stateful, Window};
 use ropey::Rope;
 
 use super::decorations::DecorationCollections;
-use super::lsp::{ContextMenuContent, HoverDefinition, InlineCompletion};
+use super::lsp::{
+    CompletionSelectionReader, ContextMenuContent, HoverDefinition, InlineCompletion,
+};
 use crate::input::{
     HighlightStyleResolver, InputEdit, InputHighlighter, RangeDecoration, SyntaxContext,
     TextDecoration,
@@ -359,6 +361,7 @@ pub struct EditorExtras {
     pub(crate) hover_popover: Option<HoverPopoverState>,
     pub(crate) hover_definition: HoverDefinition,
     pub(crate) context_menu_task: Task<anyhow::Result<()>>,
+    pub(crate) completion_selection_reader: Option<CompletionSelectionReader>,
 }
 
 impl Default for EditorExtras {
@@ -372,6 +375,7 @@ impl Default for EditorExtras {
             hover_popover: None,
             hover_definition: HoverDefinition::default(),
             context_menu_task: Task::ready(Ok(())),
+            completion_selection_reader: None,
         }
     }
 }

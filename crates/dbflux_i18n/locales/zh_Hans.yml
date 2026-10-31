@@ -4072,6 +4072,13 @@ settings:
       option:
         default: "默认"
         compact: "紧凑"
+    scrollbars:
+      help: "应用于所有窗口。"
+      label: "显示滚动条"
+      option:
+        while_scrolling: "滚动时"
+        on_hover: "悬停时"
+        always: "始终"
     language:
       label: 语言
       option:

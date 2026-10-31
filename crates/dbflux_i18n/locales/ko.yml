@@ -4072,6 +4072,13 @@ settings:
       option:
         default: "기본"
         compact: "컴팩트"
+    scrollbars:
+      help: "모든 창에 적용됩니다."
+      label: "스크롤바 표시"
+      option:
+        while_scrolling: "스크롤하는 동안"
+        on_hover: "마우스를 올렸을 때"
+        always: "항상"
     language:
       label: 언어
       option:

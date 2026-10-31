@@ -416,6 +416,11 @@ pub struct GeneralSettings {
     #[serde(default)]
     pub grid_fk_labels: bool,
 
+    // -- Appearance --
+    /// When scrollbars are shown in every window. While scrolling by default.
+    #[serde(default)]
+    pub scrollbar_visibility: ScrollbarVisibility,
+
     // -- Fonts --
     /// Interface font family. `None` uses the bundled interface font.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -545,6 +550,7 @@ impl Default for GeneralSettings {
             table_alias_use_as: false,
             vim_leader: default_vim_leader(),
             grid_fk_labels: false,
+            scrollbar_visibility: ScrollbarVisibility::WhileScrolling,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
             editor_font_family: None,
@@ -572,6 +578,10 @@ mod font_settings_tests {
 
         let legacy: GeneralSettings = serde_json::from_str("{}").expect("legacy settings");
         assert!(!legacy.grid_fk_labels);
+        assert_eq!(
+            legacy.scrollbar_visibility,
+            super::ScrollbarVisibility::WhileScrolling
+        );
         assert_eq!(legacy, settings);
     }
 
@@ -669,6 +679,21 @@ pub enum AppStyle {
     #[default]
     Default,
     Compact,
+}
+
+/// When scrollbars are shown.
+///
+/// - `WhileScrolling` — the bar appears while the content scrolls and fades
+///   out when idle.
+/// - `OnHover` — the bar appears while the pointer is over the scroll area.
+/// - `Always` — the bar stays visible.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollbarVisibility {
+    #[default]
+    WhileScrolling,
+    OnHover,
+    Always,
 }
 
 fn default_true() -> bool {

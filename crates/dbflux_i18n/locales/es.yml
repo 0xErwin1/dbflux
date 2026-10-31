@@ -4072,6 +4072,13 @@ settings:
       option:
         default: "Predeterminado"
         compact: "Compacto"
+    scrollbars:
+      help: "Se aplica a todas las ventanas."
+      label: "Mostrar barras de desplazamiento"
+      option:
+        while_scrolling: "Al desplazarse"
+        on_hover: "Al pasar el cursor"
+        always: "Siempre"
     language:
       label: Idioma
       option:

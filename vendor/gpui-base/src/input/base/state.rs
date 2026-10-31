@@ -1192,6 +1192,20 @@ impl<M: InputModeKind> InputBaseState<M> {
         closed
     }
 
+    /// End exactly this group and drop the undo entry it recorded, for a
+    /// group whose edits cancelled out. Returns false, leaving the group
+    /// active, if the ID is not active or a composition or transaction is open.
+    pub(crate) fn discard_edit_group(&mut self, id: u64) -> bool {
+        if self.ime_marked_range.is_some() || self.undo_manager.has_open_transaction() {
+            return false;
+        }
+        let discarded = self.undo_manager.discard_edit_group(id);
+        if discarded {
+            self.pending_edit_group_end = None;
+        }
+        discarded
+    }
+
     /// Request closure of exactly this editor-owned group after native composition ends.
     pub fn request_end_edit_group(&mut self, id: u64) -> EditGroupClosure {
         if !self.undo_manager.owns_edit_group(id) {
@@ -12215,6 +12229,318 @@ mod tests {
                     previous.origin.x
                 );
                 assert!(range_bounds.size.width >= px(0.0));
+            });
+        });
+    }
+
+    /// A stand-in for the completion menu: wraps like the real list and
+    /// exposes its highlighted item through the selection reader.
+    fn install_fake_completion_menu(
+        state: &mut InputBaseState<EditorMode>,
+        items: Vec<lsp_types::CompletionItem>,
+    ) -> Rc<Cell<usize>> {
+        let highlighted = Rc::new(Cell::new(0));
+        let count = items.len();
+        state.set_overlay_action_handler({
+            let highlighted = highlighted.clone();
+            move |_, action, _, _| {
+                if action.partial_eq(&MoveDown) {
+                    highlighted.set((highlighted.get() + 1) % count);
+                } else if action.partial_eq(&MoveUp) {
+                    highlighted.set((highlighted.get() + count - 1) % count);
+                } else {
+                    return action.partial_eq(&Escape);
+                }
+                true
+            }
+        });
+        state.set_completion_selection_reader({
+            let highlighted = highlighted.clone();
+            move |_| items.get(highlighted.get()).cloned()
+        });
+        highlighted
+    }
+
+    fn completion_label(label: &str) -> lsp_types::CompletionItem {
+        lsp_types::CompletionItem {
+            label: label.into(),
+            ..Default::default()
+        }
+    }
+
+    fn open_completion_cycle_fixture(
+        state: &mut InputBaseState<EditorMode>,
+        items: Vec<lsp_types::CompletionItem>,
+        window: &mut Window,
+        cx: &mut Context<InputBaseState<EditorMode>>,
+    ) -> Rc<Cell<usize>> {
+        state.focus(window, cx);
+        state.set_value("SELECT * FROM us", window, cx);
+        state.set_selected_range(16..16, cx);
+        state.present_completion_items(14, "us", items.clone(), cx);
+        install_fake_completion_menu(state, items)
+    }
+
+    fn table_items() -> Vec<lsp_types::CompletionItem> {
+        vec![
+            completion_label("users"),
+            completion_label("user_roles"),
+            completion_label("usage"),
+        ]
+    }
+
+    #[gpui::test]
+    fn tab_cycles_completion_items_in_place_and_wraps(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                open_completion_cycle_fixture(state, table_items(), window, cx);
+
+                state.indent_inline(&IndentInline, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM users");
+                assert!(state.completion_menu_state().open);
+                assert_eq!(state.cursor(), 19);
+
+                state.indent_inline(&IndentInline, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM user_roles");
+                state.indent_inline(&IndentInline, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM usage");
+                state.indent_inline(&IndentInline, window, cx);
+                assert_eq!(
+                    state.value(),
+                    "SELECT * FROM users",
+                    "Tab wraps to the first"
+                );
+
+                state.outdent_inline(&OutdentInline, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM usage", "Shift+Tab wraps back");
+                state.outdent_inline(&OutdentInline, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM user_roles");
+                assert!(state.completion_menu_state().open);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn shift_tab_first_previews_the_last_item(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                open_completion_cycle_fixture(state, table_items(), window, cx);
+                state.outdent_inline(&OutdentInline, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM usage");
+                assert!(state.completion_menu_state().open);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn arrows_follow_an_active_tab_cycle(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                open_completion_cycle_fixture(state, table_items(), window, cx);
+                state.down(&MoveDown, window, cx);
+                assert_eq!(
+                    state.value(),
+                    "SELECT * FROM us",
+                    "Down alone keeps the text"
+                );
+                assert_eq!(state.cursor(), 16);
+                assert!(state.completion_menu_state().open);
+
+                state.indent_inline(&IndentInline, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM user_roles");
+                state.down(&MoveDown, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM usage");
+                state.up(&MoveUp, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM user_roles");
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn enter_keeps_the_previewed_item_as_one_undo_step(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                open_completion_cycle_fixture(state, table_items(), window, cx);
+                state.indent_inline(&IndentInline, window, cx);
+                state.indent_inline(&IndentInline, window, cx);
+                state.enter(
+                    &Enter {
+                        secondary: false,
+                        shift: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(state.value(), "SELECT * FROM user_roles");
+                assert!(!state.completion_menu_state().open);
+                assert_eq!(state.undo_manager.undo_count(), 1);
+
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM us");
+                assert!(!state.undo_manager.has_undos());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn typing_after_tab_keeps_the_item_and_closes_the_menu(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                open_completion_cycle_fixture(state, table_items(), window, cx);
+                state.indent_inline(&IndentInline, window, cx);
+                state.replace_text_in_range(None, ".", window, cx);
+                assert_eq!(state.value(), "SELECT * FROM users.");
+                assert!(!state.completion_menu_state().open);
+
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM users");
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM us");
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn escape_restores_the_typed_word_without_history(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                state.focus(window, cx);
+                state.set_value("SELECT * FROM u", window, cx);
+                state.set_selected_range(15..15, cx);
+                state.replace_text_in_range(None, "s", window, cx);
+                let items = table_items();
+                state.present_completion_items(14, "us", items.clone(), cx);
+                install_fake_completion_menu(state, items);
+                assert_eq!(state.undo_manager.undo_count(), 1);
+
+                state.indent_inline(&IndentInline, window, cx);
+                state.indent_inline(&IndentInline, window, cx);
+                state.escape(&Escape, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM us");
+                assert_eq!(state.cursor(), 16);
+                assert!(!state.completion_menu_state().open);
+                assert_eq!(state.undo_manager.undo_count(), 1);
+
+                state.undo(&Undo, window, cx);
+                assert_eq!(
+                    state.value(),
+                    "SELECT * FROM u",
+                    "undo reaches the typed edit"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn undo_during_a_tab_cycle_restores_the_typed_word(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                open_completion_cycle_fixture(state, table_items(), window, cx);
+                state.indent_inline(&IndentInline, window, cx);
+                state.indent_inline(&IndentInline, window, cx);
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM us");
+                assert!(!state.completion_menu_state().open);
+                assert!(
+                    state
+                        .extras
+                        .context_menu_content
+                        .completion_preview
+                        .is_none()
+                );
+
+                state.indent_inline(&IndentInline, window, cx);
+                assert_eq!(
+                    state.value(),
+                    "SELECT * FROM us  ",
+                    "closed menu indents again"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn tab_cycle_resolves_text_edit_and_insert_text_items(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let replace = lsp_types::CompletionItem {
+            label: "users".into(),
+            text_edit: Some(lsp_types::CompletionTextEdit::Edit(lsp_types::TextEdit {
+                range: lsp_types::Range::new(Position::new(0, 14), Position::new(0, 16)),
+                new_text: "users AS u".into(),
+            })),
+            ..Default::default()
+        };
+        let append = lsp_types::CompletionItem {
+            label: "usage".into(),
+            insert_text: Some("age".into()),
+            ..Default::default()
+        };
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                open_completion_cycle_fixture(state, vec![replace, append], window, cx);
+                state.indent_inline(&IndentInline, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM users AS u");
+                state.indent_inline(&IndentInline, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM usage");
+                state.indent_inline(&IndentInline, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM users AS u");
+                assert_eq!(state.cursor(), 24);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn clicking_an_item_during_a_tab_cycle_is_one_undo_step(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                open_completion_cycle_fixture(state, table_items(), window, cx);
+                state.indent_inline(&IndentInline, window, cx);
+                state.insert_completion(&completion_label("usage"), 14..16, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM usage");
+                assert!(
+                    state
+                        .extras
+                        .context_menu_content
+                        .completion_preview
+                        .is_none()
+                );
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "SELECT * FROM us");
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn tab_and_shift_tab_indent_while_the_menu_is_closed(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                state.focus(window, cx);
+                state.set_value("  us", window, cx);
+                state.set_selected_range(4..4, cx);
+                install_fake_completion_menu(state, table_items());
+                state.indent_inline(&IndentInline, window, cx);
+                assert_eq!(state.value(), "  us  ");
+                state.outdent_inline(&OutdentInline, window, cx);
+                assert_eq!(state.value(), "us  ");
             });
         });
     }

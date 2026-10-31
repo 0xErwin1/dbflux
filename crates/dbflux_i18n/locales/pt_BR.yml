@@ -4072,6 +4072,13 @@ settings:
       option:
         default: "Padrão"
         compact: "Compacto"
+    scrollbars:
+      help: "Vale para todas as janelas."
+      label: "Mostrar barras de rolagem"
+      option:
+        while_scrolling: "Ao rolar"
+        on_hover: "Ao passar o cursor"
+        always: "Sempre"
     language:
       label: Idioma
       option:
