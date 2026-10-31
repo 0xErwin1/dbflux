@@ -32,8 +32,8 @@ Integration](MCP_AI_INTEGRATION.md).
   <img src="images/settings/general-light.webp" alt="The Settings window on the General section, showing the appearance, editor and startup settings">
 </picture>
 
-Save applies the changes at once and writes them to `dbflux.db` in the
-background, so a slow or busy database never freezes the window. The success
+Save applies the changes at once and writes them to the DBFlux database
+(`dbflux.db`, or `dbflux-nightly.db` on a Nightly build) in the background, so a slow or busy database never freezes the window. The success
 message appears once they are on disk. If the write fails, an error says so and
 the changes stay applied until DBFlux quits; save again to keep them.
 

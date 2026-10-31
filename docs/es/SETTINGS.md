@@ -34,7 +34,8 @@ Integration](MCP_AI_INTEGRATION.md).
   <img src="../images/settings/general-light.webp" alt="La ventana de Settings en la sección General, con los ajustes de apariencia, editor y arranque">
 </picture>
 
-Guardar aplica los cambios al instante y los escribe en `dbflux.db` en segundo
+Guardar aplica los cambios al instante y los escribe en la base de datos de
+DBFlux (`dbflux.db`, o `dbflux-nightly.db` en una build Nightly) en segundo
 plano, así que una base de datos lenta u ocupada nunca congela la ventana. El
 mensaje de éxito aparece cuando ya están en disco. Si la escritura falla, un
 error lo indica y los cambios siguen aplicados hasta que DBFlux se cierre;

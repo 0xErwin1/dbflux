@@ -28,7 +28,7 @@ DBFlux 各设置项以及连接 Hooks 的参考说明——连接 Hooks 指在�
   <img src="../images/settings/general-light.webp" alt="设置窗口的常规部分，显示外观、编辑器与启动设置">
 </picture>
 
-保存会立即应用更改，并在后台写入 `dbflux.db`，因此数据库缓慢或繁忙时窗口也不会卡住。成功提示会在写入磁盘后显示。如果写入失败，会显示错误，更改在 DBFlux 退出前仍保持生效；再次保存即可保留。
+保存会立即应用更改，并在后台写入 DBFlux 数据库（`dbflux.db`，nightly 构建中为 `dbflux-nightly.db`），因此数据库缓慢或繁忙时窗口也不会卡住。成功提示会在写入磁盘后显示。如果写入失败，会显示错误，更改在 DBFlux 退出前仍保持生效；再次保存即可保留。
 
 ### 外观
 

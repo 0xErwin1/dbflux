@@ -41,6 +41,14 @@ fn saved_max_history(app_state: &Entity<AppStateEntity>, cx: &mut TestAppContext
     })
 }
 
+fn db_path(app_state: &Entity<AppStateEntity>, cx: &gpui::App) -> std::path::PathBuf {
+    app_state
+        .read(cx)
+        .storage_runtime()
+        .dbflux_db_path()
+        .to_path_buf()
+}
+
 fn with_max_history(entries: usize) -> GeneralSettings {
     GeneralSettings {
         max_history_entries: entries,
@@ -181,7 +189,7 @@ fn quitting_writes_a_change_already_taken_by_the_drain(cx: &mut TestAppContext) 
 
     cx.update(|cx| {
         persist_general_settings(&app_state, with_max_history(88), record(&outcomes, 1), cx);
-        let in_flight = super::take_pending(cx);
+        let in_flight = super::take_pending(&db_path(&app_state, cx), cx);
         assert!(in_flight.is_some(), "the drain takes the change");
         flush_pending(cx);
     });
@@ -196,16 +204,18 @@ fn a_stale_write_never_lands_after_a_newer_one(cx: &mut TestAppContext) {
     let app_state = app_state(cx);
     let outcomes = Outcomes::default();
 
+    let stale_path = cx.update(|cx| db_path(&app_state, cx));
     let stale = cx.update(|cx| {
         persist_general_settings(&app_state, with_max_history(50), record(&outcomes, 1), cx);
-        let stale = super::take_pending(cx).expect("the drain takes the change");
+        let stale =
+            super::take_pending(&db_path(&app_state, cx), cx).expect("the drain takes the change");
         persist_general_settings(&app_state, with_max_history(70), record(&outcomes, 2), cx);
         flush_pending(cx);
         stale
     });
 
     let (write, guard) = stale;
-    super::write_guarded(&guard, write.seq, &write.db_path, &write.settings)
+    super::write_guarded(&guard, write.seq, &stale_path, &write.settings)
         .expect("a stale write is skipped, not failed");
 
     assert_eq!(saved_max_history(&app_state, cx), 70);
@@ -220,7 +230,8 @@ fn changes_made_during_a_write_are_saved_once_after_it(cx: &mut TestAppContext) 
 
     cx.update(|cx| {
         persist_general_settings(&app_state, with_max_history(50), record(&outcomes, 1), cx);
-        let _in_flight = super::take_pending(cx).expect("the drain takes the change");
+        let _in_flight =
+            super::take_pending(&db_path(&app_state, cx), cx).expect("the drain takes the change");
         persist_general_settings(&app_state, with_max_history(60), record(&outcomes, 2), cx);
         persist_general_settings(&app_state, with_max_history(70), record(&outcomes, 3), cx);
     });
@@ -229,4 +240,61 @@ fn changes_made_during_a_write_are_saved_once_after_it(cx: &mut TestAppContext) 
     assert_eq!(saved_max_history(&app_state, cx), 70);
     assert_eq!(*outcomes.borrow(), vec![(2, true), (3, true)]);
     assert_eq!(cx.update(|cx| super::writes_started(cx)), 2);
+}
+
+/// Changes for two databases queued before the drain runs are each written
+/// to their own database, and each caller hears about its own write.
+#[gpui::test]
+fn changes_for_two_databases_are_written_separately(cx: &mut TestAppContext) {
+    let first = app_state(cx);
+    let second = cx.update(|cx| {
+        cx.new(|_| {
+            AppStateEntity::new_with_storage_runtime(
+                StorageRuntime::in_memory().expect("isolated storage runtime"),
+            )
+            .expect("test storage setup")
+        })
+    });
+    let not_a_database = tempfile::tempdir().expect("scratch directory");
+    let outcomes = Outcomes::default();
+
+    cx.update(|cx| {
+        persist_general_settings(&first, with_max_history(50), record(&outcomes, 1), cx);
+        persist_general_settings(&second, with_max_history(60), record(&outcomes, 2), cx);
+        enqueue(
+            not_a_database.path().to_path_buf(),
+            with_max_history(70),
+            record(&outcomes, 3),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+
+    assert_eq!(saved_max_history(&first, cx), 50);
+    assert_eq!(saved_max_history(&second, cx), 60);
+    let mut outcomes = outcomes.borrow().clone();
+    outcomes.sort_unstable();
+    assert_eq!(outcomes, vec![(1, true), (2, true), (3, false)]);
+}
+
+/// A write that fails on quit is reported like any other, so it reaches the
+/// audit log even though no window is left to show it.
+#[gpui::test]
+fn a_failed_write_on_quit_is_reported(cx: &mut TestAppContext) {
+    let app_state = app_state(cx);
+    let outcomes = Outcomes::default();
+    let not_a_database = tempfile::tempdir().expect("scratch directory");
+
+    cx.update(|cx| {
+        enqueue(
+            not_a_database.path().to_path_buf(),
+            with_max_history(50),
+            record(&outcomes, 1),
+            cx,
+        );
+        flush_pending(cx);
+    });
+
+    assert_eq!(*outcomes.borrow(), vec![(1, false)]);
+    assert_eq!(cx.update(|cx| app_state.read(cx).unread_error_count), 1);
 }
