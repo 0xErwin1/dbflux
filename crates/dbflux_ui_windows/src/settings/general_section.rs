@@ -982,15 +982,9 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
-    fn with_general_section(
-        test: impl FnOnce(
-            &mut GeneralSection,
-            &Entity<ToastHost>,
-            &mut gpui::Window,
-            &mut gpui::Context<GeneralSection>,
-        ),
-    ) {
-        let mut cx = TestAppContext::single();
+    fn open_section_window(
+        cx: &mut TestAppContext,
+    ) -> (gpui::WindowHandle<GeneralSection>, Entity<ToastHost>) {
         cx.update(gpui_component::init);
         cx.update(dbflux_components::theme::init);
         let toast_host = cx.update(|cx| {
@@ -1014,6 +1008,20 @@ mod tests {
             })
             .expect("general settings window opens");
 
+        (window, toast_host)
+    }
+
+    fn with_general_section(
+        test: impl FnOnce(
+            &mut GeneralSection,
+            &Entity<ToastHost>,
+            &mut gpui::Window,
+            &mut gpui::Context<GeneralSection>,
+        ),
+    ) {
+        let mut cx = TestAppContext::single();
+        let (window, toast_host) = open_section_window(&mut cx);
+
         window
             .update(&mut cx, |section, window, cx| {
                 test(section, &toast_host, window, cx)
@@ -1022,6 +1030,44 @@ mod tests {
         window
             .update(&mut cx, |_, window, _| window.remove_window())
             .expect("window closes");
+    }
+
+    /// One step of a test on the General section: it runs, then the
+    /// background settings writer finishes before the next step.
+    type SectionPhase =
+        Box<dyn FnOnce(&mut GeneralSection, &mut gpui::Window, &mut gpui::Context<GeneralSection>)>;
+
+    /// Runs each phase in order, letting the background settings writer
+    /// finish after every one, so a phase can check what an earlier save
+    /// wrote to the database.
+    fn with_general_section_phases(phases: Vec<SectionPhase>) {
+        let mut cx = TestAppContext::single();
+        let (window, _) = open_section_window(&mut cx);
+
+        for phase in phases {
+            window
+                .update(&mut cx, |section, window, cx| phase(section, window, cx))
+                .expect("general section updates");
+            cx.run_until_parked();
+        }
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("window closes");
+    }
+
+    /// Runs `test`, lets the background settings writer finish, then runs
+    /// `after_saved` to check what reached the database.
+    fn with_general_section_saved(
+        test: impl FnOnce(&mut GeneralSection, &mut gpui::Window, &mut gpui::Context<GeneralSection>)
+        + 'static,
+        after_saved: impl FnOnce(
+            &mut GeneralSection,
+            &mut gpui::Window,
+            &mut gpui::Context<GeneralSection>,
+        ) + 'static,
+    ) {
+        with_general_section_phases(vec![Box::new(test), Box::new(after_saved)]);
     }
 
     fn font_size_inputs(section: &GeneralSection, cx: &gpui::App) -> [String; 3] {
@@ -1175,65 +1221,74 @@ mod tests {
 
     #[test]
     fn valid_editor_row_limit_marks_dirty_and_saves() {
-        with_general_section(|section, _, window, cx| {
-            section
-                .input_editor_row_limit
-                .update(cx, |input, cx| input.set_value("5000", window, cx));
-            assert!(section.has_unsaved_general_changes(cx));
-
-            section.save_general_settings(window, cx);
-
-            assert_eq!(
+        with_general_section_saved(
+            |section, window, cx| {
                 section
-                    .app_state
-                    .read(cx)
-                    .general_settings()
-                    .editor_row_limit,
-                5_000
-            );
-            assert_eq!(stored_editor_row_limit(section, cx), Some(5_000));
-            assert!(!section.has_unsaved_general_changes(cx));
-        });
+                    .input_editor_row_limit
+                    .update(cx, |input, cx| input.set_value("5000", window, cx));
+                assert!(section.has_unsaved_general_changes(cx));
+
+                section.save_general_settings(window, cx);
+
+                assert_eq!(
+                    section
+                        .app_state
+                        .read(cx)
+                        .general_settings()
+                        .editor_row_limit,
+                    5_000
+                );
+            },
+            |section, _window, cx| {
+                assert_eq!(stored_editor_row_limit(section, cx), Some(5_000));
+                assert!(!section.has_unsaved_general_changes(cx));
+            },
+        );
     }
 
     /// Picking a leader in the Vim leader dropdown is an unsaved change until
     /// Save, which stores it and hands it to open editors.
     #[test]
     fn choosing_a_vim_leader_marks_dirty_and_saves() {
-        with_general_section(|section, _, window, cx| {
-            assert_eq!(section.gen_settings.vim_leader, "space");
+        with_general_section_saved(
+            |section, window, cx| {
+                assert_eq!(section.gen_settings.vim_leader, "space");
 
-            assert_eq!(
-                section
-                    .dropdown_vim_leader
+                assert_eq!(
+                    section
+                        .dropdown_vim_leader
+                        .read(cx)
+                        .selected_label()
+                        .map(|label| label.to_string()),
+                    Some(dbflux_i18n::t!("settings.general.vim_leader.option.space")),
+                    "the dropdown shows the saved leader"
+                );
+
+                section.gen_settings.vim_leader =
+                    GeneralSection::vim_leader_for_index(1).to_string();
+                assert_eq!(section.gen_settings.vim_leader, ",");
+                assert_eq!(section.general_change_count(cx), 1);
+
+                section.save_general_settings(window, cx);
+
+                assert_eq!(
+                    section.app_state.read(cx).general_settings().vim_leader,
+                    ","
+                );
+            },
+            |section, _window, cx| {
+                let stored = section
+                    .app_state
                     .read(cx)
-                    .selected_label()
-                    .map(|label| label.to_string()),
-                Some(dbflux_i18n::t!("settings.general.vim_leader.option.space")),
-                "the dropdown shows the saved leader"
-            );
-
-            section.gen_settings.vim_leader = GeneralSection::vim_leader_for_index(1).to_string();
-            assert_eq!(section.gen_settings.vim_leader, ",");
-            assert_eq!(section.general_change_count(cx), 1);
-
-            section.save_general_settings(window, cx);
-
-            assert_eq!(
-                section.app_state.read(cx).general_settings().vim_leader,
-                ","
-            );
-            let stored = section
-                .app_state
-                .read(cx)
-                .storage_runtime()
-                .general_settings()
-                .get()
-                .expect("stored general settings readable")
-                .map(|settings| settings.vim_leader);
-            assert_eq!(stored.as_deref(), Some(","));
-            assert!(!section.has_unsaved_general_changes(cx));
-        });
+                    .storage_runtime()
+                    .general_settings()
+                    .get()
+                    .expect("stored general settings readable")
+                    .map(|settings| settings.vim_leader);
+                assert_eq!(stored.as_deref(), Some(","));
+                assert!(!section.has_unsaved_general_changes(cx));
+            },
+        );
     }
 
     #[test]
@@ -1265,34 +1320,38 @@ mod tests {
     /// it. `0` means every toast waits for the user.
     #[test]
     fn choosing_a_toast_timeout_marks_dirty_and_saves() {
-        with_general_section(|section, _, window, cx| {
-            assert_eq!(section.gen_settings.toast_auto_dismiss_secs, 8);
+        with_general_section_saved(
+            |section, window, cx| {
+                assert_eq!(section.gen_settings.toast_auto_dismiss_secs, 8);
 
-            section.gen_settings.toast_auto_dismiss_secs =
-                GeneralSection::toast_timeout_for_index(3);
-            assert_eq!(section.general_change_count(cx), 1);
+                section.gen_settings.toast_auto_dismiss_secs =
+                    GeneralSection::toast_timeout_for_index(3);
+                assert_eq!(section.general_change_count(cx), 1);
 
-            section.save_general_settings(window, cx);
+                section.save_general_settings(window, cx);
 
-            assert_eq!(
-                section
+                assert_eq!(
+                    section
+                        .app_state
+                        .read(cx)
+                        .general_settings()
+                        .toast_auto_dismiss_secs,
+                    0
+                );
+            },
+            |section, _window, cx| {
+                let stored = section
                     .app_state
                     .read(cx)
+                    .storage_runtime()
                     .general_settings()
-                    .toast_auto_dismiss_secs,
-                0
-            );
-            let stored = section
-                .app_state
-                .read(cx)
-                .storage_runtime()
-                .general_settings()
-                .get()
-                .expect("stored general settings readable")
-                .map(|settings| settings.toast_auto_dismiss_secs);
-            assert_eq!(stored, Some(0));
-            assert!(!section.has_unsaved_general_changes(cx));
-        });
+                    .get()
+                    .expect("stored general settings readable")
+                    .map(|settings| settings.toast_auto_dismiss_secs);
+                assert_eq!(stored, Some(0));
+                assert!(!section.has_unsaved_general_changes(cx));
+            },
+        );
     }
 
     #[test]
@@ -1545,48 +1604,66 @@ mod tests {
 
     #[test]
     fn font_settings_mark_dirty_and_save() {
-        with_general_section(|section, _, window, cx| {
-            assert_eq!(
-                section.input_grid_font_size.read(cx).value().as_ref(),
-                "12.5"
-            );
+        with_general_section_phases(vec![
+            Box::new(|section, window, cx| {
+                assert_eq!(
+                    section.input_grid_font_size.read(cx).value().as_ref(),
+                    "12.5"
+                );
 
-            section
-                .input_ui_font_size
-                .update(cx, |input, cx| input.set_value("16", window, cx));
-            section
-                .input_grid_font_size
-                .update(cx, |input, cx| input.set_value("14.5", window, cx));
-            section.set_font_family(FontFamilyField::Editor, Some("Fira Code".into()));
-            assert_eq!(section.general_change_count(cx), 3);
-
-            section.save_general_settings(window, cx);
-
-            let saved = section.app_state.read(cx).general_settings().clone();
-            assert_eq!(saved.ui_font_size, 16.0);
-            assert_eq!(saved.editor_font_size, 13.0);
-            assert_eq!(saved.grid_font_size, 14.5);
-            assert_eq!(saved.editor_font_family.as_deref(), Some("Fira Code"));
-            assert_eq!(saved.ui_font_family, None);
-            assert_eq!(
-                stored_general_settings(section, cx),
-                Some((16.0, 13.0, 14.5))
-            );
-            assert!(!section.has_unsaved_general_changes(cx));
-
-            section.set_font_family(FontFamilyField::Editor, None);
-            assert_eq!(section.general_change_count(cx), 1);
-            section.save_general_settings(window, cx);
-            assert_eq!(
                 section
+                    .input_ui_font_size
+                    .update(cx, |input, cx| input.set_value("16", window, cx));
+                section
+                    .input_grid_font_size
+                    .update(cx, |input, cx| input.set_value("14.5", window, cx));
+                section.set_font_family(FontFamilyField::Editor, Some("Fira Code".into()));
+                assert_eq!(section.general_change_count(cx), 3);
+
+                section.save_general_settings(window, cx);
+
+                let saved = section.app_state.read(cx).general_settings().clone();
+                assert_eq!(saved.ui_font_size, 16.0);
+                assert_eq!(saved.editor_font_size, 13.0);
+                assert_eq!(saved.grid_font_size, 14.5);
+                assert_eq!(saved.editor_font_family.as_deref(), Some("Fira Code"));
+                assert_eq!(saved.ui_font_family, None);
+            }),
+            Box::new(|section, window, cx| {
+                assert_eq!(
+                    stored_general_settings(section, cx),
+                    Some((16.0, 13.0, 14.5))
+                );
+                assert!(!section.has_unsaved_general_changes(cx));
+
+                section.set_font_family(FontFamilyField::Editor, None);
+                assert_eq!(section.general_change_count(cx), 1);
+                section.save_general_settings(window, cx);
+                assert_eq!(
+                    section
+                        .app_state
+                        .read(cx)
+                        .general_settings()
+                        .editor_font_family,
+                    None,
+                    "the default entry clears the family"
+                );
+            }),
+            Box::new(|section, _window, cx| {
+                let stored_family = section
                     .app_state
                     .read(cx)
+                    .storage_runtime()
                     .general_settings()
-                    .editor_font_family,
-                None,
-                "the default entry clears the family"
-            );
-        });
+                    .get()
+                    .expect("stored general settings readable")
+                    .and_then(|settings| settings.editor_font_family);
+                assert_eq!(
+                    stored_family, None,
+                    "the cleared family reaches the database"
+                );
+            }),
+        ]);
     }
 
     #[test]

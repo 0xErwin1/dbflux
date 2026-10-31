@@ -109,3 +109,30 @@ fn a_step_past_every_limit_changes_nothing(cx: &mut TestAppContext) {
     assert_eq!(active_sizes(cx), (32.0, 32.0, 32.0));
     assert_eq!(saved_sizes(&app_state, cx), (32.0, 32.0, 32.0));
 }
+
+/// Holding the key applies every step at once and coalesces the writes, so
+/// the disk sees the final size without one write per key repeat.
+#[gpui::test]
+fn repeated_steps_apply_at_once_and_save_once(cx: &mut TestAppContext) {
+    let app_state = app_state(cx);
+
+    cx.update(|cx| {
+        for _ in 0..5 {
+            change_interface_size(&app_state, InterfaceSizeChange::Increase, cx);
+        }
+    });
+
+    cx.update(|cx| {
+        let settings = app_state.read(cx).general_settings();
+        assert_eq!(settings.ui_font_size, 18.0);
+    });
+
+    cx.run_until_parked();
+
+    assert_eq!(active_sizes(cx), (18.0, 18.0, 17.5));
+    assert_eq!(saved_sizes(&app_state, cx), (18.0, 18.0, 17.5));
+    assert_eq!(
+        cx.update(|cx| crate::settings_writer::writes_started(cx)),
+        1
+    );
+}
