@@ -66,6 +66,14 @@ expanded display face of section labels. What each size controls:
 - **Data grid font size** sets cell text, row and header height, and the
   automatic column widths. Columns you resized by hand keep their width.
 
+`Ctrl+=` / `Cmd+=` and `Ctrl+-` / `Cmd+-` change all three sizes at once by
+1 px each, keeping their relative sizes, and `Ctrl+0` / `Cmd+0` restores the
+defaults. They work in the workspace window, are also in the command palette,
+and can be rebound in [Keybindings](#keybindings). A size
+already at 8 or 32 px stays there while the others keep moving. The new sizes
+are saved like any other setting, so these fields show them and they survive a
+restart.
+
 The font lists have a search field, since a system can have hundreds of fonts.
 A saved font that is no longer installed stays selected, marked
 "(not installed)", and DBFlux draws with the default until it is installed

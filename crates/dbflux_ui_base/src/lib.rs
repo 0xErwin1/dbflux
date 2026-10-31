@@ -11,6 +11,7 @@ pub mod async_ext;
 pub mod dashboard_manager;
 pub mod file_dialog;
 pub mod hook_phase_runner;
+pub mod interface_size;
 #[cfg(any(test, feature = "test-support"))]
 pub mod keyboard_coverage;
 pub mod keymap;

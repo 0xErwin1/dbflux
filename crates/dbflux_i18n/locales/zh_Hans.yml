@@ -3953,6 +3953,12 @@ palette:
       name: 切换侧边栏
     toggle_full_screen:
       name: 切换全屏
+    increase_interface_size:
+      name: "增大界面尺寸"
+    decrease_interface_size:
+      name: "减小界面尺寸"
+    reset_interface_size:
+      name: "重置界面尺寸"
     toggle_editor:
       name: 切换编辑器面板
     toggle_results:
@@ -4373,6 +4379,9 @@ settings:
       clear_finished_tasks: 清除已完成任务
       toggle_sidebar: 切换侧边栏
       toggle_full_screen: 切换全屏
+      increase_interface_size: "增大界面尺寸"
+      decrease_interface_size: "减小界面尺寸"
+      reset_interface_size: "重置界面尺寸"
       open_settings: 打开设置
       open_login_modal: 打开认证配置文件登录
       open_sso_wizard: 打开 AWS SSO 向导

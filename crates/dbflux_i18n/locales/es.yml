@@ -3953,6 +3953,12 @@ palette:
       name: Mostrar u ocultar barra lateral
     toggle_full_screen:
       name: Alternar pantalla completa
+    increase_interface_size:
+      name: "Aumentar tamaño de la interfaz"
+    decrease_interface_size:
+      name: "Reducir tamaño de la interfaz"
+    reset_interface_size:
+      name: "Restablecer tamaño de la interfaz"
     toggle_editor:
       name: Mostrar u ocultar panel del editor
     toggle_results:
@@ -4373,6 +4379,9 @@ settings:
       clear_finished_tasks: Borrar tareas terminadas
       toggle_sidebar: Mostrar u ocultar barra lateral
       toggle_full_screen: Alternar pantalla completa
+      increase_interface_size: "Aumentar tamaño de la interfaz"
+      decrease_interface_size: "Reducir tamaño de la interfaz"
+      reset_interface_size: "Restablecer tamaño de la interfaz"
       open_settings: Abrir configuración
       open_login_modal: Abrir inicio de sesión de Auth Profile
       open_sso_wizard: Abrir asistente de AWS SSO

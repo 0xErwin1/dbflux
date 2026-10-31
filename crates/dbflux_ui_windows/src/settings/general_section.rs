@@ -10,7 +10,7 @@ use dbflux_core::{
     AppStyle, GeneralSettings, RefreshPolicySetting, ScrollbarVisibility, StartupFocus,
     ThemeSetting,
 };
-use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::IndexPath;
@@ -416,6 +416,9 @@ impl GeneralSection {
             },
         );
 
+        let saved_font_sizes_subscription =
+            cx.subscribe_in(&app_state, window, Self::sync_saved_font_sizes);
+
         Self {
             app_state,
             gen_settings: settings,
@@ -459,11 +462,59 @@ impl GeneralSection {
                 blur_editor_row_limit,
                 blur_object_preview_limit,
                 blur_key_value_size_limit,
+                saved_font_sizes_subscription,
             ]
             .into_iter()
             .chain(font_subscriptions)
             .collect(),
         }
+    }
+
+    /// Font sizes also change outside this window (the interface zoom
+    /// commands). Show the new saved size in every field the user has not
+    /// edited, so Save does not write the old size back.
+    fn sync_saved_font_sizes(
+        &mut self,
+        app_state: &Entity<AppStateEntity>,
+        _event: &AppStateChanged,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let saved = app_state.read(cx).general_settings();
+        let fields = [
+            (
+                &self.input_ui_font_size,
+                &mut self.gen_settings.ui_font_size,
+                saved.ui_font_size,
+            ),
+            (
+                &self.input_editor_font_size,
+                &mut self.gen_settings.editor_font_size,
+                saved.editor_font_size,
+            ),
+            (
+                &self.input_grid_font_size,
+                &mut self.gen_settings.grid_font_size,
+                saved.grid_font_size,
+            ),
+        ];
+
+        for (input, synced, saved_size) in fields {
+            if *synced == saved_size {
+                continue;
+            }
+
+            let untouched = input.read(cx).value().as_ref() == synced.to_string();
+            *synced = saved_size;
+
+            if untouched {
+                input.update(cx, |input, cx| {
+                    input.set_value(saved_size.to_string(), window, cx)
+                });
+            }
+        }
+
+        cx.notify();
     }
 
     fn return_focus_on_blur(
@@ -971,6 +1022,93 @@ mod tests {
         window
             .update(&mut cx, |_, window, _| window.remove_window())
             .expect("window closes");
+    }
+
+    fn font_size_inputs(section: &GeneralSection, cx: &gpui::App) -> [String; 3] {
+        [
+            &section.input_ui_font_size,
+            &section.input_editor_font_size,
+            &section.input_grid_font_size,
+        ]
+        .map(|input| input.read(cx).value().to_string())
+    }
+
+    fn zoom_with_settings_open(
+        before_zoom: impl FnOnce(
+            &mut GeneralSection,
+            &mut gpui::Window,
+            &mut gpui::Context<GeneralSection>,
+        ),
+        after_zoom: impl FnOnce(&mut GeneralSection, &mut gpui::Context<GeneralSection>),
+    ) {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test app state")
+            })
+        });
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| GeneralSection::new(app_state.clone(), window, cx))
+                })
+            })
+            .expect("general settings window opens");
+
+        window
+            .update(&mut cx, |section, window, cx| {
+                before_zoom(section, window, cx)
+            })
+            .expect("general section updates before the zoom");
+        let changed = cx.update(|cx| {
+            dbflux_ui_base::interface_size::change_interface_size(
+                &app_state,
+                dbflux_core::InterfaceSizeChange::Increase,
+                cx,
+            )
+        });
+        assert!(changed, "the zoom changes the saved sizes");
+        window
+            .update(&mut cx, |section, _, cx| after_zoom(section, cx))
+            .expect("general section updates after the zoom");
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("window closes");
+    }
+
+    #[test]
+    fn zoom_while_settings_is_open_shows_the_new_sizes_without_unsaved_changes() {
+        zoom_with_settings_open(
+            |_, _, _| {},
+            |section, cx| {
+                assert_eq!(font_size_inputs(section, cx), ["14", "14", "13.5"]);
+                assert_eq!(section.general_change_count(cx), 0);
+            },
+        );
+    }
+
+    #[test]
+    fn zoom_while_settings_is_open_keeps_a_font_size_the_user_is_editing() {
+        zoom_with_settings_open(
+            |section, window, cx| {
+                section
+                    .input_ui_font_size
+                    .update(cx, |input, cx| input.set_value("20", window, cx));
+            },
+            |section, cx| {
+                assert_eq!(font_size_inputs(section, cx), ["20", "14", "13.5"]);
+                assert_eq!(section.general_change_count(cx), 1);
+            },
+        );
     }
 
     fn stored_editor_row_limit(section: &GeneralSection, cx: &gpui::App) -> Option<i64> {

@@ -447,12 +447,23 @@ pub struct GeneralSettings {
     pub grid_font_size: f32,
 }
 
+/// A change the interface size commands make to the font sizes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InterfaceSizeChange {
+    Increase,
+    Decrease,
+    Reset,
+}
+
 impl GeneralSettings {
     pub const DEFAULT_UI_FONT_SIZE: f32 = 13.0;
     pub const DEFAULT_EDITOR_FONT_SIZE: f32 = 13.0;
     pub const DEFAULT_GRID_FONT_SIZE: f32 = 12.5;
     pub const MIN_FONT_SIZE: f32 = 8.0;
     pub const MAX_FONT_SIZE: f32 = 32.0;
+    /// Pixels one interface size command adds to or removes from each font
+    /// size.
+    pub const INTERFACE_SIZE_STEP: f32 = 1.0;
     pub const DEFAULT_TOAST_AUTO_DISMISS_SECS: u32 = 8;
 
     /// Clamps a font size to `[MIN_FONT_SIZE, MAX_FONT_SIZE]`. A non-finite
@@ -464,6 +475,30 @@ impl GeneralSettings {
         } else {
             default
         }
+    }
+
+    /// Moves the interface, editor and data grid font sizes together, as the
+    /// interface size commands do. A step changes each size by
+    /// [`Self::INTERFACE_SIZE_STEP`] and stops it at the supported range, so
+    /// a size already at a limit stays there while the others still move.
+    pub fn change_interface_size(&mut self, change: InterfaceSizeChange) {
+        let step = match change {
+            InterfaceSizeChange::Increase => Self::INTERFACE_SIZE_STEP,
+            InterfaceSizeChange::Decrease => -Self::INTERFACE_SIZE_STEP,
+            InterfaceSizeChange::Reset => {
+                self.ui_font_size = Self::DEFAULT_UI_FONT_SIZE;
+                self.editor_font_size = Self::DEFAULT_EDITOR_FONT_SIZE;
+                self.grid_font_size = Self::DEFAULT_GRID_FONT_SIZE;
+                return;
+            }
+        };
+
+        self.ui_font_size =
+            Self::clamp_font_size(self.ui_font_size + step, Self::DEFAULT_UI_FONT_SIZE);
+        self.editor_font_size =
+            Self::clamp_font_size(self.editor_font_size + step, Self::DEFAULT_EDITOR_FONT_SIZE);
+        self.grid_font_size =
+            Self::clamp_font_size(self.grid_font_size + step, Self::DEFAULT_GRID_FONT_SIZE);
     }
 
     /// Trims a font family name. A missing or blank name becomes `None`,

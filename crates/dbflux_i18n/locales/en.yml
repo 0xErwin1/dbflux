@@ -3953,6 +3953,12 @@ palette:
       name: Toggle sidebar
     toggle_full_screen:
       name: Toggle full screen
+    increase_interface_size:
+      name: "Increase interface size"
+    decrease_interface_size:
+      name: "Decrease interface size"
+    reset_interface_size:
+      name: "Reset interface size"
     toggle_editor:
       name: Toggle editor panel
     toggle_results:
@@ -4373,6 +4379,9 @@ settings:
       clear_finished_tasks: Clear finished tasks
       toggle_sidebar: Toggle sidebar
       toggle_full_screen: Toggle full screen
+      increase_interface_size: "Increase interface size"
+      decrease_interface_size: "Decrease interface size"
+      reset_interface_size: "Reset interface size"
       open_settings: Open settings
       open_login_modal: Open auth profile login
       open_sso_wizard: Open AWS SSO wizard

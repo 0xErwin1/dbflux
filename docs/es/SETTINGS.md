@@ -72,6 +72,15 @@ etiquetas de sección. Qué controla cada tamaño:
   altura de filas y encabezados, y el ancho automático de las columnas. Las
   columnas que redimensionaste a mano conservan su ancho.
 
+`Ctrl+=` / `Cmd+=` y `Ctrl+-` / `Cmd+-` cambian los tres tamaños a la vez, 1 px
+cada uno, manteniendo sus proporciones, y `Ctrl+0` / `Cmd+0` restablece los
+valores predeterminados. Funcionan desde la ventana del espacio de trabajo,
+también están en la paleta de comandos y se pueden reasignar en
+[Keybindings](#keybindings). Un tamaño que ya está en 8 o 32 px se
+queda ahí mientras los demás siguen cambiando. Los nuevos tamaños se guardan
+como cualquier otra configuración, así que estos campos los muestran y se
+conservan al reiniciar.
+
 Las listas de fuentes tienen un campo de búsqueda, porque un sistema puede tener
 cientos de fuentes. Una fuente guardada que ya no está instalada sigue
 seleccionada, marcada como "(no instalada)", y DBFlux dibuja con la fuente

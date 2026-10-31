@@ -149,6 +149,12 @@ pub enum Command {
     ClearFinishedTasks,
     ToggleSidebar,
     ToggleFullScreen,
+    /// Makes the interface, editor and data grid text one step larger.
+    IncreaseInterfaceSize,
+    /// Makes the interface, editor and data grid text one step smaller.
+    DecreaseInterfaceSize,
+    /// Restores the default interface, editor and data grid text sizes.
+    ResetInterfaceSize,
     OpenSettings,
     OpenLoginModal,
     OpenSsoWizard,
@@ -310,6 +316,9 @@ impl Command {
             "focus_tasks" => Some(Command::FocusBackgroundTasks),
             "toggle_sidebar" => Some(Command::ToggleSidebar),
             "toggle_full_screen" => Some(Command::ToggleFullScreen),
+            "increase_interface_size" => Some(Command::IncreaseInterfaceSize),
+            "decrease_interface_size" => Some(Command::DecreaseInterfaceSize),
+            "reset_interface_size" => Some(Command::ResetInterfaceSize),
             "toggle_editor" => Some(Command::ToggleEditor),
             "toggle_results" => Some(Command::ToggleResults),
             "toggle_results_position" => Some(Command::ToggleResultsPosition),
@@ -450,6 +459,9 @@ impl Command {
             Command::ClearFinishedTasks => "Clear finished tasks",
             Command::ToggleSidebar => "Toggle sidebar",
             Command::ToggleFullScreen => "Toggle full screen",
+            Command::IncreaseInterfaceSize => "Increase interface size",
+            Command::DecreaseInterfaceSize => "Decrease interface size",
+            Command::ResetInterfaceSize => "Reset interface size",
             Command::OpenSettings => "Open settings",
             Command::OpenLoginModal => "Open auth profile login",
             Command::OpenSsoWizard => "Open AWS SSO wizard",
@@ -652,6 +664,9 @@ impl Command {
             Command::ClearFinishedTasks => "clear_finished_tasks",
             Command::ToggleSidebar => "toggle_sidebar",
             Command::ToggleFullScreen => "toggle_full_screen",
+            Command::IncreaseInterfaceSize => "increase_interface_size",
+            Command::DecreaseInterfaceSize => "decrease_interface_size",
+            Command::ResetInterfaceSize => "reset_interface_size",
             Command::OpenSettings => "open_settings",
             Command::OpenLoginModal => "open_login_modal",
             Command::OpenSsoWizard => "open_sso_wizard",
@@ -869,6 +884,9 @@ impl Command {
             Command::ClearFinishedTasks,
             Command::ToggleSidebar,
             Command::ToggleFullScreen,
+            Command::IncreaseInterfaceSize,
+            Command::DecreaseInterfaceSize,
+            Command::ResetInterfaceSize,
             Command::OpenSettings,
             Command::OpenLoginModal,
             Command::OpenSsoWizard,
@@ -1064,6 +1082,9 @@ impl Command {
             | Command::ClearFinishedTasks
             | Command::ToggleSidebar
             | Command::ToggleFullScreen
+            | Command::IncreaseInterfaceSize
+            | Command::DecreaseInterfaceSize
+            | Command::ResetInterfaceSize
             | Command::TogglePanel
             | Command::OpenSettings
             | Command::OpenLoginModal
@@ -1190,6 +1211,9 @@ impl Command {
                 | Command::ToggleTasks
                 | Command::ToggleSidebar
                 | Command::ToggleFullScreen
+                | Command::IncreaseInterfaceSize
+                | Command::DecreaseInterfaceSize
+                | Command::ResetInterfaceSize
                 | Command::OpenLoginModal
                 | Command::OpenSsoWizard
                 | Command::OpenAuditViewer
@@ -1728,6 +1752,9 @@ mod tests {
             "focus_tasks",
             "toggle_sidebar",
             "toggle_full_screen",
+            "increase_interface_size",
+            "decrease_interface_size",
+            "reset_interface_size",
             "toggle_editor",
             "toggle_results",
             "toggle_results_position",
@@ -1816,6 +1843,9 @@ mod tests {
             Command::ShowScriptsView,
             Command::ShowDashboardsView,
             Command::AddExternalScriptsFolder,
+            Command::IncreaseInterfaceSize,
+            Command::DecreaseInterfaceSize,
+            Command::ResetInterfaceSize,
         ] {
             assert_eq!(Command::from_palette_id(command.id()), Some(command));
             assert!(command.is_global(), "{command:?} is a workspace command");
