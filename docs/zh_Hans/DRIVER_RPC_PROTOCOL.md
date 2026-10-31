@@ -77,7 +77,7 @@ DBFlux 通过 `interprocess` 使用本地 Socket：
 
 DBFlux 先建立连接并发送 `Hello`。
 
-当前启用的驱动 RPC API 族是 `driver_rpc`。在现有的专用驱动 RPC 传输层中，该族隐含在协议本身里，`Hello` 期间不会在线路上传输。兼容性由驱动 RPC 端点加上所选协议主版本号共同保证；次版本号在同一主版本线内以确定方式协商得出。v1.7 及之前的次版本号是追加式的；v1.8 是一次线路格式修正，改变了部分现有载荷的编码方式，而之前能够解码的所有形态都逐字节相同（见下文的**线路格式修正**）。
+当前启用的驱动 RPC API 族是 `driver_rpc`。在现有的专用驱动 RPC 传输层中，该族隐含在协议本身里，`Hello` 期间不会在线路上传输。兼容性由驱动 RPC 端点加上所选协议主版本号共同保证；次版本号在同一主版本线内以确定方式协商得出。v1.7 及之前的次版本号是追加式的；v1.8 是一次线路格式修正，改变了部分现有载荷的编码方式，而之前能够解码的所有形态都逐字节相同（见下文的**线路格式修正**）。v1.9 重新回到追加式。
 
 客户端请求：
 
@@ -95,6 +95,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 6),
         ProtocolVersion::new(1, 7),
         ProtocolVersion::new(1, 8),
+        ProtocolVersion::new(1, 9),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -218,6 +219,20 @@ v1.8 没有新增任何请求或响应变体。它改变了部分现有载荷的
 
 该编码不受协商版本的控制。在 v1.8 之前能够解码的形态，在 v1.8 中逐字节相同；只有任何对端都无法解码的形态，其字节才会改变，因此使用更早次版本的对端仍可正常工作。
 
+### 根分区（v1.9+）
+
+驱动可以声明显示在侧边栏中其连接根部的分区，例如 S3 存储桶。载荷是 `dbflux_core` 的根分区类型，按原样传输：
+
+| 请求 | 响应 |
+| --- | --- |
+| `RootSections` | `RootSections { sections }`，按显示顺序排列的 `Vec<RootSectionDef>` |
+| `RootSectionItems { section_id, page_token }` | `RootSectionPage { page }`；第一页的 `page_token` 为 `None`，之后为上一页的 `next_page_token` |
+| `ExecuteRootSectionAction { section_id, item_id, action_id }` | `RootSectionActionDone` |
+
+宿主将这三种请求分派给连接的 `Connection::root_section_source`。没有该来源的驱动回复 `UnsupportedMethod`（`Driver does not declare root sections`），驱动错误则与其他 `Error` 一样回复。在协商了更早次版本的会话上，宿主以 `VersionMismatch`（`root section requests require driver RPC protocol 1.9 or newer`）拒绝这些请求，不会调用驱动。
+
+出于上文所述的线路索引原因，这六个变体追加在各自枚举的最后一个 v1.8 变体之后。只有当会话协商了 v1.9 或更新版本、且驱动元数据声明了 `DriverCapabilities::ROOT_SECTIONS` 时，客户端才会暴露根分区；否则 `IpcConnection` 会清除该能力，且不发送任何请求。`IpcConnection` 每个连接只获取一次声明并缓存；获取失败时不显示分区，并在下一次读取时重试。每个 `RootSectionAction` 都带有其 `ExecutionClassification`，因此宿主对外部驱动的操作与内置驱动一样进行确认和审计。
+
 ## 认证提供程序 RPC 契约
 
 当前启用的认证提供程序 RPC API 族为 `auth_provider_rpc`，版本 `1.3`。
@@ -321,6 +336,7 @@ DbConfig::External {
 | `Execute` → `ExecuteResult`（自 v1.7 起为 `ExecuteResultSets`） | 执行查询 |
 | `Schema` → `Schema` | Schema 快照 |
 | `ListDatabases` → `Databases` | 数据库列表 |
+| `RootSections` → `RootSections`、`RootSectionItems` → `RootSectionPage`、`ExecuteRootSectionAction` → `RootSectionActionDone`（v1.9+） | 侧边栏根分区 |
 
 该协议还支持浏览、CRUD、键值与代码生成类操作。完整的枚举集合参见 `crates/dbflux_ipc/src/driver_protocol.rs`。
 
