@@ -1032,31 +1032,42 @@ mod tests {
             .expect("window closes");
     }
 
+    /// One step of a test on the General section: it runs, then the
+    /// background settings writer finishes before the next step.
+    type SectionPhase =
+        Box<dyn FnOnce(&mut GeneralSection, &mut gpui::Window, &mut gpui::Context<GeneralSection>)>;
+
+    /// Runs each phase in order, letting the background settings writer
+    /// finish after every one, so a phase can check what an earlier save
+    /// wrote to the database.
+    fn with_general_section_phases(phases: Vec<SectionPhase>) {
+        let mut cx = TestAppContext::single();
+        let (window, _) = open_section_window(&mut cx);
+
+        for phase in phases {
+            window
+                .update(&mut cx, |section, window, cx| phase(section, window, cx))
+                .expect("general section updates");
+            cx.run_until_parked();
+        }
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("window closes");
+    }
+
     /// Runs `test`, lets the background settings writer finish, then runs
     /// `after_saved` to check what reached the database.
     fn with_general_section_saved(
-        test: impl FnOnce(&mut GeneralSection, &mut gpui::Window, &mut gpui::Context<GeneralSection>),
+        test: impl FnOnce(&mut GeneralSection, &mut gpui::Window, &mut gpui::Context<GeneralSection>)
+        + 'static,
         after_saved: impl FnOnce(
             &mut GeneralSection,
             &mut gpui::Window,
             &mut gpui::Context<GeneralSection>,
-        ),
+        ) + 'static,
     ) {
-        let mut cx = TestAppContext::single();
-        let (window, _) = open_section_window(&mut cx);
-
-        window
-            .update(&mut cx, |section, window, cx| test(section, window, cx))
-            .expect("general section updates");
-        cx.run_until_parked();
-        window
-            .update(&mut cx, |section, window, cx| {
-                after_saved(section, window, cx)
-            })
-            .expect("general section updates after the save");
-        window
-            .update(&mut cx, |_, window, _| window.remove_window())
-            .expect("window closes");
+        with_general_section_phases(vec![Box::new(test), Box::new(after_saved)]);
     }
 
     fn font_size_inputs(section: &GeneralSection, cx: &gpui::App) -> [String; 3] {
@@ -1593,8 +1604,8 @@ mod tests {
 
     #[test]
     fn font_settings_mark_dirty_and_save() {
-        with_general_section_saved(
-            |section, window, cx| {
+        with_general_section_phases(vec![
+            Box::new(|section, window, cx| {
                 assert_eq!(
                     section.input_grid_font_size.read(cx).value().as_ref(),
                     "12.5"
@@ -1617,8 +1628,8 @@ mod tests {
                 assert_eq!(saved.grid_font_size, 14.5);
                 assert_eq!(saved.editor_font_family.as_deref(), Some("Fira Code"));
                 assert_eq!(saved.ui_font_family, None);
-            },
-            |section, window, cx| {
+            }),
+            Box::new(|section, window, cx| {
                 assert_eq!(
                     stored_general_settings(section, cx),
                     Some((16.0, 13.0, 14.5))
@@ -1637,8 +1648,22 @@ mod tests {
                     None,
                     "the default entry clears the family"
                 );
-            },
-        );
+            }),
+            Box::new(|section, _window, cx| {
+                let stored_family = section
+                    .app_state
+                    .read(cx)
+                    .storage_runtime()
+                    .general_settings()
+                    .get()
+                    .expect("stored general settings readable")
+                    .and_then(|settings| settings.editor_font_family);
+                assert_eq!(
+                    stored_family, None,
+                    "the cleared family reaches the database"
+                );
+            }),
+        ]);
     }
 
     #[test]

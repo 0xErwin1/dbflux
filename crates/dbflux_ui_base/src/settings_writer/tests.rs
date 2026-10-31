@@ -298,3 +298,28 @@ fn a_failed_write_on_quit_is_reported(cx: &mut TestAppContext) {
     assert_eq!(*outcomes.borrow(), vec![(1, false)]);
     assert_eq!(cx.update(|cx| app_state.read(cx).unread_error_count), 1);
 }
+
+/// Quitting the app runs the registered quit hook, which writes the change
+/// the drain never got to.
+#[gpui::test]
+fn quitting_the_app_writes_the_pending_change(cx: &mut TestAppContext) {
+    let app_state = app_state(cx);
+    let path = cx.update(|cx| db_path(&app_state, cx));
+    let outcomes = Outcomes::default();
+
+    cx.update(|cx| {
+        persist_general_settings(&app_state, with_max_history(88), record(&outcomes, 1), cx)
+    });
+    cx.quit();
+
+    let connection = rusqlite::Connection::open(&path).expect("open the settings database");
+    let stored: i64 = connection
+        .query_row(
+            "SELECT max_history_entries FROM cfg_general_settings",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read the stored settings");
+    assert_eq!(stored, 88);
+    assert_eq!(*outcomes.borrow(), vec![(1, true)]);
+}
