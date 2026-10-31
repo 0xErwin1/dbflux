@@ -5,22 +5,18 @@
 //! DBFlux. Only the requested key's value leaves this module. Every error
 //! names the file and the key but never a value or the text of a line.
 
-use std::io::Read;
-use std::path::PathBuf;
-
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::DbError;
+use crate::values::source_file;
+
+const LABEL: &str = "Dotenv file";
 
 /// Largest dotenv file DBFlux reads.
-pub const MAX_FILE_BYTES: u64 = 64 * 1024;
+pub const MAX_FILE_BYTES: u64 = source_file::MAX_FILE_BYTES;
 
 /// Largest number of entries a dotenv file may define.
 pub const MAX_ENTRIES: usize = 1024;
-
-/// Permission bits that let anyone but the owner read or change the file.
-#[cfg(unix)]
-const UNSAFE_MODE_BITS: u32 = 0o066;
 
 /// Reads `key` from the dotenv file at `path`.
 ///
@@ -36,8 +32,7 @@ pub fn read_dotenv_value(path: &str, key: &str) -> Result<SecretString, DbError>
         )));
     }
 
-    let resolved_path = resolve_path(path)?;
-    let content = read_file(path, &resolved_path)?;
+    let content = source_file::read_owner_only_file(LABEL, path)?;
 
     match find_value(content.expose_secret(), key)
         .map_err(|failure| error(failure.describe(path)))?
@@ -54,131 +49,6 @@ pub fn read_dotenv_value(path: &str, key: &str) -> Result<SecretString, DbError>
 
 fn error(message: String) -> DbError {
     DbError::value_resolution_failed(message)
-}
-
-fn resolve_path(path: &str) -> Result<PathBuf, DbError> {
-    let trimmed = path.trim();
-
-    if trimmed.is_empty() {
-        return Err(error("Dotenv file path is empty".to_string()));
-    }
-
-    if let Some(rest) = trimmed.strip_prefix("~/") {
-        let home = dirs::home_dir().ok_or_else(|| {
-            error(format!(
-                "Dotenv file '{path}' starts with '~' but the home directory is unknown"
-            ))
-        })?;
-
-        return Ok(home.join(rest));
-    }
-
-    let candidate = PathBuf::from(trimmed);
-
-    if !candidate.is_absolute() {
-        return Err(error(format!(
-            "Dotenv file '{path}' must be an absolute path or start with '~/'"
-        )));
-    }
-
-    Ok(candidate)
-}
-
-/// Opening a FIFO for reading blocks until a writer appears, which would hang the
-/// resolver before the regular-file check could reject it. `O_NONBLOCK` makes that open
-/// return at once; it has no effect on reads from a regular file.
-#[cfg(unix)]
-fn open_without_blocking(path: &PathBuf) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn open_without_blocking(path: &PathBuf) -> std::io::Result<std::fs::File> {
-    std::fs::File::open(path)
-}
-
-fn read_file(display_path: &str, path: &PathBuf) -> Result<SecretString, DbError> {
-    let file = open_without_blocking(path).map_err(|io_error| match io_error.kind() {
-        std::io::ErrorKind::NotFound => {
-            error(format!("Dotenv file '{display_path}' does not exist"))
-        }
-        std::io::ErrorKind::PermissionDenied => error(format!(
-            "Dotenv file '{display_path}' cannot be read: permission denied"
-        )),
-        _ => error(format!(
-            "Dotenv file '{display_path}' cannot be opened: {io_error}"
-        )),
-    })?;
-
-    // Checked on the open handle, so the file that is read is the file whose
-    // metadata passed, even if the path is swapped in between.
-    let metadata = file.metadata().map_err(|io_error| {
-        error(format!(
-            "Dotenv file '{display_path}' cannot be inspected: {io_error}"
-        ))
-    })?;
-
-    if !metadata.is_file() {
-        return Err(error(format!(
-            "Dotenv file '{display_path}' is not a regular file"
-        )));
-    }
-
-    check_permissions(display_path, &metadata)?;
-
-    if metadata.len() > MAX_FILE_BYTES {
-        return Err(too_large(display_path));
-    }
-
-    let mut bytes = Vec::new();
-    file.take(MAX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|io_error| {
-            error(format!(
-                "Dotenv file '{display_path}' cannot be read: {io_error}"
-            ))
-        })?;
-
-    if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err(too_large(display_path));
-    }
-
-    let content = String::from_utf8(bytes)
-        .map_err(|_| error(format!("Dotenv file '{display_path}' is not valid UTF-8")))?;
-
-    Ok(SecretString::from(content))
-}
-
-fn too_large(display_path: &str) -> DbError {
-    error(format!(
-        "Dotenv file '{display_path}' is larger than {} KiB",
-        MAX_FILE_BYTES / 1024
-    ))
-}
-
-#[cfg(unix)]
-fn check_permissions(display_path: &str, metadata: &std::fs::Metadata) -> Result<(), DbError> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mode = metadata.permissions().mode() & 0o777;
-
-    if mode & UNSAFE_MODE_BITS != 0 {
-        return Err(error(format!(
-            "Dotenv file '{display_path}' can be read or changed by other users (mode {mode:o}); restrict it with chmod 600"
-        )));
-    }
-
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn check_permissions(_display_path: &str, _metadata: &std::fs::Metadata) -> Result<(), DbError> {
-    Ok(())
 }
 
 /// Why a dotenv file could not be parsed. Carries line numbers only, never

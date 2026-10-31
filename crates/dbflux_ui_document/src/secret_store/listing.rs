@@ -3,6 +3,25 @@
 
 use dbflux_core::{SecretListPage, SecretSummary};
 
+/// Entries a listing loads on its own. Past this the manual row takes over:
+/// every page is a provider call that costs money and time, and the listing is
+/// not virtualized, so a listing of thousands of rows would be slower than the
+/// click it saves.
+pub(super) const AUTO_CONTINUE_ENTRY_LIMIT: usize = 1_000;
+
+/// Upper bound a page request carries. Stores clamp to their own limit (100
+/// for Secrets Manager, 50 for Parameter Store), so this asks for the largest
+/// page each one is willing to give instead of letting the service pick, which
+/// is what made every listing look truncated.
+pub(super) const LARGEST_PAGE_ENTRIES: u32 = 1_000;
+
+/// Whether a listing that just landed a page keeps loading on its own: only
+/// while the store says there is more and the listing is still under the
+/// limit.
+pub(super) fn keeps_loading(loaded: usize, has_more: bool) -> bool {
+    has_more && loaded < AUTO_CONTINUE_ENTRY_LIMIT
+}
+
 /// How a hierarchical store lists the current path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathMode {

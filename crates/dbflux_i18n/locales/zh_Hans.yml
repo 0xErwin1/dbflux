@@ -176,6 +176,7 @@ components:
     literal: 字符
     env: 环境变量
     dotenv: "Dotenv 文件"
+    file: "密钥文件"
     secret: AWS 云密钥管理
     parameter: AWS 参数存储
     auth: 认证会话字段
@@ -183,10 +184,13 @@ components:
     placeholder:
       env: "VARIABLE_NAME"
       dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+      file: "/run/secrets/db_password"
     hint:
       env: "DBFlux 每次连接时从环境变量 %{name} 读取。DBFlux 不保存该值。"
       dotenv: "DBFlux 每次连接时从 %{path} 中的 %{key} 读取。该文件必须只有您能读取。"
       dotenv_missing_key: "在路径后添加键：~/path/to/file.env#KEY"
+      file: "DBFlux 每次连接时从 %{path} 读取。该文件必须只有您能读取。"
+      file_with_key: "DBFlux 每次连接时从 JSON 文件 %{path} 中的 %{key} 读取。该文件必须只有您能读取。"
   file_picker:
     browse: 浏览…
   column_projection:
@@ -3420,6 +3424,10 @@ document:
       refresh: "刷新"
     load_more: "加载下一页"
     loading_more: "正在加载下一页…"
+    region:
+      label: "区域"
+      retry: "重试"
+      switch_failed: "无法切换到区域 %{region}：%{error}"
     columns:
       name: "名称"
       description: "描述"
@@ -3945,6 +3953,12 @@ palette:
       name: 切换侧边栏
     toggle_full_screen:
       name: 切换全屏
+    increase_interface_size:
+      name: "增大界面尺寸"
+    decrease_interface_size:
+      name: "减小界面尺寸"
+    reset_interface_size:
+      name: "重置界面尺寸"
     toggle_editor:
       name: 切换编辑器面板
     toggle_results:
@@ -4064,6 +4078,13 @@ settings:
       option:
         default: "默认"
         compact: "紧凑"
+    scrollbars:
+      help: "应用于所有窗口。"
+      label: "显示滚动条"
+      option:
+        while_scrolling: "滚动时"
+        on_hover: "悬停时"
+        always: "始终"
     language:
       label: 语言
       option:
@@ -4358,6 +4379,9 @@ settings:
       clear_finished_tasks: 清除已完成任务
       toggle_sidebar: 切换侧边栏
       toggle_full_screen: 切换全屏
+      increase_interface_size: "增大界面尺寸"
+      decrease_interface_size: "减小界面尺寸"
+      reset_interface_size: "重置界面尺寸"
       open_settings: 打开设置
       open_login_modal: 打开认证配置文件登录
       open_sso_wizard: 打开 AWS SSO 向导
@@ -5191,6 +5215,11 @@ sidebar:
     dashboards: "仪表板"
     connections: 连接
     scripts: 脚本
+  root_section:
+    confirm_message: "要对“%{item}”执行“%{action}”吗？"
+    action:
+      delete_bucket: "删除存储桶"
+      delete_bucket_description: "删除该存储桶。只能删除空存储桶，且此操作无法撤销。"
   task:
     connecting: "正在连接 %{name}"
     disconnecting: "正在断开 %{name}"
@@ -5199,7 +5228,7 @@ sidebar:
     disconnect_hook_cancelled: 断开 Hook 已取消
     post_disconnect_hook_cancelled: 断开后 Hook 已取消
     loading_event_streams: "正在加载事件流：%{name}"
-    listing_buckets: "正在列出存储桶：%{name}"
+    listing_root_section: "正在列出%{section}：%{name}"
     loading_database_schema: "正在加载 Schema：%{name}"
     connecting_to_database: "正在连接数据库：%{name}"
     refreshing_database: "正在刷新数据库：%{name}"
@@ -5247,7 +5276,16 @@ sidebar:
       indexes: "加载索引失败：%{error}"
       foreign_keys: "加载外键失败：%{error}"
       routines: "加载例程失败：%{error}"
-    list_buckets_failed: "列出存储桶失败：%{error}"
+    list_root_section_failed: "列出%{section}失败：%{error}"
+    root_section_action_failed: "对 %{item} 执行%{action}失败：%{error}"
+    root_section_action_audit_failed: "已对 %{item} 执行%{action}，但未能记录其审计事件：%{error}"
+    root_section_action_connection_changed: "未对 %{item} 执行%{action}：请求操作后连接已更改。"
+    root_section_action_refused:
+      read_only: "未执行%{action}：此连接为只读。"
+      read_only_profile: "未执行%{action}：此连接的配置文件设置为只读。"
+      read_only_server: "未执行%{action}：服务器拒绝了此连接的修改。"
+      approval_unavailable: "未执行%{action}：此连接需要审批，而侧边栏操作暂不支持审批。"
+    root_section_invalid_id: "已跳过驱动声明的根分区 \"%{section}\"：分区 ID 必须唯一，且不能包含 \"|\"。"
     code_generation_failed: "代码生成失败：%{error}"
     loading_event_streams: 正在加载事件流…
     load_schema_failed: "加载 Schema 失败：%{error}"
@@ -5319,6 +5357,7 @@ sidebar:
       error_retry: "错误：%{error} — 点击重试"
       connect_failed: "连接失败：%{error}"
       remote_listing_count: "%{label}（%{count}）"
+      load_more: "加载更多"
       remote_dashboards_error_retry: "错误：%{error} — 折叠再展开以重试"
       used_by_objects:
         one: 被 1 个对象使用

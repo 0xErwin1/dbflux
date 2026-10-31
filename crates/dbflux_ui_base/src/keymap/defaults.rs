@@ -219,6 +219,28 @@ fn global_layer() -> KeymapLayer {
     let full_screen = KeyChord::new("f11", Modifiers::none());
     layer.bind(full_screen, Command::ToggleFullScreen);
 
+    // Interface size, as in most desktop apps. `+` and `=` share a key on
+    // common layouts, and some platforms report the chord with Shift held as
+    // `+`, so every form of that key makes the interface larger.
+    for key in ["=", "+"] {
+        layer.bind(
+            KeyChord::new(key, Modifiers::primary()),
+            Command::IncreaseInterfaceSize,
+        );
+        layer.bind(
+            KeyChord::new(key, Modifiers::primary_shift()),
+            Command::IncreaseInterfaceSize,
+        );
+    }
+    layer.bind(
+        KeyChord::new("-", Modifiers::primary()),
+        Command::DecreaseInterfaceSize,
+    );
+    layer.bind(
+        KeyChord::new("0", Modifiers::primary()),
+        Command::ResetInterfaceSize,
+    );
+
     // Tab context menu — stays Ctrl+M everywhere: Cmd+M is the system
     // "minimize window" shortcut on macOS.
     layer.bind(KeyChord::new("m", Modifiers::ctrl()), Command::OpenTabMenu);

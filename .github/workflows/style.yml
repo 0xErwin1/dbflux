@@ -152,7 +152,7 @@ jobs:
             python: python3
           # Native arm64; vendored-openssl matches build.yml (the runner has no
           # pkg-config-discoverable OpenSSL, so openssl-sys must build it).
-          - os: macos-14
+          - os: macos-15
             extra_features: ",vendored-openssl"
             python: python3
           # Native x86_64-msvc; OpenSSL is resolved on the runner as in build.yml.

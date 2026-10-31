@@ -176,6 +176,7 @@ components:
     literal: Literal
     env: Variable de entorno
     dotenv: "Archivo dotenv"
+    file: "Archivo de secreto"
     secret: Secret Manager
     parameter: Parameter Store
     auth: Campo de sesión de autenticación
@@ -183,10 +184,13 @@ components:
     placeholder:
       env: "NOMBRE_VARIABLE"
       dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+      file: "/run/secrets/db_password"
     hint:
       env: "Se lee de la variable de entorno %{name} cada vez que DBFlux se conecta. DBFlux no guarda el valor."
       dotenv: "Se lee de %{key} en %{path} cada vez que DBFlux se conecta. Solo tú debes poder leer el archivo."
       dotenv_missing_key: "Agrega la clave después de la ruta: ~/ruta/al/archivo.env#CLAVE"
+      file: "Se lee de %{path} cada vez que DBFlux se conecta. Solo tú debes poder leer el archivo."
+      file_with_key: "Se lee de %{key} en el archivo JSON %{path} cada vez que DBFlux se conecta. Solo tú debes poder leer el archivo."
   file_picker:
     browse: "Explorar…"
   column_projection:
@@ -3420,6 +3424,10 @@ document:
       refresh: "Actualizar"
     load_more: "Cargar la página siguiente"
     loading_more: "Cargando la página siguiente…"
+    region:
+      label: "Región"
+      retry: "Reintentar"
+      switch_failed: "No se pudo cambiar a la región %{region}: %{error}"
     columns:
       name: "Nombre"
       description: "Descripción"
@@ -3945,6 +3953,12 @@ palette:
       name: Mostrar u ocultar barra lateral
     toggle_full_screen:
       name: Alternar pantalla completa
+    increase_interface_size:
+      name: "Aumentar tamaño de la interfaz"
+    decrease_interface_size:
+      name: "Reducir tamaño de la interfaz"
+    reset_interface_size:
+      name: "Restablecer tamaño de la interfaz"
     toggle_editor:
       name: Mostrar u ocultar panel del editor
     toggle_results:
@@ -4064,6 +4078,13 @@ settings:
       option:
         default: "Predeterminado"
         compact: "Compacto"
+    scrollbars:
+      help: "Se aplica a todas las ventanas."
+      label: "Mostrar barras de desplazamiento"
+      option:
+        while_scrolling: "Al desplazarse"
+        on_hover: "Al pasar el cursor"
+        always: "Siempre"
     language:
       label: Idioma
       option:
@@ -4358,6 +4379,9 @@ settings:
       clear_finished_tasks: Borrar tareas terminadas
       toggle_sidebar: Mostrar u ocultar barra lateral
       toggle_full_screen: Alternar pantalla completa
+      increase_interface_size: "Aumentar tamaño de la interfaz"
+      decrease_interface_size: "Reducir tamaño de la interfaz"
+      reset_interface_size: "Restablecer tamaño de la interfaz"
       open_settings: Abrir configuración
       open_login_modal: Abrir inicio de sesión de Auth Profile
       open_sso_wizard: Abrir asistente de AWS SSO
@@ -5193,6 +5217,11 @@ sidebar:
     dashboards: "Dashboards"
     connections: CONEXIONES
     scripts: SCRIPTS
+  root_section:
+    confirm_message: "¿Ejecutar \"%{action}\" en \"%{item}\"?"
+    action:
+      delete_bucket: "Eliminar bucket"
+      delete_bucket_description: "Elimina el bucket. Solo se puede eliminar un bucket vacío y no se puede deshacer."
   task:
     connecting: "Conectando a %{name}"
     disconnecting: "Desconectando %{name}"
@@ -5201,7 +5230,7 @@ sidebar:
     disconnect_hook_cancelled: Hook de desconexión cancelado
     post_disconnect_hook_cancelled: Hook posterior a la desconexión cancelado
     loading_event_streams: "Cargando flujos de eventos: %{name}"
-    listing_buckets: "Listando buckets: %{name}"
+    listing_root_section: "Listando %{section}: %{name}"
     loading_database_schema: "Cargando esquema: %{name}"
     connecting_to_database: "Conectando a la base de datos: %{name}"
     refreshing_database: "Actualizando base de datos: %{name}"
@@ -5249,7 +5278,16 @@ sidebar:
       indexes: "Error al cargar los índices: %{error}"
       foreign_keys: "Error al cargar las claves foráneas: %{error}"
       routines: "Error al cargar las rutinas: %{error}"
-    list_buckets_failed: "Error al listar buckets: %{error}"
+    list_root_section_failed: "Error al listar %{section}: %{error}"
+    root_section_action_failed: "%{action} falló para %{item}: %{error}"
+    root_section_action_audit_failed: "%{action} sobre %{item} se completó, pero no se registró su evento de auditoría: %{error}"
+    root_section_action_connection_changed: "%{action} no se ejecutó sobre %{item}: la conexión cambió después de solicitar la acción."
+    root_section_action_refused:
+      read_only: "%{action} no se ejecutó: esta conexión es de solo lectura."
+      read_only_profile: "%{action} no se ejecutó: el perfil de esta conexión está configurado como de solo lectura."
+      read_only_server: "%{action} no se ejecutó: el servidor rechazó las modificaciones para esta conexión."
+      approval_unavailable: "%{action} no se ejecutó: esta conexión requiere aprobación, que todavía no está disponible para las acciones de la barra lateral."
+    root_section_invalid_id: "El driver declaró la sección raíz \"%{section}\", que se omitió: los ids de sección deben ser únicos y no pueden contener \"|\"."
     code_generation_failed: "Error al generar el código: %{error}"
     loading_event_streams: Cargando flujos de eventos…
     load_schema_failed: "Error al cargar el esquema: %{error}"
@@ -5321,6 +5359,7 @@ sidebar:
       error_retry: "Error: %{error} — clic para reintentar"
       connect_failed: "Error de conexión: %{error}"
       remote_listing_count: "%{label} (%{count})"
+      load_more: "Cargar más"
       remote_dashboards_error_retry: "Error: %{error} — colapsa y expande para reintentar"
       used_by_objects:
         one: Usado por 1 objeto

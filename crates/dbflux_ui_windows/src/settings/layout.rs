@@ -305,14 +305,26 @@ pub(super) fn master_list_panel(
         .child(toolbar)
         .child(
             div()
-                .id(id.into())
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
                 .flex()
                 .flex_col()
-                .child(rows),
+                .child(rows)
+                .overflow_y_scrollbar()
+                .id(id),
         )
+}
+
+/// Viewport of a master list that keeps its own `scroll` handle, so the
+/// section can scroll the selected row into view: `list` fills it and the
+/// vertical scrollbar is overlaid on its right edge.
+pub(super) fn scrolled_list_viewport(list: Stateful<Div>, scroll: &ScrollHandle) -> Div {
+    div()
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .child(list.size_full())
+        .vertical_scrollbar(scroll)
 }
 
 /// Content of a master list row: the icon and the name on the first line,

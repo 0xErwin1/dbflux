@@ -34,12 +34,21 @@ Integration](MCP_AI_INTEGRATION.md).
   <img src="../images/settings/general-light.webp" alt="La ventana de Settings en la sección General, con los ajustes de apariencia, editor y arranque">
 </picture>
 
+Guardar aplica los cambios al instante y los escribe en la base de datos de
+DBFlux (`dbflux.db`, o `dbflux-nightly.db` en un build Nightly sin
+**Use the stable database**) en segundo
+plano, así que una base de datos lenta u ocupada nunca congela la ventana. El
+mensaje de éxito aparece cuando ya están en disco. Si la escritura falla, un
+error lo indica y los cambios siguen aplicados hasta que DBFlux se cierre;
+guarda de nuevo para conservarlos.
+
 ### Apariencia
 
 | Setting      | Opciones                 | Default |
 | ------------ | ------------------------ | ------- |
 | **Theme**    | Follow system, Dark, Light | Dark  |
 | **Density**  | Default, Compact         | Default |
+| **Show scrollbars** | While scrolling, On hover, Always | While scrolling |
 | **Language** | System y todos los idiomas con un catálogo de traducción incluido | System  |
 | **Fuente de la interfaz** | Predeterminada (Archivo) o cualquier fuente instalada | Predeterminada |
 | **Tamaño de fuente de la interfaz** | De 8 a 32 px, admite decimales | 13 |
@@ -47,6 +56,15 @@ Integration](MCP_AI_INTEGRATION.md).
 | **Tamaño de fuente del editor** | De 8 a 32 px, admite decimales | 13 |
 | **Fuente de la tabla de datos** | Igual que el editor o cualquier fuente instalada | Igual que el editor |
 | **Tamaño de fuente de la tabla de datos** | De 8 a 32 px, admite decimales | 12.5 |
+
+**Show scrollbars** decide cuándo aparecen las barras de desplazamiento de
+todas las ventanas: solo mientras el contenido se desplaza, mientras el puntero
+está sobre un área desplazable, o siempre. Se aplica a todas las ventanas
+abiertas en cuanto guardas.
+
+La barra horizontal de la cuadrícula de datos es la excepción: se muestra
+siempre, porque la mueve un desplazador aparte que nunca recibe eventos de la
+rueda y, de otro modo, quedaría oculta.
 
 Los cambios de fuente se aplican a todas las ventanas abiertas en cuanto
 guardas; no hace falta reiniciar. La fuente del editor también define el texto
@@ -61,6 +79,15 @@ etiquetas de sección. Qué controla cada tamaño:
 - **Tamaño de fuente de la tabla de datos** define el texto de las celdas, la
   altura de filas y encabezados, y el ancho automático de las columnas. Las
   columnas que redimensionaste a mano conservan su ancho.
+
+`Ctrl+=` / `Cmd+=` y `Ctrl+-` / `Cmd+-` cambian los tres tamaños a la vez, 1 px
+cada uno, manteniendo sus proporciones, y `Ctrl+0` / `Cmd+0` restablece los
+valores predeterminados. Funcionan desde la ventana del espacio de trabajo,
+también están en la paleta de comandos y se pueden reasignar en
+[Keybindings](#keybindings). Un tamaño que ya está en 8 o 32 px se
+queda ahí mientras los demás siguen cambiando. Los nuevos tamaños se guardan
+como cualquier otra configuración, así que estos campos los muestran y se
+conservan al reiniciar.
 
 Las listas de fuentes tienen un campo de búsqueda, porque un sistema puede tener
 cientos de fuentes. Una fuente guardada que ya no está instalada sigue

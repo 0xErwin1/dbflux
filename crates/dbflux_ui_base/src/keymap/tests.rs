@@ -1505,6 +1505,77 @@ fn toggle_full_screen_reaches_text_roots_and_stops_at_dialogs() {
     }
 }
 
+/// The interface size chords work wherever the workspace keeps the global
+/// chords, including the schema diagram, which swallows every key it does
+/// not bind, and stop at dialogs.
+#[test]
+fn interface_size_chords_reach_every_workspace_context() {
+    let keymap = native_keymap();
+
+    #[cfg(target_os = "macos")]
+    let chords = [
+        ("cmd-=", Command::IncreaseInterfaceSize),
+        ("cmd-shift-=", Command::IncreaseInterfaceSize),
+        ("cmd-+", Command::IncreaseInterfaceSize),
+        ("cmd--", Command::DecreaseInterfaceSize),
+        ("cmd-0", Command::ResetInterfaceSize),
+    ];
+    #[cfg(not(target_os = "macos"))]
+    let chords = [
+        ("ctrl-=", Command::IncreaseInterfaceSize),
+        ("ctrl-shift-=", Command::IncreaseInterfaceSize),
+        ("ctrl-+", Command::IncreaseInterfaceSize),
+        ("ctrl--", Command::DecreaseInterfaceSize),
+        ("ctrl-0", Command::ResetInterfaceSize),
+    ];
+
+    let stacks = [
+        element_stack(
+            root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Editor, &[]),
+            &["CodeEditor", "Input"],
+        ),
+        element_stack(
+            root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]),
+            &["Input"],
+        ),
+        vec![root_key_context(
+            WORKSPACE_KEY_CONTEXT,
+            ContextId::Sidebar,
+            &[],
+        )],
+        vec![root_key_context(
+            WORKSPACE_KEY_CONTEXT,
+            ContextId::Results,
+            &[],
+        )],
+        vec![root_key_context(
+            WORKSPACE_KEY_CONTEXT,
+            ContextId::SchemaViz,
+            &[],
+        )],
+    ];
+
+    for (chord, command) in chords {
+        for stack in &stacks {
+            let action = top_action(&keymap, chord, stack)
+                .unwrap_or_else(|| panic!("`{chord}` must be bound in {stack:?}"));
+            assert!(
+                runs_command(action.as_ref(), command),
+                "`{chord}` in {stack:?} must run {command:?}, got {}",
+                action.name()
+            );
+        }
+
+        for context in [ContextId::ConfirmModal, ContextId::CommandPalette] {
+            let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+            assert!(
+                top_action(&keymap, chord, std::slice::from_ref(&root)).is_none(),
+                "`{chord}` must not fire while {context:?} owns the keyboard"
+            );
+        }
+    }
+}
+
 #[test]
 fn modal_keys_run_the_modal_actions() {
     let stack = element_stack(

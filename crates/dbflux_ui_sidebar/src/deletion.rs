@@ -1,5 +1,6 @@
 use super::*;
 use crate::operations::DropOptions;
+use crate::root_sections::PendingRootSectionAction;
 
 impl Sidebar {
     pub fn request_delete_selected(&mut self, cx: &mut Context<Self>) {
@@ -115,6 +116,7 @@ impl Sidebar {
                     is_ddl: false,
                     multi_item_ids: Vec::new(),
                     delegated_to_modal: true,
+                    root_action: None,
                 });
 
                 log::debug!(
@@ -142,6 +144,7 @@ impl Sidebar {
                         is_ddl: false,
                         multi_item_ids: Vec::new(),
                         delegated_to_modal: false,
+                        root_action: None,
                     },
                     cx,
                 );
@@ -161,6 +164,7 @@ impl Sidebar {
                         is_ddl: false,
                         multi_item_ids: Vec::new(),
                         delegated_to_modal: false,
+                        root_action: None,
                     },
                     cx,
                 );
@@ -180,6 +184,7 @@ impl Sidebar {
                         is_ddl: false,
                         multi_item_ids: Vec::new(),
                         delegated_to_modal: false,
+                        root_action: None,
                     },
                     cx,
                 );
@@ -209,6 +214,7 @@ impl Sidebar {
                 is_ddl: false,
                 multi_item_ids: ids,
                 delegated_to_modal: false,
+                root_action: None,
             },
             cx,
         );
@@ -253,6 +259,7 @@ impl Sidebar {
                     is_ddl: true,
                     multi_item_ids: Vec::new(),
                     delegated_to_modal: true,
+                    root_action: None,
                 });
 
                 cx.emit(SidebarEvent::RequestDropTable {
@@ -278,6 +285,7 @@ impl Sidebar {
                         is_ddl: true,
                         multi_item_ids: Vec::new(),
                         delegated_to_modal: false,
+                        root_action: None,
                     },
                     cx,
                 );
@@ -306,6 +314,11 @@ impl Sidebar {
             modal.multi_item_ids.len(),
             modal.delegated_to_modal,
         );
+
+        if let Some(pending) = modal.root_action {
+            self.run_root_section_action(pending, cx);
+            return;
+        }
 
         if !modal.multi_item_ids.is_empty() {
             for id in &modal.multi_item_ids {
@@ -357,6 +370,34 @@ impl Sidebar {
         }
     }
 
+    /// Asks the user to confirm a driver-declared root section action in the
+    /// inline confirmation the workspace draws.
+    pub(crate) fn show_root_section_action_confirm(
+        &mut self,
+        pending: PendingRootSectionAction,
+        cx: &mut Context<Self>,
+    ) {
+        let request = &pending.request;
+        self.show_inline_delete_modal(
+            DeleteConfirmState {
+                item_id: SchemaNodeId::RootSectionItem {
+                    profile_id: request.profile_id,
+                    section_id: request.section_id.clone(),
+                    item_id: request.item_id.clone(),
+                }
+                .to_string(),
+                item_name: request.item_label.clone(),
+                is_folder: false,
+                object_type: None,
+                is_ddl: false,
+                multi_item_ids: Vec::new(),
+                delegated_to_modal: false,
+                root_action: Some(pending),
+            },
+            cx,
+        );
+    }
+
     /// Shows the inline delete confirmation that the workspace draws, and
     /// asks for keyboard focus to move into it once it is on screen.
     fn show_inline_delete_modal(&mut self, state: DeleteConfirmState, cx: &mut Context<Self>) {
@@ -402,6 +443,15 @@ impl Sidebar {
             is_ddl: m.is_ddl,
             object_type: m.object_type.as_deref(),
             multi_count: (!m.multi_item_ids.is_empty()).then_some(m.multi_item_ids.len()),
+            root_action: m
+                .root_action
+                .as_ref()
+                .map(|pending| &pending.request)
+                .map(|request| RootSectionActionConfirm {
+                    title: request.action_label(),
+                    message: request.confirm_message(),
+                    confirm_label: request.action_label(),
+                }),
         })
     }
 

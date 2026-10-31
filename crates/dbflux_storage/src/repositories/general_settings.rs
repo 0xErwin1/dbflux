@@ -43,7 +43,7 @@ impl GeneralSettingsRepository {
                        ui_font_family, ui_font_size, editor_font_family, editor_font_size,
                        grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                        table_alias_completion, table_alias_use_as,
-                       grid_fk_labels,
+                       grid_fk_labels, scrollbar_visibility,
                        updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
@@ -88,7 +88,8 @@ impl GeneralSettingsRepository {
                 table_alias_completion: row.get(30)?,
                 table_alias_use_as: row.get(31)?,
                 grid_fk_labels: row.get(32)?,
-                updated_at: row.get(33)?,
+                scrollbar_visibility: row.get(33)?,
+                updated_at: row.get(34)?,
             })
         });
 
@@ -120,9 +121,9 @@ impl GeneralSettingsRepository {
                     ui_font_family, ui_font_size, editor_font_family, editor_font_size,
                     grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                     table_alias_completion, table_alias_use_as,
-                    grid_fk_labels,
+                    grid_fk_labels, scrollbar_visibility,
                     updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, datetime('now'))
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -156,6 +157,7 @@ impl GeneralSettingsRepository {
                     table_alias_completion = excluded.table_alias_completion,
                     table_alias_use_as = excluded.table_alias_use_as,
                     grid_fk_labels = excluded.grid_fk_labels,
+                    scrollbar_visibility = excluded.scrollbar_visibility,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -191,6 +193,7 @@ impl GeneralSettingsRepository {
                     settings.table_alias_completion,
                     settings.table_alias_use_as,
                     settings.grid_fk_labels,
+                    settings.scrollbar_visibility,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -266,6 +269,10 @@ pub struct GeneralSettingsDto {
     /// Whether foreign-key grid cells resolve to the referenced row's label:
     /// 1 on, 0 off.
     pub grid_fk_labels: i32,
+    /// Serialized `ScrollbarVisibility` value: `"while_scrolling"`,
+    /// `"on_hover"` or `"always"`. Unknown values fall back to
+    /// `"while_scrolling"` at the loader layer.
+    pub scrollbar_visibility: String,
     pub updated_at: String,
 }
 
@@ -333,6 +340,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
             updated_at: String::new(),
         };
 
@@ -395,6 +403,7 @@ mod tests {
                 table_alias_completion: 1,
                 table_alias_use_as: 0,
                 grid_fk_labels: 0,
+                scrollbar_visibility: "while_scrolling".to_string(),
                 updated_at: String::new(),
             };
 
@@ -477,6 +486,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
             updated_at: String::new(),
         };
 
@@ -577,6 +587,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
             updated_at: String::new(),
         };
 
@@ -633,6 +644,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
             updated_at: String::new(),
         };
 
@@ -721,6 +733,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
             updated_at: String::new(),
         };
 
@@ -799,12 +812,23 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 1,
+            scrollbar_visibility: "while_scrolling".to_string(),
             updated_at: String::new(),
         };
 
         repo.upsert(&dto).expect("should upsert");
 
         let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.grid_fk_labels, 1);
+        assert_eq!(fetched.scrollbar_visibility, "while_scrolling");
+
+        repo.upsert(&GeneralSettingsDto {
+            scrollbar_visibility: "always".to_string(),
+            ..dto
+        })
+        .expect("should upsert the scrollbar visibility");
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.scrollbar_visibility, "always");
         assert_eq!(fetched.grid_fk_labels, 1);
 
         drop(repo);

@@ -14,13 +14,17 @@ impl SecretStoreDocument {
         let mut segments = Vec::new();
 
         if let Some(connected) = self.app_state.read(cx).connections().get(&self.profile_id) {
+            // The region is not repeated here: the breadcrumb of the document
+            // already carries it, and two places showing it can disagree for
+            // the moment a switch lands.
+            let text = format!(
+                "{} · {}",
+                connected.profile.name,
+                connected.connection.metadata().display_name
+            );
+
             segments.push(StatusSegment {
-                text: format!(
-                    "{} · {}",
-                    connected.profile.name,
-                    connected.connection.metadata().display_name
-                )
-                .into(),
+                text: text.into(),
                 tooltip: None,
             });
         }

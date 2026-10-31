@@ -77,7 +77,7 @@ DBFlux는 `interprocess`를 통해 로컬 소켓을 사용합니다:
 
 DBFlux가 먼저 연결한 뒤 `Hello`를 보냅니다.
 
-현재 활성 드라이버 RPC API 패밀리는 `driver_rpc`입니다. 현재의 전용 드라이버 RPC 전송에서는 이 패밀리가 `Hello` 동안 와이어로 전송되는 대신 프로토콜 자체에 암묵적으로 포함됩니다. 호환성은 드라이버 RPC 엔드포인트와 선택된 프로토콜 메이저 버전으로 강제되며, 마이너 버전은 해당 메이저 라인 안에서 결정적으로 협상됩니다. v1.7까지의 마이너 버전은 추가 확장(additive)입니다. v1.8은 일부 기존 페이로드의 인코딩 방식을 바꾸는 와이어 형식 수정이며, 이전에 디코딩되던 모든 형태는 바이트 단위로 동일합니다(아래 **와이어 형식 수정** 참고).
+현재 활성 드라이버 RPC API 패밀리는 `driver_rpc`입니다. 현재의 전용 드라이버 RPC 전송에서는 이 패밀리가 `Hello` 동안 와이어로 전송되는 대신 프로토콜 자체에 암묵적으로 포함됩니다. 호환성은 드라이버 RPC 엔드포인트와 선택된 프로토콜 메이저 버전으로 강제되며, 마이너 버전은 해당 메이저 라인 안에서 결정적으로 협상됩니다. v1.7까지의 마이너 버전은 추가 확장(additive)입니다. v1.8은 일부 기존 페이로드의 인코딩 방식을 바꾸는 와이어 형식 수정이며, 이전에 디코딩되던 모든 형태는 바이트 단위로 동일합니다(아래 **와이어 형식 수정** 참고). v1.9는 다시 추가 확장입니다.
 
 클라이언트 요청:
 
@@ -95,6 +95,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 6),
         ProtocolVersion::new(1, 7),
         ProtocolVersion::new(1, 8),
+        ProtocolVersion::new(1, 9),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -218,6 +219,20 @@ v1.8은 요청 변형이나 응답 변형을 추가하지 않습니다. 대신 �
 
 이 인코딩은 협상된 버전에 따라 달라지지 않습니다. v1.8 이전에 디코딩되던 형태는 v1.8에서도 바이트 단위로 동일하며, 어떤 피어도 디코딩할 수 없던 형태의 바이트만 바뀌므로 이전 마이너 버전의 피어도 계속 동작합니다.
 
+### 루트 섹션 (v1.9+)
+
+드라이버는 S3 버킷처럼 사이드바에서 연결의 루트에 표시되는 섹션을 선언할 수 있습니다. 페이로드는 `dbflux_core`의 루트 섹션 타입을 그대로 전달합니다:
+
+| 요청 | 응답 |
+| --- | --- |
+| `RootSections` | `RootSections { sections }`, 표시 순서대로 정렬된 `Vec<RootSectionDef>` |
+| `RootSectionItems { section_id, page_token }` | `RootSectionPage { page }`; `page_token`은 첫 페이지에서는 `None`이고 그 이후에는 이전 페이지의 `next_page_token`입니다 |
+| `ExecuteRootSectionAction { section_id, item_id, action_id }` | `RootSectionActionDone` |
+
+호스트는 세 요청을 연결의 `Connection::root_section_source`로 전달합니다. 소스가 없는 드라이버는 `UnsupportedMethod`(`Driver does not declare root sections`)로 응답하고, 드라이버 오류는 다른 `Error`와 같은 방식으로 응답합니다. 이전 마이너 버전을 협상한 세션에서는 호스트가 드라이버를 호출하지 않고 `VersionMismatch`(`root section requests require driver RPC protocol 1.9 or newer`)로 요청을 거부합니다.
+
+여섯 개의 변형은 위에서 설명한 와이어 인덱스 이유로 각 열거형의 마지막 v1.8 변형 뒤에 추가됩니다. 클라이언트는 세션이 v1.9 이상을 협상했고 드라이버 메타데이터가 `DriverCapabilities::ROOT_SECTIONS`를 선언한 경우에만 루트 섹션을 노출합니다. 그렇지 않으면 `IpcConnection`은 해당 기능을 지우고 아무것도 보내지 않습니다. `IpcConnection`은 연결마다 선언을 한 번 가져와 캐시하며, 가져오기에 실패하면 오류를 반환하고 캐시하지 않으므로 호스트는 이를 다시 시도 행으로 표시하고 그 행에서 다시 요청합니다. 섹션 id에는 `|`를 넣을 수 없으며, 호스트는 그런 선언을 거부하고 알립니다. 호스트는 `object_store_api`가 없는 연결에서 개체 스토리지 문서를 여는 프레젠테이션의 섹션을 숨깁니다. 개체 스토리지 RPC가 아직 없으므로 `IpcConnection`에는 그것이 없고, 지금까지 제공된 두 프레젠테이션(`ObjectContainerTable`, `ObjectBrowser`)이 모두 그런 종류이므로, 그런 요구가 없는 프레젠테이션이 나오기 전까지 외부 드라이버의 섹션은 숨겨집니다. 모든 `RootSectionAction`은 `ExecutionClassification`을 포함하므로, 호스트는 외부 드라이버의 액션도 내장 드라이버와 같은 방식으로 확인하고 감사합니다.
+
 ## 인증 프로바이더 RPC 계약
 
 현재 활성 인증 프로바이더 RPC API 패밀리는 `1.3` 버전의 `auth_provider_rpc`입니다.
@@ -321,6 +336,7 @@ DbConfig::External {
 | `Execute` → `ExecuteResult` (v1.7부터 `ExecuteResultSets`) | 쿼리 실행 |
 | `Schema` → `Schema` | 스키마 스냅샷 |
 | `ListDatabases` → `Databases` | 데이터베이스 목록 |
+| `RootSections` → `RootSections`, `RootSectionItems` → `RootSectionPage`, `ExecuteRootSectionAction` → `RootSectionActionDone` (v1.9+) | 사이드바 루트 섹션 |
 
 이 프로토콜은 탐색, CRUD, 키-값, 코드 생성 작업도 지원합니다. 전체 열거형 집합은 `crates/dbflux_ipc/src/driver_protocol.rs`를 참고하세요.
 

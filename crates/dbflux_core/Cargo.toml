@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 uuid = { workspace = true }
 thiserror = "2"
 dirs = { workspace = true }

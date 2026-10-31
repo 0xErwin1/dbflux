@@ -1064,9 +1064,9 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
   (colecciones o mediciones) o es un keyspace. El sidebar
   (`tree_builder/object_folder.rs`) construye el contenido de cada base de datos a
   partir de esa descripción, y su menú contextual lee las facetas del objeto y el
-  mismo layout. El único chequeo de categoría que queda en el árbol es la lista
-  de buckets de una conexión de almacenamiento de objetos, que se obtiene por su
-  propio camino en lugar de leerse de un snapshot.
+  mismo layout. Los tipos de objeto que un driver muestra en la raíz de la
+  conexión, como los buckets de S3, no están en el snapshot; vienen de las
+  secciones raíz del driver (ver Sistema de drivers).
 - `dbflux_ui_base::object_tree` proporciona una jerarquía genérica de carga
   diferida con un coordinador por `AppStateEntity`. Los límites de core/app
   delimitan la aplicación por sesión y slot de conexión de destino; los adaptadores del
@@ -1164,6 +1164,42 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
     `CollectionPresentation::ObjectBrowser` y `PaneHandle::status_segments()`
     permiten que la UI abra y decore documents de object-storage sin bifurcar
     según driver ID.
+  - `RootSectionSource` (`crates/dbflux_core/src/connection/root_section/mod.rs`),
+    alcanzado vía `Connection::root_section_source()` y habilitado por
+    `DriverCapabilities::ROOT_SECTIONS`, declara los tipos de objeto que se
+    muestran en la raíz de una conexión en el sidebar. Cada `RootSectionDef`
+    lleva un id estable, una etiqueta, una etiqueta para el estado vacío, una
+    `RootSectionPresentation` opcional para la carpeta, la
+    `RootItemPresentation` en la que se abren sus items, si activar la fila de
+    la conexión abre la sección, y sus acciones por item. `list_items` devuelve
+    `RootSectionPage`s de `RootSectionItem`s con un `next_page_token`. Los ids
+    de nodo `SchemaNodeId::RootSection`, `RootSectionItem` y
+    `RootSectionLoadMore` llevan el id de la sección, así que un tipo de objeto
+    nuevo no necesita una variante de `SchemaNodeKind`. Un único renderer
+    genérico (`crates/dbflux_ui_sidebar/src/root_sections/`) construye las
+    carpetas, cachea los listados por perfil y carga más páginas bajo demanda.
+    Una obtención fallida de las declaraciones o de la primera página muestra
+    una fila para reintentar y nunca se guarda como vacía. Un id de sección no
+    puede contener `|`, porque los ids de nodo lo incluyen; el sidebar rechaza
+    e informa esa declaración. Una sección cuya presentación de carpeta o de
+    item necesita `Connection::object_store_api` se oculta en una conexión que
+    no lo tiene. El workspace enruta la activación según la presentación declarada
+    (`ObjectContainerTable` abre la tabla de contenedores, `ObjectBrowser` el
+    explorador de objetos). Las etiquetas son `LocalizedText`: una clave
+    opcional del catálogo i18n del host más un fallback en inglés obligatorio,
+    resueltos con `dbflux_i18n::try_translate`. Cada `RootSectionAction` lleva
+    una `ExecutionClassification`: `Destructive`, `Admin` y `AdminDestructive`
+    piden confirmación, y cada ejecución, exitosa o no, registra una fila de
+    auditoría `Governance`. Una acción solo se ejecuta en la conexión en la que
+    se solicitó, y la `MutationPolicy` del perfil controla toda acción por
+    encima de `Read`: `ReadOnly` la rechaza, y también `ApprovalRequired`
+    mientras el flujo de aprobación no cubra estas acciones. Una acción exitosa
+    vuelve a listar la sección y recarga el documento abierto que la muestra.
+    Los drivers externos alcanzan el seam por driver
+    RPC 1.9 (`RootSections`, `RootSectionItems`, `ExecuteRootSectionAction`).
+    S3 es la implementación de referencia: una sección `buckets` cuyos items se
+    abren en el explorador de objetos, con una acción Delete bucket clasificada
+    `AdminDestructive`.
   - `TableViewFeatures` (`crates/dbflux_core/src/data/column_profile.rs`),
     informado por `Connection::table_view_features()`, habilita las vistas
     Columnas y Particiones de una tabla, la estimación de lectura, el perfil de
@@ -1575,8 +1611,13 @@ flujo de release/nightly en sí está documentado en `docs/RELEASE.md`.
   - CRUD completo desde la UI: upload, delete recursivo con confirmación por
     escritura, creación de folder/bucket con degradación graceful por endpoint,
     rename (copy-then-delete), URLs presignadas
-  - Cada mutation se audita bajo `EventCategory::ObjectStorage`; las
-    credenciales y URLs presignadas nunca se registran ni persisten
+  - Cada mutation hecha desde la tabla de buckets o el explorador de objetos
+    se audita bajo `EventCategory::ObjectStorage` cuando la auditoría está
+    activada; si la escritura de auditoría falla, se registra una advertencia
+    y la mutation se mantiene, sin registro alternativo; la acción Delete bucket del
+    sidebar es una acción de root section y se audita bajo
+    `EventCategory::Governance`. Las credenciales y URLs presignadas nunca se
+    registran ni persisten
 - **AWS Secrets**: `crates/dbflux_driver_aws_secrets/` — driver
   `aws-sdk-secretsmanager` + `aws-sdk-ssm` (`DatabaseCategory::SecretStore`):
   - Expone dos almacenes con `Connection::secret_stores()` y el seam neutral al

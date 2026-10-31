@@ -218,12 +218,12 @@ parquet = { version = "59.3", default-features = false, features = [
 ] }
 arrow-array = "59.3"
 arrow-schema = "59.3"
-# Spreadsheet reading. `zip` matches calamine's own zip dependency, so format
-# detection adds no second copy; `rust_xlsxwriter` writes xls values into a new
-# xlsx and builds test fixtures.
-calamine = "0.36"
-zip = { version = "8.6", default-features = false, features = ["deflate"] }
-rust_xlsxwriter = "0.99"
+# Spreadsheet reading. `zip` matches calamine's and `rust_xlsxwriter`'s own zip
+# dependency, so format detection and xlsx writing add no second copy;
+# `rust_xlsxwriter` writes xls values into a new xlsx and builds test fixtures.
+calamine = "0.37"
+zip = { version = "9.0", default-features = false, features = ["deflate"] }
+rust_xlsxwriter = "0.102"
 bytes = "1"
 snap = "1"
 lz4_flex = "0.14"

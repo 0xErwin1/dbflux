@@ -32,12 +32,19 @@ Integration](MCP_AI_INTEGRATION.md).
   <img src="images/settings/general-light.webp" alt="The Settings window on the General section, showing the appearance, editor and startup settings">
 </picture>
 
+Save applies the changes at once and writes them to the DBFlux database
+(`dbflux.db`, or `dbflux-nightly.db` on a Nightly build without
+**Use the stable database**) in the background, so a slow or busy database never freezes the window. The success
+message appears once they are on disk. If the write fails, an error says so and
+the changes stay applied until DBFlux quits; save again to keep them.
+
 ### Appearance
 
 | Setting | Options | Default |
 |---------|---------|---------|
 | **Theme** | Follow system, Dark, Light | Dark |
 | **Density** | Default, Compact | Default |
+| **Show scrollbars** | While scrolling, On hover, Always | While scrolling |
 | **Language** | System, then every language with a shipped translation catalog | System |
 | **Interface font** | Default (Archivo), or any installed font | Default |
 | **Interface font size** | 8 to 32 px, decimals allowed | 13 |
@@ -45,6 +52,14 @@ Integration](MCP_AI_INTEGRATION.md).
 | **Editor font size** | 8 to 32 px, decimals allowed | 13 |
 | **Data grid font** | Same as editor, or any installed font | Same as editor |
 | **Data grid font size** | 8 to 32 px, decimals allowed | 12.5 |
+
+**Show scrollbars** decides when the scrollbars of every window appear: only
+while the content scrolls, while the pointer is over a scrollable area, or all
+the time. It applies to every open window as soon as you save.
+
+The horizontal scrollbar of the data grid is the exception: it is always
+shown, because it is driven by a separate scroller that never receives wheel
+events and would otherwise stay hidden.
 
 Font changes apply to every open window as soon as you save; no restart is
 needed. The editor font also sets the monospace text in the interface
@@ -56,6 +71,14 @@ expanded display face of section labels. What each size controls:
   console text.
 - **Data grid font size** sets cell text, row and header height, and the
   automatic column widths. Columns you resized by hand keep their width.
+
+`Ctrl+=` / `Cmd+=` and `Ctrl+-` / `Cmd+-` change all three sizes at once by
+1 px each, keeping their relative sizes, and `Ctrl+0` / `Cmd+0` restores the
+defaults. They work in the workspace window, are also in the command palette,
+and can be rebound in [Keybindings](#keybindings). A size
+already at 8 or 32 px stays there while the others keep moving. The new sizes
+are saved like any other setting, so these fields show them and they survive a
+restart.
 
 The font lists have a search field, since a system can have hundreds of fonts.
 A saved font that is no longer installed stays selected, marked

@@ -1,5 +1,4 @@
 use super::*;
-use dbflux_core::TaskKind;
 use dbflux_core::{SchemaDropTarget, SchemaObjectKind};
 
 impl Sidebar {
@@ -300,8 +299,8 @@ impl Sidebar {
             self.spawn_fetch_instance_catalog(*profile_id, cx);
         }
 
-        if let Some(SchemaNodeId::BucketsFolder { profile_id }) = &parsed {
-            self.spawn_fetch_buckets(*profile_id, cx);
+        if let Some(SchemaNodeId::RootSection { profile_id, .. }) = &parsed {
+            self.spawn_fetch_root_sections(*profile_id, cx);
         }
 
         if let Some(SchemaNodeId::SecretStore {
@@ -328,8 +327,8 @@ impl Sidebar {
         }
 
         if let Some(SchemaNodeId::Profile { profile_id }) = &parsed {
-            if self.profile_category(*profile_id, cx) == Some(DatabaseCategory::ObjectStorage) {
-                self.spawn_fetch_buckets(*profile_id, cx);
+            if self.profile_has_root_sections(*profile_id, cx) {
+                self.spawn_fetch_root_sections(*profile_id, cx);
             } else {
                 let key = dbflux_ui_base::object_tree::ObjectTreeRequestKey::DatabaseList {
                     profile_id: *profile_id,
@@ -692,90 +691,6 @@ impl Sidebar {
         self.pending_instance_catalog_fetches.remove(&profile_id);
     }
 
-    /// List the buckets of an object-storage connection for the sidebar tree.
-    ///
-    /// Buckets are the only level the sidebar shows — prefixes and objects
-    /// stay inside the object browser document. Deduplicated per profile so an
-    /// expand/collapse burst issues at most one `list_buckets` call.
-    pub(super) fn spawn_fetch_buckets(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
-        if self.bucket_cache.contains_key(&profile_id)
-            || self.pending_bucket_fetches.contains_key(&profile_id)
-        {
-            return;
-        }
-
-        let Some((connection, profile_name)) = self
-            .app_state
-            .read(cx)
-            .connections()
-            .get(&profile_id)
-            .map(|connected| (connected.connection.clone(), connected.profile.name.clone()))
-        else {
-            return;
-        };
-
-        let app_state = self.app_state.clone();
-        let load_task_id = app_state.update(cx, |state, _| {
-            let (task_id, _) = state.start_task_for_profile(
-                TaskKind::LoadSchema,
-                crate::labels::listing_buckets_task_label(&profile_name),
-                Some(profile_id),
-            );
-            state.tasks_mut().mark_uncancellable(task_id);
-            task_id
-        });
-
-        let sidebar = cx.entity().clone();
-
-        let background_task = cx.background_executor().spawn(async move {
-            match connection.object_store_api() {
-                Some(api) => api.list_buckets().map_err(|err| err.to_string()),
-                None => Err("connection does not expose an object store".to_string()),
-            }
-        });
-
-        let task = cx.spawn(async move |_this, cx| {
-            let result = background_task.await;
-
-            cx.update(|cx| {
-                match &result {
-                    Ok(_) => {
-                        app_state.update(cx, |state, _| {
-                            state.complete_task(load_task_id);
-                        });
-                    }
-                    Err(message) => {
-                        let details = crate::labels::list_buckets_failed_label(message);
-                        app_state.update(cx, |state, _| {
-                            state.fail_task_with_details(load_task_id, message.clone(), details);
-                        });
-                    }
-                }
-
-                sidebar.update(cx, |sidebar, cx| {
-                    sidebar.pending_bucket_fetches.remove(&profile_id);
-                    match result {
-                        Ok(buckets) => {
-                            sidebar.bucket_cache.insert(profile_id, buckets);
-                        }
-                        Err(message) => {
-                            log::warn!("Failed to list buckets for {}: {}", profile_id, message);
-                        }
-                    }
-                    sidebar.rebuild_tree_with_overrides(cx);
-                });
-            });
-        });
-
-        self.pending_bucket_fetches.insert(profile_id, task);
-    }
-
-    /// Drop the cached bucket listing so the next expansion re-lists.
-    pub(super) fn clear_bucket_cache(&mut self, profile_id: Uuid) {
-        self.bucket_cache.remove(&profile_id);
-        self.pending_bucket_fetches.remove(&profile_id);
-    }
-
     /// Whether `profile_id`'s tree node is currently expanded: the user's
     /// explicit collapse/expand override when there is one, otherwise the
     /// builder's default (the active connection expands, the rest stay
@@ -940,14 +855,19 @@ impl Sidebar {
             self.clear_instance_catalog_cache(profile_id);
         }
 
-        let stale_bucket_ids: Vec<Uuid> = self
-            .bucket_cache
-            .keys()
+        let stale_root_section_ids: Vec<Uuid> = self
+            .root_section_cache
+            .profile_ids()
+            .chain(
+                self.pending_root_section_fetches
+                    .keys()
+                    .map(|key| &key.profile_id),
+            )
             .filter(|id| !connected_profile_ids.contains(id))
             .copied()
             .collect();
-        for profile_id in stale_bucket_ids {
-            self.clear_bucket_cache(profile_id);
+        for profile_id in stale_root_section_ids {
+            self.clear_root_section_cache(profile_id, cx);
         }
 
         let stale_secret_path_ids: std::collections::HashSet<Uuid> = self
@@ -960,22 +880,21 @@ impl Sidebar {
             self.clear_secret_path_cache(profile_id);
         }
 
-        // An object-storage connection that finishes while its profile node is
-        // already expanded (the active profile expands by default) never
-        // re-fires the expand handler, so the listing would sit on the
+        // A connection with root sections that finishes while its profile
+        // node is already expanded (the active profile expands by default)
+        // never re-fires the expand handler, so its sections would sit on the
         // "Loading..." placeholder until a manual collapse/expand. Kick the
-        // bucket fetch here instead; `spawn_fetch_buckets` deduplicates
+        // fetch here instead; `spawn_fetch_root_sections` deduplicates
         // against the cache and in-flight fetches.
-        let expanded_object_store_ids: Vec<Uuid> = connected_profile_ids
+        let expanded_root_section_ids: Vec<Uuid> = connected_profile_ids
             .iter()
             .filter(|id| {
-                self.profile_category(**id, cx) == Some(DatabaseCategory::ObjectStorage)
-                    && self.profile_node_is_expanded(**id, cx)
+                self.profile_has_root_sections(**id, cx) && self.profile_node_is_expanded(**id, cx)
             })
             .copied()
             .collect();
-        for profile_id in expanded_object_store_ids {
-            self.spawn_fetch_buckets(profile_id, cx);
+        for profile_id in expanded_root_section_ids {
+            self.spawn_fetch_root_sections(profile_id, cx);
         }
 
         self.cleanup_stale_overrides(cx);

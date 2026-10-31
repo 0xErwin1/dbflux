@@ -138,6 +138,12 @@ impl OverlayMode for crate::input::EditorMode {
     fn install_action_handler(state: &Entity<InputBaseState<Self>>, cx: &mut App) {
         let id = state.entity_id();
         state.update(cx, move |state, _| {
+            state.set_completion_selection_reader(move |cx| {
+                cx.try_global::<InputOverlayRegistry<Self>>()
+                    .and_then(|registry| registry.hosts.get(&id))
+                    .and_then(|(_, host)| host.lsp.as_ref())
+                    .and_then(|lsp| lsp.completion.read(cx).selected_item(cx))
+            });
             state.set_overlay_action_handler(move |kind, action, window, cx| {
                 let menus = cx
                     .try_global::<InputOverlayRegistry<Self>>()

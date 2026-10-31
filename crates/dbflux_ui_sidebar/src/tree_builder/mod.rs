@@ -73,7 +73,7 @@ impl Sidebar {
             &self.metric_fetch_errors,
             &self.instance_metrics_cache,
             &self.instance_inspectors_cache,
-            &self.bucket_cache,
+            &self.root_section_cache,
             &self.secret_path_cache,
         );
         let state = self.app_state.read(cx);
@@ -526,7 +526,7 @@ impl Sidebar {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
-            &HashMap::new(),
+            &crate::root_sections::RootSectionCache::default(),
             &HashMap::new(),
         )
     }
@@ -536,7 +536,7 @@ impl Sidebar {
         metric_fetch_errors: &HashMap<String, String>,
         instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
         instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
-        bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
+        root_sections: &crate::root_sections::RootSectionCache,
         secret_path_cache: &crate::secret_store::SecretPathCache,
     ) -> Vec<TreeItem> {
         let root_nodes = state.connection_tree().root_nodes();
@@ -546,7 +546,7 @@ impl Sidebar {
             metric_fetch_errors,
             instance_metrics_cache,
             instance_inspectors_cache,
-            bucket_cache,
+            root_sections,
             secret_path_cache,
         )
     }
@@ -657,7 +657,7 @@ impl Sidebar {
         metric_fetch_errors: &HashMap<String, String>,
         instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
         instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
-        bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
+        root_sections: &crate::root_sections::RootSectionCache,
         secret_path_cache: &crate::secret_store::SecretPathCache,
     ) -> Vec<TreeItem> {
         let mut items = Vec::new();
@@ -674,7 +674,7 @@ impl Sidebar {
                         metric_fetch_errors,
                         instance_metrics_cache,
                         instance_inspectors_cache,
-                        bucket_cache,
+                        root_sections,
                         secret_path_cache,
                     );
 
@@ -698,7 +698,7 @@ impl Sidebar {
                             metric_fetch_errors,
                             instance_metrics_cache,
                             instance_inspectors_cache,
-                            bucket_cache,
+                            root_sections,
                             secret_path_cache,
                         );
                         items.push(profile_item);
@@ -740,7 +740,7 @@ impl Sidebar {
         metric_fetch_errors: &HashMap<String, String>,
         instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
         instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
-        bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
+        root_sections: &crate::root_sections::RootSectionCache,
         secret_path_cache: &crate::secret_store::SecretPathCache,
     ) -> TreeItem {
         let profile_id = profile.id;
@@ -750,6 +750,22 @@ impl Sidebar {
             SchemaNodeId::Profile { profile_id }.to_string(),
             profile.name.clone(),
         );
+
+        // Root sections are listed through the driver, never derived from the
+        // schema, so a connection without a schema snapshot still shows them.
+        if is_connected
+            && let Some(connected) = state.connections().get(&profile_id)
+            && connected.schema.is_none()
+            && connected
+                .connection
+                .metadata()
+                .capabilities
+                .contains(DriverCapabilities::ROOT_SECTIONS)
+        {
+            return profile_item.expanded(is_active).children(
+                crate::root_sections::build_root_section_folders(profile_id, root_sections),
+            );
+        }
 
         if is_connected
             && let Some(connected) = state.connections().get(&profile_id)
@@ -790,11 +806,14 @@ impl Sidebar {
             let supports_routines = conn_capabilities.contains(DriverCapabilities::ROUTINES);
             let metric_cache = state.metric_catalog_cache().clone();
 
-            if conn_category == DatabaseCategory::ObjectStorage {
-                // Object storage lists its containers under one Buckets
-                // folder: the prefix hierarchy lives in the object browser
-                // document, never in the global tree.
-                profile_children.push(build_buckets_folder(profile_id, bucket_cache));
+            if conn_capabilities.contains(DriverCapabilities::ROOT_SECTIONS) {
+                // Driver-declared root sections replace the database tree:
+                // their items are listed through the driver's
+                // `RootSectionSource`, never derived from the schema.
+                profile_children.extend(crate::root_sections::build_root_section_folders(
+                    profile_id,
+                    root_sections,
+                ));
             } else if conn_category == DatabaseCategory::SecretStore {
                 let stores: Vec<dbflux_core::SecretStoreDescriptor> = connected
                     .connection
@@ -2552,69 +2571,6 @@ fn build_instance_section(
     items
 }
 
-/// Build the Buckets folder of an object-storage connection.
-///
-/// The label carries the bucket count once the listing resolves; activating
-/// the folder opens the buckets table document.
-fn build_buckets_folder(
-    profile_id: Uuid,
-    bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
-) -> TreeItem {
-    let label = match bucket_cache.get(&profile_id) {
-        Some(buckets) => {
-            crate::labels::container_folder_label(DatabaseCategory::ObjectStorage, buckets.len())
-        }
-        None => dbflux_i18n::t!("sidebar.tree.folder.buckets"),
-    };
-
-    TreeItem::new(
-        SchemaNodeId::BucketsFolder { profile_id }.to_string(),
-        label,
-    )
-    .expanded(true)
-    .children(build_bucket_children(profile_id, bucket_cache))
-}
-
-/// Build the flat bucket rows shown under an object-storage connection.
-///
-/// The listing is session-cached and fetched on first expansion of the
-/// connection node; until it resolves a single non-clickable placeholder keeps
-/// the node from looking empty. Buckets have no children here by design — the
-/// prefix hierarchy belongs to the object browser document.
-fn build_bucket_children(
-    profile_id: Uuid,
-    bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
-) -> Vec<TreeItem> {
-    let Some(buckets) = bucket_cache.get(&profile_id) else {
-        return vec![Sidebar::loading_placeholder(
-            profile_id,
-            "buckets",
-            "buckets-loading",
-        )];
-    };
-
-    if buckets.is_empty() {
-        return vec![TreeItem::new(
-            format!("buckets-empty|{profile_id}"),
-            dbflux_i18n::t!("sidebar.tree.empty.buckets"),
-        )];
-    }
-
-    buckets
-        .iter()
-        .map(|bucket| {
-            TreeItem::new(
-                SchemaNodeId::Bucket {
-                    profile_id,
-                    name: bucket.name.clone(),
-                }
-                .to_string(),
-                bucket.name.clone(),
-            )
-        })
-        .collect()
-}
-
 fn build_table_column_children(
     profile_id: Uuid,
     table_name: &str,
@@ -3522,148 +3478,6 @@ mod tests {
         assert!(
             !has_metrics_folder,
             "Metrics folder must not appear when METRIC_CATALOG capability is absent"
-        );
-    }
-
-    /// T21: before the listing resolves the connection shows a single
-    /// non-clickable loading placeholder, never an empty node.
-    #[test]
-    fn bucket_children_show_a_loading_placeholder_on_cache_miss() {
-        use super::build_bucket_children;
-        use dbflux_core::SchemaNodeId;
-
-        let profile_id = Uuid::new_v4();
-
-        let children = build_bucket_children(profile_id, &HashMap::new());
-
-        assert_eq!(children.len(), 1);
-        assert!(children[0].label.as_ref().contains("Loading"));
-        assert!(
-            children[0]
-                .id
-                .as_ref()
-                .parse::<SchemaNodeId>()
-                .is_err_and(|_| true)
-                || !matches!(
-                    children[0].id.as_ref().parse::<SchemaNodeId>(),
-                    Ok(SchemaNodeId::Bucket { .. })
-                ),
-            "the placeholder must not parse as a bucket node"
-        );
-    }
-
-    /// T21: buckets render flat, one clickable row each, with no children —
-    /// the prefix hierarchy stays inside the object browser document.
-    #[test]
-    fn bucket_children_render_one_flat_row_per_bucket() {
-        use super::build_bucket_children;
-        use dbflux_core::SchemaNodeId;
-
-        let profile_id = Uuid::new_v4();
-        let mut cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>> = HashMap::new();
-        cache.insert(
-            profile_id,
-            vec![
-                dbflux_core::BucketInfo {
-                    name: "prod-logs".to_string(),
-                    created_at: None,
-                },
-                dbflux_core::BucketInfo {
-                    name: "media.assets".to_string(),
-                    created_at: None,
-                },
-            ],
-        );
-
-        let children = build_bucket_children(profile_id, &cache);
-
-        assert_eq!(children.len(), 2);
-        assert!(children.iter().all(|item| item.children.is_empty()));
-
-        let parsed: Vec<SchemaNodeId> = children
-            .iter()
-            .filter_map(|item| item.id.as_ref().parse::<SchemaNodeId>().ok())
-            .collect();
-
-        assert_eq!(
-            parsed,
-            vec![
-                SchemaNodeId::Bucket {
-                    profile_id,
-                    name: "prod-logs".to_string()
-                },
-                SchemaNodeId::Bucket {
-                    profile_id,
-                    name: "media.assets".to_string()
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn buckets_folder_wraps_the_bucket_rows_and_counts_them() {
-        use super::build_buckets_folder;
-        use dbflux_core::SchemaNodeId;
-
-        let profile_id = Uuid::new_v4();
-        let mut cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>> = HashMap::new();
-        cache.insert(
-            profile_id,
-            vec![
-                dbflux_core::BucketInfo {
-                    name: "avatars".to_string(),
-                    created_at: None,
-                },
-                dbflux_core::BucketInfo {
-                    name: "exports".to_string(),
-                    created_at: None,
-                },
-            ],
-        );
-
-        let folder = build_buckets_folder(profile_id, &cache);
-
-        assert_eq!(
-            folder.id.as_ref().parse::<SchemaNodeId>(),
-            Ok(SchemaNodeId::BucketsFolder { profile_id })
-        );
-        assert_eq!(
-            folder.label.as_ref(),
-            crate::labels::container_folder_label(dbflux_core::DatabaseCategory::ObjectStorage, 2)
-        );
-        assert_eq!(folder.children.len(), 2);
-    }
-
-    #[test]
-    fn buckets_folder_shows_a_plain_label_while_the_listing_loads() {
-        use super::build_buckets_folder;
-
-        let profile_id = Uuid::new_v4();
-
-        let folder = build_buckets_folder(profile_id, &HashMap::new());
-
-        assert_eq!(
-            folder.label.as_ref(),
-            dbflux_i18n::t!("sidebar.tree.folder.buckets")
-        );
-        assert_eq!(folder.children.len(), 1);
-    }
-
-    /// T21: a connection with no buckets says so instead of rendering nothing.
-    #[test]
-    fn bucket_children_report_an_empty_connection() {
-        use super::build_bucket_children;
-
-        let profile_id = Uuid::new_v4();
-        let mut cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>> = HashMap::new();
-        cache.insert(profile_id, Vec::new());
-
-        let children = build_bucket_children(profile_id, &cache);
-
-        assert_eq!(children.len(), 1);
-        assert_eq!(
-            children[0].label.as_ref(),
-            dbflux_i18n::t!("sidebar.tree.empty.buckets")
         );
     }
 
@@ -4644,7 +4458,7 @@ mod tests {
                 &HashMap::new(),
                 &HashMap::new(),
                 &HashMap::new(),
-                &HashMap::new(),
+                &crate::root_sections::RootSectionCache::default(),
                 &HashMap::new(),
             )
         };
@@ -4709,7 +4523,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
-            &HashMap::new(),
+            &crate::root_sections::RootSectionCache::default(),
             &HashMap::new(),
         );
         let ids: Vec<_> = item
@@ -4800,7 +4614,7 @@ mod tests {
                 &HashMap::new(),
                 &HashMap::new(),
                 &HashMap::new(),
-                &HashMap::new(),
+                &crate::root_sections::RootSectionCache::default(),
                 &HashMap::new(),
             )
             .children

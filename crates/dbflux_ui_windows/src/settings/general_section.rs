@@ -6,8 +6,11 @@ use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::SegmentedItem;
 use dbflux_components::typography::AppFonts;
-use dbflux_core::{AppStyle, GeneralSettings, RefreshPolicySetting, StartupFocus, ThemeSetting};
-use dbflux_ui_base::AppStateEntity;
+use dbflux_core::{
+    AppStyle, GeneralSettings, RefreshPolicySetting, ScrollbarVisibility, StartupFocus,
+    ThemeSetting,
+};
+use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::IndexPath;
@@ -29,6 +32,7 @@ const TOAST_TIMEOUT_CHOICES: [u32; 4] = [4, 8, 15, 0];
 pub(super) enum GeneralFormRow {
     Theme,
     Style,
+    Scrollbars,
     Language,
     UiFontFamily,
     UiFontSize,
@@ -412,6 +416,9 @@ impl GeneralSection {
             },
         );
 
+        let saved_font_sizes_subscription =
+            cx.subscribe_in(&app_state, window, Self::sync_saved_font_sizes);
+
         Self {
             app_state,
             gen_settings: settings,
@@ -455,11 +462,59 @@ impl GeneralSection {
                 blur_editor_row_limit,
                 blur_object_preview_limit,
                 blur_key_value_size_limit,
+                saved_font_sizes_subscription,
             ]
             .into_iter()
             .chain(font_subscriptions)
             .collect(),
         }
+    }
+
+    /// Font sizes also change outside this window (the interface zoom
+    /// commands). Show the new saved size in every field the user has not
+    /// edited, so Save does not write the old size back.
+    fn sync_saved_font_sizes(
+        &mut self,
+        app_state: &Entity<AppStateEntity>,
+        _event: &AppStateChanged,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let saved = app_state.read(cx).general_settings();
+        let fields = [
+            (
+                &self.input_ui_font_size,
+                &mut self.gen_settings.ui_font_size,
+                saved.ui_font_size,
+            ),
+            (
+                &self.input_editor_font_size,
+                &mut self.gen_settings.editor_font_size,
+                saved.editor_font_size,
+            ),
+            (
+                &self.input_grid_font_size,
+                &mut self.gen_settings.grid_font_size,
+                saved.grid_font_size,
+            ),
+        ];
+
+        for (input, synced, saved_size) in fields {
+            if *synced == saved_size {
+                continue;
+            }
+
+            let untouched = input.read(cx).value().as_ref() == synced.to_string();
+            *synced = saved_size;
+
+            if untouched {
+                input.update(cx, |input, cx| {
+                    input.set_value(saved_size.to_string(), window, cx)
+                });
+            }
+        }
+
+        cx.notify();
     }
 
     fn return_focus_on_blur(
@@ -630,6 +685,35 @@ impl GeneralSection {
         }
     }
 
+    /// Scrollbar visibility segments, in index order (see
+    /// [`Self::scrollbar_visibility_index`]).
+    pub(super) fn scrollbar_visibility_items() -> Vec<SegmentedItem> {
+        [
+            ("while-scrolling", ScrollbarVisibility::WhileScrolling),
+            ("on-hover", ScrollbarVisibility::OnHover),
+            ("always", ScrollbarVisibility::Always),
+        ]
+        .into_iter()
+        .map(|(id, visibility)| {
+            SegmentedItem::new(id, Self::scrollbar_visibility_label(visibility))
+        })
+        .collect()
+    }
+
+    fn scrollbar_visibility_label(visibility: ScrollbarVisibility) -> String {
+        match visibility {
+            ScrollbarVisibility::WhileScrolling => {
+                dbflux_i18n::t!("settings.general.scrollbars.option.while_scrolling")
+            }
+            ScrollbarVisibility::OnHover => {
+                dbflux_i18n::t!("settings.general.scrollbars.option.on_hover")
+            }
+            ScrollbarVisibility::Always => {
+                dbflux_i18n::t!("settings.general.scrollbars.option.always")
+            }
+        }
+    }
+
     fn language_items() -> Vec<DropdownItem> {
         let system_language =
             dbflux_i18n::resolve(None, dbflux_i18n::detect_system_locale().as_deref());
@@ -764,6 +848,22 @@ impl GeneralSection {
         }
     }
 
+    pub(super) fn scrollbar_visibility_index(visibility: ScrollbarVisibility) -> usize {
+        match visibility {
+            ScrollbarVisibility::WhileScrolling => 0,
+            ScrollbarVisibility::OnHover => 1,
+            ScrollbarVisibility::Always => 2,
+        }
+    }
+
+    pub(super) fn scrollbar_visibility_for_index(index: usize) -> ScrollbarVisibility {
+        match index {
+            1 => ScrollbarVisibility::OnHover,
+            2 => ScrollbarVisibility::Always,
+            _ => ScrollbarVisibility::WhileScrolling,
+        }
+    }
+
     fn language_index(persisted: &str) -> usize {
         match dbflux_i18n::LanguagePreference::from_storage_str(persisted) {
             dbflux_i18n::LanguagePreference::System => 0,
@@ -874,7 +974,7 @@ impl Render for GeneralSection {
 #[cfg(test)]
 mod tests {
     use super::{FontFamilyField, FontFamilyOption, GeneralFormRow, GeneralSection};
-    use dbflux_core::{AppStyle, ThemeSetting};
+    use dbflux_core::{AppStyle, ScrollbarVisibility, ThemeSetting};
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_ui_base::AppStateEntity;
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
@@ -882,15 +982,9 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
-    fn with_general_section(
-        test: impl FnOnce(
-            &mut GeneralSection,
-            &Entity<ToastHost>,
-            &mut gpui::Window,
-            &mut gpui::Context<GeneralSection>,
-        ),
-    ) {
-        let mut cx = TestAppContext::single();
+    fn open_section_window(
+        cx: &mut TestAppContext,
+    ) -> (gpui::WindowHandle<GeneralSection>, Entity<ToastHost>) {
         cx.update(gpui_component::init);
         cx.update(dbflux_components::theme::init);
         let toast_host = cx.update(|cx| {
@@ -914,6 +1008,20 @@ mod tests {
             })
             .expect("general settings window opens");
 
+        (window, toast_host)
+    }
+
+    fn with_general_section(
+        test: impl FnOnce(
+            &mut GeneralSection,
+            &Entity<ToastHost>,
+            &mut gpui::Window,
+            &mut gpui::Context<GeneralSection>,
+        ),
+    ) {
+        let mut cx = TestAppContext::single();
+        let (window, toast_host) = open_section_window(&mut cx);
+
         window
             .update(&mut cx, |section, window, cx| {
                 test(section, &toast_host, window, cx)
@@ -922,6 +1030,131 @@ mod tests {
         window
             .update(&mut cx, |_, window, _| window.remove_window())
             .expect("window closes");
+    }
+
+    /// One step of a test on the General section: it runs, then the
+    /// background settings writer finishes before the next step.
+    type SectionPhase =
+        Box<dyn FnOnce(&mut GeneralSection, &mut gpui::Window, &mut gpui::Context<GeneralSection>)>;
+
+    /// Runs each phase in order, letting the background settings writer
+    /// finish after every one, so a phase can check what an earlier save
+    /// wrote to the database.
+    fn with_general_section_phases(phases: Vec<SectionPhase>) {
+        let mut cx = TestAppContext::single();
+        let (window, _) = open_section_window(&mut cx);
+
+        for phase in phases {
+            window
+                .update(&mut cx, |section, window, cx| phase(section, window, cx))
+                .expect("general section updates");
+            cx.run_until_parked();
+        }
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("window closes");
+    }
+
+    /// Runs `test`, lets the background settings writer finish, then runs
+    /// `after_saved` to check what reached the database.
+    fn with_general_section_saved(
+        test: impl FnOnce(&mut GeneralSection, &mut gpui::Window, &mut gpui::Context<GeneralSection>)
+        + 'static,
+        after_saved: impl FnOnce(
+            &mut GeneralSection,
+            &mut gpui::Window,
+            &mut gpui::Context<GeneralSection>,
+        ) + 'static,
+    ) {
+        with_general_section_phases(vec![Box::new(test), Box::new(after_saved)]);
+    }
+
+    fn font_size_inputs(section: &GeneralSection, cx: &gpui::App) -> [String; 3] {
+        [
+            &section.input_ui_font_size,
+            &section.input_editor_font_size,
+            &section.input_grid_font_size,
+        ]
+        .map(|input| input.read(cx).value().to_string())
+    }
+
+    fn zoom_with_settings_open(
+        before_zoom: impl FnOnce(
+            &mut GeneralSection,
+            &mut gpui::Window,
+            &mut gpui::Context<GeneralSection>,
+        ),
+        after_zoom: impl FnOnce(&mut GeneralSection, &mut gpui::Context<GeneralSection>),
+    ) {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test app state")
+            })
+        });
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| GeneralSection::new(app_state.clone(), window, cx))
+                })
+            })
+            .expect("general settings window opens");
+
+        window
+            .update(&mut cx, |section, window, cx| {
+                before_zoom(section, window, cx)
+            })
+            .expect("general section updates before the zoom");
+        let changed = cx.update(|cx| {
+            dbflux_ui_base::interface_size::change_interface_size(
+                &app_state,
+                dbflux_core::InterfaceSizeChange::Increase,
+                cx,
+            )
+        });
+        assert!(changed, "the zoom changes the saved sizes");
+        window
+            .update(&mut cx, |section, _, cx| after_zoom(section, cx))
+            .expect("general section updates after the zoom");
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("window closes");
+    }
+
+    #[test]
+    fn zoom_while_settings_is_open_shows_the_new_sizes_without_unsaved_changes() {
+        zoom_with_settings_open(
+            |_, _, _| {},
+            |section, cx| {
+                assert_eq!(font_size_inputs(section, cx), ["14", "14", "13.5"]);
+                assert_eq!(section.general_change_count(cx), 0);
+            },
+        );
+    }
+
+    #[test]
+    fn zoom_while_settings_is_open_keeps_a_font_size_the_user_is_editing() {
+        zoom_with_settings_open(
+            |section, window, cx| {
+                section
+                    .input_ui_font_size
+                    .update(cx, |input, cx| input.set_value("20", window, cx));
+            },
+            |section, cx| {
+                assert_eq!(font_size_inputs(section, cx), ["20", "14", "13.5"]);
+                assert_eq!(section.general_change_count(cx), 1);
+            },
+        );
     }
 
     fn stored_editor_row_limit(section: &GeneralSection, cx: &gpui::App) -> Option<i64> {
@@ -988,65 +1221,74 @@ mod tests {
 
     #[test]
     fn valid_editor_row_limit_marks_dirty_and_saves() {
-        with_general_section(|section, _, window, cx| {
-            section
-                .input_editor_row_limit
-                .update(cx, |input, cx| input.set_value("5000", window, cx));
-            assert!(section.has_unsaved_general_changes(cx));
-
-            section.save_general_settings(window, cx);
-
-            assert_eq!(
+        with_general_section_saved(
+            |section, window, cx| {
                 section
-                    .app_state
-                    .read(cx)
-                    .general_settings()
-                    .editor_row_limit,
-                5_000
-            );
-            assert_eq!(stored_editor_row_limit(section, cx), Some(5_000));
-            assert!(!section.has_unsaved_general_changes(cx));
-        });
+                    .input_editor_row_limit
+                    .update(cx, |input, cx| input.set_value("5000", window, cx));
+                assert!(section.has_unsaved_general_changes(cx));
+
+                section.save_general_settings(window, cx);
+
+                assert_eq!(
+                    section
+                        .app_state
+                        .read(cx)
+                        .general_settings()
+                        .editor_row_limit,
+                    5_000
+                );
+            },
+            |section, _window, cx| {
+                assert_eq!(stored_editor_row_limit(section, cx), Some(5_000));
+                assert!(!section.has_unsaved_general_changes(cx));
+            },
+        );
     }
 
     /// Picking a leader in the Vim leader dropdown is an unsaved change until
     /// Save, which stores it and hands it to open editors.
     #[test]
     fn choosing_a_vim_leader_marks_dirty_and_saves() {
-        with_general_section(|section, _, window, cx| {
-            assert_eq!(section.gen_settings.vim_leader, "space");
+        with_general_section_saved(
+            |section, window, cx| {
+                assert_eq!(section.gen_settings.vim_leader, "space");
 
-            assert_eq!(
-                section
-                    .dropdown_vim_leader
+                assert_eq!(
+                    section
+                        .dropdown_vim_leader
+                        .read(cx)
+                        .selected_label()
+                        .map(|label| label.to_string()),
+                    Some(dbflux_i18n::t!("settings.general.vim_leader.option.space")),
+                    "the dropdown shows the saved leader"
+                );
+
+                section.gen_settings.vim_leader =
+                    GeneralSection::vim_leader_for_index(1).to_string();
+                assert_eq!(section.gen_settings.vim_leader, ",");
+                assert_eq!(section.general_change_count(cx), 1);
+
+                section.save_general_settings(window, cx);
+
+                assert_eq!(
+                    section.app_state.read(cx).general_settings().vim_leader,
+                    ","
+                );
+            },
+            |section, _window, cx| {
+                let stored = section
+                    .app_state
                     .read(cx)
-                    .selected_label()
-                    .map(|label| label.to_string()),
-                Some(dbflux_i18n::t!("settings.general.vim_leader.option.space")),
-                "the dropdown shows the saved leader"
-            );
-
-            section.gen_settings.vim_leader = GeneralSection::vim_leader_for_index(1).to_string();
-            assert_eq!(section.gen_settings.vim_leader, ",");
-            assert_eq!(section.general_change_count(cx), 1);
-
-            section.save_general_settings(window, cx);
-
-            assert_eq!(
-                section.app_state.read(cx).general_settings().vim_leader,
-                ","
-            );
-            let stored = section
-                .app_state
-                .read(cx)
-                .storage_runtime()
-                .general_settings()
-                .get()
-                .expect("stored general settings readable")
-                .map(|settings| settings.vim_leader);
-            assert_eq!(stored.as_deref(), Some(","));
-            assert!(!section.has_unsaved_general_changes(cx));
-        });
+                    .storage_runtime()
+                    .general_settings()
+                    .get()
+                    .expect("stored general settings readable")
+                    .map(|settings| settings.vim_leader);
+                assert_eq!(stored.as_deref(), Some(","));
+                assert!(!section.has_unsaved_general_changes(cx));
+            },
+        );
     }
 
     #[test]
@@ -1078,34 +1320,38 @@ mod tests {
     /// it. `0` means every toast waits for the user.
     #[test]
     fn choosing_a_toast_timeout_marks_dirty_and_saves() {
-        with_general_section(|section, _, window, cx| {
-            assert_eq!(section.gen_settings.toast_auto_dismiss_secs, 8);
+        with_general_section_saved(
+            |section, window, cx| {
+                assert_eq!(section.gen_settings.toast_auto_dismiss_secs, 8);
 
-            section.gen_settings.toast_auto_dismiss_secs =
-                GeneralSection::toast_timeout_for_index(3);
-            assert_eq!(section.general_change_count(cx), 1);
+                section.gen_settings.toast_auto_dismiss_secs =
+                    GeneralSection::toast_timeout_for_index(3);
+                assert_eq!(section.general_change_count(cx), 1);
 
-            section.save_general_settings(window, cx);
+                section.save_general_settings(window, cx);
 
-            assert_eq!(
-                section
+                assert_eq!(
+                    section
+                        .app_state
+                        .read(cx)
+                        .general_settings()
+                        .toast_auto_dismiss_secs,
+                    0
+                );
+            },
+            |section, _window, cx| {
+                let stored = section
                     .app_state
                     .read(cx)
+                    .storage_runtime()
                     .general_settings()
-                    .toast_auto_dismiss_secs,
-                0
-            );
-            let stored = section
-                .app_state
-                .read(cx)
-                .storage_runtime()
-                .general_settings()
-                .get()
-                .expect("stored general settings readable")
-                .map(|settings| settings.toast_auto_dismiss_secs);
-            assert_eq!(stored, Some(0));
-            assert!(!section.has_unsaved_general_changes(cx));
-        });
+                    .get()
+                    .expect("stored general settings readable")
+                    .map(|settings| settings.toast_auto_dismiss_secs);
+                assert_eq!(stored, Some(0));
+                assert!(!section.has_unsaved_general_changes(cx));
+            },
+        );
     }
 
     #[test]
@@ -1358,48 +1604,66 @@ mod tests {
 
     #[test]
     fn font_settings_mark_dirty_and_save() {
-        with_general_section(|section, _, window, cx| {
-            assert_eq!(
-                section.input_grid_font_size.read(cx).value().as_ref(),
-                "12.5"
-            );
+        with_general_section_phases(vec![
+            Box::new(|section, window, cx| {
+                assert_eq!(
+                    section.input_grid_font_size.read(cx).value().as_ref(),
+                    "12.5"
+                );
 
-            section
-                .input_ui_font_size
-                .update(cx, |input, cx| input.set_value("16", window, cx));
-            section
-                .input_grid_font_size
-                .update(cx, |input, cx| input.set_value("14.5", window, cx));
-            section.set_font_family(FontFamilyField::Editor, Some("Fira Code".into()));
-            assert_eq!(section.general_change_count(cx), 3);
-
-            section.save_general_settings(window, cx);
-
-            let saved = section.app_state.read(cx).general_settings().clone();
-            assert_eq!(saved.ui_font_size, 16.0);
-            assert_eq!(saved.editor_font_size, 13.0);
-            assert_eq!(saved.grid_font_size, 14.5);
-            assert_eq!(saved.editor_font_family.as_deref(), Some("Fira Code"));
-            assert_eq!(saved.ui_font_family, None);
-            assert_eq!(
-                stored_general_settings(section, cx),
-                Some((16.0, 13.0, 14.5))
-            );
-            assert!(!section.has_unsaved_general_changes(cx));
-
-            section.set_font_family(FontFamilyField::Editor, None);
-            assert_eq!(section.general_change_count(cx), 1);
-            section.save_general_settings(window, cx);
-            assert_eq!(
                 section
+                    .input_ui_font_size
+                    .update(cx, |input, cx| input.set_value("16", window, cx));
+                section
+                    .input_grid_font_size
+                    .update(cx, |input, cx| input.set_value("14.5", window, cx));
+                section.set_font_family(FontFamilyField::Editor, Some("Fira Code".into()));
+                assert_eq!(section.general_change_count(cx), 3);
+
+                section.save_general_settings(window, cx);
+
+                let saved = section.app_state.read(cx).general_settings().clone();
+                assert_eq!(saved.ui_font_size, 16.0);
+                assert_eq!(saved.editor_font_size, 13.0);
+                assert_eq!(saved.grid_font_size, 14.5);
+                assert_eq!(saved.editor_font_family.as_deref(), Some("Fira Code"));
+                assert_eq!(saved.ui_font_family, None);
+            }),
+            Box::new(|section, window, cx| {
+                assert_eq!(
+                    stored_general_settings(section, cx),
+                    Some((16.0, 13.0, 14.5))
+                );
+                assert!(!section.has_unsaved_general_changes(cx));
+
+                section.set_font_family(FontFamilyField::Editor, None);
+                assert_eq!(section.general_change_count(cx), 1);
+                section.save_general_settings(window, cx);
+                assert_eq!(
+                    section
+                        .app_state
+                        .read(cx)
+                        .general_settings()
+                        .editor_font_family,
+                    None,
+                    "the default entry clears the family"
+                );
+            }),
+            Box::new(|section, _window, cx| {
+                let stored_family = section
                     .app_state
                     .read(cx)
+                    .storage_runtime()
                     .general_settings()
-                    .editor_font_family,
-                None,
-                "the default entry clears the family"
-            );
-        });
+                    .get()
+                    .expect("stored general settings readable")
+                    .and_then(|settings| settings.editor_font_family);
+                assert_eq!(
+                    stored_family, None,
+                    "the cleared family reaches the database"
+                );
+            }),
+        ]);
     }
 
     #[test]
@@ -1833,6 +2097,60 @@ mod tests {
         assert_eq!(GeneralSection::style_for_index(1), AppStyle::Compact);
         // Out-of-range falls back to Default
         assert_eq!(GeneralSection::style_for_index(99), AppStyle::Default);
+    }
+
+    #[test]
+    fn scrollbar_segments_label_every_visibility_in_every_locale() {
+        let labels: Vec<_> = GeneralSection::scrollbar_visibility_items()
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert_eq!(labels, vec!["While scrolling", "On hover", "Always"]);
+
+        for key in [
+            "settings.general.scrollbars.label",
+            "settings.general.scrollbars.help",
+            "settings.general.scrollbars.option.while_scrolling",
+            "settings.general.scrollbars.option.on_hover",
+            "settings.general.scrollbars.option.always",
+        ] {
+            for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty() && value != format!("{locale}.{key}"),
+                    "{key} missing in {locale}"
+                );
+            }
+        }
+        assert_eq!(
+            dbflux_i18n::t!("settings.general.scrollbars.label", locale = "en"),
+            "Show scrollbars"
+        );
+    }
+
+    #[test]
+    fn scrollbar_visibility_index_and_reverse_mapping_cover_all_variants() {
+        let variants = [
+            ScrollbarVisibility::WhileScrolling,
+            ScrollbarVisibility::OnHover,
+            ScrollbarVisibility::Always,
+        ];
+
+        for (index, visibility) in variants.into_iter().enumerate() {
+            assert_eq!(
+                GeneralSection::scrollbar_visibility_index(visibility),
+                index
+            );
+            assert_eq!(
+                GeneralSection::scrollbar_visibility_for_index(index),
+                visibility
+            );
+        }
+        assert_eq!(
+            GeneralSection::scrollbar_visibility_for_index(99),
+            ScrollbarVisibility::WhileScrolling
+        );
     }
 
     #[test]

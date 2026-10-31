@@ -13,10 +13,12 @@ mod data;
 mod details;
 mod listing;
 mod pane;
+mod region;
 mod render;
 mod value;
 
 pub use listing::{PathMode, SecretListing};
+pub use region::RegionListState;
 pub use value::{
     RetrievalTarget, RetrievedValue, VALUE_RETRIEVE_FAILED_ACTION, VALUE_RETRIEVED_ACTION,
     ValueContent, ValueFailure, ValueState, ValueView, encode_base64, value_retrieval_event,
@@ -25,11 +27,13 @@ pub use value::{
 use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
-use dbflux_components::controls::{InputEvent, InputState};
+use dbflux_components::controls::{Dropdown, DropdownSelectionChanged, InputEvent, InputState};
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
-    RefreshPolicy, SecretDetails, SecretStoreCapabilities, SecretStoreDescriptor, SecretSummary,
+    Connection, DriverCapabilities, RefreshPolicy, SecretDetails, SecretStoreCapabilities,
+    SecretStoreDescriptor, SecretSummary,
 };
+use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::AppStateEntity;
 use gpui::*;
 use uuid::Uuid;
@@ -104,6 +108,21 @@ pub struct SecretStoreDocument {
     value_input_masks: Vec<bool>,
     value_inputs_view: Option<ValueView>,
     last_call: Option<CallTiming>,
+    /// Whether the connection's driver advertises `REGION_SWITCH`. Never a
+    /// driver id: the capability gates the control.
+    region_switchable: bool,
+    /// The region the listing is loaded under, read from the connection at
+    /// construction and updated after a successful switch.
+    region: Option<String>,
+    /// The regions the connection offers.
+    regions: RegionListState,
+    /// Bumped by every region discovery, so a result that a newer discovery or
+    /// a replaced connection made stale is dropped instead of shown.
+    regions_generation: u64,
+    /// A region switch is reconnecting on the background executor.
+    region_switch_in_flight: bool,
+    /// The toolbar region picker, built only when the driver can switch.
+    region_dropdown: Option<Entity<Dropdown>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -121,7 +140,7 @@ impl SecretStoreDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (connection_name, descriptor) = {
+        let (connection_name, descriptor, region, region_switchable) = {
             let state = app_state.read(cx);
             let connected = state.connections().get(&profile_id);
 
@@ -144,7 +163,16 @@ impl SecretStoreDocument {
                     )
                 });
 
-            (name, descriptor)
+            let region = connected.and_then(|connected| connected.connection.current_region());
+            let region_switchable = connected.is_some_and(|connected| {
+                connected
+                    .connection
+                    .metadata()
+                    .capabilities
+                    .contains(DriverCapabilities::REGION_SWITCH)
+            });
+
+            (name, descriptor, region, region_switchable)
         };
 
         let search_input = cx.new(|cx| {
@@ -174,6 +202,41 @@ impl SecretStoreDocument {
 
         let path = path.filter(|_| descriptor.supports(SecretStoreCapabilities::HIERARCHICAL));
 
+        // The picker exists only when the driver can switch regions; its
+        // items arrive once the background listing lands.
+        let (region_dropdown, region_subscription) = if region_switchable {
+            let dropdown = cx.new(|_cx| {
+                Dropdown::new("secret-region")
+                    .placeholder(dbflux_i18n::t!("document.secret_store.region.label"))
+                    .aria_label(dbflux_i18n::t!("document.secret_store.region.label"))
+                    .toolbar_style(true)
+                    .mono_label(true)
+            });
+
+            let subscription = cx.subscribe_in(
+                &dropdown,
+                window,
+                |this, _, event: &DropdownSelectionChanged, _window, cx| {
+                    this.switch_region(event.item.value.to_string(), cx);
+                },
+            );
+
+            (Some(dropdown), Some(subscription))
+        } else {
+            (None, None)
+        };
+
+        let mut subscriptions = vec![search_subscription];
+        subscriptions.extend(region_subscription);
+        // The live connection can be replaced (or moved to another region)
+        // outside this document; the subscription keeps the region and the
+        // listing on what the connection actually reaches.
+        subscriptions.push(
+            cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
+                this.adopt_connection_region(cx);
+            }),
+        );
+
         let mut doc = Self {
             id: DocumentId::new(),
             title: dbflux_i18n::t!(
@@ -202,8 +265,18 @@ impl SecretStoreDocument {
             value_input_masks: Vec::new(),
             value_inputs_view: None,
             last_call: None,
-            _subscriptions: vec![search_subscription],
+            region_switchable,
+            region,
+            regions: RegionListState::Idle,
+            regions_generation: 0,
+            region_switch_in_flight: false,
+            region_dropdown,
+            _subscriptions: subscriptions,
         };
+
+        if region_switchable {
+            doc.load_regions(cx);
+        }
 
         doc.load_first_page(cx);
         doc
@@ -269,6 +342,26 @@ impl SecretStoreDocument {
 
     pub fn last_call(&self) -> Option<CallTiming> {
         self.last_call
+    }
+
+    /// Whether the connection's driver can switch regions.
+    pub fn supports_region_switch(&self) -> bool {
+        self.region_switchable
+    }
+
+    /// The region the listing is loaded under.
+    pub fn region(&self) -> Option<&str> {
+        self.region.as_deref()
+    }
+
+    /// The regions the connection offers.
+    pub fn regions(&self) -> &RegionListState {
+        &self.regions
+    }
+
+    /// Whether a region switch is reconnecting.
+    pub fn region_switch_in_flight(&self) -> bool {
+        self.region_switch_in_flight
     }
 
     pub fn refresh_policy(&self) -> RefreshPolicy {
@@ -695,6 +788,34 @@ impl SecretStoreDocument {
                     Command::ColumnLeft,
                 )
                 .enabled(self.path.is_some()),
+            );
+        }
+
+        // The region picker and the retry of a failed listing are clickable
+        // toolbar controls, so the pane actions are their keyboard path too.
+        if self.region_switchable {
+            if let Some(dropdown) = self.region_dropdown.clone() {
+                actions.push(
+                    PaneAction::callback(
+                        "secret-region",
+                        dbflux_i18n::t!("document.secret_store.region.label"),
+                        move |window, cx| {
+                            dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+                        },
+                    )
+                    .icon(AppIcon::Globe)
+                    .enabled(matches!(self.regions, RegionListState::Loaded(_))),
+                );
+            }
+            actions.push(
+                callback_action(
+                    &target,
+                    "secret-region-retry",
+                    "document.secret_store.region.retry",
+                    Self::load_regions,
+                )
+                .icon(AppIcon::RefreshCcw)
+                .enabled(matches!(self.regions, RegionListState::Failed(_))),
             );
         }
 
