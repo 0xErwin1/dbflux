@@ -181,7 +181,8 @@ fn a_pending_change_is_written_when_the_app_quits(cx: &mut TestAppContext) {
 }
 
 /// A write the drain has already taken, but that has not reached the disk,
-/// is still written when the app quits.
+/// is still written when the app quits. Its callback stays with the drain
+/// task, which the process exit can cut short, so quitting does not run it.
 #[gpui::test]
 fn quitting_writes_a_change_already_taken_by_the_drain(cx: &mut TestAppContext) {
     let app_state = app_state(cx);
@@ -192,6 +193,10 @@ fn quitting_writes_a_change_already_taken_by_the_drain(cx: &mut TestAppContext) 
         let in_flight = super::take_pending(&db_path(&app_state, cx), cx);
         assert!(in_flight.is_some(), "the drain takes the change");
         flush_pending(cx);
+        assert!(
+            outcomes.borrow().is_empty(),
+            "the callback belongs to the in-flight write, not to the quit flush"
+        );
     });
 
     assert_eq!(saved_max_history(&app_state, cx), 88);

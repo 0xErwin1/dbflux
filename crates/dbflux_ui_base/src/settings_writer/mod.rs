@@ -73,6 +73,11 @@ impl Global for SettingsWriter {}
 /// has finished: `true` once it is on disk, `false` when the write failed. A
 /// failure is reported to the user here, so callers must not report it again.
 /// The caller applies the change in memory itself, before calling this.
+///
+/// When the app quits while the change is being written, the quit hook writes
+/// it on the spot, but `on_saved` may never run: the background write that
+/// owns the callback can be cut short by the process exiting. A pending
+/// change that no write has taken yet still has its `on_saved` run on quit.
 pub fn persist_general_settings(
     app_state: &Entity<AppStateEntity>,
     settings: GeneralSettings,
