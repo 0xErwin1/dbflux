@@ -366,8 +366,16 @@ por la razón de índices en el wire descrita arriba. El cliente expone las
 secciones raíz solo cuando la sesión negoció v1.9 o posterior y los metadatos
 del driver declaran `DriverCapabilities::ROOT_SECTIONS`; si no, `IpcConnection`
 quita esa capacidad y no envía nada. `IpcConnection` obtiene la declaración una
-vez por conexión y la guarda en caché; si la obtención falla, no muestra
-secciones y vuelve a intentarlo en la siguiente lectura. Cada
+vez por conexión y la guarda en caché; si la obtención falla, devuelve el error
+sin guardarlo, así que el host lo muestra con una fila para reintentar y vuelve a
+pedirla desde ahí. Un id de sección no puede contener `|`; el host rechaza e
+informa esa declaración. El host oculta una sección cuya presentación abre un
+documento de almacenamiento de objetos en una conexión sin `object_store_api`.
+`IpcConnection` no lo tiene, porque todavía no existe un RPC de almacenamiento
+de objetos, y las dos presentaciones disponibles hasta ahora
+(`ObjectContainerTable` y `ObjectBrowser`) son de ese tipo, así que las
+secciones de un driver externo quedan ocultas hasta que exista una presentación
+sin esa necesidad. Cada
 `RootSectionAction` lleva su `ExecutionClassification`, así que el host confirma
 y audita las acciones de los drivers externos igual que las de los integrados.
 

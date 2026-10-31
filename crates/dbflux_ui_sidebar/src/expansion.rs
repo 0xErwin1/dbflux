@@ -857,7 +857,7 @@ impl Sidebar {
 
         let stale_root_section_ids: Vec<Uuid> = self
             .root_section_cache
-            .keys()
+            .profile_ids()
             .chain(
                 self.pending_root_section_fetches
                     .keys()
@@ -867,7 +867,7 @@ impl Sidebar {
             .copied()
             .collect();
         for profile_id in stale_root_section_ids {
-            self.clear_root_section_cache(profile_id);
+            self.clear_root_section_cache(profile_id, cx);
         }
 
         let stale_secret_path_ids: std::collections::HashSet<Uuid> = self

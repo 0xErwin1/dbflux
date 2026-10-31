@@ -5262,6 +5262,14 @@ sidebar:
       routines: "加载例程失败：%{error}"
     list_root_section_failed: "列出%{section}失败：%{error}"
     root_section_action_failed: "对 %{item} 执行%{action}失败：%{error}"
+    root_section_action_audit_failed: "已对 %{item} 执行%{action}，但未能记录其审计事件：%{error}"
+    root_section_action_connection_changed: "未对 %{item} 执行%{action}：请求操作后连接已更改。"
+    root_section_action_refused:
+      read_only: "未执行%{action}：此连接为只读。"
+      read_only_profile: "未执行%{action}：此连接的配置文件设置为只读。"
+      read_only_server: "未执行%{action}：服务器拒绝了此连接的修改。"
+      approval_unavailable: "未执行%{action}：此连接需要审批，而侧边栏操作暂不支持审批。"
+    root_section_invalid_id: "已跳过驱动声明的根分区 \"%{section}\"：分区 ID 不能包含 \"|\"。"
     code_generation_failed: "代码生成失败：%{error}"
     loading_event_streams: 正在加载事件流…
     load_schema_failed: "加载 Schema 失败：%{error}"

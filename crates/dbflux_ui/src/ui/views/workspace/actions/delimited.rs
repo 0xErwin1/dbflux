@@ -592,6 +592,8 @@ pub(super) mod tests {
         /// The size `head_object` reports instead of the stored length, as
         /// when another writer replaces the object right after it.
         reported_size: std::sync::Mutex<Option<u64>>,
+        /// How many times the buckets were listed.
+        bucket_listings: std::sync::atomic::AtomicUsize,
     }
 
     impl ObjectStoreFake {
@@ -619,6 +621,7 @@ pub(super) mod tests {
                 range_reads,
                 full_reads: std::sync::atomic::AtomicUsize::new(0),
                 reported_size: std::sync::Mutex::new(None),
+                bucket_listings: std::sync::atomic::AtomicUsize::new(0),
             })
         }
 
@@ -630,6 +633,12 @@ pub(super) mod tests {
         /// How many times the store sent a whole object.
         pub(in crate::ui::views::workspace::actions) fn full_reads(&self) -> usize {
             self.full_reads.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        /// How many times the buckets were listed.
+        pub(in crate::ui::views::workspace::actions) fn bucket_listings(&self) -> usize {
+            self.bucket_listings
+                .load(std::sync::atomic::Ordering::SeqCst)
         }
 
         /// Replaces the object `key`, as another writer would.
@@ -671,7 +680,13 @@ pub(super) mod tests {
 
     impl dbflux_core::ObjectStoreConnection for ObjectStoreFake {
         fn list_buckets(&self) -> Result<Vec<dbflux_core::BucketInfo>, dbflux_core::DbError> {
-            not_used()
+            self.bucket_listings
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+            Ok(vec![dbflux_core::BucketInfo {
+                name: BUCKET.to_string(),
+                created_at: None,
+            }])
         }
 
         fn list_objects(
@@ -899,6 +914,44 @@ pub(super) mod tests {
 
         fn object_store_api(&self) -> Option<&dyn dbflux_core::ObjectStoreConnection> {
             Some(self.store.as_ref())
+        }
+
+        fn root_section_source(&self) -> Option<&dyn dbflux_core::RootSectionSource> {
+            Some(self)
+        }
+    }
+
+    /// One `buckets` section presented as the containers table, whose
+    /// actions all succeed without touching the store.
+    impl dbflux_core::RootSectionSource for ObjectConnection {
+        fn sections(&self) -> Result<Vec<dbflux_core::RootSectionDef>, dbflux_core::DbError> {
+            Ok(vec![dbflux_core::RootSectionDef {
+                id: "buckets".to_string(),
+                label: dbflux_core::LocalizedText::plain("Buckets"),
+                counted_label_key: None,
+                empty_label: dbflux_core::LocalizedText::plain("No buckets"),
+                presentation: Some(dbflux_core::RootSectionPresentation::ObjectContainerTable),
+                item_presentation: dbflux_core::RootItemPresentation::ObjectBrowser,
+                opens_on_profile_activation: true,
+                item_actions: Vec::new(),
+            }])
+        }
+
+        fn list_items(
+            &self,
+            _section_id: &str,
+            _page_token: Option<&str>,
+        ) -> Result<dbflux_core::RootSectionPage, dbflux_core::DbError> {
+            Ok(dbflux_core::RootSectionPage::default())
+        }
+
+        fn execute_action(
+            &self,
+            _section_id: &str,
+            _item_id: &str,
+            _action_id: &str,
+        ) -> Result<(), dbflux_core::DbError> {
+            Ok(())
         }
     }
 

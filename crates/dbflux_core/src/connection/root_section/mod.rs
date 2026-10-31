@@ -51,6 +51,15 @@ pub enum RootSectionPresentation {
     ObjectContainerTable,
 }
 
+impl RootSectionPresentation {
+    /// Whether the document it opens reads through `Connection::object_store_api`.
+    pub fn requires_object_store(self) -> bool {
+        match self {
+            Self::ObjectContainerTable => true,
+        }
+    }
+}
+
 /// What opens when the user activates one item of a section.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +67,15 @@ pub enum RootSectionPresentation {
 pub enum RootItemPresentation {
     /// The object browser rooted at the container whose name is the item id.
     ObjectBrowser,
+}
+
+impl RootItemPresentation {
+    /// Whether the document it opens reads through `Connection::object_store_api`.
+    pub fn requires_object_store(self) -> bool {
+        match self {
+            Self::ObjectBrowser => true,
+        }
+    }
 }
 
 /// An operation the user can run on one item of a section.
@@ -85,7 +103,18 @@ impl RootSectionAction {
                 | ExecutionClassification::AdminDestructive
         )
     }
+
+    /// Whether the action only reads, so a read-only connection may run it.
+    pub fn is_read_only(&self) -> bool {
+        matches!(
+            self.classification,
+            ExecutionClassification::Metadata | ExecutionClassification::Read
+        )
+    }
 }
+
+/// Separates the parts of the sidebar node ids that embed a section id.
+const ROOT_SECTION_ID_SEPARATOR: char = '|';
 
 /// One section shown at the root of a connection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +145,21 @@ impl RootSectionDef {
             .iter()
             .find(|action| action.id == action_id)
     }
+
+    /// Whether the id can be embedded in a node id: node ids are parsed up to
+    /// the next separator, so a section id containing it would be misread.
+    pub fn has_valid_id(&self) -> bool {
+        !self.id.contains(ROOT_SECTION_ID_SEPARATOR)
+    }
+
+    /// Whether the section's folder or item presentation opens a document
+    /// that needs `Connection::object_store_api`. A host hides such a section
+    /// on a connection without one, since every load of that document fails.
+    pub fn requires_object_store(&self) -> bool {
+        self.presentation
+            .is_some_and(RootSectionPresentation::requires_object_store)
+            || self.item_presentation.requires_object_store()
+    }
 }
 
 /// One listed item of a section. `id` is what the driver and the item
@@ -139,8 +183,10 @@ pub struct RootSectionPage {
 /// Methods block and must run on a background executor. A driver that
 /// implements it advertises `DriverCapabilities::ROOT_SECTIONS`.
 pub trait RootSectionSource: Send + Sync {
-    /// The sections of this connection, in display order.
-    fn sections(&self) -> Vec<RootSectionDef>;
+    /// The sections of this connection, in display order. An error (for
+    /// example an unreachable driver host) is reported and asked again on the
+    /// next expansion; it is never taken as "no sections".
+    fn sections(&self) -> Result<Vec<RootSectionDef>, DbError>;
 
     /// Lists one page of `section_id`. `page_token` is `None` for the first
     /// page and the previous page's `next_page_token` afterwards.

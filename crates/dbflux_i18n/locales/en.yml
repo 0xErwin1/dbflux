@@ -5264,6 +5264,14 @@ sidebar:
       routines: "Failed to load routines: %{error}"
     list_root_section_failed: "Failed to list %{section}: %{error}"
     root_section_action_failed: "%{action} failed for %{item}: %{error}"
+    root_section_action_audit_failed: "%{action} on %{item} succeeded, but its audit event was not recorded: %{error}"
+    root_section_action_connection_changed: "%{action} was not run on %{item}: the connection changed after the action was requested."
+    root_section_action_refused:
+      read_only: "%{action} was not run: this connection is read-only."
+      read_only_profile: "%{action} was not run: this connection's profile is set to read-only."
+      read_only_server: "%{action} was not run: the server rejected mutations for this connection."
+      approval_unavailable: "%{action} was not run: this connection requires approval, which is not available for sidebar actions yet."
+    root_section_invalid_id: "The driver declared the root section \"%{section}\", which was skipped: section ids cannot contain \"|\"."
     code_generation_failed: "Code generation failed: %{error}"
     loading_event_streams: Loading event streams…
     load_schema_failed: "Failed to load schema: %{error}"

@@ -1,5 +1,6 @@
 use super::*;
 use crate::operations::DropOptions;
+use crate::root_sections::PendingRootSectionAction;
 
 impl Sidebar {
     pub fn request_delete_selected(&mut self, cx: &mut Context<Self>) {
@@ -314,8 +315,8 @@ impl Sidebar {
             modal.delegated_to_modal,
         );
 
-        if let Some(request) = modal.root_action {
-            self.run_root_section_action(request, cx);
+        if let Some(pending) = modal.root_action {
+            self.run_root_section_action(pending, cx);
             return;
         }
 
@@ -373,9 +374,10 @@ impl Sidebar {
     /// inline confirmation the workspace draws.
     pub(crate) fn show_root_section_action_confirm(
         &mut self,
-        request: RootSectionActionRequest,
+        pending: PendingRootSectionAction,
         cx: &mut Context<Self>,
     ) {
+        let request = &pending.request;
         self.show_inline_delete_modal(
             DeleteConfirmState {
                 item_id: SchemaNodeId::RootSectionItem {
@@ -390,7 +392,7 @@ impl Sidebar {
                 is_ddl: false,
                 multi_item_ids: Vec::new(),
                 delegated_to_modal: false,
-                root_action: Some(request),
+                root_action: Some(pending),
             },
             cx,
         );
@@ -444,6 +446,7 @@ impl Sidebar {
             root_action: m
                 .root_action
                 .as_ref()
+                .map(|pending| &pending.request)
                 .map(|request| RootSectionActionConfirm {
                     title: request.action_label(),
                     message: request.confirm_message(),

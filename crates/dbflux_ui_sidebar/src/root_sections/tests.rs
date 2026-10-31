@@ -6,13 +6,14 @@ use crate::table_loading::object_tree_adapter_tests::test_app_state;
 use crate::{ContextMenuAction, Sidebar, SidebarEvent};
 use dbflux_core::{
     Connection, DatabaseCategory, DbError, DriverCapabilities, ExecutionClassification,
-    LocalizedText, RootItemPresentation, RootSectionAction, RootSectionDef, RootSectionItem,
-    RootSectionPage, RootSectionPresentation, RootSectionSource, SchemaNodeId, SchemaNodeKind,
-    SchemaSnapshot,
+    LocalizedText, MutationPolicy, ObjectStoreConnection, ReadOnlyReason, RootItemPresentation,
+    RootSectionAction, RootSectionDef, RootSectionItem, RootSectionPage, RootSectionPresentation,
+    RootSectionSource, SchemaNodeId, SchemaNodeKind, SchemaSnapshot,
 };
 use dbflux_ui_base::AppStateEntity;
 use gpui::{Entity, TestAppContext, VisualTestContext};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -120,6 +121,7 @@ fn folder_wraps_the_rows_and_counts_them() {
         PROFILE_ID,
         &buckets_section(),
         Some(&listing(&["avatars", "exports"], None)),
+        None,
     );
 
     assert_eq!(folder.id.as_ref(), section_node());
@@ -132,7 +134,7 @@ fn folder_wraps_the_rows_and_counts_them() {
 
 #[test]
 fn folder_shows_a_plain_label_while_the_listing_loads() {
-    let folder = build_root_section_folder(PROFILE_ID, &buckets_section(), None);
+    let folder = build_root_section_folder(PROFILE_ID, &buckets_section(), None, None);
 
     assert_eq!(
         folder.label.as_ref(),
@@ -213,25 +215,120 @@ fn unknown_label_keys_fall_back_to_the_declared_text() {
     assert_eq!(children[0].label.as_ref(), "No topics");
 }
 
+/// A counted key whose catalog text has no count placeholder still shows the
+/// count, through the generic count format.
+#[test]
+fn a_counted_label_without_a_count_placeholder_keeps_the_count() {
+    let section = RootSectionDef {
+        counted_label_key: Some("sidebar.tree.folder.buckets".to_string()),
+        ..buckets_section()
+    };
+
+    assert_eq!(
+        section_folder_label(&section, Some(2)),
+        dbflux_i18n::t!(
+            "sidebar.tree.status.remote_listing_count",
+            label = dbflux_i18n::t!("sidebar.tree.folder.buckets"),
+            count = 2
+        )
+    );
+}
+
 // --- connected fixtures ---
 
-/// Every `list_items` and `execute_action` call the fixture received.
+/// Every declaration, `list_items` and `execute_action` call the fixture
+/// received.
 #[derive(Default)]
 struct SourceLog {
+    declarations: usize,
     listings: Vec<(String, Option<String>)>,
     actions: Vec<(String, String, String)>,
 }
 
 struct SectionConnection {
     metadata: dbflux_core::DriverMetadata,
-    pages: HashMap<Option<String>, RootSectionPage>,
+    sections: Vec<RootSectionDef>,
+    pages: Mutex<HashMap<Option<String>, RootSectionPage>>,
+    failing_declarations: AtomicUsize,
+    failing_listings: AtomicUsize,
     fail_actions: bool,
+    has_object_store: bool,
     log: Arc<Mutex<SourceLog>>,
 }
 
+impl SectionConnection {
+    /// A connection whose `buckets` section lists `alpha` then, on a second
+    /// page, `beta`.
+    fn new(log: &Arc<Mutex<SourceLog>>) -> Self {
+        let first = RootSectionPage {
+            items: items(&["alpha"]),
+            next_page_token: Some("2".to_string()),
+        };
+        let second = RootSectionPage {
+            items: items(&["beta"]),
+            next_page_token: None,
+        };
+
+        Self {
+            metadata: metadata(),
+            sections: vec![buckets_section()],
+            pages: Mutex::new(HashMap::from([
+                (None, first),
+                (Some("2".to_string()), second),
+            ])),
+            failing_declarations: AtomicUsize::new(0),
+            failing_listings: AtomicUsize::new(0),
+            fail_actions: false,
+            has_object_store: true,
+            log: log.clone(),
+        }
+    }
+
+    fn failing_actions(mut self) -> Self {
+        self.fail_actions = true;
+        self
+    }
+
+    fn declaring(mut self, sections: Vec<RootSectionDef>) -> Self {
+        self.sections = sections;
+        self
+    }
+
+    fn without_object_store(mut self) -> Self {
+        self.has_object_store = false;
+        self
+    }
+
+    fn failing_first_declarations(self, count: usize) -> Self {
+        self.failing_declarations.store(count, Ordering::SeqCst);
+        self
+    }
+
+    fn failing_first_listings(self, count: usize) -> Self {
+        self.failing_listings.store(count, Ordering::SeqCst);
+        self
+    }
+}
+
+/// Consumes one of the remaining scripted failures, if any is left.
+fn take_failure(remaining: &AtomicUsize) -> bool {
+    remaining
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            left.checked_sub(1)
+        })
+        .is_ok()
+}
+
 impl RootSectionSource for SectionConnection {
-    fn sections(&self) -> Vec<RootSectionDef> {
-        vec![buckets_section()]
+    fn sections(&self) -> Result<Vec<RootSectionDef>, DbError> {
+        if let Ok(mut log) = self.log.lock() {
+            log.declarations += 1;
+        }
+
+        if take_failure(&self.failing_declarations) {
+            return Err(DbError::connection_failed("driver host unavailable"));
+        }
+        Ok(self.sections.clone())
     }
 
     fn list_items(
@@ -244,7 +341,13 @@ impl RootSectionSource for SectionConnection {
                 .push((section_id.to_string(), page_token.map(str::to_string)));
         }
 
+        if take_failure(&self.failing_listings) {
+            return Err(DbError::query_failed("listing unavailable"));
+        }
+
         self.pages
+            .lock()
+            .map_err(|_| DbError::query_failed("fixture pages poisoned"))?
             .get(&page_token.map(str::to_string))
             .cloned()
             .ok_or_else(|| DbError::query_failed("no such page"))
@@ -267,7 +370,134 @@ impl RootSectionSource for SectionConnection {
         if self.fail_actions {
             return Err(DbError::query_failed("bucket is not empty"));
         }
+
+        if let Ok(mut pages) = self.pages.lock() {
+            for page in pages.values_mut() {
+                page.items.retain(|item| item.id != item_id);
+            }
+        }
         Ok(())
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn unused<T>() -> Result<T, DbError> {
+    Err(DbError::NotSupported("root section fixture".into()))
+}
+
+/// The sections present items in the object browser, which needs an object
+/// store; none of its operations is reached by these tests.
+impl ObjectStoreConnection for SectionConnection {
+    fn list_buckets(&self) -> Result<Vec<dbflux_core::BucketInfo>, DbError> {
+        unused()
+    }
+
+    fn list_objects(
+        &self,
+        _bucket: &str,
+        _prefix: &str,
+        _continuation_token: Option<&str>,
+    ) -> Result<dbflux_core::ObjectListingPage, DbError> {
+        unused()
+    }
+
+    fn head_object(
+        &self,
+        _bucket: &str,
+        _key: &str,
+    ) -> Result<dbflux_core::ObjectMetadata, DbError> {
+        unused()
+    }
+
+    fn get_object(&self, _bucket: &str, _key: &str) -> Result<Vec<u8>, DbError> {
+        unused()
+    }
+
+    fn download_object(
+        &self,
+        _bucket: &str,
+        _key: &str,
+        _dest: &std::path::Path,
+    ) -> Result<u64, DbError> {
+        unused()
+    }
+
+    fn put_object(
+        &self,
+        _bucket: &str,
+        _key: &str,
+        _bytes: Vec<u8>,
+        _content_type: Option<&str>,
+    ) -> Result<(), DbError> {
+        unused()
+    }
+
+    fn upload_object(
+        &self,
+        _bucket: &str,
+        _key: &str,
+        _source_path: &std::path::Path,
+        _content_type: Option<&str>,
+    ) -> Result<(), DbError> {
+        unused()
+    }
+
+    fn delete_object(&self, _bucket: &str, _key: &str) -> Result<(), DbError> {
+        unused()
+    }
+
+    fn delete_prefix(
+        &self,
+        _bucket: &str,
+        _prefix: &str,
+    ) -> Result<dbflux_core::DeletePrefixOutcome, DbError> {
+        unused()
+    }
+
+    fn copy_object(&self, _bucket: &str, _src_key: &str, _dest_key: &str) -> Result<(), DbError> {
+        unused()
+    }
+
+    fn presign(
+        &self,
+        _bucket: &str,
+        _key: &str,
+        _method: dbflux_core::PresignMethod,
+        _expiry: std::time::Duration,
+    ) -> Result<String, DbError> {
+        unused()
+    }
+
+    fn get_bucket_details(&self, _bucket: &str) -> Result<dbflux_core::BucketDetails, DbError> {
+        unused()
+    }
+
+    fn estimate_bucket_size(
+        &self,
+        _bucket: &str,
+        _object_cap: u64,
+    ) -> Result<dbflux_core::BucketSizeEstimate, DbError> {
+        unused()
+    }
+
+    fn list_object_versions(
+        &self,
+        _bucket: &str,
+        _key: &str,
+    ) -> Result<Vec<dbflux_core::ObjectVersionSummary>, DbError> {
+        unused()
+    }
+
+    fn create_bucket(
+        &self,
+        _bucket: &str,
+        _options: dbflux_core::BucketCreateOptions,
+    ) -> Result<dbflux_core::BucketCreateOutcome, DbError> {
+        unused()
+    }
+
+    fn delete_bucket(&self, _bucket: &str) -> Result<(), DbError> {
+        unused()
     }
 }
 
@@ -311,6 +541,11 @@ impl Connection for SectionConnection {
         &dbflux_core::DefaultSqlDialect
     }
 
+    fn object_store_api(&self) -> Option<&dyn ObjectStoreConnection> {
+        self.has_object_store
+            .then_some(self as &dyn ObjectStoreConnection)
+    }
+
     fn root_section_source(&self) -> Option<&dyn RootSectionSource> {
         Some(self)
     }
@@ -344,26 +579,6 @@ fn metadata() -> dbflux_core::DriverMetadata {
     }
 }
 
-/// A connection whose `buckets` section lists `alpha` then, on a second
-/// page, `beta`.
-fn section_connection(fail_actions: bool, log: &Arc<Mutex<SourceLog>>) -> SectionConnection {
-    let first = RootSectionPage {
-        items: items(&["alpha"]),
-        next_page_token: Some("2".to_string()),
-    };
-    let second = RootSectionPage {
-        items: items(&["beta"]),
-        next_page_token: None,
-    };
-
-    SectionConnection {
-        metadata: metadata(),
-        pages: HashMap::from([(None, first), (Some("2".to_string()), second)]),
-        fail_actions,
-        log: log.clone(),
-    }
-}
-
 fn connect(state: &Entity<AppStateEntity>, connection: SectionConnection, cx: &mut TestAppContext) {
     let mut profile =
         dbflux_core::ConnectionProfile::new("sections", dbflux_core::DbConfig::default_postgres());
@@ -387,23 +602,33 @@ fn connect(state: &Entity<AppStateEntity>, connection: SectionConnection, cx: &m
     });
 }
 
-/// A sidebar over a connected fixture whose declarations and first page are
-/// loaded.
-fn loaded_sidebar<'a>(
-    fail_actions: bool,
-    log: &Arc<Mutex<SourceLog>>,
-    cx: &'a mut TestAppContext,
-) -> (Entity<Sidebar>, &'a mut VisualTestContext) {
+/// A sidebar over `connection`, connected, before anything is fetched.
+fn connected_sidebar(
+    connection: SectionConnection,
+    cx: &mut TestAppContext,
+) -> (Entity<Sidebar>, &mut VisualTestContext) {
     let state = test_app_state(cx);
-    connect(&state, section_connection(fail_actions, log), cx);
+    connect(&state, connection, cx);
 
-    let (sidebar, cx) = cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+    cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx))
+}
+
+/// A sidebar over `connection` whose declarations and first page are loaded.
+fn loaded_sidebar(
+    connection: SectionConnection,
+    cx: &mut TestAppContext,
+) -> (Entity<Sidebar>, &mut VisualTestContext) {
+    let (sidebar, cx) = connected_sidebar(connection, cx);
     sidebar.update(cx, |sidebar, cx| {
         sidebar.spawn_fetch_root_sections(PROFILE_ID, cx)
     });
     cx.run_until_parked();
 
     (sidebar, cx)
+}
+
+fn app_state(sidebar: &Entity<Sidebar>, cx: &mut VisualTestContext) -> Entity<AppStateEntity> {
+    sidebar.update(cx, |sidebar, _| sidebar.app_state.clone())
 }
 
 fn cached_ids(sidebar: &Entity<Sidebar>, cx: &mut VisualTestContext) -> Vec<String> {
@@ -417,10 +642,102 @@ fn cached_ids(sidebar: &Entity<Sidebar>, cx: &mut VisualTestContext) -> Vec<Stri
     })
 }
 
+fn cached_section_ids(
+    sidebar: &Entity<Sidebar>,
+    cx: &mut VisualTestContext,
+) -> Option<Vec<String>> {
+    sidebar.update(cx, |sidebar, _| {
+        sidebar.root_section_cache.get(&PROFILE_ID).map(|cached| {
+            cached
+                .sections
+                .iter()
+                .map(|section| section.id.clone())
+                .collect()
+        })
+    })
+}
+
+/// The built connections tree, depth first, as `(id, label)` rows.
+fn tree_rows(sidebar: &Entity<Sidebar>, cx: &mut VisualTestContext) -> Vec<(String, String)> {
+    fn walk(items: &[gpui_component::tree::TreeItem], rows: &mut Vec<(String, String)>) {
+        for item in items {
+            rows.push((item.id.to_string(), item.label.to_string()));
+            walk(&item.children, rows);
+        }
+    }
+
+    let items = sidebar.update(cx, |sidebar, cx| {
+        sidebar.build_tree_items_with_overrides(cx)
+    });
+    let mut rows = Vec::new();
+    walk(&items, &mut rows);
+    rows
+}
+
+fn last_toast(cx: &mut VisualTestContext) -> Option<String> {
+    cx.update(|_, cx| {
+        cx.global::<dbflux_ui_base::toast::ToastGlobal>()
+            .host
+            .read(cx)
+            .last_toast_title()
+    })
+}
+
+fn profile_node() -> String {
+    SchemaNodeId::Profile {
+        profile_id: PROFILE_ID,
+    }
+    .to_string()
+}
+
+/// Records every root section open event the sidebar emits.
+fn record_open_events(
+    sidebar: &Entity<Sidebar>,
+    cx: &mut VisualTestContext,
+) -> (Arc<Mutex<Vec<String>>>, gpui::Subscription) {
+    let events: Arc<Mutex<Vec<String>>> = Arc::default();
+    let subscription = cx.update(|_, cx| {
+        let events = events.clone();
+        cx.subscribe(sidebar, move |_, event: &SidebarEvent, _| {
+            let entry = match event {
+                SidebarEvent::OpenRootSection {
+                    section_id,
+                    presentation,
+                    ..
+                } => format!("section {section_id} {presentation:?}"),
+                SidebarEvent::OpenRootSectionItem {
+                    item_id,
+                    presentation,
+                    ..
+                } => format!("item {item_id} {presentation:?}"),
+                _ => return,
+            };
+            events.lock().expect("event log").push(entry);
+        })
+    });
+
+    (events, subscription)
+}
+
+fn set_mutation_policy(
+    sidebar: &Entity<Sidebar>,
+    policy: MutationPolicy,
+    reason: Option<ReadOnlyReason>,
+    cx: &mut VisualTestContext,
+) {
+    let state = app_state(sidebar, cx);
+    state.update(cx, |state, _| {
+        if let Some(connected) = state.connections_mut().get_mut(&PROFILE_ID) {
+            connected.mutation_policy = policy;
+            connected.read_only_reason = reason;
+        }
+    });
+}
+
 #[gpui::test]
 async fn load_more_appends_the_next_page(cx: &mut TestAppContext) {
     let log = Arc::default();
-    let (sidebar, cx) = loaded_sidebar(false, &log, cx);
+    let (sidebar, cx) = loaded_sidebar(SectionConnection::new(&log), cx);
     assert_eq!(cached_ids(&sidebar, cx), vec!["alpha"]);
 
     let load_more = SchemaNodeId::RootSectionLoadMore {
@@ -444,7 +761,7 @@ async fn load_more_appends_the_next_page(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn the_item_menu_lists_open_and_every_declared_action(cx: &mut TestAppContext) {
     let log = Arc::default();
-    let (sidebar, cx) = loaded_sidebar(false, &log, cx);
+    let (sidebar, cx) = loaded_sidebar(SectionConnection::new(&log), cx);
 
     let entries: Vec<(String, bool, Option<String>)> = sidebar.update(cx, |sidebar, cx| {
         sidebar
@@ -476,11 +793,12 @@ async fn the_item_menu_lists_open_and_every_declared_action(cx: &mut TestAppCont
 }
 
 /// An `AdminDestructive` action waits for confirmation and runs only once
-/// confirmed; the section is listed again afterwards.
+/// confirmed; the section is listed again afterwards, without the item.
 #[gpui::test]
 async fn a_destructive_action_runs_only_after_confirmation(cx: &mut TestAppContext) {
     let log: Arc<Mutex<SourceLog>> = Arc::default();
-    let (sidebar, cx) = loaded_sidebar(false, &log, cx);
+    let (sidebar, cx) = loaded_sidebar(SectionConnection::new(&log), cx);
+    assert_eq!(cached_ids(&sidebar, cx), vec!["alpha"]);
 
     sidebar.update(cx, |sidebar, cx| {
         sidebar.request_root_section_action(&item_node("alpha"), "delete_bucket", cx)
@@ -505,28 +823,34 @@ async fn a_destructive_action_runs_only_after_confirmation(cx: &mut TestAppConte
     sidebar.update(cx, |sidebar, cx| sidebar.confirm_modal_delete(cx));
     cx.run_until_parked();
 
-    let log = log.lock().expect("source log");
-    assert_eq!(
-        log.actions,
-        vec![(
-            "buckets".to_string(),
-            "alpha".to_string(),
-            "delete_bucket".to_string()
-        )]
+    {
+        let log = log.lock().expect("source log");
+        assert_eq!(
+            log.actions,
+            vec![(
+                "buckets".to_string(),
+                "alpha".to_string(),
+                "delete_bucket".to_string()
+            )]
+        );
+        assert_eq!(
+            log.listings.last(),
+            Some(&("buckets".to_string(), None)),
+            "a successful action lists the section again"
+        );
+        assert_eq!(log.listings.len(), 2);
+    }
+    assert!(
+        cached_ids(&sidebar, cx).is_empty(),
+        "the refreshed listing replaces the cached items"
     );
-    assert_eq!(
-        log.listings.last(),
-        Some(&("buckets".to_string(), None)),
-        "a successful action lists the section again"
-    );
-    assert_eq!(log.listings.len(), 2);
 }
 
 /// A `Read` action runs right away, with no confirmation.
 #[gpui::test]
 async fn a_read_action_runs_without_confirmation(cx: &mut TestAppContext) {
     let log: Arc<Mutex<SourceLog>> = Arc::default();
-    let (sidebar, cx) = loaded_sidebar(false, &log, cx);
+    let (sidebar, cx) = loaded_sidebar(SectionConnection::new(&log), cx);
 
     sidebar.update(cx, |sidebar, cx| {
         sidebar.request_root_section_action(&item_node("alpha"), "inspect", cx)
@@ -549,21 +873,15 @@ async fn a_read_action_runs_without_confirmation(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn a_failed_action_is_reported(cx: &mut TestAppContext) {
     let log: Arc<Mutex<SourceLog>> = Arc::default();
-    let (sidebar, cx) = loaded_sidebar(true, &log, cx);
+    let (sidebar, cx) = loaded_sidebar(SectionConnection::new(&log).failing_actions(), cx);
 
     sidebar.update(cx, |sidebar, cx| {
         sidebar.request_root_section_action(&item_node("alpha"), "inspect", cx)
     });
     cx.run_until_parked();
 
-    let last_toast = cx.update(|_, cx| {
-        cx.global::<dbflux_ui_base::toast::ToastGlobal>()
-            .host
-            .read(cx)
-            .last_toast_title()
-    });
     assert_eq!(
-        last_toast,
+        last_toast(cx),
         Some(dbflux_i18n::t!(
             "sidebar.toast.root_section_action_failed",
             action = "Inspect",
@@ -579,39 +897,13 @@ async fn a_failed_action_is_reported(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn activation_opens_the_declared_presentations(cx: &mut TestAppContext) {
     let log = Arc::default();
-    let (sidebar, cx) = loaded_sidebar(false, &log, cx);
-
-    let events: Arc<Mutex<Vec<String>>> = Arc::default();
-    let _subscription = cx.update(|_, cx| {
-        let events = events.clone();
-        cx.subscribe(&sidebar, move |_, event: &SidebarEvent, _| {
-            let entry = match event {
-                SidebarEvent::OpenRootSection {
-                    section_id,
-                    presentation,
-                    ..
-                } => format!("section {section_id} {presentation:?}"),
-                SidebarEvent::OpenRootSectionItem {
-                    item_id,
-                    presentation,
-                    ..
-                } => format!("item {item_id} {presentation:?}"),
-                _ => return,
-            };
-            events.lock().expect("event log").push(entry);
-        })
-    });
+    let (sidebar, cx) = loaded_sidebar(SectionConnection::new(&log), cx);
+    let (events, _subscription) = record_open_events(&sidebar, cx);
 
     sidebar.update(cx, |sidebar, cx| {
         sidebar.execute_item(&section_node(), cx);
         sidebar.execute_item(&item_node("alpha"), cx);
-        sidebar.execute_item(
-            &SchemaNodeId::Profile {
-                profile_id: PROFILE_ID,
-            }
-            .to_string(),
-            cx,
-        );
+        sidebar.execute_item(&profile_node(), cx);
     });
     cx.run_until_parked();
 
@@ -622,5 +914,313 @@ async fn activation_opens_the_declared_presentations(cx: &mut TestAppContext) {
             "item alpha ObjectBrowser",
             "section buckets ObjectContainerTable",
         ]
+    );
+}
+
+/// A declared section id with the node id separator would be misparsed by
+/// every node built from it, so it is dropped and reported; the other
+/// sections still load.
+#[gpui::test]
+async fn a_section_id_with_the_node_separator_is_rejected_and_reported(cx: &mut TestAppContext) {
+    let log = Arc::default();
+    let separated = RootSectionDef {
+        id: "reports|daily".to_string(),
+        ..buckets_section()
+    };
+    let connection = SectionConnection::new(&log).declaring(vec![buckets_section(), separated]);
+    let (sidebar, cx) = loaded_sidebar(connection, cx);
+
+    assert_eq!(
+        cached_section_ids(&sidebar, cx),
+        Some(vec!["buckets".to_string()])
+    );
+    assert_eq!(
+        last_toast(cx),
+        Some(dbflux_i18n::t!(
+            "sidebar.toast.root_section_invalid_id",
+            section = "reports|daily"
+        ))
+    );
+    assert!(
+        tree_rows(&sidebar, cx)
+            .iter()
+            .all(|(id, _)| !id.contains("reports")),
+        "the rejected section renders no row"
+    );
+}
+
+/// Both declared presentations open object-store documents, so a connection
+/// without an object store hides the sections instead of opening documents
+/// whose every load fails.
+#[gpui::test]
+async fn sections_that_need_an_object_store_are_hidden_without_one(cx: &mut TestAppContext) {
+    let log = Arc::default();
+    let (sidebar, cx) = loaded_sidebar(SectionConnection::new(&log).without_object_store(), cx);
+
+    assert_eq!(cached_section_ids(&sidebar, cx), Some(Vec::new()));
+    assert!(
+        tree_rows(&sidebar, cx)
+            .iter()
+            .all(|(id, _)| !id.starts_with("RSC")),
+        "no section row renders"
+    );
+    assert!(
+        log.lock().expect("source log").listings.is_empty(),
+        "a hidden section is never listed"
+    );
+}
+
+/// A failed declaration fetch is shown as a retry row and not cached:
+/// activating the row asks the driver again.
+#[gpui::test]
+async fn failed_declarations_are_shown_and_asked_again(cx: &mut TestAppContext) {
+    let log: Arc<Mutex<SourceLog>> = Arc::default();
+    let connection = SectionConnection::new(&log).failing_first_declarations(1);
+    let (sidebar, cx) = loaded_sidebar(connection, cx);
+
+    assert_eq!(cached_section_ids(&sidebar, cx), None);
+    let retry_label = crate::labels::error_retry_label(
+        &DbError::connection_failed("driver host unavailable").to_string(),
+    );
+    let retry_row = tree_rows(&sidebar, cx)
+        .into_iter()
+        .find(|(_, label)| *label == retry_label)
+        .map(|(id, _)| id)
+        .expect("the failed declarations show a retry row");
+
+    sidebar.update(cx, |sidebar, cx| sidebar.execute_item(&retry_row, cx));
+    cx.run_until_parked();
+
+    assert_eq!(log.lock().expect("source log").declarations, 2);
+    assert_eq!(
+        cached_section_ids(&sidebar, cx),
+        Some(vec!["buckets".to_string()])
+    );
+    assert_eq!(cached_ids(&sidebar, cx), vec!["alpha"]);
+}
+
+/// A connection row activated before the declarations arrive still opens
+/// the section that opens on profile activation, once they land.
+#[gpui::test]
+async fn a_profile_activation_before_the_declarations_load_opens_the_section_once_they_land(
+    cx: &mut TestAppContext,
+) {
+    let log = Arc::default();
+    let (sidebar, cx) = connected_sidebar(SectionConnection::new(&log), cx);
+    let (events, _subscription) = record_open_events(&sidebar, cx);
+
+    sidebar.update(cx, |sidebar, cx| sidebar.execute_item(&profile_node(), cx));
+    cx.run_until_parked();
+
+    assert_eq!(
+        events.lock().expect("event log").clone(),
+        vec!["section buckets ObjectContainerTable"]
+    );
+}
+
+/// A confirmation answered after the profile reconnected runs on neither
+/// connection: the request is bound to the session it was made on.
+#[gpui::test]
+async fn a_confirmed_action_does_not_run_on_a_replaced_connection(cx: &mut TestAppContext) {
+    let first_log: Arc<Mutex<SourceLog>> = Arc::default();
+    let second_log: Arc<Mutex<SourceLog>> = Arc::default();
+    let (sidebar, cx) = loaded_sidebar(SectionConnection::new(&first_log), cx);
+
+    sidebar.update(cx, |sidebar, cx| {
+        sidebar.request_root_section_action(&item_node("alpha"), "delete_bucket", cx)
+    });
+    cx.run_until_parked();
+    assert!(sidebar.update(cx, |sidebar, _| sidebar.has_delete_modal()));
+
+    let replacement: Arc<dyn Connection> = Arc::new(SectionConnection::new(&second_log));
+    let state = app_state(&sidebar, cx);
+    state.update(cx, |state, _| {
+        if let Some(connected) = state.connections_mut().get_mut(&PROFILE_ID) {
+            connected.connection = replacement;
+        }
+    });
+
+    sidebar.update(cx, |sidebar, cx| sidebar.confirm_modal_delete(cx));
+    cx.run_until_parked();
+
+    assert!(first_log.lock().expect("first log").actions.is_empty());
+    assert!(second_log.lock().expect("second log").actions.is_empty());
+    assert_eq!(
+        last_toast(cx),
+        Some(dbflux_i18n::t!(
+            "sidebar.toast.root_section_action_connection_changed",
+            action = dbflux_i18n::t!("sidebar.root_section.action.delete_bucket"),
+            item = "alpha"
+        ))
+    );
+}
+
+/// A failed first page shows a retry row instead of loading forever, and
+/// activating it lists the section again.
+#[gpui::test]
+async fn a_failed_listing_shows_a_retry_row_that_lists_again(cx: &mut TestAppContext) {
+    let log: Arc<Mutex<SourceLog>> = Arc::default();
+    let (sidebar, cx) = loaded_sidebar(SectionConnection::new(&log).failing_first_listings(1), cx);
+
+    let rows = tree_rows(&sidebar, cx);
+    assert!(
+        rows.iter()
+            .all(|(_, label)| *label != dbflux_i18n::t!("sidebar.tree.status.loading")),
+        "a failed listing must not stay on the loading row: {rows:?}"
+    );
+    let retry_label =
+        crate::labels::error_retry_label(&DbError::query_failed("listing unavailable").to_string());
+    let retry_row = rows
+        .into_iter()
+        .find(|(_, label)| *label == retry_label)
+        .map(|(id, _)| id)
+        .expect("the failed listing shows a retry row");
+
+    sidebar.update(cx, |sidebar, cx| sidebar.execute_item(&retry_row, cx));
+    cx.run_until_parked();
+
+    assert_eq!(cached_ids(&sidebar, cx), vec!["alpha"]);
+    assert_eq!(log.lock().expect("source log").listings.len(), 2);
+}
+
+/// A refresh that replaces a fetch still in flight settles that fetch's
+/// task, so no listing task is left running.
+#[gpui::test]
+async fn a_refresh_settles_the_task_of_the_fetch_it_replaces(cx: &mut TestAppContext) {
+    let log: Arc<Mutex<SourceLog>> = Arc::default();
+    let (sidebar, cx) = loaded_sidebar(SectionConnection::new(&log), cx);
+
+    sidebar.update(cx, |sidebar, cx| {
+        sidebar.refresh_root_section(PROFILE_ID, "buckets", cx);
+        sidebar.refresh_root_section(PROFILE_ID, "buckets", cx);
+    });
+    cx.run_until_parked();
+
+    let state = app_state(&sidebar, cx);
+    let running: Vec<String> = state.update(cx, |state, _| {
+        state
+            .running_tasks()
+            .into_iter()
+            .map(|task| task.description)
+            .collect()
+    });
+    assert!(running.is_empty(), "tasks left running: {running:?}");
+    assert_eq!(cached_ids(&sidebar, cx), vec!["alpha"]);
+}
+
+/// A read-only connection refuses every action above `Read` before asking
+/// for confirmation, and still runs `Read` actions.
+#[gpui::test]
+async fn a_read_only_connection_refuses_actions_above_read(cx: &mut TestAppContext) {
+    let log: Arc<Mutex<SourceLog>> = Arc::default();
+    let (sidebar, cx) = loaded_sidebar(SectionConnection::new(&log), cx);
+    set_mutation_policy(
+        &sidebar,
+        MutationPolicy::ReadOnly,
+        Some(ReadOnlyReason::ProfileSetting),
+        cx,
+    );
+
+    sidebar.update(cx, |sidebar, cx| {
+        sidebar.request_root_section_action(&item_node("alpha"), "delete_bucket", cx)
+    });
+    cx.run_until_parked();
+
+    assert!(!sidebar.update(cx, |sidebar, _| sidebar.has_delete_modal()));
+    assert!(log.lock().expect("source log").actions.is_empty());
+    assert_eq!(
+        last_toast(cx),
+        Some(dbflux_i18n::t!(
+            "sidebar.toast.root_section_action_refused.read_only_profile",
+            action = dbflux_i18n::t!("sidebar.root_section.action.delete_bucket")
+        ))
+    );
+
+    sidebar.update(cx, |sidebar, cx| {
+        sidebar.request_root_section_action(&item_node("alpha"), "inspect", cx)
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        log.lock().expect("source log").actions,
+        vec![(
+            "buckets".to_string(),
+            "alpha".to_string(),
+            "inspect".to_string()
+        )]
+    );
+}
+
+/// A connection that requires approval refuses actions above `Read`, since
+/// root section actions have no approval route yet; a policy that changes
+/// while the confirmation is open is checked again when it is answered.
+#[gpui::test]
+async fn an_approval_connection_refuses_actions_above_read(cx: &mut TestAppContext) {
+    let log: Arc<Mutex<SourceLog>> = Arc::default();
+    let (sidebar, cx) = loaded_sidebar(SectionConnection::new(&log), cx);
+
+    sidebar.update(cx, |sidebar, cx| {
+        sidebar.request_root_section_action(&item_node("alpha"), "delete_bucket", cx)
+    });
+    cx.run_until_parked();
+    assert!(sidebar.update(cx, |sidebar, _| sidebar.has_delete_modal()));
+
+    set_mutation_policy(&sidebar, MutationPolicy::ApprovalRequired, None, cx);
+    sidebar.update(cx, |sidebar, cx| sidebar.confirm_modal_delete(cx));
+    cx.run_until_parked();
+
+    assert!(log.lock().expect("source log").actions.is_empty());
+    assert_eq!(
+        last_toast(cx),
+        Some(dbflux_i18n::t!(
+            "sidebar.toast.root_section_action_refused.approval_unavailable",
+            action = dbflux_i18n::t!("sidebar.root_section.action.delete_bucket")
+        ))
+    );
+}
+
+/// An action that succeeded but whose audit event was not recorded reports
+/// the audit failure on its own, and still lists the section again.
+#[gpui::test]
+async fn an_audit_failure_is_reported_without_failing_the_action(cx: &mut TestAppContext) {
+    let log: Arc<Mutex<SourceLog>> = Arc::default();
+    let (sidebar, cx) = loaded_sidebar(SectionConnection::new(&log), cx);
+    let request = super::RootSectionActionRequest {
+        profile_id: PROFILE_ID,
+        section_id: "buckets".to_string(),
+        section_presentation: Some(RootSectionPresentation::ObjectContainerTable),
+        item_id: "alpha".to_string(),
+        item_label: "alpha".to_string(),
+        action: buckets_section()
+            .item_action("delete_bucket")
+            .cloned()
+            .expect("the declared delete action"),
+    };
+
+    sidebar.update(cx, |sidebar, cx| {
+        sidebar.finish_root_section_action(
+            &request,
+            super::actions::RootSectionActionOutcome {
+                result: Ok(()),
+                audit_error: Some("database is locked".to_string()),
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        last_toast(cx),
+        Some(dbflux_i18n::t!(
+            "sidebar.toast.root_section_action_audit_failed",
+            action = dbflux_i18n::t!("sidebar.root_section.action.delete_bucket"),
+            item = "alpha",
+            error = "database is locked"
+        ))
+    );
+    assert_eq!(
+        log.lock().expect("source log").listings.len(),
+        2,
+        "the successful action still lists the section again"
     );
 }

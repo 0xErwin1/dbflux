@@ -5263,6 +5263,14 @@ sidebar:
       routines: "루틴을 불러오지 못했습니다: %{error}"
     list_root_section_failed: "%{section} 목록을 조회하지 못했습니다: %{error}"
     root_section_action_failed: "%{item}에 대한 %{action} 실패: %{error}"
+    root_section_action_audit_failed: "%{item}에 대한 %{action}은(는) 성공했지만 감사 이벤트를 기록하지 못했습니다: %{error}"
+    root_section_action_connection_changed: "%{item}에 대한 %{action}을(를) 실행하지 않았습니다: 작업을 요청한 후 연결이 변경되었습니다."
+    root_section_action_refused:
+      read_only: "%{action}을(를) 실행하지 않았습니다: 이 연결은 읽기 전용입니다."
+      read_only_profile: "%{action}을(를) 실행하지 않았습니다: 이 연결의 프로필이 읽기 전용으로 설정되어 있습니다."
+      read_only_server: "%{action}을(를) 실행하지 않았습니다: 서버가 이 연결의 변경을 거부했습니다."
+      approval_unavailable: "%{action}을(를) 실행하지 않았습니다: 이 연결은 승인이 필요하지만 사이드바 작업에는 아직 승인을 사용할 수 없습니다."
+    root_section_invalid_id: "드라이버가 선언한 루트 섹션 \"%{section}\"을(를) 건너뛰었습니다: 섹션 ID에는 \"|\"를 포함할 수 없습니다."
     code_generation_failed: "코드 생성에 실패했습니다: %{error}"
     loading_event_streams: 이벤트 스트림을 불러오는 중…
     load_schema_failed: "스키마를 불러오지 못했습니다: %{error}"

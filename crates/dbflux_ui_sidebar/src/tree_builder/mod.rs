@@ -526,7 +526,7 @@ impl Sidebar {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
-            &HashMap::new(),
+            &crate::root_sections::RootSectionCache::default(),
             &HashMap::new(),
         )
     }
@@ -750,6 +750,22 @@ impl Sidebar {
             SchemaNodeId::Profile { profile_id }.to_string(),
             profile.name.clone(),
         );
+
+        // Root sections are listed through the driver, never derived from the
+        // schema, so a connection without a schema snapshot still shows them.
+        if is_connected
+            && let Some(connected) = state.connections().get(&profile_id)
+            && connected.schema.is_none()
+            && connected
+                .connection
+                .metadata()
+                .capabilities
+                .contains(DriverCapabilities::ROOT_SECTIONS)
+        {
+            return profile_item.expanded(is_active).children(
+                crate::root_sections::build_root_section_folders(profile_id, root_sections),
+            );
+        }
 
         if is_connected
             && let Some(connected) = state.connections().get(&profile_id)
@@ -4442,7 +4458,7 @@ mod tests {
                 &HashMap::new(),
                 &HashMap::new(),
                 &HashMap::new(),
-                &HashMap::new(),
+                &crate::root_sections::RootSectionCache::default(),
                 &HashMap::new(),
             )
         };
@@ -4507,7 +4523,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
-            &HashMap::new(),
+            &crate::root_sections::RootSectionCache::default(),
             &HashMap::new(),
         );
         let ids: Vec<_> = item
@@ -4598,7 +4614,7 @@ mod tests {
                 &HashMap::new(),
                 &HashMap::new(),
                 &HashMap::new(),
-                &HashMap::new(),
+                &crate::root_sections::RootSectionCache::default(),
                 &HashMap::new(),
             )
             .children

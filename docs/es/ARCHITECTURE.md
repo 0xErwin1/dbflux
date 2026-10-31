@@ -1177,15 +1177,25 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
     `RootSectionLoadMore` llevan el id de la sección, así que un tipo de objeto
     nuevo no necesita una variante de `SchemaNodeKind`. Un único renderer
     genérico (`crates/dbflux_ui_sidebar/src/root_sections/`) construye las
-    carpetas, cachea los listados por perfil y carga más páginas bajo demanda;
-    el workspace enruta la activación según la presentación declarada
+    carpetas, cachea los listados por perfil y carga más páginas bajo demanda.
+    Una obtención fallida de las declaraciones o de la primera página muestra
+    una fila para reintentar y nunca se guarda como vacía. Un id de sección no
+    puede contener `|`, porque los ids de nodo lo incluyen; el sidebar rechaza
+    e informa esa declaración. Una sección cuya presentación de carpeta o de
+    item necesita `Connection::object_store_api` se oculta en una conexión que
+    no lo tiene. El workspace enruta la activación según la presentación declarada
     (`ObjectContainerTable` abre la tabla de contenedores, `ObjectBrowser` el
     explorador de objetos). Las etiquetas son `LocalizedText`: una clave
     opcional del catálogo i18n del host más un fallback en inglés obligatorio,
     resueltos con `dbflux_i18n::try_translate`. Cada `RootSectionAction` lleva
     una `ExecutionClassification`: `Destructive`, `Admin` y `AdminDestructive`
     piden confirmación, y cada ejecución, exitosa o no, registra una fila de
-    auditoría `Governance`. Los drivers externos alcanzan el seam por driver
+    auditoría `Governance`. Una acción solo se ejecuta en la conexión en la que
+    se solicitó, y la `MutationPolicy` del perfil controla toda acción por
+    encima de `Read`: `ReadOnly` la rechaza, y también `ApprovalRequired`
+    mientras el flujo de aprobación no cubra estas acciones. Una acción exitosa
+    vuelve a listar la sección y recarga el documento abierto que la muestra.
+    Los drivers externos alcanzan el seam por driver
     RPC 1.9 (`RootSections`, `RootSectionItems`, `ExecuteRootSectionAction`).
     S3 es la implementación de referencia: una sección `buckets` cuyos items se
     abren en el explorador de objetos, con una acción Delete bucket clasificada

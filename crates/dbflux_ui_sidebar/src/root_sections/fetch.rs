@@ -1,9 +1,55 @@
-use dbflux_core::{DbError, DriverCapabilities, RootSectionDef, RootSectionPage, TaskKind};
+use dbflux_core::{
+    Connection, DbError, DriverCapabilities, RootSectionDef, RootSectionPage, TaskKind,
+};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::{App, Context};
 use uuid::Uuid;
 
-use super::{ProfileRootSections, RootSectionFetchKey, RootSectionListing};
+use super::{
+    DECLARATIONS_RETRY_PREFIX, LISTING_RETRY_PREFIX, PendingRootSectionFetch, ProfileRootSections,
+    RootSectionFetchKey, RootSectionListing,
+};
 use crate::Sidebar;
+
+/// The declarations a connection can show, and the ids of the declarations
+/// rejected because they cannot be embedded in a node id.
+struct DeclaredSections {
+    sections: Vec<RootSectionDef>,
+    invalid_ids: Vec<String>,
+}
+
+/// Reads the declarations of `connection` and keeps the ones it can show.
+///
+/// A section whose presentation opens an object-store document is hidden on
+/// a connection without `object_store_api`, since every load of that document
+/// would fail. A section id with the node id separator is rejected, since
+/// every node built from it would be misparsed.
+#[allow(clippy::result_large_err)]
+fn declared_sections(connection: &dyn Connection) -> Result<DeclaredSections, DbError> {
+    let source = connection
+        .root_section_source()
+        .ok_or_else(|| DbError::NotSupported("connection declares no root sections".to_string()))?;
+    let has_object_store = connection.object_store_api().is_some();
+
+    let mut declared = DeclaredSections {
+        sections: Vec::new(),
+        invalid_ids: Vec::new(),
+    };
+    for section in source.sections()? {
+        if !section.has_valid_id() {
+            declared.invalid_ids.push(section.id);
+        } else if section.requires_object_store() && !has_object_store {
+            log::warn!(
+                "Hiding root section {}: its presentation needs an object store the connection does not expose",
+                section.id
+            );
+        } else {
+            declared.sections.push(section);
+        }
+    }
+
+    Ok(declared)
+}
 
 impl Sidebar {
     /// Whether `profile_id` is connected through a driver that declares root
@@ -22,9 +68,21 @@ impl Sidebar {
             })
     }
 
+    /// Whether the declarations of `profile_id` are still to arrive: neither
+    /// loaded nor failed.
+    pub(crate) fn root_section_declarations_pending(&self, profile_id: Uuid, cx: &App) -> bool {
+        self.profile_has_root_sections(profile_id, cx)
+            && self.root_section_cache.get(&profile_id).is_none()
+            && !self
+                .root_section_cache
+                .declaration_errors
+                .contains_key(&profile_id)
+    }
+
     /// Loads the section declarations of `profile_id`, then the first page of
     /// every section not listed yet. Deduplicated against the cache and the
-    /// fetches in flight, so an expand/collapse burst lists each once.
+    /// fetches in flight, so an expand/collapse burst lists each once. What
+    /// failed is fetched again only from its retry row.
     pub(crate) fn spawn_fetch_root_sections(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
         if !self.profile_has_root_sections(profile_id, cx) {
             return;
@@ -34,13 +92,24 @@ impl Sidebar {
             let unlisted: Vec<String> = cached
                 .sections
                 .iter()
-                .filter(|section| !cached.listings.contains_key(&section.id))
+                .filter(|section| {
+                    !cached.listings.contains_key(&section.id)
+                        && !cached.listing_errors.contains_key(&section.id)
+                })
                 .map(|section| section.id.clone())
                 .collect();
 
             for section_id in unlisted {
                 self.spawn_fetch_root_section_page(profile_id, &section_id, None, cx);
             }
+            return;
+        }
+
+        if self
+            .root_section_cache
+            .declaration_errors
+            .contains_key(&profile_id)
+        {
             return;
         }
 
@@ -62,38 +131,86 @@ impl Sidebar {
             return;
         };
 
-        let background_task = cx.background_executor().spawn(async move {
-            connection
-                .root_section_source()
-                .map(|source| source.sections())
-                .unwrap_or_default()
-        });
+        let background_task = cx
+            .background_executor()
+            .spawn(async move { declared_sections(connection.as_ref()) });
 
         let task = cx.spawn(async move |this, cx| {
-            let sections: Vec<RootSectionDef> = background_task.await;
+            let result = background_task.await;
 
             if let Err(error) = this.update(cx, |sidebar, cx| {
-                sidebar
-                    .pending_root_section_fetches
-                    .remove(&RootSectionFetchKey {
-                        profile_id,
-                        section_id: None,
-                    });
-                sidebar.root_section_cache.insert(
-                    profile_id,
-                    ProfileRootSections {
-                        sections,
-                        listings: Default::default(),
-                    },
-                );
-                sidebar.spawn_fetch_root_sections(profile_id, cx);
-                sidebar.rebuild_tree_with_overrides(cx);
+                sidebar.apply_root_section_declarations(profile_id, result, cx);
             }) {
                 log::warn!("Sidebar dropped before root sections of {profile_id} loaded: {error}");
             }
         });
 
-        self.pending_root_section_fetches.insert(key, task);
+        self.pending_root_section_fetches.insert(
+            key,
+            PendingRootSectionFetch {
+                _task: task,
+                load_task_id: None,
+            },
+        );
+    }
+
+    /// Caches the declarations that loaded, or records why they did not, and
+    /// opens the section a connection row activation was waiting for.
+    fn apply_root_section_declarations(
+        &mut self,
+        profile_id: Uuid,
+        result: Result<DeclaredSections, DbError>,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_root_section_fetches
+            .remove(&RootSectionFetchKey {
+                profile_id,
+                section_id: None,
+            });
+        let activation_pending = self.pending_root_section_activations.remove(&profile_id);
+
+        match result {
+            Ok(declared) => {
+                for section_id in &declared.invalid_ids {
+                    report_error(
+                        UserFacingError::new(
+                            ErrorKind::Driver,
+                            dbflux_i18n::t!(
+                                "sidebar.toast.root_section_invalid_id",
+                                section = section_id
+                            ),
+                        ),
+                        cx,
+                    );
+                }
+
+                self.root_section_cache
+                    .declaration_errors
+                    .remove(&profile_id);
+                self.root_section_cache.profiles.insert(
+                    profile_id,
+                    ProfileRootSections {
+                        sections: declared.sections,
+                        ..ProfileRootSections::default()
+                    },
+                );
+                self.spawn_fetch_root_sections(profile_id, cx);
+
+                if activation_pending
+                    && let Some(section_id) = self.profile_activation_section(profile_id)
+                {
+                    self.activate_root_section(profile_id, &section_id, cx);
+                }
+            }
+            Err(error) => {
+                log::warn!("Failed to load the root sections of {profile_id}: {error}");
+                self.root_section_cache
+                    .declaration_errors
+                    .insert(profile_id, error.to_string());
+            }
+        }
+
+        self.rebuild_tree_with_overrides(cx);
     }
 
     /// Lists one page of `section_id`: the first page when `page_token` is
@@ -184,9 +301,18 @@ impl Sidebar {
             }
         });
 
-        self.pending_root_section_fetches.insert(key, task);
+        self.pending_root_section_fetches.insert(
+            key,
+            PendingRootSectionFetch {
+                _task: task,
+                load_task_id: Some(load_task_id),
+            },
+        );
     }
 
+    /// Stores a listed page. A failed first page of a section with nothing
+    /// listed yet is recorded for its retry row; any other failure keeps the
+    /// items already listed and is left to the failed task.
     fn apply_root_section_page(
         &mut self,
         key: &RootSectionFetchKey,
@@ -194,6 +320,9 @@ impl Sidebar {
         result: Result<RootSectionPage, String>,
     ) {
         let Some(section_id) = key.section_id.as_deref() else {
+            return;
+        };
+        let Some(cached) = self.root_section_cache.get_mut(&key.profile_id) else {
             return;
         };
 
@@ -204,14 +333,16 @@ impl Sidebar {
                     "Failed to list root section {section_id} of {}: {message}",
                     key.profile_id
                 );
+                if !appends && !cached.listings.contains_key(section_id) {
+                    cached
+                        .listing_errors
+                        .insert(section_id.to_string(), message);
+                }
                 return;
             }
         };
 
-        let Some(cached) = self.root_section_cache.get_mut(&key.profile_id) else {
-            return;
-        };
-
+        cached.listing_errors.remove(section_id);
         let listing = cached
             .listings
             .entry(section_id.to_string())
@@ -243,26 +374,85 @@ impl Sidebar {
     }
 
     /// Lists `section_id` again from its first page, replacing the cached
-    /// items once the page arrives.
+    /// items once the page arrives. A fetch of that section still in flight
+    /// is abandoned and its task settled.
     pub(crate) fn refresh_root_section(
         &mut self,
         profile_id: Uuid,
         section_id: &str,
         cx: &mut Context<Self>,
     ) {
-        self.pending_root_section_fetches
-            .remove(&RootSectionFetchKey {
-                profile_id,
-                section_id: Some(section_id.to_string()),
-            });
+        let key = RootSectionFetchKey {
+            profile_id,
+            section_id: Some(section_id.to_string()),
+        };
+        if let Some(abandoned) = self.pending_root_section_fetches.remove(&key) {
+            self.settle_abandoned_root_section_fetch(abandoned, cx);
+        }
+        if let Some(cached) = self.root_section_cache.get_mut(&profile_id) {
+            cached.listing_errors.remove(section_id);
+        }
+
         self.spawn_fetch_root_section_page(profile_id, section_id, None, cx);
     }
 
+    /// Cancels the tasks panel entry of a fetch whose completion was dropped.
+    /// The blocking driver call may still run to its end in the background;
+    /// its result is discarded.
+    fn settle_abandoned_root_section_fetch(
+        &mut self,
+        abandoned: PendingRootSectionFetch,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(task_id) = abandoned.load_task_id {
+            self.app_state
+                .update(cx, |state, _| state.cancel_task(task_id));
+        }
+    }
+
+    /// Activates the retry row `item_id` when it is one: fetches the failed
+    /// declarations or first page again. Returns whether it was one.
+    pub(crate) fn retry_root_section_row(&mut self, item_id: &str, cx: &mut Context<Self>) -> bool {
+        if let Some(profile_id) = item_id.strip_prefix(DECLARATIONS_RETRY_PREFIX) {
+            if let Ok(profile_id) = profile_id.parse::<Uuid>() {
+                self.root_section_cache
+                    .declaration_errors
+                    .remove(&profile_id);
+                self.spawn_fetch_root_sections(profile_id, cx);
+                self.rebuild_tree_with_overrides(cx);
+            }
+            return true;
+        }
+
+        if let Some(rest) = item_id.strip_prefix(LISTING_RETRY_PREFIX) {
+            if let Some((profile_id, section_id)) = rest.split_once('|')
+                && let Ok(profile_id) = profile_id.parse::<Uuid>()
+            {
+                self.refresh_root_section(profile_id, section_id, cx);
+                self.rebuild_tree_with_overrides(cx);
+            }
+            return true;
+        }
+
+        false
+    }
+
     /// Drops the root sections of `profile_id`, so the next expansion loads
-    /// them again.
-    pub(crate) fn clear_root_section_cache(&mut self, profile_id: Uuid) {
+    /// them again, and settles the fetches it abandons.
+    pub(crate) fn clear_root_section_cache(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
         self.root_section_cache.remove(&profile_id);
-        self.pending_root_section_fetches
-            .retain(|key, _| key.profile_id != profile_id);
+        self.pending_root_section_activations.remove(&profile_id);
+
+        let abandoned_keys: Vec<RootSectionFetchKey> = self
+            .pending_root_section_fetches
+            .keys()
+            .filter(|key| key.profile_id == profile_id)
+            .cloned()
+            .collect();
+        for key in abandoned_keys {
+            if let Some(abandoned) = self.pending_root_section_fetches.remove(&key) {
+                self.settle_abandoned_root_section_fetch(abandoned, cx);
+            }
+        }
     }
 }

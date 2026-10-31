@@ -99,8 +99,8 @@ fn item_action_finds_declared_actions_only() {
 struct ListingOnly;
 
 impl RootSectionSource for ListingOnly {
-    fn sections(&self) -> Vec<RootSectionDef> {
-        Vec::new()
+    fn sections(&self) -> Result<Vec<RootSectionDef>, DbError> {
+        Ok(Vec::new())
     }
 
     fn list_items(&self, _: &str, _: Option<&str>) -> Result<RootSectionPage, DbError> {
@@ -116,4 +116,61 @@ fn execute_action_defaults_to_not_supported() {
         matches!(&result, Err(DbError::NotSupported(message)) if message.contains("delete")),
         "unexpected result: {result:?}"
     );
+}
+
+fn section(id: &str) -> RootSectionDef {
+    RootSectionDef {
+        id: id.to_string(),
+        label: LocalizedText::plain("Section"),
+        counted_label_key: None,
+        empty_label: LocalizedText::plain("Empty"),
+        presentation: None,
+        item_presentation: RootItemPresentation::ObjectBrowser,
+        opens_on_profile_activation: false,
+        item_actions: Vec::new(),
+    }
+}
+
+#[test]
+fn section_ids_with_the_node_id_separator_are_invalid() {
+    assert!(section("buckets").has_valid_id());
+    assert!(section("consumer-groups.v2").has_valid_id());
+    assert!(!section("reports|daily").has_valid_id());
+    assert!(!section("|").has_valid_id());
+}
+
+#[test]
+fn object_store_presentations_require_an_object_store() {
+    assert!(RootSectionPresentation::ObjectContainerTable.requires_object_store());
+    assert!(RootItemPresentation::ObjectBrowser.requires_object_store());
+    assert!(section("buckets").requires_object_store());
+    assert!(
+        RootSectionDef {
+            presentation: Some(RootSectionPresentation::ObjectContainerTable),
+            ..section("buckets")
+        }
+        .requires_object_store()
+    );
+}
+
+#[test]
+fn only_metadata_and_read_actions_are_read_only() {
+    let read_only = [
+        ExecutionClassification::Metadata,
+        ExecutionClassification::Read,
+    ];
+    let mutating = [
+        ExecutionClassification::Write,
+        ExecutionClassification::Destructive,
+        ExecutionClassification::AdminSafe,
+        ExecutionClassification::Admin,
+        ExecutionClassification::AdminDestructive,
+    ];
+
+    for classification in read_only {
+        assert!(action(classification).is_read_only(), "{classification:?}");
+    }
+    for classification in mutating {
+        assert!(!action(classification).is_read_only(), "{classification:?}");
+    }
 }

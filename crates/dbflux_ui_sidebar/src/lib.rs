@@ -114,6 +114,13 @@ pub enum SidebarEvent {
         item_id: String,
         presentation: dbflux_core::RootItemPresentation,
     },
+    /// An action changed the items of a driver-declared root section. The
+    /// workspace reloads the open document that shows `presentation`.
+    RootSectionChanged {
+        profile_id: Uuid,
+        section_id: String,
+        presentation: Option<dbflux_core::RootSectionPresentation>,
+    },
     /// A store of a secret-store connection, or one of its paths, was
     /// activated. The workspace opens the store's document, at `path` when
     /// one is given.
@@ -1168,6 +1175,10 @@ pub struct Sidebar {
     root_section_cache: root_sections::RootSectionCache,
     /// In-flight root section declaration and page fetches.
     pending_root_section_fetches: root_sections::PendingRootSectionFetches,
+    /// Connected profiles whose row was activated before their root section
+    /// declarations arrived; the section that opens on activation opens once
+    /// they land.
+    pending_root_section_activations: HashSet<Uuid>,
     /// Session-scoped cache of the listed path levels of hierarchical secret
     /// stores. Populated on first expansion of a store or path node.
     secret_path_cache: secret_store::SecretPathCache,
@@ -1201,7 +1212,7 @@ struct DeleteConfirmState {
     delegated_to_modal: bool,
     /// When set, confirm runs this driver-declared root section action
     /// instead of a delete.
-    root_action: Option<RootSectionActionRequest>,
+    root_action: Option<root_sections::PendingRootSectionAction>,
 }
 
 /// Borrowed snapshot of the delete confirmation modal state, used by the
@@ -1485,8 +1496,9 @@ impl Sidebar {
             instance_metrics_cache: HashMap::new(),
             instance_inspectors_cache: HashMap::new(),
             pending_instance_catalog_fetches: HashMap::new(),
-            root_section_cache: HashMap::new(),
+            root_section_cache: root_sections::RootSectionCache::default(),
             pending_root_section_fetches: HashMap::new(),
+            pending_root_section_activations: HashSet::new(),
             secret_path_cache: HashMap::new(),
             pending_secret_path_fetches: HashMap::new(),
             connection_latencies: HashMap::new(),
@@ -1673,6 +1685,10 @@ impl Sidebar {
     }
 
     fn execute_item(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        if self.retry_root_section_row(item_id, cx) {
+            return;
+        }
+
         // Retry sentinels for failed metric fetches have a non-parseable ID of the
         // form "metrics-retry|<profile_id>|<database_name>".  Handle them before
         // attempting to parse as a SchemaNodeId.
@@ -1790,9 +1806,7 @@ impl Sidebar {
                         cx.notify();
                     });
 
-                    if let Some(section_id) = self.profile_activation_section(profile_id) {
-                        self.activate_root_section(profile_id, &section_id, cx);
-                    }
+                    self.activate_profile_root_section(profile_id, cx);
                 } else {
                     self.connect_to_profile(profile_id, cx);
                 }
@@ -2018,6 +2032,7 @@ impl Sidebar {
             let is_object_storage_root = match parse_node_id(item_id) {
                 Some(SchemaNodeId::Profile { profile_id }) => {
                     self.profile_activation_section(profile_id).is_some()
+                        || self.root_section_declarations_pending(profile_id, cx)
                 }
                 Some(SchemaNodeId::RootSection { .. })
                 | Some(SchemaNodeId::SecretStore { .. })

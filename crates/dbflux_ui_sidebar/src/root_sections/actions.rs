@@ -1,8 +1,12 @@
 use dbflux_core::chrono::Utc;
 use dbflux_core::observability::{EventCategory, EventOutcome, EventRecord, EventSeverity};
-use dbflux_core::{DbError, RootSectionAction, SchemaNodeId};
-use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
+use dbflux_core::{
+    Connection, DbError, MutationPolicy, ReadOnlyReason, RootSectionAction,
+    RootSectionPresentation, SchemaNodeId,
+};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::Context;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use super::resolve_text;
@@ -14,6 +18,9 @@ use crate::{ContextMenuAction, ContextMenuItem, Sidebar, SidebarEvent};
 pub struct RootSectionActionRequest {
     pub profile_id: Uuid,
     pub section_id: String,
+    /// What the section's folder opens; the document showing it is reloaded
+    /// after a successful action.
+    pub section_presentation: Option<RootSectionPresentation>,
     pub item_id: String,
     pub item_label: String,
     pub action: RootSectionAction,
@@ -37,6 +44,22 @@ impl RootSectionActionRequest {
             None => question,
         }
     }
+}
+
+/// A request waiting for confirmation, bound to the connection it was made
+/// on: it runs only while that connection is still the profile's.
+pub(crate) struct PendingRootSectionAction {
+    pub(crate) request: RootSectionActionRequest,
+    /// `None` when the profile had no connection at request time.
+    pub(crate) connection: Option<Arc<dyn Connection>>,
+}
+
+/// What running an action produced: the driver's result, and the error of
+/// recording its audit event, reported on its own so it never turns a
+/// successful action into a failed one.
+pub(super) struct RootSectionActionOutcome {
+    pub(super) result: Result<(), DbError>,
+    pub(super) audit_error: Option<String>,
 }
 
 /// Copy of the confirmation dialog for a root section action.
@@ -98,6 +121,22 @@ impl Sidebar {
             item_id: item_id.to_string(),
             presentation,
         });
+    }
+
+    /// Opens the section declared to open on connection row activation. When
+    /// the declarations have not arrived yet, the activation is remembered and
+    /// honored once they land.
+    pub(crate) fn activate_profile_root_section(
+        &mut self,
+        profile_id: Uuid,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(section_id) = self.profile_activation_section(profile_id) {
+            self.activate_root_section(profile_id, &section_id, cx);
+        } else if self.root_section_declarations_pending(profile_id, cx) {
+            self.pending_root_section_activations.insert(profile_id);
+            self.spawn_fetch_root_sections(profile_id, cx);
+        }
     }
 
     /// The section that opens when the connection row is activated.
@@ -177,11 +216,11 @@ impl Sidebar {
         let Some(cached) = self.root_section_cache.get(&profile_id) else {
             return;
         };
-        let Some(action) = cached
-            .section(&section_id)
-            .and_then(|section| section.item_action(action_id))
-            .cloned()
-        else {
+        let Some(section) = cached.section(&section_id) else {
+            return;
+        };
+        let section_presentation = section.presentation;
+        let Some(action) = section.item_action(action_id).cloned() else {
             return;
         };
 
@@ -196,6 +235,7 @@ impl Sidebar {
             RootSectionActionRequest {
                 profile_id,
                 section_id,
+                section_presentation,
                 item_id,
                 item_label,
                 action,
@@ -204,46 +244,86 @@ impl Sidebar {
         );
     }
 
-    /// Asks for confirmation when the action's classification requires it,
-    /// otherwise runs it right away.
+    /// Binds the request to the profile's current connection, refuses it
+    /// when the connection's mutation policy forbids it, then asks for
+    /// confirmation when the action's classification requires it, or runs it
+    /// right away.
     pub fn dispatch_root_section_action(
         &mut self,
         request: RootSectionActionRequest,
         cx: &mut Context<Self>,
     ) {
-        if request.action.requires_confirmation() {
-            self.show_root_section_action_confirm(request, cx);
+        let connected = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&request.profile_id);
+        let connection = connected.map(|connected| connected.connection.clone());
+        let refusal = connected.and_then(|connected| {
+            root_section_action_refusal(
+                &request,
+                connected.mutation_policy,
+                connected.read_only_reason,
+            )
+        });
+
+        if let Some(refusal) = refusal {
+            report_error(UserFacingError::new(ErrorKind::User, refusal), cx);
+            return;
+        }
+
+        let pending = PendingRootSectionAction {
+            request,
+            connection,
+        };
+        if pending.request.action.requires_confirmation() {
+            self.show_root_section_action_confirm(pending, cx);
         } else {
-            self.run_root_section_action(request, cx);
+            self.run_root_section_action(pending, cx);
         }
     }
 
-    /// Runs a confirmed action on the background executor, audits it under
-    /// `Governance`, reports a failure and lists the section again on success.
+    /// Runs a confirmed action on the background executor and audits it
+    /// under `Governance`. It runs only on the connection it was requested on
+    /// and only while the connection's mutation policy allows it.
     pub(crate) fn run_root_section_action(
         &mut self,
-        request: RootSectionActionRequest,
+        pending: PendingRootSectionAction,
         cx: &mut Context<Self>,
     ) {
+        let PendingRootSectionAction {
+            request,
+            connection: requested_connection,
+        } = pending;
         let state = self.app_state.read(cx);
-        let Some(connection) = state
-            .connections()
-            .get(&request.profile_id)
-            .map(|connected| connected.connection.clone())
-        else {
-            report_error(
-                UserFacingError::new(
-                    ErrorKind::User,
-                    root_section_action_failed_message(
-                        &request,
-                        &dbflux_i18n::t!("connections.toast.no_active_connection"),
-                    ),
-                ),
-                cx,
-            );
+        let audit_service = state.audit_service().clone();
+        let connected = state.connections().get(&request.profile_id);
+
+        let refusal = match (connected, &requested_connection) {
+            (Some(connected), Some(requested)) if Arc::ptr_eq(&connected.connection, requested) => {
+                root_section_action_refusal(
+                    &request,
+                    connected.mutation_policy,
+                    connected.read_only_reason,
+                )
+            }
+            (Some(_), Some(_)) => Some(dbflux_i18n::t!(
+                "sidebar.toast.root_section_action_connection_changed",
+                action = request.action_label(),
+                item = request.item_label
+            )),
+            _ => Some(root_section_action_failed_message(
+                &request,
+                &dbflux_i18n::t!("connections.toast.no_active_connection"),
+            )),
+        };
+        if let Some(refusal) = refusal {
+            report_error(UserFacingError::new(ErrorKind::User, refusal), cx);
+            return;
+        }
+        let Some(connection) = requested_connection else {
             return;
         };
-        let audit_service = state.audit_service().clone();
 
         let background_task = cx.background_executor().spawn({
             let request = request.clone();
@@ -261,31 +341,106 @@ impl Sidebar {
 
                 let event =
                     root_section_action_audit_event(&request, &connection.metadata().id, &result);
-                if let Err(error) = audit_service.record(event) {
-                    log::warn!("Failed to record root section action audit event: {error}");
-                }
+                let audit_error = audit_service
+                    .record(event)
+                    .err()
+                    .map(|error| error.to_string());
 
-                result
+                RootSectionActionOutcome {
+                    result,
+                    audit_error,
+                }
             }
         });
 
-        cx.spawn(async move |this, cx| match background_task.await {
-            Ok(()) => {
-                if let Err(error) = this.update(cx, |sidebar, cx| {
-                    sidebar.refresh_root_section(request.profile_id, &request.section_id, cx);
-                }) {
-                    log::warn!("Sidebar dropped before refreshing a root section: {error}");
-                }
+        cx.spawn(async move |this, cx| {
+            let outcome = background_task.await;
+            if let Err(error) = this.update(cx, |sidebar, cx| {
+                sidebar.finish_root_section_action(&request, outcome, cx);
+            }) {
+                log::warn!("Sidebar dropped before a root section action finished: {error}");
             }
-            Err(error) => report_error_async(
+        })
+        .detach();
+    }
+
+    /// Reports what the action produced. On success it lists the section
+    /// again and tells the workspace, which reloads the document showing it;
+    /// a failed audit write is reported separately and changes neither.
+    pub(super) fn finish_root_section_action(
+        &mut self,
+        request: &RootSectionActionRequest,
+        outcome: RootSectionActionOutcome,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(audit_error) = outcome.audit_error {
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!(
+                        "sidebar.toast.root_section_action_audit_failed",
+                        action = request.action_label(),
+                        item = request.item_label,
+                        error = audit_error
+                    ),
+                ),
+                cx,
+            );
+        }
+
+        match outcome.result {
+            Ok(()) => {
+                self.refresh_root_section(request.profile_id, &request.section_id, cx);
+                cx.emit(SidebarEvent::RootSectionChanged {
+                    profile_id: request.profile_id,
+                    section_id: request.section_id.clone(),
+                    presentation: request.section_presentation,
+                });
+            }
+            Err(error) => report_error(
                 UserFacingError::new(
                     ErrorKind::Driver,
-                    root_section_action_failed_message(&request, &error.to_string()),
+                    root_section_action_failed_message(request, &error.to_string()),
                 ),
                 cx,
             ),
-        })
-        .detach();
+        }
+    }
+}
+
+/// Why the connection's mutation policy refuses `request`, if it does.
+/// Actions that only read always pass. Approval routing for these actions is
+/// not available yet, so an approval policy refuses the others.
+fn root_section_action_refusal(
+    request: &RootSectionActionRequest,
+    policy: MutationPolicy,
+    read_only_reason: Option<ReadOnlyReason>,
+) -> Option<String> {
+    if request.action.is_read_only() {
+        return None;
+    }
+
+    let action = request.action_label();
+    match policy {
+        MutationPolicy::Allowed => None,
+        MutationPolicy::ReadOnly => Some(match read_only_reason {
+            Some(ReadOnlyReason::ProfileSetting) => dbflux_i18n::t!(
+                "sidebar.toast.root_section_action_refused.read_only_profile",
+                action = action
+            ),
+            Some(ReadOnlyReason::ServerEnforced) => dbflux_i18n::t!(
+                "sidebar.toast.root_section_action_refused.read_only_server",
+                action = action
+            ),
+            None => dbflux_i18n::t!(
+                "sidebar.toast.root_section_action_refused.read_only",
+                action = action
+            ),
+        }),
+        MutationPolicy::ApprovalRequired => Some(dbflux_i18n::t!(
+            "sidebar.toast.root_section_action_refused.approval_unavailable",
+            action = action
+        )),
     }
 }
 

@@ -360,26 +360,30 @@ fn the_root_section_action_confirmation_is_covered(cx: &mut TestAppContext) {
         .window
         .update(|_, cx| harness.workspace.read(cx).sidebar.clone());
 
-    harness.window.update(|_, cx| {
-        sidebar.update(cx, |sidebar, cx| {
-            sidebar.dispatch_root_section_action(
-                dbflux_ui_sidebar::RootSectionActionRequest {
-                    profile_id: uuid::Uuid::new_v4(),
-                    section_id: "buckets".to_string(),
-                    item_id: "old-bucket".to_string(),
-                    item_label: "old-bucket".to_string(),
-                    action: dbflux_core::RootSectionAction {
-                        id: "delete_bucket".to_string(),
-                        label: dbflux_core::LocalizedText::plain("Delete bucket"),
-                        description: None,
-                        classification: dbflux_core::ExecutionClassification::AdminDestructive,
+    let open_confirmation = |harness: &mut Harness<'_>| {
+        harness.window.update(|_, cx| {
+            sidebar.update(cx, |sidebar, cx| {
+                sidebar.dispatch_root_section_action(
+                    dbflux_ui_sidebar::RootSectionActionRequest {
+                        profile_id: uuid::Uuid::new_v4(),
+                        section_id: "buckets".to_string(),
+                        section_presentation: None,
+                        item_id: "old-bucket".to_string(),
+                        item_label: "old-bucket".to_string(),
+                        action: dbflux_core::RootSectionAction {
+                            id: "delete_bucket".to_string(),
+                            label: dbflux_core::LocalizedText::plain("Delete bucket"),
+                            description: None,
+                            classification: dbflux_core::ExecutionClassification::AdminDestructive,
+                        },
                     },
-                },
-                cx,
-            );
+                    cx,
+                );
+            });
         });
-    });
-    harness.window.run_until_parked();
+        harness.window.run_until_parked();
+    };
+    open_confirmation(&mut harness);
     harness.window.update(|window, _| window.refresh());
     harness.window.run_until_parked();
 
@@ -399,6 +403,22 @@ fn the_root_section_action_confirmation_is_covered(cx: &mut TestAppContext) {
             .window
             .update(|_, cx| sidebar.read(cx).has_delete_modal()),
         "Escape cancels the confirmation"
+    );
+
+    // The harness has no connection, so Enter confirms into the
+    // no-connection refusal; what it proves is that Execute is routed.
+    open_confirmation(&mut harness);
+    assert!(
+        harness
+            .window
+            .update(|_, cx| sidebar.read(cx).has_delete_modal())
+    );
+    harness.keys("enter");
+    assert!(
+        !harness
+            .window
+            .update(|_, cx| sidebar.read(cx).has_delete_modal()),
+        "Enter confirms and closes the confirmation"
     );
 }
 

@@ -231,7 +231,7 @@ v1.8 没有新增任何请求或响应变体。它改变了部分现有载荷的
 
 宿主将这三种请求分派给连接的 `Connection::root_section_source`。没有该来源的驱动回复 `UnsupportedMethod`（`Driver does not declare root sections`），驱动错误则与其他 `Error` 一样回复。在协商了更早次版本的会话上，宿主以 `VersionMismatch`（`root section requests require driver RPC protocol 1.9 or newer`）拒绝这些请求，不会调用驱动。
 
-出于上文所述的线路索引原因，这六个变体追加在各自枚举的最后一个 v1.8 变体之后。只有当会话协商了 v1.9 或更新版本、且驱动元数据声明了 `DriverCapabilities::ROOT_SECTIONS` 时，客户端才会暴露根分区；否则 `IpcConnection` 会清除该能力，且不发送任何请求。`IpcConnection` 每个连接只获取一次声明并缓存；获取失败时不显示分区，并在下一次读取时重试。每个 `RootSectionAction` 都带有其 `ExecutionClassification`，因此宿主对外部驱动的操作与内置驱动一样进行确认和审计。
+出于上文所述的线路索引原因，这六个变体追加在各自枚举的最后一个 v1.8 变体之后。只有当会话协商了 v1.9 或更新版本、且驱动元数据声明了 `DriverCapabilities::ROOT_SECTIONS` 时，客户端才会暴露根分区；否则 `IpcConnection` 会清除该能力，且不发送任何请求。`IpcConnection` 每个连接只获取一次声明并缓存；获取失败时返回错误且不缓存，宿主会以重试行显示该错误，并从该行再次请求。分区 id 不能包含 `|`，宿主会拒绝并报告此类声明。在不提供 `object_store_api` 的连接上，宿主会隐藏呈现方式需要打开对象存储文档的分区。由于尚无对象存储 RPC，`IpcConnection` 不提供它，而目前提供的两种呈现方式（`ObjectContainerTable` 与 `ObjectBrowser`）都属于此类，因此在出现不需要对象存储的呈现方式之前，外部驱动的分区会保持隐藏。每个 `RootSectionAction` 都带有其 `ExecutionClassification`，因此宿主对外部驱动的操作与内置驱动一样进行确认和审计。
 
 ## 认证提供程序 RPC 契约
 

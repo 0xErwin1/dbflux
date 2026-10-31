@@ -104,8 +104,8 @@ pub(crate) fn execute_section_action(
 }
 
 impl RootSectionSource for S3Connection {
-    fn sections(&self) -> Vec<RootSectionDef> {
-        vec![buckets_section()]
+    fn sections(&self) -> Result<Vec<RootSectionDef>, DbError> {
+        Ok(vec![buckets_section()])
     }
 
     fn list_items(

@@ -490,9 +490,9 @@ fn dispatch_root_section(
     };
 
     let result = match body {
-        DriverRequestBody::RootSections => Ok(DriverResponseBody::RootSections {
-            sections: source.sections(),
-        }),
+        DriverRequestBody::RootSections => source
+            .sections()
+            .map(|sections| DriverResponseBody::RootSections { sections }),
         DriverRequestBody::RootSectionItems {
             section_id,
             page_token,
@@ -1251,6 +1251,7 @@ mod tests {
         metadata: dbflux_core::DriverMetadata,
         actions: Mutex<Vec<(String, String, String)>>,
         listed_tokens: Mutex<Vec<Option<String>>>,
+        fail_sections: bool,
     }
 
     impl RootSectionConnection {
@@ -1266,6 +1267,7 @@ mod tests {
                 .build(),
                 actions: Mutex::new(Vec::new()),
                 listed_tokens: Mutex::new(Vec::new()),
+                fail_sections: false,
             }
         }
 
@@ -1284,8 +1286,11 @@ mod tests {
     }
 
     impl dbflux_core::RootSectionSource for RootSectionConnection {
-        fn sections(&self) -> Vec<dbflux_core::RootSectionDef> {
-            vec![Self::section()]
+        fn sections(&self) -> Result<Vec<dbflux_core::RootSectionDef>, DbError> {
+            if self.fail_sections {
+                return Err(DbError::query_failed("catalog unavailable"));
+            }
+            Ok(vec![Self::section()])
         }
 
         fn list_items(
@@ -1423,6 +1428,32 @@ mod tests {
             DriverResponseBody::Error(error) => {
                 assert_eq!(error.code, DriverRpcErrorCode::Driver);
                 assert!(error.message.contains("missing"), "{}", error.message);
+            }
+            other => panic!("expected an error, got {other:?}"),
+        }
+    }
+
+    /// A driver that cannot read its declarations answers with the ordinary
+    /// driver error, so the host asks again instead of seeing no sections.
+    #[test]
+    fn v1_9_host_reports_driver_errors_from_root_section_declarations() {
+        let connection = RootSectionConnection {
+            fail_sections: true,
+            ..RootSectionConnection::new()
+        };
+
+        match dispatch(
+            &connection,
+            DRIVER_RPC_V1_9,
+            DriverRequestBody::RootSections,
+        ) {
+            DriverResponseBody::Error(error) => {
+                assert_eq!(error.code, DriverRpcErrorCode::Driver);
+                assert!(
+                    error.message.contains("catalog unavailable"),
+                    "{}",
+                    error.message
+                );
             }
             other => panic!("expected an error, got {other:?}"),
         }

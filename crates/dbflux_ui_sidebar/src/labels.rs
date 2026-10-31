@@ -1864,7 +1864,7 @@ mod tests {
         );
     }
 
-    const E1_KEYS: [&str; 29] = [
+    const E1_KEYS: [&str; 37] = [
         "sidebar.error.cannot_load_schema_types",
         "sidebar.error.cannot_load_schema_indexes",
         "sidebar.error.cannot_load_schema_foreign_keys",
@@ -1876,6 +1876,14 @@ mod tests {
         "sidebar.task.listing_root_section",
         "sidebar.toast.list_root_section_failed",
         "sidebar.toast.root_section_action_failed",
+        "sidebar.toast.root_section_action_audit_failed",
+        "sidebar.toast.root_section_action_connection_changed",
+        "sidebar.toast.root_section_action_refused.read_only",
+        "sidebar.toast.root_section_action_refused.read_only_profile",
+        "sidebar.toast.root_section_action_refused.read_only_server",
+        "sidebar.toast.root_section_action_refused.approval_unavailable",
+        "sidebar.toast.root_section_invalid_id",
+        "sidebar.tree.status.error_retry",
         "sidebar.tree.status.load_more",
         "sidebar.root_section.confirm_message",
         "sidebar.root_section.action.delete_bucket",

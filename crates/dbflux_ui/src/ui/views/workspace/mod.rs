@@ -1137,6 +1137,13 @@ impl Workspace {
                         cx,
                     );
                 }
+                SidebarEvent::RootSectionChanged {
+                    profile_id,
+                    presentation,
+                    ..
+                } => {
+                    this.refresh_root_section_document(*profile_id, *presentation, window, cx);
+                }
                 SidebarEvent::OpenSecretStore {
                     profile_id,
                     store_id,

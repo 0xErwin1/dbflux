@@ -429,20 +429,18 @@ impl Connection for IpcConnection {
 }
 
 impl RootSectionSource for IpcConnection {
-    /// A failed fetch is logged and shows no sections; it is not cached, so the
-    /// next read asks the host again.
-    fn sections(&self) -> Vec<RootSectionDef> {
+    /// A failed fetch is returned and not cached, so the next read asks the
+    /// host again.
+    fn sections(&self) -> Result<Vec<RootSectionDef>, DbError> {
         if let Some(sections) = self.root_sections.get() {
-            return sections.clone();
+            return Ok(sections.clone());
         }
 
-        match self.client.root_sections(self.session_id) {
-            Ok(sections) => self.root_sections.get_or_init(|| sections).clone(),
-            Err(error) => {
-                log::warn!("Failed to fetch root sections from the driver host: {error}");
-                Vec::new()
-            }
-        }
+        let sections = self
+            .client
+            .root_sections(self.session_id)
+            .map_err(DbError::from)?;
+        Ok(self.root_sections.get_or_init(|| sections).clone())
     }
 
     fn list_items(
@@ -1326,9 +1324,15 @@ mod tests {
         let source = connection
             .root_section_source()
             .expect("a declaring v1.9 driver exposes root sections");
-        assert_eq!(source.sections(), vec![buckets_section()]);
+        assert_eq!(
+            source.sections().expect("sections"),
+            vec![buckets_section()]
+        );
         // The declaration is cached: the second read sends no frame.
-        assert_eq!(source.sections(), vec![buckets_section()]);
+        assert_eq!(
+            source.sections().expect("cached sections"),
+            vec![buckets_section()]
+        );
         assert_eq!(
             source
                 .list_items("buckets", Some("page-2"))
@@ -1392,8 +1396,14 @@ mod tests {
         );
         let source = connection.root_section_source().expect("root sections");
 
-        assert!(source.sections().is_empty());
-        assert_eq!(source.sections(), vec![buckets_section()]);
+        match source.sections() {
+            Err(error) => assert!(error.to_string().contains("not ready"), "{error}"),
+            Ok(sections) => panic!("expected the host error, got {sections:?}"),
+        }
+        assert_eq!(
+            source.sections().expect("sections after the retry"),
+            vec![buckets_section()]
+        );
         server.wait().expect("server completed");
     }
 
