@@ -119,6 +119,13 @@ While text is being typed, `Tab` indents and `Shift+Tab` outdents, so use
 `Shift+Tab` move between the query and replace fields while the replace field is
 shown; otherwise they cycle focus between panels, as they do outside the editor.
 
+While a completion menu is open, `Tab` writes the highlighted suggestion in
+place of the word being completed, and each further `Tab` / `Shift+Tab` replaces
+it with the next / previous one, wrapping at either end. Once `Tab` has inserted
+a suggestion, the arrow keys also update the text. `Enter`, or typing any other
+character, keeps the inserted suggestion and closes the menu; `Escape` restores
+the word you typed. The whole cycle is one undo step.
+
 The action strip on the editor's left edge is also a menu. `Shift+F10` opens the **pane actions** menu
 from the editor text, in every Vim mode and without Vim. `Ctrl+k` moves focus to
 the execution context bar, where `m` (or `Shift+F10`) opens it too. A script
