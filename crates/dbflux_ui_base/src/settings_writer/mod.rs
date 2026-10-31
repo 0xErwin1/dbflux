@@ -176,7 +176,8 @@ fn take_pending(db_path: &Path, cx: &mut App) -> Option<(PendingWrite, Arc<Mutex
 
 /// Writes change `seq` unless a newer one is already on disk, in which case
 /// the newer value stands for it and the write succeeds without touching the
-/// database.
+/// database: its callers are told it was saved, since what they asked for is
+/// on disk or was replaced by a later change.
 fn write_guarded(
     last_written: &Mutex<u64>,
     seq: u64,

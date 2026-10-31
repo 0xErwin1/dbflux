@@ -35,7 +35,8 @@ Integration](MCP_AI_INTEGRATION.md).
 </picture>
 
 Guardar aplica los cambios al instante y los escribe en la base de datos de
-DBFlux (`dbflux.db`, o `dbflux-nightly.db` en una build Nightly) en segundo
+DBFlux (`dbflux.db`, o `dbflux-nightly.db` en un build Nightly sin
+**Use the stable database**) en segundo
 plano, así que una base de datos lenta u ocupada nunca congela la ventana. El
 mensaje de éxito aparece cuando ya están en disco. Si la escritura falla, un
 error lo indica y los cambios siguen aplicados hasta que DBFlux se cierre;

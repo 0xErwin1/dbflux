@@ -215,11 +215,15 @@ fn a_stale_write_never_lands_after_a_newer_one(cx: &mut TestAppContext) {
     });
 
     let (write, guard) = stale;
-    super::write_guarded(&guard, write.seq, &stale_path, &write.settings)
-        .expect("a stale write is skipped, not failed");
+    let result = super::write_guarded(&guard, write.seq, &stale_path, &write.settings);
+    assert!(result.is_ok(), "a stale write is skipped, not failed");
+    cx.update(|cx| super::finish(&stale_path, write.seq, result, write.callbacks, cx));
 
     assert_eq!(saved_max_history(&app_state, cx), 70);
-    assert_eq!(*outcomes.borrow(), vec![(2, true)]);
+    // The skipped change is covered by the newer value on disk, so its caller
+    // hears that it was saved, and no error is reported.
+    assert_eq!(*outcomes.borrow(), vec![(2, true), (1, true)]);
+    assert_eq!(cx.update(|cx| app_state.read(cx).unread_error_count), 0);
 }
 
 /// Changes made while a write is in flight collapse into one write after it.
@@ -277,8 +281,8 @@ fn changes_for_two_databases_are_written_separately(cx: &mut TestAppContext) {
     assert_eq!(outcomes, vec![(1, true), (2, true), (3, false)]);
 }
 
-/// A write that fails on quit is reported like any other, so it reaches the
-/// audit log even though no window is left to show it.
+/// A write that fails on quit goes through the same error report as any
+/// other failed write, and its caller hears that it was not saved.
 #[gpui::test]
 fn a_failed_write_on_quit_is_reported(cx: &mut TestAppContext) {
     let app_state = app_state(cx);

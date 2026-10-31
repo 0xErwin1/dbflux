@@ -30,8 +30,8 @@ MCP 관련 섹션(Clients, Roles, Policies)은 바이너리가 `mcp` 기능과 �
   <img src="../images/settings/general-light.webp" alt="모양, 편집기, 시작 설정이 보이는 설정 창의 일반 섹션">
 </picture>
 
-저장하면 변경 사항이 즉시 적용되고 DBFlux 데이터베이스(`dbflux.db`, 나이틀리
-빌드에서는 `dbflux-nightly.db`)에는 백그라운드에서 기록되므로,
+저장하면 변경 사항이 즉시 적용되고 DBFlux 데이터베이스(`dbflux.db`,
+**Use the stable database**를 켜지 않은 나이틀리 빌드에서는 `dbflux-nightly.db`)에는 백그라운드에서 기록되므로,
 데이터베이스가 느리거나 사용 중이어도 창이 멈추지 않습니다. 성공 메시지는 디스크에
 기록된 뒤에 표시됩니다. 기록에 실패하면 오류가 표시되고, 변경 사항은 DBFlux를
 종료할 때까지 적용된 상태로 남습니다. 유지하려면 다시 저장하세요.
