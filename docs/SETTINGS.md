@@ -51,6 +51,10 @@ Integration](MCP_AI_INTEGRATION.md).
 while the content scrolls, while the pointer is over a scrollable area, or all
 the time. It applies to every open window as soon as you save.
 
+The horizontal scrollbar of the data grid is the exception: it is always
+shown, because it is driven by a separate scroller that never receives wheel
+events and would otherwise stay hidden.
+
 Font changes apply to every open window as soon as you save; no restart is
 needed. The editor font also sets the monospace text in the interface
 (metadata, key hints, console), and a custom interface font also replaces the

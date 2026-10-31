@@ -54,6 +54,10 @@ todas las ventanas: solo mientras el contenido se desplaza, mientras el puntero
 está sobre un área desplazable, o siempre. Se aplica a todas las ventanas
 abiertas en cuanto guardas.
 
+La barra horizontal de la cuadrícula de datos es la excepción: se muestra
+siempre, porque la mueve un desplazador aparte que nunca recibe eventos de la
+rueda y, de otro modo, quedaría oculta.
+
 Los cambios de fuente se aplican a todas las ventanas abiertas en cuanto
 guardas; no hace falta reiniciar. La fuente del editor también define el texto
 monoespaciado de la interfaz (metadatos, atajos de teclado, consola), y una
