@@ -2017,6 +2017,16 @@ pub trait Connection: Send + Sync {
         None
     }
 
+    /// Returns the sidebar root sections this connection declares.
+    ///
+    /// Drivers that implement `RootSectionSource` override this and advertise
+    /// `DriverCapabilities::ROOT_SECTIONS`; the rest inherit `None`.
+    fn root_section_source(
+        &self,
+    ) -> Option<&dyn crate::connection::root_section::RootSectionSource> {
+        None
+    }
+
     /// Returns the secret stores this connection exposes, in display order.
     ///
     /// Drivers that implement `SecretStoreSource` override this. Drivers without

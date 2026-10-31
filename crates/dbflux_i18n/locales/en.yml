@@ -5208,6 +5208,11 @@ sidebar:
     dashboards: "Dashboards"
     connections: CONNECTIONS
     scripts: SCRIPTS
+  root_section:
+    confirm_message: "Run \"%{action}\" on \"%{item}\"?"
+    action:
+      delete_bucket: "Delete bucket"
+      delete_bucket_description: "Deletes the bucket. Only an empty bucket can be deleted, and this cannot be undone."
   task:
     connecting: "Connecting to %{name}"
     disconnecting: "Disconnecting %{name}"
@@ -5216,7 +5221,7 @@ sidebar:
     disconnect_hook_cancelled: Disconnect hook cancelled
     post_disconnect_hook_cancelled: Post-disconnect hook cancelled
     loading_event_streams: "Loading event streams: %{name}"
-    listing_buckets: "Listing buckets: %{name}"
+    listing_root_section: "Listing %{section}: %{name}"
     loading_database_schema: "Loading schema: %{name}"
     connecting_to_database: "Connecting to database: %{name}"
     refreshing_database: "Refreshing database: %{name}"
@@ -5264,7 +5269,16 @@ sidebar:
       indexes: "Failed to load indexes: %{error}"
       foreign_keys: "Failed to load foreign keys: %{error}"
       routines: "Failed to load routines: %{error}"
-    list_buckets_failed: "Failed to list buckets: %{error}"
+    list_root_section_failed: "Failed to list %{section}: %{error}"
+    root_section_action_failed: "%{action} failed for %{item}: %{error}"
+    root_section_action_audit_failed: "%{action} on %{item} succeeded, but its audit event was not recorded: %{error}"
+    root_section_action_connection_changed: "%{action} was not run on %{item}: the connection changed after the action was requested."
+    root_section_action_refused:
+      read_only: "%{action} was not run: this connection is read-only."
+      read_only_profile: "%{action} was not run: this connection's profile is set to read-only."
+      read_only_server: "%{action} was not run: the server rejected mutations for this connection."
+      approval_unavailable: "%{action} was not run: this connection requires approval, which is not available for sidebar actions yet."
+    root_section_invalid_id: "The driver declared the root section \"%{section}\", which was skipped: section ids must be unique and cannot contain \"|\"."
     code_generation_failed: "Code generation failed: %{error}"
     loading_event_streams: Loading event streams…
     load_schema_failed: "Failed to load schema: %{error}"
@@ -5336,6 +5350,7 @@ sidebar:
       error_retry: "Error: %{error} — click to retry"
       connect_failed: "Connection failed: %{error}"
       remote_listing_count: "%{label} (%{count})"
+      load_more: "Load more"
       remote_dashboards_error_retry: "Error: %{error} — collapse and expand to retry"
       used_by_objects:
         one: Used by 1 object
