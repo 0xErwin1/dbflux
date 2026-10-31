@@ -22,13 +22,39 @@ use dbflux_storage::repositories::connection_profile_value_refs::ConnectionProfi
 use dbflux_storage::repositories::connection_profiles::ConnectionProfileDto;
 use dbflux_storage::repositories::driver_overrides::DriverOverridesDto;
 use dbflux_storage::repositories::driver_setting_values::DriverSettingValueDto;
-use dbflux_storage::repositories::general_settings::GeneralSettingsDto;
+use dbflux_storage::repositories::general_settings::{
+    GeneralSettingsDto, GeneralSettingsRepository,
+};
 use dbflux_storage::repositories::hook_definitions::{
     HookDefinitionDto, HookDefinitionReplacement,
 };
 
 pub fn save_general_settings(
     runtime: &StorageRuntime,
+    settings: &GeneralSettings,
+) -> Result<(), dbflux_storage::error::StorageError> {
+    save_general_settings_to(&runtime.general_settings(), settings)
+}
+
+/// Saves `settings` through a connection of its own to the database at
+/// `db_path`. The repository connection of a [`StorageRuntime`] cannot leave
+/// the thread that owns it, so a write made on a background thread opens its
+/// own.
+pub fn save_general_settings_at(
+    db_path: &std::path::Path,
+    settings: &GeneralSettings,
+) -> Result<(), dbflux_storage::error::StorageError> {
+    let connection = dbflux_storage::sqlite::open_database(db_path)?;
+    // The repository takes the shared connection type; this one never leaves
+    // the thread that opened it.
+    #[allow(clippy::arc_with_non_send_sync)]
+    let repo = GeneralSettingsRepository::new(std::sync::Arc::new(connection));
+
+    save_general_settings_to(&repo, settings)
+}
+
+fn save_general_settings_to(
+    repo: &GeneralSettingsRepository,
     settings: &GeneralSettings,
 ) -> Result<(), dbflux_storage::error::StorageError> {
     let editor_row_limit = i64::try_from(settings.editor_row_limit)
@@ -40,8 +66,6 @@ pub fn save_general_settings(
             )
         })?;
 
-    // Save to normalized general_settings table
-    let repo = runtime.general_settings();
     let dto = GeneralSettingsDto {
         id: 1,
         theme: general_settings_theme_to_storage(settings.theme).to_string(),
