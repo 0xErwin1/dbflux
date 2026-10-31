@@ -1612,7 +1612,9 @@ flujo de release/nightly en sí está documentado en `docs/RELEASE.md`.
     escritura, creación de folder/bucket con degradación graceful por endpoint,
     rename (copy-then-delete), URLs presignadas
   - Cada mutation hecha desde la tabla de buckets o el explorador de objetos
-    se audita bajo `EventCategory::ObjectStorage`; la acción Delete bucket del
+    se audita bajo `EventCategory::ObjectStorage` cuando la auditoría está
+    activada; si la escritura de auditoría falla, se registra una advertencia
+    y la mutation se mantiene, sin registro alternativo; la acción Delete bucket del
     sidebar es una acción de root section y se audita bajo
     `EventCategory::Governance`. Las credenciales y URLs presignadas nunca se
     registran ni persisten

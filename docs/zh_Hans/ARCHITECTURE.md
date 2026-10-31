@@ -891,7 +891,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
   - 存储桶发现（连接根处的 `BucketsTableDocument`）与按层级分页的对象导航（`ObjectBrowserDocument`），并可切换到不分页的树形模式
   - `ObjectStoreConnection` 实现覆盖上传、删除、递归前缀/存储桶删除（批量 `DeleteObjects`）、复制、预签名、存储桶详情/版本控制与对象版本
   - 界面提供完整 CRUD：上传、需输入确认的递归删除、创建文件夹/存储桶（按端点优雅降级）、重命名（先复制后删除）、预签名 URL
-  - 在存储桶表格或对象浏览器中进行的每次变更都在 `EventCategory::ObjectStorage` 下审计；侧边栏的 Delete bucket 操作属于根分区操作，在 `EventCategory::Governance` 下审计。凭据与预签名 URL 从不被记录到日志或持久化
+  - 启用审计时，在存储桶表格或对象浏览器中进行的每次变更都在 `EventCategory::ObjectStorage` 下审计；审计写入失败时只记录一条警告，变更依然生效，且不会写入替代记录；侧边栏的 Delete bucket 操作属于根分区操作，在 `EventCategory::Governance` 下审计。凭据与预签名 URL 从不被记录到日志或持久化
 - **AWS Secrets**：`crates/dbflux_driver_aws_secrets/` —— `aws-sdk-secretsmanager` + `aws-sdk-ssm` 驱动程序（`DatabaseCategory::SecretStore`）：
   - 通过 `Connection::secret_stores()` 与提供方无关的 `SecretStoreSource` 接缝（`dbflux_core/src/connection/secret_store/`）暴露两个存储库，由 `DriverCapabilities::SECRET_STORE` 门控；各存储库的 `SecretStoreCapabilities` 门控 UI 行为
   - 列表（`ListSecrets`、`DescribeParameters`）从不读取值；Parameter Store 路径在客户端分组为直接条目与子路径

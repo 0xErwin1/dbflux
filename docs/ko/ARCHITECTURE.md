@@ -875,7 +875,7 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
   - 버킷 탐색(연결 루트의 `BucketsTableDocument`)과 수준별 페이지 나누기가 적용된 개체 탐색(`ObjectBrowserDocument`), 선택적인 페이지 나누기 없는 트리 모드
   - `ObjectStoreConnection` 구현은 업로드, 삭제, 재귀적 접두사/버킷 삭제(일괄 처리된 `DeleteObjects`), 복사, 사전 서명, 버킷 세부 정보/버전 관리, 개체 버전을 다룹니다
   - UI의 전체 CRUD: 업로드, 확인 입력 방식의 재귀 삭제, 엔드포인트별 단계적 기능 저하가 있는 폴더/버킷 만들기, 이름 바꾸기(복사 후 삭제), 사전 서명된 URL
-  - 버킷 테이블이나 객체 브라우저에서 수행한 모든 변경은 `EventCategory::ObjectStorage` 아래로 감사 기록됩니다; 사이드바의 Delete bucket 동작은 루트 섹션 동작이므로 `EventCategory::Governance` 아래로 감사 기록됩니다. 자격 증명과 사전 서명된 URL은 절대 로깅되거나 저장되지 않습니다
+  - 버킷 테이블이나 객체 브라우저에서 수행한 모든 변경은 감사가 활성화된 경우 `EventCategory::ObjectStorage` 아래로 감사 기록됩니다. 감사 기록 쓰기가 실패하면 경고가 로그에 남고 변경은 그대로 유지되며, 대체 기록은 남지 않습니다; 사이드바의 Delete bucket 동작은 루트 섹션 동작이므로 `EventCategory::Governance` 아래로 감사 기록됩니다. 자격 증명과 사전 서명된 URL은 절대 로깅되거나 저장되지 않습니다
 - **AWS Secrets**: `crates/dbflux_driver_aws_secrets/` — `aws-sdk-secretsmanager` + `aws-sdk-ssm` 드라이버(`DatabaseCategory::SecretStore`)입니다:
   - `Connection::secret_stores()`와 공급자 중립적인 `SecretStoreSource` seam(`dbflux_core/src/connection/secret_store/`)으로 두 저장소를 노출하며, `DriverCapabilities::SECRET_STORE`로 게이트됩니다. 저장소별 `SecretStoreCapabilities`가 UI 동작을 게이트합니다
   - 목록(`ListSecrets`, `DescribeParameters`)은 값을 절대 가져오지 않습니다. Parameter Store 경로는 클라이언트 측에서 직접 항목과 하위 경로로 묶입니다

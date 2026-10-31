@@ -26,7 +26,8 @@ struct DeclaredSections {
 /// a connection without `object_store_api`, since every load of that document
 /// would fail. A section id with the node id separator is rejected, since
 /// every node built from it would be misparsed. A repeated section id is
-/// rejected and the first declaration kept, since both would share one node.
+/// rejected and the first shown declaration kept, since both would share one
+/// node; a hidden declaration does not claim its id.
 #[allow(clippy::result_large_err)]
 fn declared_sections(connection: &dyn Connection) -> Result<DeclaredSections, DbError> {
     let source = connection
@@ -40,7 +41,7 @@ fn declared_sections(connection: &dyn Connection) -> Result<DeclaredSections, Db
     };
     let mut seen_ids = HashSet::new();
     for section in source.sections()? {
-        if !section.has_valid_id() || !seen_ids.insert(section.id.clone()) {
+        if !section.has_valid_id() || seen_ids.contains(&section.id) {
             declared.invalid_ids.push(section.id);
         } else if section.requires_object_store() && !has_object_store {
             log::warn!(
@@ -48,6 +49,7 @@ fn declared_sections(connection: &dyn Connection) -> Result<DeclaredSections, Db
                 section.id
             );
         } else {
+            seen_ids.insert(section.id.clone());
             declared.sections.push(section);
         }
     }
