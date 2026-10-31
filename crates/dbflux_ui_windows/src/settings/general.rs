@@ -7,6 +7,7 @@ use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
 use dbflux_components::tokens::{Fields, ui};
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
+use dbflux_ui_base::settings_writer::persist_general_settings;
 use dbflux_ui_base::toast::{Toast, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
@@ -865,20 +866,6 @@ impl GeneralSection {
         self.gen_settings.object_preview_size_limit_mib = object_preview_limit;
         self.gen_settings.key_value_size_limit_mib = key_value_size_limit;
 
-        let runtime = self.app_state.read(cx).storage_runtime();
-        if let Err(e) =
-            dbflux_app::config_loader::save_general_settings(runtime, &self.gen_settings)
-        {
-            report_error(
-                UserFacingError::new(
-                    ErrorKind::Storage,
-                    dbflux_i18n::t!("settings.general.save.error", error = e),
-                ),
-                cx,
-            );
-            return;
-        }
-
         // Open code editors pick up settings such as Vim mode from this event.
         self.app_state.update(cx, |state, cx| {
             state.update_general_settings(self.gen_settings.clone());
@@ -895,9 +882,19 @@ impl GeneralSection {
             cx,
         );
 
-        Toast::success(dbflux_i18n::t!("settings.general.save.success"))
-            .meta_right(now_hms())
-            .push(cx);
+        // The writer reports a failed write itself.
+        persist_general_settings(
+            &self.app_state,
+            self.gen_settings.clone(),
+            |saved, cx| {
+                if saved {
+                    Toast::success(dbflux_i18n::t!("settings.general.save.success"))
+                        .meta_right(now_hms())
+                        .push(cx);
+                }
+            },
+            cx,
+        );
     }
 
     pub(super) fn render_general_section(&self, cx: &mut Context<Self>) -> impl IntoElement {

@@ -2604,17 +2604,19 @@ impl Workspace {
 
     /// Persist the inspector width to `GeneralSettings` and save to disk.
     fn persist_inspector_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
-        let runtime = self.app_state.read(cx).storage_runtime();
         let mut settings = self.app_state.read(cx).general_settings().clone();
         settings.workspace_inspector_width_px = Some(f32::from(width));
 
-        if let Err(e) = dbflux_app::config_loader::save_general_settings(runtime, &settings) {
-            log::warn!("Failed to persist inspector width: {}", e);
-        }
-
         self.app_state.update(cx, |state, _cx| {
-            state.update_general_settings(settings);
+            state.update_general_settings(settings.clone());
         });
+
+        dbflux_ui_base::settings_writer::persist_general_settings(
+            &self.app_state,
+            settings,
+            |_saved, _cx| {},
+            cx,
+        );
     }
 
     /// The next area in the Tab cycle, skipping the background tasks while
