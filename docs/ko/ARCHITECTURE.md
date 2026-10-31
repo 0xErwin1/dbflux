@@ -689,7 +689,7 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 - 컬렉션/컨테이너 아래의 드라이버 소유 하위 리소스는 일반 `CollectionChildInfo` 메타데이터를 통해 게시됩니다. 사이드바는 이름, 필드 타입, 드라이버 ID로부터 드라이버별 하위 항목을 추론해서는 안 됩니다.
 - 루틴(함수, 프로시저, 집계, 창 함수)은 드라이버가 `ROUTINES` 기능을 설정하고 `schema_routines` 접점을 채울 때 스키마별 "Routines" 폴더로 나타납니다. UI는 이 폴더를 일반적으로 렌더링하며 어떤 드라이버도 특별 취급하지 않습니다.
 - 사이드바 독: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs`는 ToggleSidebar 명령(Ctrl+B)이 있는 접을 수 있고 크기 조절 가능한 사이드바를 제공합니다.
-- 연결 트리는 하나의 투영만 순회합니다. `SchemaSnapshot::database_layout`(`crates/dbflux_core/src/schema/listing.rs`)은 각 데이터베이스가 테이블과 뷰를 스키마 아래에 묶는지, 객체를 하나의 `ObjectFolder`(컬렉션 또는 측정값)에 나열하는지, 키스페이스인지를 알려 줍니다. 사이드바(`tree_builder/object_folder.rs`)는 이 설명으로 각 데이터베이스의 내용을 만들고, 컨텍스트 메뉴는 객체의 패싯과 같은 레이아웃을 읽습니다. 트리에 남은 유일한 카테고리 검사는 오브젝트 스토리지 연결의 버킷 목록으로, 스냅샷에서 읽지 않고 별도 경로로 가져옵니다.
+- 연결 트리는 하나의 투영만 순회합니다. `SchemaSnapshot::database_layout`(`crates/dbflux_core/src/schema/listing.rs`)은 각 데이터베이스가 테이블과 뷰를 스키마 아래에 묶는지, 객체를 하나의 `ObjectFolder`(컬렉션 또는 측정값)에 나열하는지, 키스페이스인지를 알려 줍니다. 사이드바(`tree_builder/object_folder.rs`)는 이 설명으로 각 데이터베이스의 내용을 만들고, 컨텍스트 메뉴는 객체의 패싯과 같은 레이아웃을 읽습니다. S3 버킷처럼 드라이버가 연결 루트에 보여 주는 객체 종류는 스냅샷에 없으며, 드라이버의 루트 섹션에서 옵니다(드라이버 시스템 참조).
 - 연결 트리: `crates/dbflux_core/src/connection/tree.rs`는 폴더와 연결을 트리 구조로 모델링하고, `tree_manager.rs`가 인메모리 관리를 담당합니다.
 
 ### 드라이버 체계
@@ -714,6 +714,7 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
   - `EventStreamTarget`는 워크스페이스/감사에 드라이버 지원 이벤트 스트림의 일반 식별자를 제공합니다.
   - `SourceContextSpec`는 드라이버가 `dbflux_ui`에 드라이버 이름을 하드코딩하지 않고 추가 쿼리 컨텍스트 컨트롤을 선언할 수 있게 합니다.
   - `Connection::object_store_api()`를 통해 도달하는 `ObjectStoreConnection`(`crates/dbflux_core/src/core/traits.rs`)은 개체 스토리지 접점(버킷/개체 나열, CRUD, presign, 복사, 버전)입니다. `CollectionPresentation::ObjectBrowser`와 `PaneHandle::status_segments()`는 UI가 드라이버 ID로 분기하지 않고 개체 스토리지 문서를 열고 프레임(chrome)을 입힐 수 있게 합니다.
+  - `Connection::root_section_source()`를 통해 도달하고 `DriverCapabilities::ROOT_SECTIONS`로 게이트되는 `RootSectionSource`(`crates/dbflux_core/src/connection/root_section/mod.rs`)는 사이드바에서 연결 루트에 표시되는 객체 종류를 선언합니다. 각 `RootSectionDef`는 안정적인 id, 레이블, 빈 상태 레이블, 폴더용 선택적 `RootSectionPresentation`, 항목이 열리는 `RootItemPresentation`, 연결 행 활성화 시 섹션을 여는지 여부, 항목 액션을 담습니다. `list_items`는 `next_page_token`이 있는 `RootSectionItem`의 `RootSectionPage`를 반환합니다. 노드 id `SchemaNodeId::RootSection`, `RootSectionItem`, `RootSectionLoadMore`는 섹션 id를 담으므로 새 객체 종류에 `SchemaNodeKind` 변형이 필요하지 않습니다. 하나의 범용 렌더러(`crates/dbflux_ui_sidebar/src/root_sections/`)가 폴더를 만들고, 프로필별로 목록을 캐시하며, 요청 시 다음 페이지를 불러옵니다. 워크스페이스는 선언된 프레젠테이션으로 활성화를 라우팅합니다(`ObjectContainerTable`은 컨테이너 테이블을, `ObjectBrowser`는 개체 브라우저를 엽니다). 레이블은 `LocalizedText`로, 호스트 i18n 카탈로그의 선택적 키와 필수 영어 대체 텍스트로 이루어지며 `dbflux_i18n::try_translate`로 해석됩니다. 각 `RootSectionAction`은 `ExecutionClassification`을 담습니다. `Destructive`, `Admin`, `AdminDestructive`는 확인을 요청하고, 모든 실행은 성공 여부와 관계없이 `Governance` 감사 행을 기록합니다. 외부 드라이버는 드라이버 RPC 1.9(`RootSections`, `RootSectionItems`, `ExecuteRootSectionAction`)로 이 seam에 도달합니다. S3가 참조 구현입니다. 항목이 개체 브라우저에서 열리는 하나의 `buckets` 섹션과 `AdminDestructive`로 분류된 Delete bucket 액션을 제공합니다.
   - UI에 새 동작이 필요하면 먼저 일반 코어 추상화를 추가합니다. `dbflux_ui`나 앱 대면 워크플로 코드에 `if driver_id == ...`를 추가하지 않습니다.
 ### 인증 및 접근 파이프라인
 
