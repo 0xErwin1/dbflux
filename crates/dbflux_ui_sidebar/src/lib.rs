@@ -14,6 +14,7 @@ mod render;
 mod render_footer;
 mod render_overlays;
 mod render_tree;
+mod root_sections;
 mod secret_store;
 mod selection;
 mod style_guardrails;
@@ -47,6 +48,8 @@ use gpui_component::list::ListItem;
 use gpui_component::tree::{TreeItem, TreeState, tree};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
+
+pub use root_sections::{RootSectionActionConfirm, RootSectionActionRequest};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarTab {
@@ -95,17 +98,21 @@ pub enum SidebarEvent {
         profile_id: Uuid,
         database: String,
     },
-    /// Connection root activated (double-click/Enter) for an object-storage
-    /// driver — opens the searchable buckets table for the connection.
-    OpenObjectStoreBuckets {
+    /// A driver-declared root section was activated: its folder, or the
+    /// connection row when the section opens on profile activation. The
+    /// workspace opens the section's declared presentation.
+    OpenRootSection {
         profile_id: Uuid,
+        section_id: String,
+        presentation: dbflux_core::RootSectionPresentation,
     },
-    /// A bucket row was activated (double-click/Enter) under an object-storage
-    /// connection. The workspace focuses the connection's buckets table on that
-    /// bucket until the object browser document exists.
-    OpenObjectStoreBucket {
+    /// An item of a driver-declared root section was activated. The
+    /// workspace opens the section's declared item presentation.
+    OpenRootSectionItem {
         profile_id: Uuid,
-        bucket: String,
+        section_id: String,
+        item_id: String,
+        presentation: dbflux_core::RootItemPresentation,
     },
     /// A store of a secret-store connection, or one of its paths, was
     /// activated. The workspace opens the store's document, at `path` when
@@ -612,6 +619,8 @@ pub enum ContextMenuAction {
     /// menu was opened on. Gated on `DatabaseCategory::Relational` — never a
     /// driver id; non-relational nodes surface an explicit "unsupported" toast.
     CompareSchema,
+    /// Run the driver-declared root section item action with this id.
+    RootSectionAction(String),
 }
 
 #[derive(Clone)]
@@ -751,6 +760,7 @@ impl ContextMenuAction {
             Self::ImportTables => Some(AppIcon::Download),
             Self::MigrateTables => Some(AppIcon::ArrowUpDown),
             Self::CompareSchema => Some(AppIcon::Columns),
+            Self::RootSectionAction(_) => None,
         }
     }
 }
@@ -1152,12 +1162,12 @@ pub struct Sidebar {
     /// A single fetch populates both `instance_metrics_cache` and
     /// `instance_inspectors_cache` because the catalog returns both in one round-trip.
     pending_instance_catalog_fetches: HashMap<Uuid, Task<()>>,
-    /// Session-scoped cache of the buckets listed for an object-storage
-    /// connection, keyed by profile_id. Populated on first expansion of the
-    /// connection node; buckets are listed flat, with no prefix recursion.
-    bucket_cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
-    /// In-flight `list_buckets` fetches, keyed by profile_id.
-    pending_bucket_fetches: HashMap<Uuid, Task<()>>,
+    /// Session-scoped cache of the driver-declared root sections of each
+    /// connected profile and the items listed for them. Populated on first
+    /// expansion of the connection node.
+    root_section_cache: root_sections::RootSectionCache,
+    /// In-flight root section declaration and page fetches.
+    pending_root_section_fetches: root_sections::PendingRootSectionFetches,
     /// Session-scoped cache of the listed path levels of hierarchical secret
     /// stores. Populated on first expansion of a store or path node.
     secret_path_cache: secret_store::SecretPathCache,
@@ -1189,6 +1199,9 @@ struct DeleteConfirmState {
     /// what to delete when that overlay emits `Confirmed`, but the generic
     /// inline confirm popup must NOT render alongside it.
     delegated_to_modal: bool,
+    /// When set, confirm runs this driver-declared root section action
+    /// instead of a delete.
+    root_action: Option<RootSectionActionRequest>,
 }
 
 /// Borrowed snapshot of the delete confirmation modal state, used by the
@@ -1201,6 +1214,9 @@ pub struct DeleteModalState<'a> {
     /// When `Some(n)`, the modal confirms a batch delete of `n` selected
     /// sidebar items. The renderer uses this to switch the message wording.
     pub multi_count: Option<usize>,
+    /// When set, the modal confirms a driver-declared root section action
+    /// and shows this copy instead of the delete wording.
+    pub root_action: Option<RootSectionActionConfirm>,
 }
 
 impl EventEmitter<SidebarEvent> for Sidebar {}
@@ -1469,8 +1485,8 @@ impl Sidebar {
             instance_metrics_cache: HashMap::new(),
             instance_inspectors_cache: HashMap::new(),
             pending_instance_catalog_fetches: HashMap::new(),
-            bucket_cache: HashMap::new(),
-            pending_bucket_fetches: HashMap::new(),
+            root_section_cache: HashMap::new(),
+            pending_root_section_fetches: HashMap::new(),
             secret_path_cache: HashMap::new(),
             pending_secret_path_fetches: HashMap::new(),
             connection_latencies: HashMap::new(),
@@ -1774,23 +1790,31 @@ impl Sidebar {
                         cx.notify();
                     });
 
-                    if self.profile_category(profile_id, cx)
-                        == Some(DatabaseCategory::ObjectStorage)
-                    {
-                        cx.emit(SidebarEvent::OpenObjectStoreBuckets { profile_id });
+                    if let Some(section_id) = self.profile_activation_section(profile_id) {
+                        self.activate_root_section(profile_id, &section_id, cx);
                     }
                 } else {
                     self.connect_to_profile(profile_id, cx);
                 }
             }
-            SchemaNodeId::BucketsFolder { profile_id } => {
-                cx.emit(SidebarEvent::OpenObjectStoreBuckets { profile_id });
+            SchemaNodeId::RootSection {
+                profile_id,
+                section_id,
+            } => {
+                self.activate_root_section(profile_id, &section_id, cx);
             }
-            SchemaNodeId::Bucket { profile_id, name } => {
-                cx.emit(SidebarEvent::OpenObjectStoreBucket {
-                    profile_id,
-                    bucket: name,
-                });
+            SchemaNodeId::RootSectionItem {
+                profile_id,
+                section_id,
+                item_id,
+            } => {
+                self.activate_root_section_item(profile_id, &section_id, &item_id, cx);
+            }
+            SchemaNodeId::RootSectionLoadMore {
+                profile_id,
+                section_id,
+            } => {
+                self.load_more_root_section_items(profile_id, &section_id, cx);
             }
             SchemaNodeId::SecretStore {
                 profile_id,
@@ -1974,7 +1998,11 @@ impl Sidebar {
 
         let node_kind = parse_node_kind(item_id);
 
-        if node_kind == SchemaNodeKind::CollectionChildrenMore && click_count == 1 {
+        if matches!(
+            node_kind,
+            SchemaNodeKind::CollectionChildrenMore | SchemaNodeKind::RootSectionLoadMore
+        ) && click_count == 1
+        {
             self.execute_item(item_id, cx);
             cx.notify();
             return;
@@ -1989,9 +2017,9 @@ impl Sidebar {
 
             let is_object_storage_root = match parse_node_id(item_id) {
                 Some(SchemaNodeId::Profile { profile_id }) => {
-                    self.profile_category(profile_id, cx) == Some(DatabaseCategory::ObjectStorage)
+                    self.profile_activation_section(profile_id).is_some()
                 }
-                Some(SchemaNodeId::BucketsFolder { .. })
+                Some(SchemaNodeId::RootSection { .. })
                 | Some(SchemaNodeId::SecretStore { .. })
                 | Some(SchemaNodeId::SecretPath { .. }) => true,
                 _ => false,

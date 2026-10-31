@@ -377,20 +377,6 @@ pub enum SchemaNodeId {
         profile_id: Uuid,
     },
 
-    /// Clickable leaf for a single container of an object-storage connection
-    /// (`DatabaseCategory::ObjectStorage`). Listed flat under the connection —
-    /// the prefix hierarchy stays inside the object browser document.
-    Bucket {
-        profile_id: Uuid,
-        name: String,
-    },
-
-    /// Folder that groups the containers of an object-storage connection.
-    /// Activating it opens the buckets table document.
-    BucketsFolder {
-        profile_id: Uuid,
-    },
-
     /// Folder of a driver-declared root section (`RootSectionDef::id`).
     RootSection {
         profile_id: Uuid,
@@ -496,8 +482,6 @@ pub enum SchemaNodeKind {
     InstanceInspectorLeaf,
     InstanceOverviewLeaf,
     InstanceFolder,
-    Bucket,
-    BucketsFolder,
     RootSection,
     RootSectionItem,
     RootSectionLoadMore,
@@ -575,8 +559,6 @@ impl SchemaNodeId {
             Self::InstanceInspectorLeaf { .. } => SchemaNodeKind::InstanceInspectorLeaf,
             Self::InstanceOverviewLeaf { .. } => SchemaNodeKind::InstanceOverviewLeaf,
             Self::InstanceFolder { .. } => SchemaNodeKind::InstanceFolder,
-            Self::Bucket { .. } => SchemaNodeKind::Bucket,
-            Self::BucketsFolder { .. } => SchemaNodeKind::BucketsFolder,
             Self::RootSection { .. } => SchemaNodeKind::RootSection,
             Self::RootSectionItem { .. } => SchemaNodeKind::RootSectionItem,
             Self::RootSectionLoadMore { .. } => SchemaNodeKind::RootSectionLoadMore,
@@ -652,8 +634,6 @@ impl SchemaNodeId {
             | Self::InstanceInspectorLeaf { profile_id, .. }
             | Self::InstanceOverviewLeaf { profile_id, .. }
             | Self::InstanceFolder { profile_id, .. }
-            | Self::Bucket { profile_id, .. }
-            | Self::BucketsFolder { profile_id }
             | Self::RootSection { profile_id, .. }
             | Self::RootSectionItem { profile_id, .. }
             | Self::RootSectionLoadMore { profile_id, .. }
@@ -727,8 +707,6 @@ const P_INST_INSPECTOR_LEAF: &str = "IIL";
 const P_INST_OVERVIEW_LEAF: &str = "IOL";
 const P_INST_FOLDER: &str = "INSF";
 // Object-storage bucket leaf.
-const P_BUCKET: &str = "BKT";
-const P_BUCKETS_FOLDER: &str = "BKTF";
 // Driver-declared root section nodes.
 const P_ROOT_SECTION: &str = "RSC";
 const P_ROOT_SECTION_ITEM: &str = "RSCI";
@@ -1390,23 +1368,6 @@ mod tests {
             metric_id: "pg.activity".into(),
         });
         roundtrip(SchemaNodeId::InstanceOverviewLeaf { profile_id: uuid });
-    }
-
-    /// T21: bucket leaves round-trip so the sidebar can parse the node ID it
-    /// rendered, including names containing dots and hyphens.
-    #[test]
-    fn bucket_nodes_round_trip_via_display_and_from_str() {
-        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
-
-        roundtrip(SchemaNodeId::Bucket {
-            profile_id: uuid,
-            name: "prod-logs".into(),
-        });
-        roundtrip(SchemaNodeId::Bucket {
-            profile_id: uuid,
-            name: "media.assets.example".into(),
-        });
-        roundtrip(SchemaNodeId::BucketsFolder { profile_id: uuid });
     }
 
     /// Root section nodes round-trip, including an item id that contains the
