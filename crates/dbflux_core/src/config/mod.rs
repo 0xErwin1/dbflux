@@ -1,6 +1,8 @@
 pub(crate) mod app;
 pub(crate) mod refresh_policy;
 pub(crate) mod scripts_directory;
+#[cfg(test)]
+mod tests;
 
 pub use app::{
     AppConfig, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
