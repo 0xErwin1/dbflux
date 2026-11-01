@@ -4,8 +4,10 @@
 //! The generic dropdown — its state machine, menu, triggers and the
 //! [`bolt::keymap::CommandSet`] key seam — lives in `bolt` and is
 //! re-exported at this crate's `controls` path so call sites keep compiling.
-//! What stays here is the product half: the `ConnectionEnvironment` badge,
-//! the keymap action the dropdowns answer, and the translated placeholder.
+//! What stays here is the product half: the `ConnectionEnvironment` badge
+//! and the keymap action the dropdowns answer. The translated placeholder
+//! is the text seam's job: `theme::init` installs the product's translator
+//! and the dropdown reads `bolt::strings`.
 
 use bolt::controls::{BadgeLabel, Dropdown};
 use bolt::keymap::{Command as BoltCommand, CommandSet, KeyCommand, attach_key_commands};
@@ -59,17 +61,16 @@ impl KeyCommand for RunCommand {
 
 /// Installs the seams the product's components read: the keymap's
 /// [`CommandSet`] (the `RunCommand` action and the semantic commands mapped
-/// onto the product's `Command` ids) and the translated placeholder.
+/// onto the product's `Command` ids).
 ///
-/// The set carries the dropdown's five menu keys *and* the vim leader
-/// commands the editors' hosts answer (`FocusSearch` in
-/// `vim/binding.rs`, the dialog save in the `VimHost` impls), so one table
-/// serves every component and a running app cannot have a dropdown with one
-/// table and an editor with another.
+/// The set carries the dropdown's five menu keys, the vim leader
+/// commands the editors' hosts answer (`FocusSearch` in `vim/binding.rs`,
+/// the dialog save in the `VimHost` impls) and the palette's new-tab
+/// confirm, so one table serves every component and a running app cannot
+/// have a dropdown with one table and an editor with another.
 ///
 /// Call it once at startup, before the first window; `theme::init` does. A
-/// component rendered before it runs answers no commands and draws no
-/// default placeholder.
+/// component rendered before it runs answers no commands.
 pub fn install_keymap_seams(cx: &mut App) {
     cx.set_global(
         CommandSet::new(
@@ -84,12 +85,10 @@ pub fn install_keymap_seams(cx: &mut App) {
         .map(BoltCommand::Cancel, Command::Cancel.id())
         // The vim leader commands (`vim/binding.rs`).
         .map(BoltCommand::FocusSearch, Command::FocusSearch.id())
-        .map(BoltCommand::Save, Command::SaveQuery.id()),
+        .map(BoltCommand::Save, Command::SaveQuery.id())
+        // The command palette's new-tab confirm (`command_palette.rs`).
+        .map(BoltCommand::OpenInNewTab, Command::RunQueryInNewTab.id()),
     );
-
-    cx.set_global(bolt::controls::DropdownStrings {
-        dropdown_placeholder: || dbflux_i18n::t!("controls.dropdown.placeholder").into(),
-    });
 }
 
 /// The keys the app keymap binds in the `Dropdown` context (see the dropdown

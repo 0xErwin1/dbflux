@@ -15,7 +15,7 @@ pub mod accessibility;
 pub mod font_settings;
 pub mod helpers;
 // Moved to `bolt`; re-exported at these paths so call sites keep compiling.
-pub use bolt::icon;
+pub use bolt::{command_palette, icon, keymap};
 pub mod semantic;
 // Moved to `bolt`; re-exported at these paths so call sites keep compiling.
 pub use bolt::{fonts, tokens, typography};

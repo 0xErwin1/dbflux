@@ -2008,6 +2008,7 @@ dependencies = [
 name = "bolt"
 version = "0.10.0-dev.0"
 dependencies = [
+ "fuzzy-matcher",
  "gpui-base",
  "gpui-component",
  "gpui-pre",

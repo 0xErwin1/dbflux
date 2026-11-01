@@ -23,6 +23,7 @@ pub mod data;
 pub mod accessibility;
 
 pub mod colors;
+pub mod command_palette;
 pub mod controls;
 pub mod density;
 pub mod fonts;
@@ -34,6 +35,7 @@ pub mod primitives;
 pub mod selector;
 pub mod semantic;
 pub mod shell;
+pub mod strings;
 pub mod theme;
 pub mod tokens;
 pub mod typography;

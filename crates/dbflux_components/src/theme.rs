@@ -49,11 +49,32 @@ pub fn init(cx: &mut App) {
     gpui_component::init(cx);
     crate::highlighting::register_languages();
     load_bundled_fonts(cx);
+    install_translator(cx);
     crate::controls::install_keymap_seams(cx);
     crate::vim::install_vim_seams(cx);
     crate::modals::modal::install_modal_seams(cx);
     crate::composites::install_shell_icons(cx);
     apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx);
+}
+
+/// The product's translator for `bolt::strings`, answered from the
+/// `dbflux_i18n` catalogue: the same lookups the `t!` macro performs, as
+/// plain functions so the components carry no catalogue dependency. The
+/// `%{name}` interpolation matches the macro's `replace` semantics exactly.
+fn install_translator(cx: &mut App) {
+    bolt::strings::install(
+        cx,
+        bolt::strings::Strings {
+            text: |key| dbflux_i18n::translate(key).into(),
+            text_with: |key, args| {
+                let mut text = dbflux_i18n::translate(key);
+                for (name, value) in args {
+                    text = text.replace(&format!("%{{{name}}}"), value);
+                }
+                text.into()
+            },
+        },
+    );
 }
 
 /// Initialize the theme, density and font globals from persisted settings.

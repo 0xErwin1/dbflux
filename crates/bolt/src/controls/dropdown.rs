@@ -53,20 +53,13 @@ impl DropdownItem {
     }
 }
 
-/// The default copy a dropdown draws, installed by the product.
-pub struct DropdownStrings {
-    /// The placeholder a dropdown with no selection and no explicit
-    /// `.placeholder` draws.
-    pub dropdown_placeholder: fn() -> SharedString,
-}
-
-impl gpui::Global for DropdownStrings {}
+/// The key of the placeholder a dropdown with no selection and no explicit
+/// `.placeholder` draws; the product's catalogue answers it through
+/// [`crate::strings`].
+const PLACEHOLDER_KEY: &str = "controls.dropdown.placeholder";
 
 fn dropdown_placeholder(cx: &App) -> SharedString {
-    match cx.try_global::<DropdownStrings>() {
-        Some(strings) => (strings.dropdown_placeholder)(),
-        None => SharedString::from(""),
-    }
+    crate::strings::text(cx, PLACEHOLDER_KEY)
 }
 
 /// A small uppercase tag on a tone wash, drawn inside a control's label row
@@ -214,7 +207,7 @@ fn menu_key(keys: &CommandSet, action_id: &str) -> Option<MenuKey> {
         Command::SelectPrev => Some(MenuKey::SelectPrev),
         Command::Execute | Command::ExpandCollapse => Some(MenuKey::Confirm),
         Command::Cancel => Some(MenuKey::Cancel),
-        Command::FocusSearch | Command::Save => None,
+        Command::FocusSearch | Command::Save | Command::OpenInNewTab => None,
     }
 }
 

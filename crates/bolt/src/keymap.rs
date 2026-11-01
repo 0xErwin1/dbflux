@@ -41,6 +41,9 @@ pub enum Command {
     /// Saves or confirms the surface hosting an editor, as its primary
     /// button does — the vim leader save command a dialog answers.
     Save,
+    /// Confirms the highlighted choice, opening it in a new tab or surface
+    /// instead of the current one — the palette's new-tab confirm.
+    OpenInNewTab,
 }
 
 /// The keymap action a product dispatches: the action id it carries names
@@ -178,6 +181,7 @@ mod tests {
             .map(Command::Cancel, "test_cancel")
             .map(Command::FocusSearch, "test_search")
             .map(Command::Save, "test_save")
+            .map(Command::OpenInNewTab, "test_open_in_new_tab")
     }
 
     #[test]
@@ -192,6 +196,7 @@ mod tests {
             (Command::Cancel, "test_cancel"),
             (Command::FocusSearch, "test_search"),
             (Command::Save, "test_save"),
+            (Command::OpenInNewTab, "test_open_in_new_tab"),
         ] {
             assert_eq!(set.action_id(command), Some(action_id), "{command:?}");
             assert_eq!(set.command(action_id), Some(command), "{action_id}");

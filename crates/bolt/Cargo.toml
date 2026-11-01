@@ -23,6 +23,7 @@ test-support = ["gpui/test-support"]
 gpui.workspace = true
 gpui-component.workspace = true
 gpui-base = { path = "../../vendor/gpui-base" }
+fuzzy-matcher.workspace = true
 log.workspace = true
 # The syntax-recoloring helpers restyle gpui-component's private style fields
 # through their serde representation.

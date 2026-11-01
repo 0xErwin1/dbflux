@@ -8,8 +8,7 @@ mod dropdown;
 
 pub use bolt::controls::{
     BadgeLabel, Button, ButtonFills, ButtonSize, ButtonVariant, Checkbox, Dropdown,
-    DropdownDismissed, DropdownItem, DropdownSelectionChanged, DropdownStrings, button_colors,
-    is_activation_key,
+    DropdownDismissed, DropdownItem, DropdownSelectionChanged, button_colors, is_activation_key,
 };
 pub use bolt::controls::{
     CodeActionProvider, CompletionProvider, GpuiInput, INPUT_CONTEXT, Input, InputContentType,
