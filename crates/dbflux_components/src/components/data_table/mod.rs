@@ -5,6 +5,7 @@ mod events;
 pub mod model;
 mod record;
 pub mod selection;
+pub mod source;
 mod state;
 mod table;
 mod theme;

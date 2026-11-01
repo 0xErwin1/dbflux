@@ -12,6 +12,7 @@
 #![recursion_limit = "512"]
 
 pub mod brand;
+pub mod data;
 
 /// Accessibility checks for rendered surfaces: the accessible-name helpers a
 /// surface test asserts with. Gated like the product crates' `test-support`
