@@ -7,6 +7,8 @@ use gpui::{
 };
 
 use super::*;
+use crate::accessibility::{FrameCapture, accessibility_node, accessible_name};
+use gpui::Role;
 
 #[test]
 fn shortcut_keys_join_into_one_keycap() {
@@ -176,6 +178,143 @@ fn the_bell_draws_its_badge_only_with_something_unread(cx: &mut TestAppContext) 
     window.simulate_click(bell.center(), Modifiers::default());
     window.run_until_parked();
     assert_eq!(opened.bell_clicks.get(), 1);
+}
+
+#[gpui::test]
+fn the_search_field_is_a_button_and_its_keycap_reads_the_shortcut(cx: &mut TestAppContext) {
+    let opened = open(0, cx);
+    let window = opened.window;
+    let capture = FrameCapture::observe(window);
+    let frame = capture.frame(window);
+
+    let field = accessibility_node(&frame, "search").expect("field node");
+    assert_eq!(field.role(), Role::Button);
+    assert_eq!(
+        accessible_name(&frame, "search").as_deref(),
+        Some("Search or run a command")
+    );
+    assert_eq!(
+        accessible_name(&frame, "search-key").as_deref(),
+        Some("Ctrl K")
+    );
+}
+
+#[gpui::test]
+fn the_bell_badge_reads_the_count(cx: &mut TestAppContext) {
+    let opened = open(2, cx);
+    let window = opened.window;
+    let capture = FrameCapture::observe(window);
+    let frame = capture.frame(window);
+
+    assert_eq!(
+        accessible_name(&frame, "notifications-badge").as_deref(),
+        Some("2")
+    );
+}
+
+#[gpui::test]
+fn the_bell_badge_takes_the_id_the_product_chooses(cx: &mut TestAppContext) {
+    struct CustomBadge;
+
+    impl Render for CustomBadge {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().p_4().child(
+                NotificationBell::new("bell", "Notifications", 5)
+                    .urgency(BellUrgency::Info)
+                    .badge_id("inbox-badge"),
+            )
+        }
+    }
+
+    open(0, cx);
+    let (_view, window) = cx.add_window_view(|_, _| CustomBadge);
+    window.run_until_parked();
+
+    assert!(window.debug_bounds("inbox-badge").is_some());
+    assert!(window.debug_bounds("notifications-badge").is_none());
+}
+
+#[gpui::test]
+fn the_bell_is_a_button_named_by_its_label(cx: &mut TestAppContext) {
+    let opened = open(0, cx);
+    let window = opened.window;
+    let capture = FrameCapture::observe(window);
+    let frame = capture.frame(window);
+
+    let bell = accessibility_node(&frame, "bell").expect("bell node");
+    assert_eq!(bell.role(), Role::Button);
+    assert_eq!(
+        accessible_name(&frame, "bell").as_deref(),
+        Some("Notifications")
+    );
+}
+
+#[gpui::test]
+fn a_bell_without_a_click_handler_is_still_a_button(cx: &mut TestAppContext) {
+    struct BareBell;
+
+    impl Render for BareBell {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .p_4()
+                .child(NotificationBell::new("bell", "Notifications", 0))
+        }
+    }
+
+    open(0, cx);
+    let (_view, window) = cx.add_window_view(|_, _| BareBell);
+    window.run_until_parked();
+    let capture = FrameCapture::observe(window);
+    let frame = capture.frame(window);
+
+    let bell = accessibility_node(&frame, "bell").expect("bell node");
+    assert_eq!(bell.role(), Role::Button);
+    assert_eq!(
+        accessible_name(&frame, "bell").as_deref(),
+        Some("Notifications")
+    );
+}
+
+struct NarrowBar {
+    shrinkable: bool,
+}
+
+impl Render for NarrowBar {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().p_4().child(
+            div().flex().w(gpui::px(240.0)).child(
+                CommandSearch::new("search", "Search or run a command")
+                    .shortcut(["Ctrl", "K"])
+                    .shrinkable(self.shrinkable),
+            ),
+        )
+    }
+}
+
+fn search_width(shrinkable: bool, cx: &mut TestAppContext) -> gpui::Pixels {
+    open(0, cx);
+    let (_view, window) = cx.add_window_view(move |_, _| NarrowBar { shrinkable });
+    window.run_until_parked();
+
+    window
+        .debug_bounds("search")
+        .expect("the field is laid out")
+        .size
+        .width
+}
+
+#[gpui::test]
+fn a_shrinkable_search_field_fits_a_narrow_title_bar(cx: &mut TestAppContext) {
+    let width = search_width(true, cx);
+
+    assert!(width <= gpui::px(240.0), "width {width:?}");
+    assert!(width >= gpui::px(120.0), "width {width:?}");
+}
+
+#[gpui::test]
+fn the_search_field_keeps_its_width_by_default(cx: &mut TestAppContext) {
+    assert_eq!(search_width(false, cx), gpui::px(420.0));
 }
 
 #[gpui::test]

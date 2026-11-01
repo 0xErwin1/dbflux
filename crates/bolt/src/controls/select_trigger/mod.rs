@@ -3,7 +3,9 @@
 //! draws the same trigger a [`Dropdown`](crate::controls::Dropdown) draws.
 
 use gpui::prelude::*;
-use gpui::{App, ClickEvent, Div, ElementId, Hsla, Role, SharedString, Stateful, Window, div};
+use gpui::{
+    App, ClickEvent, Div, ElementId, FontWeight, Hsla, Role, SharedString, Stateful, Window, div,
+};
 use gpui_component::{ActiveTheme, IconName};
 
 use crate::icon::IconSource;
@@ -11,9 +13,42 @@ use crate::primitives::{Chamfer, ChamferRing, Icon};
 use crate::selector::id_selector;
 use crate::tokens::{ChamferCut, ChromeColors, Fields};
 
+/// How the label of a select trigger is drawn; every unset part follows
+/// the field.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SelectLabelStyle {
+    pub color: Option<Hsla>,
+    pub weight: Option<FontWeight>,
+    pub family: Option<SharedString>,
+}
+
+/// The truncated label of a select field in `style`. A disabled field keeps
+/// `faded_color`, the color it draws its text in.
+pub(crate) fn select_label(
+    label: SharedString,
+    style: &SelectLabelStyle,
+    disabled: bool,
+    faded_color: Hsla,
+) -> Div {
+    let color = style
+        .color
+        .map(|color| if disabled { faded_color } else { color });
+
+    div()
+        .flex_1()
+        .truncate()
+        .when_some(color, |label, color| label.text_color(color))
+        .when_some(style.weight, |label, weight| label.font_weight(weight))
+        .when_some(style.family.clone(), |label, family| {
+            label.font_family(family)
+        })
+        .child(label)
+}
+
 /// What the field of a select trigger draws.
 pub(crate) struct SelectField {
     pub label: SharedString,
+    pub label_style: SelectLabelStyle,
     pub leading_icon: Option<IconSource>,
     pub disabled: bool,
     /// The focus ring color, when the ring shows.
@@ -70,7 +105,12 @@ pub(crate) fn select_field(trigger: Stateful<Div>, field: SelectField, cx: &App)
                     .color(theme.muted_foreground),
             )
         })
-        .child(div().flex_1().truncate().child(field.label))
+        .child(select_label(
+            field.label,
+            &field.label_style,
+            field.disabled,
+            text_color,
+        ))
         .child(
             Icon::new(IconName::ChevronDown)
                 .size(Fields::CHEVRON)
@@ -90,6 +130,7 @@ pub struct SelectTrigger {
     label: SharedString,
     aria_label: Option<SharedString>,
     leading_icon: Option<IconSource>,
+    label_style: SelectLabelStyle,
     disabled: bool,
     ring: Option<Hsla>,
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
@@ -102,6 +143,7 @@ impl SelectTrigger {
             label: label.into(),
             aria_label: None,
             leading_icon: None,
+            label_style: SelectLabelStyle::default(),
             disabled: false,
             ring: None,
             on_click: None,
@@ -116,6 +158,25 @@ impl SelectTrigger {
 
     pub fn leading_icon(mut self, icon: impl Into<IconSource>) -> Self {
         self.leading_icon = Some(icon.into());
+        self
+    }
+
+    /// Draws the label in `color` instead of the field text color (an HTTP
+    /// method in its color). A disabled trigger keeps the faded color.
+    pub fn label_color(mut self, color: Hsla) -> Self {
+        self.label_style.color = Some(color);
+        self
+    }
+
+    /// Draws the label at `weight` instead of the field weight.
+    pub fn label_weight(mut self, weight: FontWeight) -> Self {
+        self.label_style.weight = Some(weight);
+        self
+    }
+
+    /// Draws the label in `family` instead of the interface face.
+    pub fn label_font_family(mut self, family: impl Into<SharedString>) -> Self {
+        self.label_style.family = Some(family.into());
         self
     }
 
@@ -165,6 +226,7 @@ impl RenderOnce for SelectTrigger {
             trigger,
             SelectField {
                 label: self.label,
+                label_style: self.label_style,
                 leading_icon: self.leading_icon,
                 disabled,
                 ring: self.ring,

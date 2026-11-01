@@ -125,6 +125,8 @@ pub struct SegmentedControl {
     focused: bool,
     focused_id: Option<SharedString>,
     group: Option<SharedString>,
+    track_id: Option<SharedString>,
+    aria_label: Option<SharedString>,
     tabs: bool,
     on_select: Arc<dyn Fn(&SharedString, &mut Window, &mut App)>,
 }
@@ -155,6 +157,8 @@ impl SegmentedControl {
             focused: false,
             focused_id: None,
             group: None,
+            track_id: None,
+            aria_label: None,
             tabs: false,
             on_select: Arc::new(on_select),
         }
@@ -187,6 +191,22 @@ impl SegmentedControl {
     /// kebab-case name that is unique in the window, such as `theme`.
     pub fn group(mut self, group: impl Into<SharedString>) -> Self {
         self.group = Some(group.into());
+        self
+    }
+
+    /// Element and accessibility id of the track instead of
+    /// `segmented-<group>`; the segment ids keep the group. Unique in the
+    /// window.
+    pub fn track_id(mut self, id: impl Into<SharedString>) -> Self {
+        self.track_id = Some(id.into());
+        self
+    }
+
+    /// Accessible name of the track (the radio group or tab list). Only a
+    /// control named with [`Self::group`] has an accessibility node to carry
+    /// it.
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.aria_label = Some(label.into());
         self
     }
 }
@@ -293,10 +313,13 @@ impl RenderOnce for SegmentedControl {
                 .into_any_element()
         });
 
-        let track_id = group
-            .as_deref()
-            .map(segmented_group_id)
-            .unwrap_or_else(|| SharedString::from("seg-ctl-track"));
+        let track_label = self.aria_label;
+        let track_id = self.track_id.unwrap_or_else(|| {
+            group
+                .as_deref()
+                .map(segmented_group_id)
+                .unwrap_or_else(|| SharedString::from("seg-ctl-track"))
+        });
 
         let track_element_id = ElementId::from(track_id.clone());
 
@@ -311,6 +334,7 @@ impl RenderOnce for SegmentedControl {
                         Role::RadioGroup
                     })
                     .accessibility_id(track_id)
+                    .when_some(track_label, |track, label| track.aria_label(label))
             })
             .relative()
             .flex()
@@ -785,5 +809,40 @@ mod tests {
         assert_eq!(super::stepped_segment(&ids, "detached", 1), None);
         assert_eq!(super::stepped_segment(&ids, "blocking", -1), None);
         assert_eq!(super::stepped_segment(&ids, "missing", 1), None);
+    }
+
+    fn tracks(_cx: &mut App) -> gpui::AnyElement {
+        div()
+            .child(
+                SegmentedControl::new(items(), "prefer", |_, _, _| {})
+                    .group("ssl")
+                    .track_id("request-tabs")
+                    .aria_label("Request sections"),
+            )
+            .child(SegmentedControl::new(items(), "prefer", |_, _, _| {}).group("mode"))
+            .into_any_element()
+    }
+
+    #[gpui::test]
+    fn the_track_takes_the_id_and_name_its_caller_sets(cx: &mut TestAppContext) {
+        use crate::accessibility::{accessibility_node, accessible_name, render_frame};
+
+        let frame = render_frame(cx, tracks);
+
+        let track = accessibility_node(&frame, "request-tabs").expect("track node");
+        assert_eq!(track.role(), Role::RadioGroup);
+        assert_eq!(
+            accessible_name(&frame, "request-tabs").as_deref(),
+            Some("Request sections")
+        );
+        assert!(accessibility_node(&frame, "segmented-ssl").is_none());
+        assert!(
+            accessibility_node(&frame, "segmented-ssl-allow").is_some(),
+            "segment ids keep the group"
+        );
+        assert!(
+            accessibility_node(&frame, "segmented-mode").is_some(),
+            "the default track id is unchanged"
+        );
     }
 }

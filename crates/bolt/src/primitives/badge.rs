@@ -59,6 +59,7 @@ pub struct Badge {
     label: SharedString,
     icon: Option<IconSource>,
     id: Option<ElementId>,
+    aria_label: Option<SharedString>,
 }
 
 impl Badge {
@@ -68,7 +69,16 @@ impl Badge {
             label: label.into(),
             icon: None,
             id: None,
+            aria_label: None,
         }
+    }
+
+    /// Accessible name of the badge instead of its label, for a badge whose
+    /// text needs context (`3` read as `3 headers`). It needs [`Self::id`]:
+    /// a badge without an id has no accessibility node to carry it.
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.aria_label = Some(label.into());
+        self
     }
 
     /// Sets the element id (and debug selector), so tests and automation
@@ -90,6 +100,7 @@ impl RenderOnce for Badge {
         let theme = cx.theme();
         let fill = self.tone.fill(theme, Feedback::BADGE_FILL_ALPHA);
         let text_color = self.tone.text_color(theme);
+        let accessible_name = self.aria_label.unwrap_or_else(|| self.label.clone());
 
         let badge = div()
             .relative()
@@ -112,7 +123,7 @@ impl RenderOnce for Badge {
                     .child(self.label),
             );
 
-        crate::selector::with_optional_id(badge, self.id)
+        crate::selector::with_optional_label(badge, self.id, accessible_name)
     }
 }
 
@@ -145,5 +156,31 @@ mod tests {
             let text = tone.text_color(&theme);
             assert_eq!(tone.fill(&theme, 0.14), text.opacity(0.14));
         }
+    }
+
+    fn badges(_cx: &mut App) -> gpui::AnyElement {
+        div()
+            .child(Badge::new("GET", BadgeTone::Info).id("method"))
+            .child(
+                Badge::new("3", BadgeTone::Neutral)
+                    .id("count")
+                    .aria_label("3 headers"),
+            )
+            .into_any_element()
+    }
+
+    #[gpui::test]
+    fn a_badge_with_an_id_is_a_label_named_by_its_text(cx: &mut gpui::TestAppContext) {
+        use crate::accessibility::{accessibility_node, accessible_name, render_frame};
+
+        let frame = render_frame(cx, badges);
+
+        let method = accessibility_node(&frame, "method").expect("badge node");
+        assert_eq!(method.role(), gpui::Role::Label);
+        assert_eq!(accessible_name(&frame, "method").as_deref(), Some("GET"));
+        assert_eq!(
+            accessible_name(&frame, "count").as_deref(),
+            Some("3 headers")
+        );
     }
 }

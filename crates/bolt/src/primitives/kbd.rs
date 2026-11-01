@@ -88,6 +88,7 @@ pub struct Kbd {
     keys: Vec<SharedString>,
     tone: KbdTone,
     id: Option<ElementId>,
+    aria_label: Option<SharedString>,
 }
 
 impl Kbd {
@@ -97,6 +98,7 @@ impl Kbd {
             keys: vec![key_label(&key.into())],
             tone: KbdTone::Default,
             id: None,
+            aria_label: None,
         }
     }
 
@@ -124,6 +126,7 @@ impl Kbd {
             keys,
             tone: KbdTone::Default,
             id: None,
+            aria_label: None,
         }
     }
 
@@ -136,6 +139,15 @@ impl Kbd {
     /// automation find it by name.
     pub fn id(mut self, id: impl Into<ElementId>) -> Self {
         self.id = Some(id.into());
+        self
+    }
+
+    /// Accessible label of the key row, read by assistive technology and
+    /// automation, instead of the keys it draws (joined by `+`). It needs
+    /// [`Self::id`]: a row without an id has no accessibility node to carry
+    /// it.
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.aria_label = Some(label.into());
         self
     }
 
@@ -181,6 +193,9 @@ impl RenderOnce for Kbd {
         let separator_color = cx.theme().muted_foreground;
         let key_count = self.keys.len();
         let tone = self.tone;
+        let accessible_name = self
+            .aria_label
+            .unwrap_or_else(|| self.keys.join("+").into());
 
         let mut row = div().flex().items_center().gap(KbdMetrics::CHORD_GAP);
 
@@ -199,7 +214,7 @@ impl RenderOnce for Kbd {
             }
         }
 
-        crate::selector::with_optional_id(row, self.id)
+        crate::selector::with_optional_label(row, self.id, accessible_name)
     }
 }
 
@@ -236,6 +251,30 @@ mod tests {
         assert_eq!(key_label("+"), "+");
         assert_eq!(key_label("Ctrl +"), "Ctrl +");
         assert_eq!(Kbd::chord(["g", "g"]).keys(), ["g", "g"]);
+    }
+
+    fn keycaps(_cx: &mut App) -> gpui::AnyElement {
+        div()
+            .child(Kbd::new("Ctrl n").id("single"))
+            .child(Kbd::chord(["Ctrl", "Shift", "p"]).id("chord"))
+            .child(Kbd::new("Esc").id("named").aria_label("Close"))
+            .into_any_element()
+    }
+
+    #[gpui::test]
+    fn a_keycap_with_an_id_is_named_by_the_keys_it_draws(cx: &mut gpui::TestAppContext) {
+        use crate::accessibility::{accessibility_node, accessible_name, render_frame};
+
+        let frame = render_frame(cx, keycaps);
+
+        let single = accessibility_node(&frame, "single").expect("keycap node");
+        assert_eq!(single.role(), gpui::Role::Label);
+        assert_eq!(accessible_name(&frame, "single").as_deref(), Some("Ctrl N"));
+        assert_eq!(
+            accessible_name(&frame, "chord").as_deref(),
+            Some("Ctrl+Shift+P")
+        );
+        assert_eq!(accessible_name(&frame, "named").as_deref(), Some("Close"));
     }
 
     #[test]

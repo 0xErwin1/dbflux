@@ -10,6 +10,37 @@ use gpui::{
 use super::{SplitAxis, Splitter};
 use crate::tokens::SplitterMetrics;
 
+fn named_splitter(_cx: &mut gpui::App) -> gpui::AnyElement {
+    div()
+        .flex()
+        .w(px(400.0))
+        .h(px(200.0))
+        .child(
+            Splitter::new("split", SplitAxis::Horizontal)
+                .aria_label("Resize request and response")
+                .value_percent(62.4),
+        )
+        .into_any_element()
+}
+
+#[gpui::test]
+fn the_gutter_reads_its_name_and_value_in_percent(cx: &mut TestAppContext) {
+    use crate::accessibility::{accessibility_node, accessible_name, render_frame};
+
+    let frame = render_frame(cx, named_splitter);
+
+    let node = accessibility_node(&frame, "split").expect("splitter node");
+    assert_eq!(node.role(), gpui::Role::Splitter);
+    assert_eq!(
+        accessible_name(&frame, "split").as_deref(),
+        Some("Resize request and response")
+    );
+    assert_eq!(node.value(), Some("62%"));
+    assert_eq!(node.numeric_value(), Some(62.4));
+    assert_eq!(node.min_numeric_value(), Some(0.0));
+    assert_eq!(node.max_numeric_value(), Some(100.0));
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Seen {
     Drag(Pixels),

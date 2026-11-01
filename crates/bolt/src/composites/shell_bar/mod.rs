@@ -3,8 +3,8 @@
 
 use gpui::prelude::*;
 use gpui::{
-    App, ClickEvent, Div, ElementId, FocusHandle, FontWeight, Hsla, KeyDownEvent, SharedString,
-    Stateful, Window, div,
+    App, ClickEvent, Div, ElementId, FocusHandle, FontWeight, Hsla, KeyDownEvent, Role,
+    SharedString, Stateful, Window, div,
 };
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{ActiveTheme, IconName};
@@ -50,6 +50,8 @@ pub(crate) fn count_badge(
     text: SharedString,
     (fill, text_color, edge): (Hsla, Hsla, Option<Hsla>),
 ) -> Stateful<Div> {
+    // gpui emits no accessibility node for a div without a role, so the
+    // badge takes one to carry the count as its label.
     let id = id.into();
     let mut badge_shape = Chamfer::new(ChamferCut::KEYCAP).fill(fill);
     if let Some(edge) = edge {
@@ -59,6 +61,8 @@ pub(crate) fn count_badge(
     div()
         .debug_selector(crate::selector::id_selector(&id))
         .id(id)
+        .role(Role::Label)
+        .aria_label(text.clone())
         .absolute()
         .top(ShellMetrics::BELL_BADGE_OFFSET)
         .right(ShellMetrics::BELL_BADGE_OFFSET)
@@ -91,6 +95,7 @@ pub struct CommandSearch {
     shortcut: Option<SharedString>,
     focus_handle: Option<FocusHandle>,
     on_open: Option<ActivateHandler>,
+    shrinkable: bool,
 }
 
 impl CommandSearch {
@@ -101,7 +106,17 @@ impl CommandSearch {
             shortcut: None,
             focus_handle: None,
             on_open: None,
+            shrinkable: false,
         }
+    }
+
+    /// Lets the field shrink below its 420 px width, down to
+    /// `ShellMetrics::COMMAND_SEARCH_MIN_WIDTH`, when the title bar is
+    /// narrow; the placeholder truncates with an ellipsis. Off by default:
+    /// the field keeps its width and never shrinks.
+    pub fn shrinkable(mut self, shrinkable: bool) -> Self {
+        self.shrinkable = shrinkable;
+        self
     }
 
     /// The palette's chord, shown as one keycap ("Ctrl Shift P").
@@ -163,11 +178,20 @@ impl RenderOnce for CommandSearch {
             .debug_selector(crate::selector::id_selector(&self.id))
             .id(self.id)
             .key_context(COMMAND_SEARCH_KEY_CONTEXT)
+            .role(Role::Button)
             .aria_label(self.placeholder.clone())
             .relative()
             .flex()
-            .flex_shrink_0()
             .w(ShellMetrics::COMMAND_SEARCH_WIDTH)
+            .map(|field| {
+                if self.shrinkable {
+                    field
+                        .flex_shrink(1.0)
+                        .min_w(ShellMetrics::COMMAND_SEARCH_MIN_WIDTH)
+                } else {
+                    field.flex_shrink_0()
+                }
+            })
             .items_center()
             .gap(ShellMetrics::COMMAND_SEARCH_GAP)
             .h(ShellMetrics::COMMAND_SEARCH_HEIGHT)
@@ -191,7 +215,7 @@ impl RenderOnce for CommandSearch {
                     .child(self.placeholder),
             )
             .when_some(self.shortcut, |field, shortcut| {
-                field.child(Kbd::new(shortcut).id(key_id))
+                field.child(Kbd::new(shortcut.clone()).id(key_id).aria_label(shortcut))
             })
             .when_some(self.focus_handle, |field, handle| {
                 field.track_focus(&handle)
@@ -213,6 +237,9 @@ impl RenderOnce for CommandSearch {
             })
     }
 }
+
+/// Default element id of the bell's count badge.
+const NOTIFICATIONS_BADGE_ID: &str = "notifications-badge";
 
 /// Which badge the bell wears: the most urgent unread notification decides
 /// it.
@@ -240,6 +267,7 @@ pub struct NotificationBell {
     count: usize,
     urgency: BellUrgency,
     open: bool,
+    badge_id: ElementId,
     on_click: Option<ClickHandler>,
 }
 
@@ -251,8 +279,15 @@ impl NotificationBell {
             count,
             urgency: BellUrgency::None,
             open: false,
+            badge_id: NOTIFICATIONS_BADGE_ID.into(),
             on_click: None,
         }
+    }
+
+    /// Element id of the count badge; `notifications-badge` unless set.
+    pub fn badge_id(mut self, id: impl Into<ElementId>) -> Self {
+        self.badge_id = id.into();
+        self
     }
 
     pub fn urgency(mut self, urgency: BellUrgency) -> Self {
@@ -330,6 +365,7 @@ impl RenderOnce for NotificationBell {
         div()
             .debug_selector(crate::selector::id_selector(&self.id))
             .id(self.id)
+            .role(Role::Button)
             .aria_label(self.label)
             .relative()
             .flex()
@@ -346,7 +382,7 @@ impl RenderOnce for NotificationBell {
                     .color(icon_color),
             )
             .when_some(badge, |bell, (text, colors)| {
-                bell.child(count_badge("notifications-badge", text, colors))
+                bell.child(count_badge(self.badge_id, text, colors))
             })
             .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
             .when_some(self.on_click, |bell, handler| bell.on_click(handler))

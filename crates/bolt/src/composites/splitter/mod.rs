@@ -6,7 +6,8 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    App, ElementId, FocusHandle, KeyDownEvent, Orientation, Pixels, Render, Role, Window, div,
+    App, ElementId, FocusHandle, KeyDownEvent, Orientation, Pixels, Render, Role, SharedString,
+    Window, div,
 };
 use gpui_component::ActiveTheme;
 
@@ -71,6 +72,8 @@ pub struct Splitter {
     step: Pixels,
     active: bool,
     focus_handle: Option<FocusHandle>,
+    aria_label: Option<SharedString>,
+    value_percent: Option<f64>,
     on_drag: Option<PositionHandler>,
     on_step: Option<PositionHandler>,
     on_toggle_collapse: Option<ToggleHandler>,
@@ -84,6 +87,8 @@ impl Splitter {
             step: SplitterMetrics::KEY_STEP,
             active: false,
             focus_handle: None,
+            aria_label: None,
+            value_percent: None,
             on_drag: None,
             on_step: None,
             on_toggle_collapse: None,
@@ -100,6 +105,20 @@ impl Splitter {
     /// under way.
     pub fn active(mut self, active: bool) -> Self {
         self.active = active;
+        self
+    }
+
+    /// Accessible name of the gutter, saying which panes it resizes
+    /// (`Resize request and response`).
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.aria_label = Some(label.into());
+        self
+    }
+
+    /// Position of the gutter as the share of the split held by the first
+    /// pane, `0.0..=100.0`, reported as the splitter's value (`62%`).
+    pub fn value_percent(mut self, percent: f64) -> Self {
+        self.value_percent = Some(percent);
         self
     }
 
@@ -171,6 +190,16 @@ impl RenderOnce for Splitter {
             .aria_orientation(match axis {
                 SplitAxis::Horizontal => Orientation::Vertical,
                 SplitAxis::Vertical => Orientation::Horizontal,
+            })
+            .when_some(self.aria_label.clone(), |gutter, label| {
+                gutter.aria_label(label)
+            })
+            .when_some(self.value_percent, |gutter, percent| {
+                gutter
+                    .aria_numeric_value(percent)
+                    .aria_min_numeric_value(0.0)
+                    .aria_max_numeric_value(100.0)
+                    .aria_value(format!("{percent:.0}%"))
             })
             .flex()
             .flex_none()

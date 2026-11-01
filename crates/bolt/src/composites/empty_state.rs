@@ -2,7 +2,7 @@
 //! one sentence, and the two or three keys that get the user started.
 
 use gpui::prelude::*;
-use gpui::{App, ElementId, FontWeight, Hsla, SharedString, Window, div};
+use gpui::{AnyElement, App, ElementId, FontWeight, Hsla, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 
 use crate::controls::Button;
@@ -115,7 +115,44 @@ impl EmptyState {
         self
     }
 
-    fn render_action(action: EmptyStateAction, muted: Hsla) -> gpui::Div {
+    /// `part` under `<id>-<suffix>`, named by `text`, when the state has an
+    /// id; unchanged otherwise.
+    fn named_part(
+        part: gpui::Div,
+        id: Option<&ElementId>,
+        suffix: &str,
+        text: SharedString,
+    ) -> AnyElement {
+        let id = id.map(|id| ElementId::from(SharedString::from(format!("{id}-{suffix}"))));
+        crate::selector::with_optional_label(part, id, text)
+    }
+
+    /// One action row, the `index`th of the state; its label is
+    /// `<id>-action-<index>`. Its keycaps are numbered from `first_key`
+    /// across the whole state, so `<id>-key-<n>` stays unique.
+    fn render_action(
+        action: EmptyStateAction,
+        muted: Hsla,
+        id: Option<&ElementId>,
+        index: usize,
+        first_key: usize,
+    ) -> gpui::Div {
+        let keys = action
+            .keys
+            .into_iter()
+            .enumerate()
+            .map(move |(index, key)| {
+                let keycap = Kbd::new(key);
+                match id {
+                    Some(id) => keycap.id(SharedString::from(format!(
+                        "{id}-key-{}",
+                        first_key + index
+                    ))),
+                    None => keycap,
+                }
+            })
+            .collect::<Vec<_>>();
+
         div()
             .flex()
             .items_center()
@@ -126,8 +163,17 @@ impl EmptyState {
                     .size(NavigationMetrics::EMPTY_ACTION_ICON)
                     .color(muted),
             )
-            .child(div().flex_1().min_w_0().truncate().child(action.label))
-            .children(action.keys.into_iter().map(Kbd::new))
+            .child(Self::named_part(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(action.label.clone()),
+                id,
+                &format!("action-{index}"),
+                action.label,
+            ))
+            .children(keys)
     }
 }
 
@@ -141,11 +187,18 @@ impl RenderOnce for EmptyState {
             EmptyStateTone::Danger => (theme.danger, theme.danger),
         };
 
+        let id = self.id;
         let has_actions = !self.actions.is_empty();
+        let mut key_count = 0;
         let actions: Vec<gpui::Div> = self
             .actions
             .into_iter()
-            .map(|action| Self::render_action(action, muted))
+            .enumerate()
+            .map(|(index, action)| {
+                let first_key = key_count;
+                key_count += action.keys.len();
+                Self::render_action(action, muted, id.as_ref(), index, first_key)
+            })
             .collect();
 
         let content = div()
@@ -172,20 +225,26 @@ impl RenderOnce for EmptyState {
                     .color(icon_color),
             )
             .when_some(self.title, |content, title| {
-                content.child(
+                content.child(Self::named_part(
                     div()
                         .text_size(NavigationMetrics::EMPTY_TITLE_FONT)
                         .font_weight(FontWeight::BOLD)
                         .text_color(ChromeColors::strong(theme))
-                        .child(title),
-                )
+                        .child(title.clone()),
+                    id.as_ref(),
+                    "title",
+                    title,
+                ))
             })
-            .child(
+            .child(Self::named_part(
                 div()
                     .text_size(NavigationMetrics::EMPTY_BODY_FONT)
                     .text_color(message_color)
-                    .child(self.message),
-            )
+                    .child(self.message.clone()),
+                id.as_ref(),
+                "text",
+                self.message,
+            ))
             .when_some(self.primary_action, |content, button| content.child(button))
             .when(has_actions, |content| {
                 content.child(
@@ -207,7 +266,7 @@ impl RenderOnce for EmptyState {
             .justify_center()
             .child(content);
 
-        crate::selector::with_optional_id(placeholder, self.id)
+        crate::selector::with_optional_id(placeholder, id)
     }
 }
 
@@ -291,6 +350,64 @@ mod tests {
         window.simulate_click(button.center(), Modifiers::default());
         window.run_until_parked();
         assert_eq!(clicks.get(), 1);
+    }
+
+    fn titled_state(_cx: &mut gpui::App) -> gpui::AnyElement {
+        let folder = IconSource::Svg("icons/folder.svg".into());
+
+        EmptyState::new(folder.clone(), "No requests yet")
+            .id("empty")
+            .title("Nothing here")
+            .action(EmptyStateAction::new(
+                folder.clone(),
+                "New request",
+                ["Ctrl n"],
+            ))
+            .action(EmptyStateAction::new(folder, "Import", ["Ctrl i"]))
+            .into_any_element()
+    }
+
+    #[gpui::test]
+    fn the_title_text_and_keycaps_of_a_named_state_carry_their_text(cx: &mut TestAppContext) {
+        use crate::accessibility::{accessible_name, render_frame};
+
+        let frame = render_frame(cx, titled_state);
+
+        assert_eq!(
+            accessible_name(&frame, "empty-title").as_deref(),
+            Some("Nothing here")
+        );
+        assert_eq!(
+            accessible_name(&frame, "empty-text").as_deref(),
+            Some("No requests yet")
+        );
+        assert_eq!(
+            accessible_name(&frame, "empty-key-0").as_deref(),
+            Some("Ctrl N")
+        );
+        assert_eq!(
+            accessible_name(&frame, "empty-key-1").as_deref(),
+            Some("Ctrl I")
+        );
+        assert_eq!(
+            accessible_name(&frame, "empty-action-0").as_deref(),
+            Some("New request")
+        );
+        assert_eq!(
+            accessible_name(&frame, "empty-action-1").as_deref(),
+            Some("Import")
+        );
+    }
+
+    #[gpui::test]
+    fn an_action_label_is_found_by_its_selector(cx: &mut TestAppContext) {
+        let (_clicks, window) = open(false, cx);
+
+        let state = window.debug_bounds("empty").expect("the state is laid out");
+        let label = window
+            .debug_bounds("empty-action-0")
+            .expect("the action label is found under the state id");
+        assert!(state.contains(&label.center()));
     }
 
     #[gpui::test]
