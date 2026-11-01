@@ -2,16 +2,17 @@ use std::sync::Arc;
 
 use gpui::prelude::*;
 use gpui::{
-    Action, Anchor, App, ClickEvent, Context, Div, ElementId, EventEmitter, FocusHandle,
-    FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, Render, Role,
-    ScrollHandle, ScrollWheelEvent, SharedString, Stateful, StatefulInteractiveElement, Styled,
-    Subscription, Window, anchored, deferred, div, point, px,
+    Anchor, App, ClickEvent, Context, ElementId, EventEmitter, FocusHandle, FontWeight, Hsla,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Render, Role, ScrollHandle,
+    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    anchored, deferred, div, point, px,
 };
 use gpui_component::{ActiveTheme, IconName};
 
 use crate::controls::{ButtonVariant, button_colors};
 use crate::density;
 use crate::icon::IconSource;
+use crate::keymap::{Command, CommandSet};
 use crate::primitives::{BadgeTone, Chamfer, ChamferRing, Icon};
 use crate::tokens::{ChamferCut, ChromeColors, ChromeEdgeRole, Feedback, Fields, Heights, Spacing};
 
@@ -48,57 +49,6 @@ impl DropdownItem {
             value: value.into(),
         }
     }
-}
-
-/// The keymap action a product dispatches at its dropdowns: the command id
-/// it carries names the menu key a key binding runs (see [`KeyCommands`]).
-pub trait KeyCommand: Action {
-    /// The command id the action carries — the product's `Command::id`.
-    fn key_command_id(&self) -> &str;
-}
-
-/// The five menu keys a dropdown answers, in the product's own command
-/// vocabulary, plus the action that carries them.
-///
-/// The product's keymap binds its keys in a dropdown key context and
-/// dispatches its action there; the dropdown matches the dispatched action's
-/// command id against these five and runs the menu state machine. Install one value per app before
-/// the first window; a dropdown rendered without one answers no keys of its
-/// own and propagates every key to the pane around it.
-pub struct KeyCommands {
-    /// The key context the keymap binds the dropdown keys in.
-    pub key_context: SharedString,
-    /// The action id that moves the highlight down.
-    pub select_next: SharedString,
-    /// The action id that moves the highlight up.
-    pub select_prev: SharedString,
-    /// The action id that confirms the highlighted item.
-    pub execute: SharedString,
-    /// The action id that opens the menu, or confirms while it is open.
-    pub expand_or_collapse: SharedString,
-    /// The action id that closes the menu, or gives focus back.
-    pub cancel: SharedString,
-    /// Registers the typed action listener for the product's keymap action
-    /// (see [`attach_key_commands`]); monomorphized on the product's
-    /// [`KeyCommand`] type so the element stays non-generic.
-    pub attach: AttachKeyCommands,
-}
-
-impl gpui::Global for KeyCommands {}
-
-/// The type of [`KeyCommands::attach`].
-pub type AttachKeyCommands = fn(Stateful<Div>, &mut Context<Dropdown>) -> Stateful<Div>;
-
-/// Registers the dropdown's key handler for the product's keymap action
-/// `A`: the element answers the dispatched action's command id (see
-/// [`KeyCommand`]) and propagates the keys it does not own.
-pub fn attach_key_commands<A>(element: Stateful<Div>, cx: &mut Context<Dropdown>) -> Stateful<Div>
-where
-    A: KeyCommand,
-{
-    element.on_action(cx.listener(|this, action: &A, window, cx| {
-        this.handle_key_command(action.key_command_id(), window, cx);
-    }))
 }
 
 /// The default copy a dropdown draws, installed by the product.
@@ -247,7 +197,7 @@ fn dropdown_dismiss_transition(open: bool) -> Option<DropdownDismissTransition> 
     })
 }
 
-/// One of the menu keys [`KeyCommands`] names.
+/// One of the menu keys the installed [`CommandSet`] names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuKey {
     SelectNext,
@@ -256,17 +206,13 @@ enum MenuKey {
     Cancel,
 }
 
-fn menu_key(keys: &KeyCommands, action_id: &str) -> Option<MenuKey> {
-    if action_id == keys.select_next.as_ref() {
-        Some(MenuKey::SelectNext)
-    } else if action_id == keys.select_prev.as_ref() {
-        Some(MenuKey::SelectPrev)
-    } else if action_id == keys.execute.as_ref() || action_id == keys.expand_or_collapse.as_ref() {
-        Some(MenuKey::Confirm)
-    } else if action_id == keys.cancel.as_ref() {
-        Some(MenuKey::Cancel)
-    } else {
-        None
+fn menu_key(keys: &CommandSet, action_id: &str) -> Option<MenuKey> {
+    match keys.command(action_id)? {
+        Command::SelectNext => Some(MenuKey::SelectNext),
+        Command::SelectPrev => Some(MenuKey::SelectPrev),
+        Command::Execute | Command::ExpandCollapse => Some(MenuKey::Confirm),
+        Command::Cancel => Some(MenuKey::Cancel),
+        Command::FocusSearch | Command::Save => None,
     }
 }
 
@@ -722,12 +668,17 @@ impl Dropdown {
         }
     }
 
-    /// Answers the menu keys of the installed [`KeyCommands`] while the
-    /// dropdown has focus. A key it has no use for in its current state
-    /// propagates to the pane around it.
-    fn handle_key_command(&mut self, action_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    /// Answers the menu commands of the installed [`crate::keymap::CommandSet`]
+    /// while the dropdown has focus. A key it has no use for in its current
+    /// state propagates to the pane around it.
+    pub(crate) fn handle_key_command(
+        &mut self,
+        action_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(key) = cx
-            .try_global::<KeyCommands>()
+            .try_global::<CommandSet>()
             .and_then(|keys| menu_key(keys, action_id))
         else {
             cx.propagate();
@@ -1094,7 +1045,7 @@ impl Render for Dropdown {
         // The product's keymap seam, installed once per app: the dropdown
         // answers the keymap action under its key context and propagates
         // the keys it does not own. Without a seam it answers none.
-        if let Some(keys) = cx.try_global::<KeyCommands>() {
+        if let Some(keys) = cx.try_global::<CommandSet>() {
             let attach = keys.attach;
             let key_context = keys.key_context.clone();
             element = attach(element.key_context(key_context.as_ref()), cx);
@@ -1114,7 +1065,7 @@ mod tests {
         dropdown_focus_ring_state, dropdown_menu_chrome, dropdown_selection_transition,
         dropdown_trigger_render_plan, menu_key,
     };
-    use crate::controls::{KeyCommand, KeyCommands, attach_key_commands};
+    use crate::keymap::{Command, CommandSet, KeyCommand, attach_key_commands};
     use crate::primitives::BadgeTone;
     use crate::tokens::{ChamferCut, ChromeEdgeRole};
     use gpui::{Action, SharedString};
@@ -1136,16 +1087,13 @@ mod tests {
     /// The seam the keyboard tests install: the stand-in action, bound under
     /// the `TestDropdown` key context the way a product keymap binds its own
     /// action.
-    fn test_key_commands() -> KeyCommands {
-        KeyCommands {
-            key_context: "TestDropdown".into(),
-            select_next: "test_next".into(),
-            select_prev: "test_prev".into(),
-            execute: "test_execute".into(),
-            expand_or_collapse: "test_expand".into(),
-            cancel: "test_cancel".into(),
-            attach: attach_key_commands::<TestKeyCommand>,
-        }
+    fn test_key_commands() -> CommandSet {
+        CommandSet::new("TestDropdown", attach_key_commands::<TestKeyCommand>)
+            .map(Command::SelectNext, "test_next")
+            .map(Command::SelectPrev, "test_prev")
+            .map(Command::Execute, "test_execute")
+            .map(Command::ExpandCollapse, "test_expand")
+            .map(Command::Cancel, "test_cancel")
     }
 
     #[test]
@@ -1284,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn the_five_command_ids_map_to_their_menu_keys() {
+    fn the_mapped_command_ids_name_their_menu_keys() {
         let keys = test_key_commands();
 
         assert_eq!(
@@ -1319,7 +1267,7 @@ mod tests {
     }
 
     /// Keyboard tests against a real window: the test installs its own
-    /// [`KeyCommands`] seam (a stand-in action carrying command ids, bound
+    /// [`CommandSet`] seam (a stand-in action carrying command ids, bound
     /// under the `TestDropdown` context the way a product keymap binds its
     /// action), and an owner view stands in for the pane hosting the dropdown
     /// and records every command that reaches it.

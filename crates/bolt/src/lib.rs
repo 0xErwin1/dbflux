@@ -26,6 +26,7 @@ pub mod controls;
 pub mod density;
 pub mod fonts;
 pub mod icon;
+pub mod keymap;
 pub mod palette;
 pub mod primitives;
 pub mod semantic;

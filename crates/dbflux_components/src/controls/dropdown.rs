@@ -2,12 +2,13 @@
 //! [`Dropdown`].
 //!
 //! The generic dropdown — its state machine, menu, triggers and the
-//! [`bolt::controls::KeyCommands`] key seam — lives in `bolt` and is
+//! [`bolt::keymap::CommandSet`] key seam — lives in `bolt` and is
 //! re-exported at this crate's `controls` path so call sites keep compiling.
 //! What stays here is the product half: the `ConnectionEnvironment` badge,
 //! the keymap action the dropdowns answer, and the translated placeholder.
 
-use bolt::controls::{BadgeLabel, Dropdown, KeyCommands, attach_key_commands};
+use bolt::controls::{BadgeLabel, Dropdown};
+use bolt::keymap::{Command as BoltCommand, CommandSet, KeyCommand, attach_key_commands};
 use dbflux_core::ConnectionEnvironment;
 use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::{App, Context};
@@ -48,31 +49,43 @@ fn environment_badge(environment: ConnectionEnvironment) -> BadgeLabel {
     }
 }
 
-/// The product's keymap action, for the dropdown key seam: the command id it
-/// carries names the menu key a key binding runs.
-impl bolt::controls::KeyCommand for RunCommand {
+/// The product's keymap action, for the bolt keymap seam: the command id it
+/// carries names the command a key binding runs.
+impl KeyCommand for RunCommand {
     fn key_command_id(&self) -> &str {
         &self.command
     }
 }
 
-/// Installs the seams the moved dropdowns read: the keymap hook (the
-/// `RunCommand` action and the five `Command` ids, in the `Dropdown` key
-/// context) and the translated placeholder.
+/// Installs the seams the product's components read: the keymap's
+/// [`CommandSet`] (the `RunCommand` action and the semantic commands mapped
+/// onto the product's `Command` ids) and the translated placeholder.
+///
+/// The set carries the dropdown's five menu keys *and* the vim leader
+/// commands the editors' hosts answer (`FocusSearch` in
+/// `vim/binding.rs`, the dialog save in the `VimHost` impls), so one table
+/// serves every component and a running app cannot have a dropdown with one
+/// table and an editor with another.
 ///
 /// Call it once at startup, before the first window; `theme::init` does. A
-/// dropdown rendered before it runs answers no keys and draws no default
-/// placeholder.
-pub fn install_dropdown_seams(cx: &mut App) {
-    cx.set_global(KeyCommands {
-        key_context: ContextId::Dropdown.as_gpui_context().into(),
-        select_next: Command::SelectNext.id().into(),
-        select_prev: Command::SelectPrev.id().into(),
-        execute: Command::Execute.id().into(),
-        expand_or_collapse: Command::ExpandCollapse.id().into(),
-        cancel: Command::Cancel.id().into(),
-        attach: attach_key_commands::<RunCommand>,
-    });
+/// component rendered before it runs answers no commands and draws no
+/// default placeholder.
+pub fn install_keymap_seams(cx: &mut App) {
+    cx.set_global(
+        CommandSet::new(
+            ContextId::Dropdown.as_gpui_context(),
+            attach_key_commands::<RunCommand>,
+        )
+        // The dropdown's menu keys (the keymap layer in `dbflux_ui_base`).
+        .map(BoltCommand::SelectNext, Command::SelectNext.id())
+        .map(BoltCommand::SelectPrev, Command::SelectPrev.id())
+        .map(BoltCommand::Execute, Command::Execute.id())
+        .map(BoltCommand::ExpandCollapse, Command::ExpandCollapse.id())
+        .map(BoltCommand::Cancel, Command::Cancel.id())
+        // The vim leader commands (`vim/binding.rs`).
+        .map(BoltCommand::FocusSearch, Command::FocusSearch.id())
+        .map(BoltCommand::Save, Command::SaveQuery.id()),
+    );
 
     cx.set_global(bolt::controls::DropdownStrings {
         dropdown_placeholder: || dbflux_i18n::t!("controls.dropdown.placeholder").into(),
@@ -81,7 +94,7 @@ pub fn install_dropdown_seams(cx: &mut App) {
 
 /// The keys the app keymap binds in the `Dropdown` context (see the dropdown
 /// layer in `dbflux_ui_base::keymap`), for component tests that run without
-/// the app keymap. Also installs [`install_dropdown_seams`], which the app
+/// the app keymap. Also installs [`install_keymap_seams`], which the app
 /// does at startup.
 #[cfg(test)]
 pub(crate) fn bind_dropdown_keys_for_tests(cx: &mut gpui::TestAppContext) {
@@ -91,7 +104,7 @@ pub(crate) fn bind_dropdown_keys_for_tests(cx: &mut gpui::TestAppContext) {
     let run = |command: Command| RunCommand::new(command.id());
 
     cx.update(|cx| {
-        install_dropdown_seams(cx);
+        install_keymap_seams(cx);
         cx.bind_keys([
             KeyBinding::new("j", run(Command::SelectNext), context),
             KeyBinding::new("down", run(Command::SelectNext), context),
@@ -430,7 +443,7 @@ mod tests {
     /// A trigger that draws only a chevron has no text of its own, so it needs
     /// the name the owner sets; anything else is named by its placeholder.
     mod naming {
-        use super::super::install_dropdown_seams;
+        use super::super::install_keymap_seams;
         use crate::accessibility::{FrameCapture, accessible_name};
         use crate::controls::{ButtonVariant, Dropdown, DropdownItem};
         use gpui::{
@@ -461,7 +474,7 @@ mod tests {
             cx: &mut TestAppContext,
         ) -> Option<String> {
             cx.update(crate::theme::init);
-            cx.update(install_dropdown_seams);
+            cx.update(install_keymap_seams);
 
             let capture = std::sync::Arc::new(FrameCapture::default());
             let capture_for_window = capture.clone();

@@ -12,8 +12,8 @@ pub use button::{
 };
 pub use checkbox::Checkbox;
 pub use dropdown::{
-    AttachKeyCommands, BadgeLabel, Dropdown, DropdownDismissed, DropdownItem,
-    DropdownSelectionChanged, DropdownStrings, KeyCommand, KeyCommands, attach_key_commands,
+    BadgeLabel, Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged,
+    DropdownStrings,
 };
 pub use input::{
     CodeActionProvider, CompletionProvider, GpuiInput, INPUT_CONTEXT, Input, InputContentType,
