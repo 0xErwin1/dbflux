@@ -30,6 +30,13 @@ pub mod density;
 pub mod fonts;
 pub mod icon;
 pub mod keymap;
+
+/// The keyboard engine: key chords, keymap layers, user overrides, conflict
+/// detection and shortcut recording, over a product-supplied context
+/// vocabulary. A consumer that only needs the mechanics takes the
+/// `bolt_keys` crate directly; this re-export gives the umbrella crate's
+/// users the whole keyboard surface.
+pub use bolt_keys as keys;
 pub mod modals;
 pub mod palette;
 pub mod primitives;

@@ -2894,3 +2894,68 @@ fn test_sidebar_tab_switch_bindings() {
         Some(Command::SidebarNextTab)
     );
 }
+
+/// Users' keybinding overrides store three identifiers per row: the context
+/// name, the command id and the default keys in their storage form. The
+/// keyboard engine now lives in `bolt_keys`; these identifiers must survive
+/// that move byte for byte, so a row saved by an earlier release still
+/// names the same binding.
+#[test]
+fn persisted_identifiers_round_trip_through_their_storage_forms() {
+    let keymap = default_keymap();
+    let slots = dbflux_app::keymap::default_slots(keymap);
+    assert!(!slots.is_empty());
+
+    for slot in &slots {
+        let context_id = slot.context.id();
+        let command_id = slot.command.id();
+        let default_keys = slot.default_keys.to_storage_string();
+
+        assert_eq!(
+            KeySequence::from_storage_string(&default_keys),
+            Ok(slot.default_keys.clone()),
+            "{context_id}/{command_id}: the stored keys parse back unchanged"
+        );
+        assert!(
+            ContextId::all_variants()
+                .iter()
+                .any(|context| context.id() == context_id),
+            "{context_id}: the stored context name still names a context"
+        );
+        assert!(
+            Command::all_variants()
+                .into_iter()
+                .any(|command| command.id() == command_id),
+            "{command_id}: the stored command id still names a command"
+        );
+    }
+
+    // A row in the exact form the overrides have always stored — including
+    // a payload command's family id (`switch_to_tab`, never
+    // `switch_to_tab_3`) — still matches its binding after the move.
+    use dbflux_storage::repositories::keybinding_overrides::KeybindingOverrideDto;
+
+    assert_eq!(ContextId::Global.id(), "global");
+    assert_eq!(Command::SwitchToTab(3).id(), "switch_to_tab");
+    assert_eq!(Command::SwitchToTab(3).action_id(), "switch_to_tab_3");
+
+    let slot = BindingSlot::new(
+        ContextId::Global,
+        Command::NewQueryTab,
+        KeyChord::new("n", Modifiers::ctrl()),
+    );
+    let row = KeybindingOverrideDto {
+        context: "global".to_string(),
+        command_id: "new_query_tab".to_string(),
+        default_keys: "ctrl+n".to_string(),
+        keys: Some("ctrl+t".to_string()),
+        predicate: None,
+    };
+
+    let reloaded = KeymapOverrides::from_dtos(keymap, &[row]);
+    assert_eq!(
+        reloaded.effective_keys(&slot),
+        Some(KeySequence::parse("ctrl+t").expect("valid sequence")),
+        "a stored row keeps rebinding the same binding"
+    );
+}

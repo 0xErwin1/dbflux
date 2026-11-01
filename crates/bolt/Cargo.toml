@@ -20,6 +20,7 @@ default = []
 test-support = ["gpui/test-support"]
 
 [dependencies]
+bolt_keys.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 gpui-base = { path = "../../vendor/gpui-base" }

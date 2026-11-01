@@ -2008,6 +2008,7 @@ dependencies = [
 name = "bolt"
 version = "0.10.0-dev.0"
 dependencies = [
+ "bolt_keys",
  "chrono",
  "fuzzy-matcher",
  "gpui-base",
@@ -2016,6 +2017,13 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "bolt_keys"
+version = "0.10.0-dev.0"
+dependencies = [
+ "log",
 ]
 
 [[package]]
@@ -3168,6 +3176,7 @@ name = "dbflux_app"
 version = "0.10.0-dev.0"
 dependencies = [
  "async-trait",
+ "bolt_keys",
  "chrono",
  "dbflux_approval",
  "dbflux_audit",

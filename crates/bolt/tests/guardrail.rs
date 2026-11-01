@@ -7,8 +7,9 @@
 //! tests police what is specific to `bolt`: its independence and its token
 //! discipline.
 //!
-//! The tests walk every `.rs` file under `crates/bolt/src` and
-//! `crates/bolt/tests` (except this file) and reject:
+//! The tests walk every `.rs` file under `crates/bolt/src`,
+//! `crates/bolt/tests` and `crates/bolt_keys/src` (except this file) and
+//! reject:
 //!
 //! - a product name or product concept: DBFlux, Relay, the byzantine accent,
 //!   a database driver, a design board;
@@ -135,6 +136,11 @@ fn bolt_sources_define_geometry_only_in_token_files() {
 /// The bolt sources these tests scan.
 const SRC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
 const TESTS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests");
+/// The gpui-free keyboard-engine crate that `bolt` re-exports. It is part of
+/// the same boundary, so it is policed by the same rules: no product name and
+/// no product-core reference. It defines no colors or geometry, so the token
+/// exemptions below never apply to it.
+const KEYS_SRC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../bolt_keys/src");
 
 /// Product names and product concepts, forbidden everywhere in `bolt`.
 ///
@@ -321,6 +327,7 @@ fn check_files(check: impl Fn(&str, &str, &str) -> Vec<String>) -> Vec<String> {
     let mut files = Vec::new();
     collect_rust_files(SRC_DIR, &mut files);
     collect_rust_files(TESTS_DIR, &mut files);
+    collect_rust_files(KEYS_SRC_DIR, &mut files);
 
     let mut violations = Vec::new();
 

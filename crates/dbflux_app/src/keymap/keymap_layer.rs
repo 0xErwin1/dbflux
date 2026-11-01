@@ -1,12 +1,28 @@
+//! The typed keymap over the product's vocabulary: a builder for a
+//! context's bindings, the stack that resolves keys across the context
+//! tree, and the borrowed typed view of a built layer.
+//!
+//! The mechanics live in `bolt_keys`, which stores commands as action-id
+//! strings. This module is the vocabulary adapter: it stores and answers
+//! `Command` values, converts ids at the edges, and delegates every lookup
+//! to the engine with the product's context vocabulary.
+
 use std::collections::HashMap;
 
-use super::{Command, ContextId, KeyChord, KeySequence};
+use bolt_keys::{KeyChord, KeySequence, KeymapStack as EngineStack};
+
+use super::vocabulary::{command_for, context_for, vocabulary};
+use super::{Command, ContextId};
 
 /// A single layer of keybindings for a specific context.
 ///
 /// Besides the lookup table the layer keeps the order in which key sequences
 /// were first bound, so lists built from it (the settings page) follow the
 /// order the keymap declares them in.
+///
+/// The layer is a builder: [`KeymapStack::add_layer`] converts it to the
+/// engine's layer, which holds the commands as action-id strings; a built
+/// layer is read back as a [`KeymapLayerView`] of the stack.
 #[derive(Clone)]
 pub struct KeymapLayer {
     context: ContextId,
@@ -84,22 +100,67 @@ impl KeymapLayer {
         &self.bindings
     }
 
-    /// This layer with the leader placeholder in its keys replaced by
-    /// `leader`, keeping the order and predicates of its bindings.
-    fn with_leader(&self, leader: &KeyChord) -> KeymapLayer {
-        let mut layer = KeymapLayer::new(self.context);
+    /// The engine layer for `self`: the same bindings, with the commands as
+    /// their action ids.
+    pub(super) fn into_engine(self) -> bolt_keys::KeymapLayer {
+        let mut layer = bolt_keys::KeymapLayer::new(self.context.id());
 
-        for (keys, command) in self.ordered_bindings() {
-            let resolved = keys.with_leader(leader);
+        for keys in &self.order {
+            let command = self
+                .bindings
+                .get(keys)
+                .map(|command| command.action_id())
+                .unwrap_or_default();
 
             if let Some(predicate) = self.predicates.get(keys) {
-                layer.bind_with_predicate(resolved, command, predicate);
+                layer.bind_with_predicate(keys.clone(), command, predicate);
             } else {
-                layer.bind(resolved, command);
+                layer.bind(keys.clone(), command);
             }
         }
 
         layer
+    }
+}
+
+/// A borrowed, typed view of one layer of a [`KeymapStack`].
+///
+/// The stack stores the engine's layers, whose commands are action-id
+/// strings; the view converts them back to `Command` values as it iterates.
+pub struct KeymapLayerView<'a> {
+    layer: &'a bolt_keys::KeymapLayer,
+}
+
+impl KeymapLayerView<'_> {
+    /// Bindings of this layer in the order their keys were first bound.
+    pub fn ordered_bindings(&self) -> impl Iterator<Item = (&KeySequence, Command)> + '_ {
+        self.layer.ordered_bindings().filter_map(|(keys, command)| {
+            command_for(command.as_ref()).map(|command| (keys, command))
+        })
+    }
+
+    /// The command bound to the single chord `chord`.
+    pub fn get(&self, chord: &KeyChord) -> Option<Command> {
+        self.layer
+            .get(chord)
+            .and_then(|command| command_for(&command))
+    }
+
+    /// The command bound to the key sequence `keys`.
+    pub fn get_sequence(&self, keys: &KeySequence) -> Option<Command> {
+        self.layer
+            .get_sequence(keys)
+            .and_then(|command| command_for(&command))
+    }
+
+    /// The context the layer declares its bindings for.
+    pub fn context(&self) -> ContextId {
+        context_for(self.layer.context())
+    }
+
+    /// The default predicate of the binding on `keys`.
+    pub fn predicate_for(&self, keys: &KeySequence) -> &'static str {
+        self.layer.predicate_for(vocabulary(), keys)
     }
 }
 
@@ -113,76 +174,47 @@ impl KeymapLayer {
 /// Key dispatch itself goes through GPUI's keymap (see
 /// `dbflux_ui_base::keymap`); the stack answers lookups such as the keys a
 /// command has, for shortcut labels.
-#[derive(Clone)]
-pub struct KeymapStack {
-    layers: HashMap<ContextId, KeymapLayer>,
-}
+#[derive(Clone, Default)]
+pub struct KeymapStack(EngineStack);
 
 impl KeymapStack {
     pub fn new() -> Self {
-        Self {
-            layers: HashMap::new(),
-        }
+        Self(EngineStack::new())
     }
 
     /// Adds a layer to the stack.
     pub fn add_layer(&mut self, layer: KeymapLayer) {
-        self.layers.insert(layer.context, layer);
+        self.0.add_layer(layer.into_engine());
     }
 
-    /// Returns the layer holding the bindings declared for `context` itself.
-    pub fn layer(&self, context: ContextId) -> Option<&KeymapLayer> {
-        self.layers.get(&context)
+    /// A typed view of the layer holding the bindings declared for
+    /// `context` itself, or `None` when the stack has no layer for it.
+    pub fn layer(&self, context: ContextId) -> Option<KeymapLayerView<'_>> {
+        self.0
+            .layer(context.id())
+            .map(|layer| KeymapLayerView { layer })
     }
 
     /// This stack with every leader placeholder replaced by `leader`: the
     /// keys the user presses, for lookups and labels.
     pub fn with_leader(&self, leader: &KeyChord) -> KeymapStack {
-        KeymapStack {
-            layers: self
-                .layers
-                .iter()
-                .map(|(context, layer)| (*context, layer.with_leader(leader)))
-                .collect(),
-        }
+        KeymapStack(self.0.with_leader(leader))
     }
 
     /// Resolves a single chord to a command, checking the given context
     /// first, then falling back to parent contexts.
     pub fn resolve(&self, context: ContextId, chord: &KeyChord) -> Option<Command> {
-        self.resolve_sequence(context, &KeySequence::from(chord.clone()))
+        self.0
+            .resolve(vocabulary(), context.id(), chord)
+            .and_then(|command| command_for(&command))
     }
 
     /// Resolves a key sequence to a command, checking the given context
     /// first, then falling back to parent contexts.
     pub fn resolve_sequence(&self, context: ContextId, keys: &KeySequence) -> Option<Command> {
-        self.lookup_chain(context)
-            .into_iter()
-            .filter(|(_, chords_only)| !chords_only || keys.is_global_chord())
-            .find_map(|(layer, _)| layer.get_sequence(keys))
-    }
-
-    /// The layers a key pressed in `context` reaches, in lookup order: the
-    /// context's own, its ancestors', and last the global layer when the
-    /// context keeps only its chords (the flag is `true` for that entry).
-    fn lookup_chain(&self, context: ContextId) -> Vec<(&KeymapLayer, bool)> {
-        let mut chain = Vec::new();
-        let mut current = Some(context);
-
-        while let Some(ctx) = current {
-            if let Some(layer) = self.layers.get(&ctx) {
-                chain.push((layer, false));
-            }
-            current = ctx.parent();
-        }
-
-        if context.inherits_global_chords()
-            && let Some(global) = self.layers.get(&ContextId::Global)
-        {
-            chain.push((global, true));
-        }
-
-        chain
+        self.0
+            .resolve_sequence(vocabulary(), context.id(), keys)
+            .and_then(|command| command_for(&command))
     }
 
     /// Returns all keybindings for a given context, including inherited ones.
@@ -190,28 +222,23 @@ impl KeymapStack {
         &self,
         context: ContextId,
     ) -> Vec<(KeySequence, Command, ContextId)> {
-        let mut result = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-
-        for (layer, chords_only) in self.lookup_chain(context) {
-            for (keys, cmd) in layer.ordered_bindings() {
-                if chords_only && !keys.is_global_chord() {
-                    continue;
-                }
-
-                if seen.insert(keys.clone()) {
-                    result.push((keys.clone(), cmd, layer.context()));
-                }
-            }
-        }
-
-        result
+        self.0
+            .bindings_for_context(vocabulary(), context.id())
+            .into_iter()
+            .filter_map(|(keys, command, layer_context)| {
+                Some((
+                    keys,
+                    command_for(command.as_ref())?,
+                    context_for(layer_context),
+                ))
+            })
+            .collect()
     }
 
     /// Returns the shortcut string for a command in the given context, if any.
     pub fn shortcut_for_command(&self, context: ContextId, command: Command) -> Option<String> {
-        self.keys_for_command(context, command)
-            .map(|keys| keys.to_string())
+        self.0
+            .shortcut_for_command(vocabulary(), context.id(), &command.action_id())
     }
 
     /// Returns the keys bound to a command in the given context, falling
@@ -220,84 +247,48 @@ impl KeymapStack {
     /// When one layer binds the command to several key sequences, the one
     /// bound first is returned.
     pub fn keys_for_command(&self, context: ContextId, command: Command) -> Option<&KeySequence> {
-        self.lookup_chain(context)
-            .into_iter()
-            .find_map(|(layer, chords_only)| {
-                layer
-                    .ordered_bindings()
-                    .find(|(keys, bound_command)| {
-                        *bound_command == command && (!chords_only || keys.is_global_chord())
-                    })
-                    .map(|(keys, _)| keys)
-            })
+        self.0
+            .keys_for_command(vocabulary(), context.id(), &command.action_id())
     }
 
     /// The first chord of the keys bound to `command`, see
     /// [`KeymapStack::keys_for_command`].
     pub fn chord_for_command(&self, context: ContextId, command: Command) -> Option<&KeyChord> {
-        self.keys_for_command(context, command)
-            .map(KeySequence::first)
+        self.0
+            .chord_for_command(vocabulary(), context.id(), &command.action_id())
     }
-}
 
-impl Default for KeymapStack {
-    fn default() -> Self {
-        Self::new()
+    /// The engine stack: the same layers with commands as action ids.
+    pub(super) fn engine(&self) -> &EngineStack {
+        &self.0
+    }
+
+    /// Wraps an engine stack built outside this module.
+    pub(super) fn from_engine_stack(engine: EngineStack) -> Self {
+        Self(engine)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keymap::Modifiers;
+    use bolt_keys::Modifiers;
 
     #[test]
-    fn test_resolve_in_context() {
-        let mut stack = KeymapStack::new();
-
-        let mut global = KeymapLayer::new(ContextId::Global);
-        global.bind(
-            KeyChord::new("p", Modifiers::ctrl_shift()),
-            Command::ToggleCommandPalette,
+    fn a_typed_layer_round_trips_through_the_engine() {
+        let mut layer = KeymapLayer::new(ContextId::Sidebar);
+        layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
+        layer.bind_with_predicate(
+            KeyChord::new("r", Modifiers::ctrl()),
+            Command::RunQuery,
+            "Sidebar",
         );
 
-        let mut sidebar = KeymapLayer::new(ContextId::Sidebar);
-        sidebar.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
-
-        stack.add_layer(global);
-        stack.add_layer(sidebar);
-
-        let chord_j = KeyChord::new("j", Modifiers::none());
-        assert_eq!(
-            stack.resolve(ContextId::Sidebar, &chord_j),
-            Some(Command::SelectNext)
-        );
-        assert_eq!(stack.resolve(ContextId::Editor, &chord_j), None);
-    }
-
-    #[test]
-    fn with_leader_resolves_the_placeholder_and_keeps_order_and_predicates() {
-        let leader_a = KeySequence::new(vec![
-            KeyChord::leader(),
-            KeyChord::new("a", Modifiers::none()),
-        ])
-        .expect("two chords");
-        let leader_r = KeySequence::new(vec![
-            KeyChord::leader(),
-            KeyChord::new("r", Modifiers::none()),
-        ])
-        .expect("two chords");
-
-        let mut layer = KeymapLayer::new(ContextId::VimNormal);
-        layer.bind(leader_a, Command::OpenPaneActions);
-        layer.bind_with_predicate(leader_r, Command::RunQuery, "VimNormal");
-
         let mut stack = KeymapStack::new();
-        stack.add_layer(layer);
+        stack.add_layer(layer.clone());
 
-        let resolved = stack.with_leader(&KeyChord::new(",", Modifiers::none()));
-        let layer = resolved.layer(ContextId::VimNormal).expect("layer kept");
-        let bindings: Vec<(String, Command)> = layer
+        let view = stack.layer(ContextId::Sidebar).expect("layer kept");
+        let bindings: Vec<(String, Command)> = view
             .ordered_bindings()
             .map(|(keys, command)| (keys.to_storage_string(), command))
             .collect();
@@ -305,178 +296,29 @@ mod tests {
         assert_eq!(
             bindings,
             vec![
-                (", a".to_string(), Command::OpenPaneActions),
-                (", r".to_string(), Command::RunQuery),
+                ("j".to_string(), Command::SelectNext),
+                ("ctrl+r".to_string(), Command::RunQuery),
             ]
         );
+        assert_eq!(view.context(), ContextId::Sidebar);
         assert_eq!(
-            layer.predicate_for(&KeySequence::parse(", r").expect("valid")),
-            "VimNormal"
-        );
-    }
-
-    #[test]
-    fn test_fallback_to_global() {
-        let mut stack = KeymapStack::new();
-
-        let mut global = KeymapLayer::new(ContextId::Global);
-        global.bind(
-            KeyChord::new("p", Modifiers::ctrl_shift()),
-            Command::ToggleCommandPalette,
-        );
-
-        stack.add_layer(global);
-
-        let chord = KeyChord::new("p", Modifiers::ctrl_shift());
-
-        assert_eq!(
-            stack.resolve(ContextId::Sidebar, &chord),
-            Some(Command::ToggleCommandPalette)
+            view.predicate_for(&KeySequence::parse("ctrl+r").expect("valid")),
+            "Sidebar"
         );
         assert_eq!(
-            stack.resolve(ContextId::Editor, &chord),
-            Some(Command::ToggleCommandPalette)
-        );
-    }
-
-    #[test]
-    fn test_modal_no_fallback() {
-        let mut stack = KeymapStack::new();
-
-        let mut global = KeymapLayer::new(ContextId::Global);
-        global.bind(
-            KeyChord::new("p", Modifiers::ctrl_shift()),
-            Command::ToggleCommandPalette,
+            view.get(&KeyChord::new("j", Modifiers::none())),
+            Some(Command::SelectNext)
         );
 
-        let palette = KeymapLayer::new(ContextId::CommandPalette);
+        let built = stack.layer(ContextId::Editor);
+        assert!(built.is_none(), "no layer was added for the editor");
 
-        stack.add_layer(global);
-        stack.add_layer(palette);
-
-        let chord = KeyChord::new("p", Modifiers::ctrl_shift());
-        assert_eq!(stack.resolve(ContextId::CommandPalette, &chord), None);
-    }
-
-    #[test]
-    fn text_entry_contexts_fall_back_to_global_chords_only() {
-        let mut global = KeymapLayer::new(ContextId::Global);
-        global.bind(
-            KeyChord::new("p", Modifiers::ctrl_shift()),
-            Command::ToggleCommandPalette,
-        );
-        global.bind(
-            KeyChord::new("tab", Modifiers::none()),
-            Command::CycleFocusForward,
-        );
-        global.bind(
-            KeyChord::new("h", Modifiers::alt()),
-            Command::ToggleHistoryDropdown,
-        );
-
-        let mut text_input = KeymapLayer::new(ContextId::TextInput);
-        text_input.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
-
-        let mut stack = KeymapStack::new();
-        stack.add_layer(global);
-        stack.add_layer(text_input);
-
-        let palette = KeyChord::new("p", Modifiers::ctrl_shift());
-        let tab = KeyChord::new("tab", Modifiers::none());
-        let alt_h = KeyChord::new("h", Modifiers::alt());
+        let resolved = stack.resolve(ContextId::Sidebar, &KeyChord::new("j", Modifiers::none()));
+        assert_eq!(resolved, Some(Command::SelectNext));
 
         assert_eq!(
-            stack.resolve(ContextId::TextInput, &palette),
-            Some(Command::ToggleCommandPalette)
-        );
-        assert_eq!(stack.resolve(ContextId::TextInput, &tab), None);
-        assert_eq!(stack.resolve(ContextId::TextInput, &alt_h), None);
-        assert_eq!(stack.resolve(ContextId::ConfirmModal, &palette), None);
-
-        assert_eq!(
-            stack.keys_for_command(ContextId::TextInput, Command::ToggleCommandPalette),
-            Some(&KeySequence::from(palette.clone()))
-        );
-        assert_eq!(
-            stack.keys_for_command(ContextId::TextInput, Command::CycleFocusForward),
-            None
-        );
-
-        let listed: Vec<Command> = stack
-            .bindings_for_context(ContextId::TextInput)
-            .into_iter()
-            .map(|(_, command, _)| command)
-            .collect();
-        assert_eq!(listed, vec![Command::Cancel, Command::ToggleCommandPalette]);
-    }
-
-    #[test]
-    fn sequences_resolve_only_as_a_whole() {
-        let mut tree = KeymapLayer::new(ContextId::DocumentTree);
-        let d_d = KeySequence::parse("d d").expect("valid sequence");
-        tree.bind(d_d.clone(), Command::Delete);
-
-        let mut stack = KeymapStack::new();
-        stack.add_layer(tree);
-
-        assert_eq!(
-            stack.resolve_sequence(ContextId::DocumentTree, &d_d),
-            Some(Command::Delete)
-        );
-        assert_eq!(
-            stack.resolve(
-                ContextId::DocumentTree,
-                &KeyChord::new("d", Modifiers::none())
-            ),
-            None
-        );
-        assert_eq!(
-            stack.keys_for_command(ContextId::DocumentTree, Command::Delete),
-            Some(&d_d)
-        );
-    }
-
-    #[test]
-    fn chord_for_command_prefers_context_then_falls_back_to_parent() {
-        let mut stack = KeymapStack::new();
-
-        let mut global = KeymapLayer::new(ContextId::Global);
-        global.bind(
-            KeyChord::new("n", Modifiers::ctrl_shift()),
-            Command::OpenConnectionManager,
-        );
-
-        let mut sidebar = KeymapLayer::new(ContextId::Sidebar);
-        sidebar.bind(
-            KeyChord::new("c", Modifiers::none()),
-            Command::OpenConnectionManager,
-        );
-
-        stack.add_layer(global);
-        stack.add_layer(sidebar);
-
-        let global_chord = KeyChord::new("n", Modifiers::ctrl_shift());
-        let sidebar_chord = KeyChord::new("c", Modifiers::none());
-
-        assert_eq!(
-            stack.chord_for_command(ContextId::Global, Command::OpenConnectionManager),
-            Some(&global_chord)
-        );
-        assert_eq!(
-            stack.chord_for_command(ContextId::Editor, Command::OpenConnectionManager),
-            Some(&global_chord)
-        );
-        assert_eq!(
-            stack.chord_for_command(ContextId::Sidebar, Command::OpenConnectionManager),
-            Some(&sidebar_chord)
-        );
-        assert_eq!(
-            stack.chord_for_command(ContextId::CommandPalette, Command::OpenConnectionManager),
-            None
-        );
-        assert_eq!(
-            stack.shortcut_for_command(ContextId::Global, Command::OpenConnectionManager),
-            Some(global_chord.to_string())
+            layer.get_sequence(&KeySequence::parse("j").expect("valid")),
+            Some(Command::SelectNext)
         );
     }
 }
