@@ -12,6 +12,7 @@
 #![recursion_limit = "512"]
 
 pub mod brand;
+pub mod chart;
 pub mod components;
 pub mod composites;
 pub mod data;

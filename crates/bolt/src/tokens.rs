@@ -2186,6 +2186,9 @@ impl ChartGeometry {
     /// Row height in chart dropdowns and inspector lists. (11 px)
     pub const ROW: Pixels = px(11.0);
 
+    /// Quick-actions row padding in the point inspector. (10 px)
+    pub const QUICK_ACTIONS_PAD: Pixels = px(10.0);
+
     /// Reserved width for short axis tick labels. (60 px)
     pub const SHORT_LABEL_COL: Pixels = px(60.0);
 

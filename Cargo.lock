@@ -2008,11 +2008,13 @@ dependencies = [
 name = "bolt"
 version = "0.10.0-dev.0"
 dependencies = [
+ "chrono",
  "fuzzy-matcher",
  "gpui-base",
  "gpui-component",
  "gpui-pre",
  "log",
+ "serde",
  "serde_json",
 ]
 
