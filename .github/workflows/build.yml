@@ -466,7 +466,7 @@ jobs:
 
       - name: Upload artifacts
         if: env.ACT != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: linux-${{ matrix.arch }}
           path: |
@@ -640,7 +640,7 @@ jobs:
 
       - name: Upload build timings
         if: always() && env.ACT != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: cargo-timings-macos-${{ matrix.arch }}
           path: target/cargo-timings/
@@ -766,7 +766,7 @@ jobs:
 
       - name: Upload artifacts
         if: env.ACT != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: macos-${{ matrix.arch }}
           path: |
@@ -895,7 +895,7 @@ jobs:
       - name: Upload unsigned Windows executable
         if: inputs.channel == 'stable' || inputs.channel == 'rc'
         id: unsigned-executable
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           path: target/x86_64-pc-windows-msvc/release/dbflux.exe
           archive: false
@@ -971,7 +971,7 @@ jobs:
       - name: Upload unsigned Windows installer
         if: inputs.channel == 'stable' || inputs.channel == 'rc'
         id: unsigned-installer
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           path: dbflux-windows-amd64-setup.exe
           archive: false
@@ -1029,7 +1029,7 @@ jobs:
 
       - name: Upload artifacts
         if: env.ACT != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: windows-amd64
           path: |
