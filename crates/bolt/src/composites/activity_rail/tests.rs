@@ -7,6 +7,8 @@ use gpui::{
 };
 
 use super::*;
+use crate::accessibility::{FrameCapture, accessibility_node, accessible_name};
+use gpui::Role;
 
 fn icon(name: &str) -> IconSource {
     IconSource::Svg(format!("icons/{name}.svg").into())
@@ -122,6 +124,44 @@ fn a_count_draws_its_badge_over_the_button(cx: &mut TestAppContext) {
         "a zero count draws no badge"
     );
     assert!(window.debug_bounds("rail-connections-count").is_none());
+}
+
+#[gpui::test]
+fn the_rail_root_is_found_by_its_element_id(cx: &mut TestAppContext) {
+    let (_selected, window) = open(cx);
+
+    let rail = window
+        .debug_bounds("rail")
+        .expect("the rail root is found by its element id");
+    let button = window
+        .debug_bounds("rail-connections")
+        .expect("button laid out");
+    assert!(rail.contains(&button.center()));
+}
+
+#[gpui::test]
+fn buttons_and_badges_announce_role_state_and_count(cx: &mut TestAppContext) {
+    let (_selected, window) = open(cx);
+    let capture = FrameCapture::observe(window);
+    let frame = capture.frame(window);
+
+    let active = accessibility_node(&frame, "rail-connections").expect("button node");
+    assert_eq!(active.role(), Role::Button);
+    assert_eq!(active.is_selected(), Some(true));
+    assert_eq!(
+        accessible_name(&frame, "rail-connections").as_deref(),
+        Some("Connections")
+    );
+
+    let idle = accessibility_node(&frame, "rail-settings").expect("button node");
+    assert_eq!(idle.role(), Role::Button);
+    assert_eq!(idle.is_selected(), Some(false));
+
+    assert_eq!(
+        accessible_name(&frame, "rail-approvals-count").as_deref(),
+        Some("3")
+    );
+    assert_eq!(accessible_name(&frame, "rail-scripts-count"), None);
 }
 
 #[gpui::test]

@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use gpui::prelude::*;
-use gpui::{App, ElementId, Hsla, SharedString, Window, div};
+use gpui::{App, ElementId, Hsla, Role, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 use gpui_component::tooltip::Tooltip;
 
@@ -173,7 +173,9 @@ impl ActivityRail {
         div()
             .debug_selector(crate::selector::id_selector(&element_id))
             .id(element_id)
+            .role(Role::Button)
             .aria_label(label.clone())
+            .aria_selected(entry.active)
             .relative()
             .flex()
             .flex_shrink_0()
@@ -217,6 +219,7 @@ impl RenderOnce for ActivityRail {
             .collect();
 
         div()
+            .debug_selector(crate::selector::id_selector(&self.id))
             .id(self.id)
             .key_context(ACTIVITY_RAIL_KEY_CONTEXT)
             .flex()

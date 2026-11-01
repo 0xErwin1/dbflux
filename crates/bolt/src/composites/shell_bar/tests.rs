@@ -7,6 +7,8 @@ use gpui::{
 };
 
 use super::*;
+use crate::accessibility::{FrameCapture, accessibility_node, accessible_name};
+use gpui::Role;
 
 #[test]
 fn shortcut_keys_join_into_one_keycap() {
@@ -176,6 +178,60 @@ fn the_bell_draws_its_badge_only_with_something_unread(cx: &mut TestAppContext) 
     window.simulate_click(bell.center(), Modifiers::default());
     window.run_until_parked();
     assert_eq!(opened.bell_clicks.get(), 1);
+}
+
+#[gpui::test]
+fn the_search_field_is_a_button_and_its_keycap_reads_the_shortcut(cx: &mut TestAppContext) {
+    let opened = open(0, cx);
+    let window = opened.window;
+    let capture = FrameCapture::observe(window);
+    let frame = capture.frame(window);
+
+    let field = accessibility_node(&frame, "search").expect("field node");
+    assert_eq!(field.role(), Role::Button);
+    assert_eq!(
+        accessible_name(&frame, "search").as_deref(),
+        Some("Search or run a command")
+    );
+    assert_eq!(
+        accessible_name(&frame, "search-key").as_deref(),
+        Some("Ctrl K")
+    );
+}
+
+#[gpui::test]
+fn the_bell_badge_reads_the_count(cx: &mut TestAppContext) {
+    let opened = open(2, cx);
+    let window = opened.window;
+    let capture = FrameCapture::observe(window);
+    let frame = capture.frame(window);
+
+    assert_eq!(
+        accessible_name(&frame, "notifications-badge").as_deref(),
+        Some("2")
+    );
+}
+
+#[gpui::test]
+fn the_bell_badge_takes_the_id_the_product_chooses(cx: &mut TestAppContext) {
+    struct CustomBadge;
+
+    impl Render for CustomBadge {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().p_4().child(
+                NotificationBell::new("bell", "Notifications", 5)
+                    .urgency(BellUrgency::Info)
+                    .badge_id("inbox-badge"),
+            )
+        }
+    }
+
+    open(0, cx);
+    let (_view, window) = cx.add_window_view(|_, _| CustomBadge);
+    window.run_until_parked();
+
+    assert!(window.debug_bounds("inbox-badge").is_some());
+    assert!(window.debug_bounds("notifications-badge").is_none());
 }
 
 #[gpui::test]

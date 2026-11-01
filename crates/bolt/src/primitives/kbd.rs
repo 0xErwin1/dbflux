@@ -88,6 +88,7 @@ pub struct Kbd {
     keys: Vec<SharedString>,
     tone: KbdTone,
     id: Option<ElementId>,
+    aria_label: Option<SharedString>,
 }
 
 impl Kbd {
@@ -97,6 +98,7 @@ impl Kbd {
             keys: vec![key_label(&key.into())],
             tone: KbdTone::Default,
             id: None,
+            aria_label: None,
         }
     }
 
@@ -124,6 +126,7 @@ impl Kbd {
             keys,
             tone: KbdTone::Default,
             id: None,
+            aria_label: None,
         }
     }
 
@@ -136,6 +139,14 @@ impl Kbd {
     /// automation find it by name.
     pub fn id(mut self, id: impl Into<ElementId>) -> Self {
         self.id = Some(id.into());
+        self
+    }
+
+    /// Accessible label of the key row, read by assistive technology and
+    /// automation. It needs [`Self::id`]: a row without an id has no
+    /// accessibility node to carry it.
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.aria_label = Some(label.into());
         self
     }
 
@@ -199,7 +210,15 @@ impl RenderOnce for Kbd {
             }
         }
 
-        crate::selector::with_optional_id(row, self.id)
+        match (self.id, self.aria_label) {
+            (Some(id), Some(label)) => row
+                .debug_selector(crate::selector::id_selector(&id))
+                .id(id)
+                .role(gpui::Role::Label)
+                .aria_label(label)
+                .into_any_element(),
+            (id, _) => crate::selector::with_optional_id(row, id),
+        }
     }
 }
 

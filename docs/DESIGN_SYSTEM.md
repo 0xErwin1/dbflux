@@ -83,10 +83,16 @@ Some parts get an id derived from their owner's id:
 | The command search field's shortcut keycap | `<field id>-key` |
 | An activity rail button | `rail-<entry id>` |
 | A rail button's count badge | `rail-<entry id>-count` |
-| The notification bell's count badge | `notifications-badge` |
+| The notification bell's count badge | `notifications-badge` (`NotificationBell::badge_id` replaces it) |
+
+The rail root carries its own id as a selector too. The count badges carry
+the count they draw as their accessible label (none while hidden), and the
+command search keycap carries its shortcut text, so the accessibility tree and
+UI automation read them. Rail buttons and the command search field have the
+button role; a rail button reports itself selected while its entry is active.
 
 `Badge`, `Kbd`, `BannerBlock` and `EmptyState` take an optional id with
-`.id(..)`. Without one they render exactly as before; with one, the element
+`.id(..)`. A `Kbd` with an id also takes `.aria_label(..)`. Without one they render exactly as before; with one, the element
 carries that id and its debug selector, so a product finds it without a
 wrapper.
 
