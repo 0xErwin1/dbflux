@@ -25,8 +25,8 @@ to its own repository without touching a screen: see
 | `bolt::semantic` | Banner, row-state and chart-chrome colors per palette |
 | `bolt::icon` | `IconSource`: a named icon or an SVG path |
 | `bolt::primitives` | Badge, banner, chamfer, divider, file picker, focus ring, keycap, label, loading state, segmented control, status, surface, text, type-to-confirm |
-| `bolt::controls` | Button, checkbox, dropdown, input, read-only text view |
-| `bolt::composites` | Tabs (document, result, inline), menu item and popup menu, list row, empty state, split button, field row, island |
+| `bolt::controls` | Button, checkbox, dropdown, select trigger, input, read-only text view |
+| `bolt::composites` | Tabs (document, result, inline), menu item and popup menu, list row, empty state, split button, splitter, field row, island |
 | `bolt::selector` | `id_selector`: the gpui debug selector every id-bearing component records for its element id |
 | `bolt::modals` | The modal dialog, its focus helper and the shared body blocks (lead, statement, field, form row, value field) |
 
@@ -60,14 +60,56 @@ a database or a design board: a source-scanning guardrail in
 ## Finding components in tests
 
 Every Bolt component that takes an element id (button, checkbox, dropdown,
-input, file picker, tabs, menu row and overlay, list row, split button,
-segmented control and its segments, modal backdrop) records that id as its
-gpui debug selector, so a product's GPUI test finds it with
+select trigger, input, file picker, tabs, menu row and overlay, list row,
+split button, splitter, segmented control and its segments, modal backdrop)
+records that id as its gpui debug selector, so a product's GPUI test finds it with
 `cx.debug_bounds("<id>")`. A segment's id defaults to
 `segmented-<group>-<id>`; `SegmentedItem::element_id` replaces it. An input
 records its selector on its frame, so a bare input (`appearance(false)`) has
 none. gpui records selectors only in debug builds with `test-support`;
 nothing changes in what is drawn.
+
+`Badge`, `Kbd`, `BannerBlock` and `EmptyState` take an optional id with
+`.id(..)`. Without one they render exactly as before; with one, the element
+carries that id and its debug selector, so a product finds it without a
+wrapper.
+
+## Options for products
+
+These options exist so a product composes its screens from Bolt alone. Each
+one is off by default, so DBFlux draws the same pixels without them.
+
+| Component | Option | What it does |
+|---|---|---|
+| `SegmentedControl` | `.tabs(true)` | A named control becomes a tab list and its segments tabs, selected when active, for a segmented control that switches views. The look and ids stay the same; the default is a radio group. |
+| `SelectTrigger` | `SelectTrigger::new(id, label)` | The closed field of a select, drawn by the same code as a standard `Dropdown` trigger: cut-6 field, optional leading icon, truncated label, chevron. It is a button with the caller's click handler, `.disabled(..)`, `.focus_ring(..)` or `.focused(..)`, for a product that opens its own popup. The `Dropdown` entity itself is unchanged. |
+| `Input` | `.padding(x, y)`, `.text_size(..)`, `.line_height(..)` | Replace the inner padding (the height then follows the line), the text size and the line height. With `appearance(false)`, set them to the values of the text the field replaces so nothing moves when the text turns into a field. Without them a bare input keeps gpui-component's size. |
+| `EmptyState` | `.primary_action(Button)` | A real button under the sentence for the one thing the region asks for. The key-hint actions stay below it. |
+| `MenuItem` | `.checked(bool)` | A checkable row: `true` draws a tint check mark (`MenuMetrics::CHECK_ICON`) after the label. The row reports itself as a checkable menu item, toggled or not. A row without it is a plain menu item. |
+| `Splitter` | `Splitter::new(id, SplitAxis)` | The resize gutter between two panes (see below). |
+
+### Splitter
+
+`Splitter` is a `SplitterMetrics::GUTTER` (6 px) strip across the split with a
+three-dot muted grip in the middle. `SplitAxis::Horizontal` places the panes side
+by side and shows the column-resize cursor; `SplitAxis::Vertical` stacks them
+and shows the row-resize cursor. Hovering lays the accent wash at
+`SplitterMetrics::HOVER_ALPHA` over the gutter, the same wash as the sidebar
+and inspector grips. The tint shows while `.active(true)` or while keyboard
+focus is visible.
+
+The owner keeps the pane size, and the splitter reports what the user does:
+
+- `.on_drag(|position, window, cx| ..)`: the pointer along the axis, in
+  window coordinates, on every move of a drag the gutter started.
+- `.on_step(|delta, window, cx| ..)`: Left and Right (side by side) or Up and
+  Down (stacked) while the handle given to `.track_focus(..)` holds focus,
+  `SplitterMetrics::KEY_STEP` (16 px) by default, set with `.step(..)`.
+- `.on_toggle_collapse(|window, cx| ..)`: a double click, or Enter while
+  focused.
+
+Its accessibility role is a splitter, oriented across the axis. DBFlux's
+sidebar and inspector keep their own grips.
 
 ## Reading colors
 

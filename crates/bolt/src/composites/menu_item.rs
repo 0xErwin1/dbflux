@@ -48,6 +48,8 @@ pub struct MenuItem {
     /// A second, muted line under the label: what the item acts on, or why
     /// it is disabled.
     pub detail: Option<SharedString>,
+    /// `Some` for a checkable row: `true` draws the trailing check mark.
+    pub checked: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,7 +170,15 @@ impl MenuItem {
             disabled: false,
             shortcut: None,
             detail: None,
+            checked: None,
         }
+    }
+
+    /// Makes the row checkable: a checked row draws a tint check mark after
+    /// its label, and the row reports itself as a checkable menu item.
+    pub fn checked(mut self, checked: bool) -> Self {
+        self.checked = Some(checked);
+        self
     }
 
     /// A caption row at the top of a menu, for example the column and row a
@@ -264,6 +274,8 @@ pub fn menu_row(
     }
 
     let id = id.into();
+    let check_selector = format!("{id}-check");
+    let is_item = !item.is_header && !item.is_separator;
 
     div()
         .debug_selector(crate::selector::id_selector(&id))
@@ -271,8 +283,13 @@ pub fn menu_row(
         // A header or a separator is not an item of the menu; the two have
         // renderers of their own, and this keeps the role honest if one is ever
         // drawn as a row.
-        .when(!item.is_header && !item.is_separator, |row| {
-            row.role(Role::MenuItem)
+        .when(is_item, |row| match item.checked {
+            Some(checked) => row.role(Role::MenuItemCheckBox).aria_toggled(if checked {
+                Toggled::True
+            } else {
+                Toggled::False
+            }),
+            None => row.role(Role::MenuItem),
         })
         .relative()
         .flex()
@@ -325,6 +342,18 @@ pub fn menu_row(
                         .text_color(theme.muted_foreground)
                         .child(detail),
                 ),
+        })
+        .when(item.checked == Some(true), |row| {
+            row.child(
+                div()
+                    .debug_selector(move || check_selector)
+                    .flex_shrink_0()
+                    .child(
+                        Icon::new(IconSource::Named(IconName::Check))
+                            .size(MenuMetrics::CHECK_ICON)
+                            .color(ChromeColors::tint(theme)),
+                    ),
+            )
         })
         .when_some(item.shortcut.as_ref(), |row, shortcut| {
             row.child(
@@ -464,6 +493,110 @@ mod tests {
     };
     use crate::tokens::{ChamferCut, ChromeColorSlot, ChromeEdgeRole};
     use gpui::px;
+
+    mod checked {
+        use super::super::{MenuItem, menu_row};
+        use gpui::{
+            Context, IntoElement, ParentElement as _, Render, Role, Styled as _, TestAppContext,
+            Toggled, Window, div,
+        };
+
+        #[derive(Default)]
+        struct FrameCapture(std::sync::Mutex<Option<gpui::AccessibilityFrame>>);
+
+        impl gpui::FrameObserver for FrameCapture {
+            fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
+                *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+            }
+        }
+
+        struct Rows;
+
+        impl Render for Rows {
+            fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(menu_row(
+                        "row-wrap",
+                        &MenuItem::new("Wrap").checked(true),
+                        false,
+                        cx,
+                    ))
+                    .child(menu_row(
+                        "row-mono",
+                        &MenuItem::new("Mono").checked(false),
+                        false,
+                        cx,
+                    ))
+                    .child(menu_row("row-open", &MenuItem::new("Open"), false, cx))
+            }
+        }
+
+        #[gpui::test]
+        fn a_checked_row_draws_the_mark_and_reports_its_state(cx: &mut TestAppContext) {
+            cx.update(gpui_component::init);
+            cx.update(|cx| {
+                crate::theme::install(
+                    crate::brand::Brand::neutral(),
+                    crate::palette::PaletteMode::Dark,
+                    crate::density::Density::Default,
+                    cx,
+                );
+            });
+
+            let capture = std::sync::Arc::new(FrameCapture::default());
+            let capture_for_window = capture.clone();
+            let (_view, window) = cx.add_window_view(move |window, _cx| {
+                window.observe_frames(&capture_for_window);
+                window.refresh();
+                Rows
+            });
+            window.run_until_parked();
+
+            let wrap = window.debug_bounds("row-wrap").expect("row laid out");
+            let mark = window
+                .debug_bounds("row-wrap-check")
+                .expect("the checked row draws its mark");
+            assert!(wrap.contains(&mark.center()));
+            assert!(
+                window.debug_bounds("row-mono-check").is_none(),
+                "an unchecked row draws no mark"
+            );
+            assert!(window.debug_bounds("row-open-check").is_none());
+
+            let mono = window.debug_bounds("row-mono").expect("row laid out");
+            let open = window.debug_bounds("row-open").expect("row laid out");
+            assert_eq!(mono.size, open.size, "a checkable row keeps the row size");
+
+            let frame = capture
+                .0
+                .lock()
+                .expect("frame capture lock")
+                .clone()
+                .expect("the window rendered a frame");
+            let node = |id: &str| {
+                let (_, node) = frame
+                    .nodes()
+                    .find(|(_, node)| node.id() == id)
+                    .unwrap_or_else(|| panic!("{id} is in the frame"));
+                frame
+                    .accessibility_node(node)
+                    .unwrap_or_else(|| panic!("{id} is accessible"))
+                    .clone()
+            };
+
+            let wrap = node("row-wrap");
+            assert_eq!(wrap.role(), Role::MenuItemCheckBox);
+            assert_eq!(wrap.toggled(), Some(Toggled::True));
+            assert_eq!(node("row-mono").toggled(), Some(Toggled::False));
+
+            let open = node("row-open");
+            assert_eq!(open.role(), Role::MenuItem, "a plain row stays a menu item");
+            assert_eq!(open.toggled(), None);
+        }
+    }
 
     #[test]
     fn shortcut_builder_preserves_shortcut_text() {

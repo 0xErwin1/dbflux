@@ -5,6 +5,7 @@ mod checkbox;
 mod dropdown;
 mod input;
 mod readonly_text_view;
+mod select_trigger;
 mod type_to_confirm;
 
 pub use button::{
@@ -22,4 +23,5 @@ pub use input::{
     ReadOnlyEditor, Rope, RopeExt, TriggerCompletion,
 };
 pub use readonly_text_view::ReadonlyTextView;
+pub use select_trigger::SelectTrigger;
 pub use type_to_confirm::{TypeToConfirm, TypeToConfirmEvent};

@@ -115,6 +115,9 @@ pub fn stepped_segment<'a>(ids: &[&'a str], active: &str, step: isize) -> Option
 ///   technology can target one option of one control. An unnamed control
 ///   stays out of the accessibility tree: its segment ids repeat across
 ///   controls, and duplicate accessible nodes are dropped.
+/// - Tab list: a named control marked with [`Self::tabs`] is a tab list
+///   whose segments are tabs, selected when active, for a segmented control
+///   that switches views. The look and ids are the same.
 #[derive(IntoElement)]
 pub struct SegmentedControl {
     items: Vec<SegmentedItem>,
@@ -122,6 +125,7 @@ pub struct SegmentedControl {
     focused: bool,
     focused_id: Option<SharedString>,
     group: Option<SharedString>,
+    tabs: bool,
     on_select: Arc<dyn Fn(&SharedString, &mut Window, &mut App)>,
 }
 
@@ -151,8 +155,17 @@ impl SegmentedControl {
             focused: false,
             focused_id: None,
             group: None,
+            tabs: false,
             on_select: Arc::new(on_select),
         }
+    }
+
+    /// Gives a named control the tab list role and its segments the tab role
+    /// (selected rather than toggled), for a control used as a tab list.
+    /// Off by default: the control is a radio group.
+    pub fn tabs(mut self, tabs: bool) -> Self {
+        self.tabs = tabs;
+        self
     }
 
     /// Marks the control as holding the keyboard cursor. The focused segment
@@ -193,6 +206,7 @@ impl RenderOnce for SegmentedControl {
         let on_select = self.on_select;
         let group = self.group;
         let is_named = group.is_some();
+        let is_tab_list = self.tabs;
 
         let segments = self.items.into_iter().map(|item| {
             let is_active = item.id == active_id;
@@ -229,15 +243,19 @@ impl RenderOnce for SegmentedControl {
                 .debug_selector(id_selector(&segment_element_id))
                 .id(segment_element_id)
                 .when(is_named, |segment| {
-                    segment
-                        .role(Role::RadioButton)
-                        .accessibility_id(segment_id)
-                        .aria_label(accessible_label)
-                        .aria_toggled(if is_active {
+                    let segment = if is_tab_list {
+                        segment.role(Role::Tab).aria_selected(is_active)
+                    } else {
+                        segment.role(Role::RadioButton).aria_toggled(if is_active {
                             Toggled::True
                         } else {
                             Toggled::False
                         })
+                    };
+
+                    segment
+                        .accessibility_id(segment_id)
+                        .aria_label(accessible_label)
                         .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
                             on_accessible_select(&accessible_id, window, cx);
                         })
@@ -286,7 +304,13 @@ impl RenderOnce for SegmentedControl {
             .debug_selector(id_selector(&track_element_id))
             .id(track_element_id)
             .when(is_named, |track| {
-                track.role(Role::RadioGroup).accessibility_id(track_id)
+                track
+                    .role(if is_tab_list {
+                        Role::TabList
+                    } else {
+                        Role::RadioGroup
+                    })
+                    .accessibility_id(track_id)
             })
             .relative()
             .flex()
@@ -520,6 +544,102 @@ mod tests {
 
         let light = node_named("segmented-theme-light");
         assert_eq!(light.toggled(), Some(Toggled::False));
+    }
+
+    struct TabSegments;
+
+    impl Render for TabSegments {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                SegmentedControl::new(
+                    vec![
+                        SegmentedItem::new("body", "Body"),
+                        SegmentedItem::new("headers", "Headers"),
+                    ],
+                    "body",
+                    |_, _, _| {},
+                )
+                .group("response")
+                .tabs(true),
+            )
+        }
+    }
+
+    fn capture_frame<V: Render>(
+        build: impl FnOnce() -> V + 'static,
+        cx: &mut TestAppContext,
+    ) -> gpui::AccessibilityFrame {
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::install(
+                crate::brand::Brand::neutral(),
+                crate::palette::PaletteMode::Dark,
+                crate::density::Density::Default,
+                cx,
+            );
+        });
+
+        let capture = std::sync::Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (_view, window) = cx.add_window_view(move |window, _cx| {
+            window.observe_frames(&capture_for_window);
+            window.refresh();
+            build()
+        });
+        window.run_until_parked();
+
+        capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame")
+    }
+
+    fn accessible_node(frame: &gpui::AccessibilityFrame, id: &str) -> gpui::accesskit::Node {
+        let (_, node) = frame
+            .nodes()
+            .find(|(_, node)| node.id() == id)
+            .unwrap_or_else(|| panic!("{id} is in the frame"));
+        frame
+            .accessibility_node(node)
+            .unwrap_or_else(|| panic!("{id} is an accessible node"))
+            .clone()
+    }
+
+    #[gpui::test]
+    fn a_tab_control_is_a_tab_list_of_selected_tabs(cx: &mut TestAppContext) {
+        let frame = capture_frame(|| TabSegments, cx);
+
+        assert_eq!(
+            accessible_node(&frame, "segmented-response").role(),
+            Role::TabList
+        );
+
+        let body = accessible_node(&frame, "segmented-response-body");
+        assert_eq!(body.role(), Role::Tab);
+        assert_eq!(body.label(), Some("Body"));
+        assert_eq!(body.is_selected(), Some(true));
+        assert_eq!(body.toggled(), None, "a tab is selected, not toggled");
+        assert!(body.supports_action(AccessibleAction::Click));
+
+        let headers = accessible_node(&frame, "segmented-response-headers");
+        assert_eq!(headers.role(), Role::Tab);
+        assert_eq!(headers.is_selected(), Some(false));
+    }
+
+    #[gpui::test]
+    fn a_named_control_stays_a_radio_group_by_default(cx: &mut TestAppContext) {
+        let frame = capture_frame(|| NamedSegments, cx);
+
+        assert_eq!(
+            accessible_node(&frame, "segmented-theme").role(),
+            Role::RadioGroup
+        );
+        assert_eq!(
+            accessible_node(&frame, "segmented-theme-dark").is_selected(),
+            None
+        );
     }
 
     struct CountedSegments;

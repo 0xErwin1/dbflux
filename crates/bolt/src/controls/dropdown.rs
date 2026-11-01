@@ -9,10 +9,11 @@ use gpui::{
 };
 use gpui_component::{ActiveTheme, IconName};
 
+use crate::controls::select_trigger::{SelectField, select_field};
 use crate::controls::{ButtonVariant, button_colors};
 use crate::density;
 use crate::icon::IconSource;
-use crate::primitives::{BadgeTone, Chamfer, ChamferRing, Icon};
+use crate::primitives::{BadgeTone, Chamfer, Icon};
 use crate::selector::id_selector;
 use crate::tokens::{ChamferCut, ChromeColors, ChromeEdgeRole, Feedback, Fields, Heights, Spacing};
 
@@ -988,57 +989,22 @@ impl Dropdown {
                     );
             }
             DropdownTriggerVariant::Standard => {
-                let opacity = if disabled {
-                    Fields::DISABLED_OPACITY
-                } else {
-                    1.0
-                };
+                let ring = (self.focus_ring_visible || keyboard_focused).then(|| {
+                    self.focus_ring_color
+                        .unwrap_or_else(|| ChromeColors::tint(theme))
+                });
 
-                let mut shape = Chamfer::new(ChamferCut::CONTROL)
-                    .fill(theme.secondary.opacity(opacity))
-                    .border(theme.border.opacity(opacity));
-
-                if !disabled {
-                    shape = shape
-                        .fill_hover(theme.secondary_hover)
-                        .interactive("dropdown-trigger-shape");
-                }
-
-                if self.focus_ring_visible || keyboard_focused {
-                    shape = shape.ring(ChamferRing::focus(
-                        self.focus_ring_color
-                            .unwrap_or_else(|| ChromeColors::tint(theme)),
-                    ));
-                }
-
-                let text_color = if disabled {
-                    theme.muted_foreground
-                } else {
-                    theme.accent_foreground
-                };
-
-                trigger = trigger
-                    .relative()
-                    .h(Fields::HEIGHT)
-                    .gap(Fields::GAP)
-                    .px(Fields::PADDING_X)
-                    .font_family(crate::fonts::ui_family(cx))
-                    .text_size(Fields::TEXT)
-                    .text_color(text_color)
-                    .child(shape)
-                    .when_some(self.leading_icon.clone(), |trigger, icon| {
-                        trigger.child(
-                            Icon::new(icon)
-                                .size(Fields::LEADING_ICON)
-                                .color(theme.muted_foreground),
-                        )
-                    })
-                    .child(div().flex_1().truncate().child(label))
-                    .child(
-                        Icon::new(IconName::ChevronDown)
-                            .size(Fields::CHEVRON)
-                            .color(theme.muted_foreground),
-                    );
+                trigger = select_field(
+                    trigger,
+                    SelectField {
+                        label,
+                        leading_icon: self.leading_icon.clone(),
+                        disabled,
+                        ring,
+                        shape_id: "dropdown-trigger-shape".into(),
+                    },
+                    cx,
+                );
             }
         }
 

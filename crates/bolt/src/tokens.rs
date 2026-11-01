@@ -900,6 +900,30 @@ impl MenuMetrics {
     pub const SELECTED_ALPHA: f32 = 0.14;
     /// Opacity of a disabled row.
     pub const DISABLED_OPACITY: f32 = 0.45;
+    /// Trailing check mark of a checked row, sized like the submenu chevron.
+    /// (13 px)
+    pub const CHECK_ICON: Rems = ui(13.0);
+}
+
+/// Geometry of the resize gutter between two panes (`composites::Splitter`),
+/// from the sidebar and inspector grips.
+pub struct SplitterMetrics;
+
+impl SplitterMetrics {
+    /// Thickness of the gutter across the split, the inspector grip's width.
+    /// (6 px)
+    pub const GUTTER: Pixels = px(6.0);
+    /// Side of one grip dot. (2 px)
+    pub const DOT: Pixels = px(2.0);
+    /// Gap between grip dots. (3 px)
+    pub const DOT_GAP: Pixels = px(3.0);
+    /// Length of the three-dot grip along the gutter: three dots and two
+    /// gaps. (12 px)
+    pub const GRIP_LENGTH: Pixels = px(12.0);
+    /// Alpha of the accent wash over a hovered gutter, the grips' hover.
+    pub const HOVER_ALPHA: f32 = 0.3;
+    /// Distance one arrow key moves the split. (16 px)
+    pub const KEY_STEP: Pixels = px(16.0);
 }
 
 /// Geometry of trees (`TreeNav` rows and the connections sidebar), from the

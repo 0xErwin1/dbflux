@@ -4,7 +4,7 @@
 //! Colors are sourced entirely from `BannerColors` — no hardcoded hex values.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, FontWeight, Hsla, SharedString, Window, div};
+use gpui::{AnyElement, App, ElementId, FontWeight, Hsla, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 
 use crate::icon::IconSource;
@@ -53,6 +53,7 @@ pub struct BannerBlock {
     body: Option<SharedString>,
     pre_block: Option<SharedString>,
     actions: Option<AnyElement>,
+    id: Option<ElementId>,
 }
 
 impl BannerBlock {
@@ -65,7 +66,15 @@ impl BannerBlock {
             body: None,
             pre_block: None,
             actions: None,
+            id: None,
         }
+    }
+
+    /// Sets the element id (and debug selector), so tests and automation
+    /// find the banner by name.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = Some(id.into());
+        self
     }
 
     /// The leading icon shown when the caller does not supply one with
@@ -164,7 +173,7 @@ impl RenderOnce for BannerBlock {
                 )
             });
 
-        div()
+        let banner = div()
             .relative()
             .flex()
             .w_full()
@@ -185,6 +194,8 @@ impl RenderOnce for BannerBlock {
             .child(content)
             .when_some(self.actions, |el, actions| {
                 el.child(div().flex_shrink_0().child(actions))
-            })
+            });
+
+        crate::selector::with_optional_id(banner, self.id)
     }
 }

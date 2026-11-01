@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, FontWeight, SharedString, Window, div};
+use gpui::{App, ElementId, FontWeight, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 
 use crate::primitives::Chamfer;
@@ -87,6 +87,7 @@ pub fn key_label(label: &str) -> SharedString {
 pub struct Kbd {
     keys: Vec<SharedString>,
     tone: KbdTone,
+    id: Option<ElementId>,
 }
 
 impl Kbd {
@@ -95,6 +96,7 @@ impl Kbd {
         Self {
             keys: vec![key_label(&key.into())],
             tone: KbdTone::Default,
+            id: None,
         }
     }
 
@@ -121,11 +123,19 @@ impl Kbd {
         Self {
             keys,
             tone: KbdTone::Default,
+            id: None,
         }
     }
 
     pub fn tone(mut self, tone: KbdTone) -> Self {
         self.tone = tone;
+        self
+    }
+
+    /// Sets the element id (and debug selector) of the key row, so tests and
+    /// automation find it by name.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = Some(id.into());
         self
     }
 
@@ -189,7 +199,7 @@ impl RenderOnce for Kbd {
             }
         }
 
-        row
+        crate::selector::with_optional_id(row, self.id)
     }
 }
 

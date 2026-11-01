@@ -1,17 +1,19 @@
 use gpui::{
     AppContext as _, Context, ElementId, Entity, IntoElement, ParentElement as _, Render,
-    Styled as _, TestAppContext, VisualTestContext, Window, div,
+    Styled as _, TestAppContext, VisualTestContext, Window, div, px,
 };
 
 use super::id_selector;
 use crate::composites::{
-    ListRow, MenuItem, SplitButton, document_tab, inline_tab, menu_row, render_menu_overlay,
-    result_tab,
+    EmptyState, ListRow, MenuItem, SplitAxis, SplitButton, Splitter, document_tab, inline_tab,
+    menu_row, render_menu_overlay, result_tab,
 };
-use crate::controls::{Button, Checkbox, Dropdown, DropdownItem, Input, InputState};
+use crate::controls::{Button, Checkbox, Dropdown, DropdownItem, Input, InputState, SelectTrigger};
 use crate::icon::IconSource;
 use crate::modals::Modal;
-use crate::primitives::{FilePicker, SegmentedControl, SegmentedItem};
+use crate::primitives::{
+    Badge, BadgeTone, BannerBlock, BannerVariant, FilePicker, Kbd, SegmentedControl, SegmentedItem,
+};
 
 struct Components {
     dropdown: Entity<Dropdown>,
@@ -30,6 +32,22 @@ impl Render for Components {
             .flex_col()
             .child(Button::new("sel-button", "Save"))
             .child(Checkbox::new("sel-checkbox").label("Wrap"))
+            .child(Badge::new("New", BadgeTone::Info).id("sel-badge"))
+            .child(Kbd::new("Esc").id("sel-kbd"))
+            .child(BannerBlock::new(BannerVariant::Info, "Saved").id("sel-banner"))
+            .child(
+                div().h(px(160.0)).child(
+                    EmptyState::new(folder.clone(), "Nothing here")
+                        .id("sel-empty")
+                        .primary_action(Button::new("sel-empty-primary", "Create")),
+                ),
+            )
+            .child(SelectTrigger::new("sel-select", "One"))
+            .child(
+                div()
+                    .h(px(40.0))
+                    .child(Splitter::new("sel-splitter", SplitAxis::Horizontal)),
+            )
             .child(self.dropdown.clone())
             .child(Input::new(&self.input).id("sel-input"))
             .child(FilePicker::new("sel-file", "", "Choose", folder, clear))
@@ -85,6 +103,13 @@ fn every_id_bearing_component_is_found_by_its_id(cx: &mut TestAppContext) {
     let ids = [
         "sel-button",
         "sel-checkbox",
+        "sel-badge",
+        "sel-kbd",
+        "sel-banner",
+        "sel-empty",
+        "sel-empty-primary",
+        "sel-select",
+        "sel-splitter",
         "sel-dropdown",
         "sel-input",
         "sel-file",

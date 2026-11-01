@@ -1,5 +1,5 @@
 //! Composites: the tabs, menus, list rows, empty states, split buttons,
-//! field rows and islands a screen builds out of the primitives and controls.
+//! splitters, field rows and islands a screen builds out of the primitives and controls.
 
 mod empty_state;
 mod field_row;
@@ -8,6 +8,7 @@ mod list_row;
 mod menu_item;
 mod menu_popup;
 mod split_button;
+mod splitter;
 mod tabs;
 
 pub use empty_state::{EmptyState, EmptyStateAction};
@@ -25,6 +26,7 @@ pub use menu_item::{
 };
 pub use menu_popup::{render_menu_items, render_menu_overlay};
 pub use split_button::SplitButton;
+pub use splitter::{SplitAxis, Splitter};
 pub use tabs::{
     document_tab, document_tab_bar, document_tab_title, inline_tab, inline_tab_bar, result_tab,
     result_tab_bar,
