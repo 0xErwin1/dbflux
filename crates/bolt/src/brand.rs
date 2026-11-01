@@ -126,7 +126,7 @@ pub fn brand(cx: &App) -> Brand {
 }
 
 /// The washes the installed brand paints for the resolved palette mode.
-pub fn colors(cx: &App) -> AccentWashes {
+pub fn washes(cx: &App) -> AccentWashes {
     AccentWashes::for_brand(&brand(cx), resolved_mode(cx))
 }
 
@@ -155,7 +155,7 @@ mod tests {
         cx.update(|cx| {
             assert_eq!(brand(cx), Brand::neutral());
 
-            let washes = colors(cx);
+            let washes = super::washes(cx);
             assert_eq!(
                 washes,
                 AccentWashes::for_brand(&Brand::neutral(), resolved_mode(cx))

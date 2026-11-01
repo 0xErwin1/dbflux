@@ -6,7 +6,8 @@
 //! hardcoded. A product maps its own settings onto [`PaletteMode`] and
 //! [`Density`], installs its [`Brand`], and calls [`install`] or
 //! [`apply_theme`]. Screens never read a `gpui_component::Theme` field for an
-//! accent role: they read [`crate::brand::brand`] and [`crate::brand::colors`].
+//! accent role: they read [`crate::brand::brand`] and [`crate::brand::washes`],
+//! or the neutral and semantic roles through [`crate::colors`].
 //!
 //! `System` is a request, not a palette: [`apply_theme`] resolves it against
 //! the platform appearance and publishes `Dark` or `Light` once it knows
