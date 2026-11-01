@@ -57,7 +57,11 @@ pub mod selector;
 pub mod semantic;
 pub mod shell;
 pub mod strings;
+
 pub mod theme;
+/// The toast stack: the severity model, its throttle and bounded stack, and
+/// the presentation shell. Content and product wiring stay product-side.
+pub mod toast;
 pub mod tokens;
 pub mod typography;
 pub mod vim;
