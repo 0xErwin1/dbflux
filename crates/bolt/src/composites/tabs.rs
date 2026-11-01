@@ -17,6 +17,7 @@ use gpui::{App, ElementId, FontWeight, SharedString, Stateful, div};
 use gpui_component::ActiveTheme;
 
 use crate::primitives::{Chamfer, ChamferCorners, Text};
+use crate::selector::id_selector;
 use crate::tokens::{ChamferCut, ChromeColors, TabMetrics};
 
 /// The document tab row: 46 px at the top of the document island, 10 px side
@@ -35,7 +36,10 @@ pub fn document_tab_bar(_cx: &App) -> gpui::Div {
 /// One document tab: a 30 px chip. Add the icon, `document_tab_title`, the
 /// dirty diamond and the close button as children.
 pub fn document_tab(id: impl Into<ElementId>, active: bool, cx: &App) -> Stateful<gpui::Div> {
+    let id = id.into();
+
     div()
+        .debug_selector(id_selector(&id))
         .id(id)
         .relative()
         .flex()
@@ -90,7 +94,10 @@ pub fn result_tab(
     active: bool,
     cx: &App,
 ) -> Stateful<gpui::Div> {
+    let id = id.into();
+
     div()
+        .debug_selector(id_selector(&id))
         .id(id)
         .relative()
         .flex()
@@ -128,8 +135,10 @@ pub fn inline_tab_bar(cx: &App) -> gpui::Div {
 pub fn inline_tab(id: impl Into<ElementId>, active: bool, cx: &App) -> Stateful<gpui::Div> {
     let theme = cx.theme();
     let hover = ChromeColors::strong(theme);
+    let id = id.into();
 
     div()
+        .debug_selector(id_selector(&id))
         .id(id)
         .relative()
         .flex()

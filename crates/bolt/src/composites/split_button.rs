@@ -4,6 +4,7 @@ use gpui_component::ActiveTheme;
 
 use crate::controls::{Button, ButtonVariant, button_colors};
 use crate::primitives::{Chamfer, ChamferCorners, ChamferRing};
+use crate::selector::id_selector;
 use crate::tokens::ButtonMetrics;
 
 /// A main action and its menu, joined by a 1 px seam.
@@ -91,6 +92,7 @@ impl RenderOnce for SplitButton {
             });
 
         div()
+            .debug_selector(id_selector(&self.id))
             .id(self.id)
             .flex()
             .flex_shrink_0()

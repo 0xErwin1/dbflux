@@ -6,6 +6,7 @@ use gpui::{App, Div, ElementId, Stateful, div};
 use gpui_component::ActiveTheme;
 
 use crate::primitives::{FOCUS_MARKER_SELECTOR, WhenFocusVisible};
+use crate::selector::id_selector;
 use crate::tokens::{ChromeColors, TreeMetrics};
 
 /// A clickable row of a list, table-like panel or picker.
@@ -69,6 +70,7 @@ impl ListRow {
         let show_bar = self.selected && self.selection_bar;
 
         div()
+            .debug_selector(id_selector(&self.id))
             .id(self.id)
             .relative()
             .when(self.selected, |row| row.bg(theme.list_active))

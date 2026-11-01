@@ -1,8 +1,9 @@
-//! Composites: the tabs, menus, list rows, empty states, split buttons and
-//! field rows a screen builds out of the primitives and controls.
+//! Composites: the tabs, menus, list rows, empty states, split buttons,
+//! field rows and islands a screen builds out of the primitives and controls.
 
 mod empty_state;
 mod field_row;
+mod island;
 mod list_row;
 mod menu_item;
 mod menu_popup;
@@ -13,6 +14,9 @@ pub use empty_state::{EmptyState, EmptyStateAction};
 pub use field_row::{
     field_row, field_row_vertical, field_row_vertical_with_desc, field_row_with_desc,
     field_row_with_label_width,
+};
+pub use island::{
+    Island, IslandInspection, docked_island_frame, inspect_island, island_edge_ring, island_fill,
 };
 pub use list_row::ListRow;
 pub use menu_item::{

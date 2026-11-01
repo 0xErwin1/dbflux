@@ -10,6 +10,7 @@ use gpui_component::input::{Editor as GpuiEditor, EditorState};
 use gpui_component::{ActiveTheme, Sizable};
 
 use crate::primitives::{Chamfer, ChamferRing};
+use crate::selector::id_selector;
 use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes};
 
 pub use gpui_component::RopeExt;
@@ -197,6 +198,8 @@ impl RenderOnce for Input {
             input = input.content_type(InputContentType::Password);
         }
 
+        let selector_id = self.id.clone();
+
         if let Some(id) = self.id {
             input = input.id(id);
         }
@@ -223,7 +226,13 @@ impl RenderOnce for Input {
             .focus_handle(cx)
             .contains_focused(window, cx);
 
+        // The frame records the selector: the inner gpui_component input has
+        // no hook for one, and a bare input (`appearance(false)`) gets no
+        // wrapper so its layout stays the host's.
         div()
+            .when_some(selector_id, |frame, id| {
+                frame.debug_selector(id_selector(&id))
+            })
             .relative()
             .w_full()
             .child(field_shape(

@@ -13,6 +13,7 @@ use crate::controls::{ButtonVariant, button_colors};
 use crate::density;
 use crate::icon::IconSource;
 use crate::primitives::{BadgeTone, Chamfer, ChamferRing, Icon};
+use crate::selector::id_selector;
 use crate::tokens::{ChamferCut, ChromeColors, ChromeEdgeRole, Feedback, Fields, Heights, Spacing};
 
 #[derive(Clone, Debug)]
@@ -1073,10 +1074,7 @@ impl Render for Dropdown {
 
         let mut element = div()
             .id(self.id.clone())
-            .debug_selector({
-                let id = self.id.to_string();
-                move || id.clone()
-            })
+            .debug_selector(id_selector(&self.id))
             .when_some(self.focus_handle.as_ref(), |element, handle| {
                 element.track_focus(handle)
             })

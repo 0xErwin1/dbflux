@@ -8,6 +8,7 @@ use gpui_component::ActiveTheme;
 
 use crate::density;
 use crate::primitives::{Chamfer, ChamferFillKind, ChamferRing, Icon};
+use crate::selector::id_selector;
 use crate::tokens::{ChamferCut, ChromeColors, Fields};
 
 type CheckboxHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
@@ -145,6 +146,7 @@ impl RenderOnce for Checkbox {
         let on_click = self.on_click.filter(|_| !self.disabled);
 
         div()
+            .debug_selector(id_selector(&self.id))
             .id(self.id)
             .role(Role::CheckBox)
             .aria_toggled(if checked {

@@ -263,7 +263,10 @@ pub fn menu_row(
         shape = shape.fill_hover(wash).interactive("menu-row-shape");
     }
 
+    let id = id.into();
+
     div()
+        .debug_selector(crate::selector::id_selector(&id))
         .id(id)
         // A header or a separator is not an item of the menu; the two have
         // renderers of their own, and this keeps the role honest if one is ever
@@ -360,17 +363,14 @@ pub fn render_menu_item(
 ) -> Stateful<Div> {
     let interaction_state = menu_item_interaction_state(item, is_selected);
 
-    let item_selector = format!("{}-item-{}", panel_id, index);
-    let item_id = SharedString::from(item_selector.clone());
+    let item_id = SharedString::from(format!("{}-item-{}", panel_id, index));
 
-    menu_row(item_id, item, is_selected, cx)
-        .debug_selector(move || item_selector.clone())
-        .when(interaction_state.interactive, |row| {
-            row.on_mouse_move(move |_, _, cx| {
-                on_hover(cx);
-            })
-            .on_click(on_click)
+    menu_row(item_id, item, is_selected, cx).when(interaction_state.interactive, |row| {
+        row.on_mouse_move(move |_, _, cx| {
+            on_hover(cx);
         })
+        .on_click(on_click)
+    })
 }
 
 /// Render a menu header row: an optional icon and a short mono caption naming

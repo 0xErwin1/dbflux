@@ -1,9 +1,9 @@
 //! `Island` — a chamfered pane floating on the desk (Isl* boards).
 //!
-//! Every pane of the main window (sidebar, document, right-side panels) and
-//! of the Settings and Connection Manager windows is an island: the panel
-//! fill cut 14 px at the top-left and bottom-right corners, a hairline along
-//! the full outline, and an `IslandMetrics::GAP` of desk between islands.
+//! Every pane of a window (sidebar, document, side panels) is an island: the
+//! panel fill cut 14 px at the top-left and bottom-right corners, a hairline
+//! along the full outline, and an `IslandMetrics::GAP` of desk between
+//! islands.
 
 use gpui::prelude::*;
 use gpui::{AnyElement, App, Div, Hsla, Pixels, StyleRefinement, Window, div};

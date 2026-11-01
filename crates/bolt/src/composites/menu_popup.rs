@@ -25,8 +25,10 @@ pub fn render_menu_overlay(
 ) -> Stateful<Div> {
     let on_dismiss = std::rc::Rc::new(on_dismiss);
     let on_dismiss_right = on_dismiss.clone();
+    let id = id.into();
 
     div()
+        .debug_selector(crate::selector::id_selector(&id))
         .id(id)
         .absolute()
         .top_0()

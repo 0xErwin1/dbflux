@@ -2,7 +2,6 @@ mod activity_rail;
 mod breadcrumb;
 mod control_shell;
 mod header;
-mod island;
 mod master_detail_list;
 mod notification_center;
 mod rail_nav;
@@ -13,11 +12,12 @@ mod wizard_rail;
 // The generic composites moved to `bolt`; re-exported at these paths so call
 // sites keep compiling.
 pub use bolt::composites::{
-    EmptyState, EmptyStateAction, ListRow, MenuItem, SplitButton, document_tab, document_tab_bar,
-    document_tab_title, field_row, field_row_vertical, field_row_vertical_with_desc,
-    field_row_with_desc, field_row_with_label_width, inline_tab, inline_tab_bar, menu_frame,
-    menu_row, render_menu_container, render_menu_header, render_menu_item, render_menu_items,
-    render_menu_overlay, render_separator, result_tab, result_tab_bar,
+    EmptyState, EmptyStateAction, Island, IslandInspection, ListRow, MenuItem, SplitButton,
+    docked_island_frame, document_tab, document_tab_bar, document_tab_title, field_row,
+    field_row_vertical, field_row_vertical_with_desc, field_row_with_desc,
+    field_row_with_label_width, inline_tab, inline_tab_bar, inspect_island, island_edge_ring,
+    island_fill, menu_frame, menu_row, render_menu_container, render_menu_header, render_menu_item,
+    render_menu_items, render_menu_overlay, render_separator, result_tab, result_tab_bar,
 };
 
 pub use activity_rail::{
@@ -28,9 +28,6 @@ pub use control_shell::control_shell;
 pub use header::{
     collapsible_bar, page_header, page_header_with_action, panel_header, panel_header_with_actions,
     section_header,
-};
-pub use island::{
-    Island, IslandInspection, docked_island_frame, inspect_island, island_edge_ring, island_fill,
 };
 pub use master_detail_list::{
     MasterDetailAction, MasterDetailActionKind, MasterDetailItem, MasterDetailListConfig, RowKind,

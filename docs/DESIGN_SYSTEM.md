@@ -26,7 +26,8 @@ to its own repository without touching a screen: see
 | `bolt::icon` | `IconSource`: a named icon or an SVG path |
 | `bolt::primitives` | Badge, banner, chamfer, divider, file picker, focus ring, keycap, label, loading state, segmented control, status, surface, text, type-to-confirm |
 | `bolt::controls` | Button, checkbox, dropdown, input, read-only text view |
-| `bolt::composites` | Tabs (document, result, inline), menu item and popup menu, list row, empty state, split button, field row |
+| `bolt::composites` | Tabs (document, result, inline), menu item and popup menu, list row, empty state, split button, field row, island |
+| `bolt::selector` | `id_selector`: the gpui debug selector every id-bearing component records for its element id |
 | `bolt::modals` | The modal dialog, its focus helper and the shared body blocks (lead, statement, field, form row, value field) |
 
 Bolt depends on `gpui`, `gpui-component`, `gpui-base`, `log` and `serde_json`.
@@ -55,6 +56,18 @@ a database or a design board: a source-scanning guardrail in
   with `on_modal_key`, says which command a deferring modal runs, and supplies
   the Escape keycap label, the close icon and its translated name. A modal
   rendered before the seam is installed answers no keys.
+
+## Finding components in tests
+
+Every Bolt component that takes an element id (button, checkbox, dropdown,
+input, file picker, tabs, menu row and overlay, list row, split button,
+segmented control and its segments, modal backdrop) records that id as its
+gpui debug selector, so a product's GPUI test finds it with
+`cx.debug_bounds("<id>")`. A segment's id defaults to
+`segmented-<group>-<id>`; `SegmentedItem::element_id` replaces it. An input
+records its selector on its frame, so a bare input (`appearance(false)`) has
+none. gpui records selectors only in debug builds with `test-support`;
+nothing changes in what is drawn.
 
 ## Reading colors
 

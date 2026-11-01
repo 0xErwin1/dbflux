@@ -11,6 +11,7 @@ use crate::icon::IconSource;
 use crate::primitives::{
     Chamfer, ChamferCorners, ChamferFillKind, ChamferRing, Icon, Kbd, KbdTone,
 };
+use crate::selector::id_selector;
 use crate::tokens::{ButtonMetrics, ChamferCut, ChromeColors, Fields};
 
 /// Color treatment of a [`Button`] (the states board).
@@ -500,6 +501,7 @@ impl RenderOnce for Button {
         });
 
         let mut button = div()
+            .debug_selector(id_selector(&id))
             .id(id)
             .role(Role::Button)
             .when_some(accessible_name, |button, name| button.aria_label(name))

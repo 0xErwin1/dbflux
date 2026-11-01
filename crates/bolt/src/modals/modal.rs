@@ -1,6 +1,7 @@
 use crate::controls::Button;
 use crate::icon::IconSource;
 use crate::primitives::{Chamfer, Icon, Kbd, SurfaceRole, Text, inspect_surface_role, overlay_bg};
+use crate::selector::id_selector;
 use crate::tokens::{ChamferCut, ChromeColors, ModalMetrics};
 use gpui::prelude::*;
 use gpui::{
@@ -696,6 +697,7 @@ impl RenderOnce for Modal {
 
         let trap_id = self.id.clone();
         let mut backdrop = div()
+            .debug_selector(id_selector(&self.id))
             .id(self.id)
             .absolute()
             .inset_0()
