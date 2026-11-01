@@ -28,6 +28,12 @@ pub mod command_palette;
 pub mod controls;
 pub mod density;
 pub mod fonts;
+
+/// The form seam: the edit state a form host moves between, the per-field
+/// facts and the command-driven two-dimensional navigation over the host's
+/// own field rows.
+pub mod forms;
+
 pub mod icon;
 
 /// The keyboard-coverage rule as a reusable registry: a product fills in its

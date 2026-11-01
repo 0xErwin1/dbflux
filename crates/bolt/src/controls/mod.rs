@@ -4,6 +4,7 @@ mod button;
 mod checkbox;
 mod dropdown;
 mod input;
+mod multi_select;
 mod readonly_text_view;
 mod select_trigger;
 mod type_to_confirm;
@@ -21,6 +22,7 @@ pub use input::{
     InputOutdentInline, InputPosition, InputSearch, InputState, ReadOnlyAccessibility,
     ReadOnlyEditor, Rope, RopeExt, TriggerCompletion,
 };
+pub use multi_select::{MultiSelect, MultiSelectChanged};
 pub use readonly_text_view::ReadonlyTextView;
 pub use select_trigger::SelectTrigger;
 pub use type_to_confirm::{TypeToConfirm, TypeToConfirmEvent};

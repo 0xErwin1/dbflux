@@ -12,9 +12,8 @@
 //! cannot have one component with one table and another with a different
 //! one.
 
-use gpui::{Action, App, Context, Div, InteractiveElement, Keystroke, SharedString, Stateful};
-
-use crate::controls::Dropdown;
+use gpui::{Action, App, Div, InteractiveElement, Keystroke, SharedString, Stateful, Window};
+use std::rc::Rc;
 
 /// The semantic commands Bolt's components answer, in Bolt's own vocabulary.
 ///
@@ -53,25 +52,35 @@ pub trait KeyCommand: Action {
     fn key_command_id(&self) -> &str;
 }
 
-/// The type of [`CommandSet::attach`]: registers the product's action
-/// listener on a component's element.
-pub type AttachKeyCommands = fn(Stateful<Div>, &mut Context<Dropdown>) -> Stateful<Div>;
+/// The handler a component supplies to the product's attach hook: it is
+/// invoked with the action id of the dispatched action and answers whether
+/// the component handled it; the hook propagates the keys it did not.
+pub type KeyCommandHandler = Rc<dyn Fn(&str, &mut Window, &mut App) -> bool>;
 
-/// Registers the component's key handler for the product's keymap action
-/// `A` on `element`: the element answers the dispatched action's action id
-/// (see [`KeyCommand`]) and propagates the keys it does not own.
+/// The type of [`CommandSet::attach`]: registers the product's keymap action
+/// listeners on a component's element, forwarding each dispatched action's
+/// id to the component's handler.
+pub type AttachKeyCommands = fn(Stateful<Div>, KeyCommandHandler) -> Stateful<Div>;
+
+/// Registers the product's keymap action `A` on `element`: the element
+/// answers the dispatched action's action id (see [`KeyCommand`]) and
+/// propagates the keys the handler does not own.
 ///
 /// The hook is monomorphised on the product's action type on purpose:
 /// gpui-pre's `on_boxed_action` invokes the listener with the prototype
 /// clone, never the dispatched action, so a `Box<dyn Any>` handler would
 /// receive the wrong value.
-pub fn attach_key_commands<A>(element: Stateful<Div>, cx: &mut Context<Dropdown>) -> Stateful<Div>
+pub fn attach_key_commands<A>(element: Stateful<Div>, handler: KeyCommandHandler) -> Stateful<Div>
 where
     A: KeyCommand,
 {
-    element.on_action(cx.listener(|this, action: &A, window, cx| {
-        this.handle_key_command(action.key_command_id(), window, cx);
-    }))
+    element.on_action(move |action: &A, window, cx: &mut App| {
+        let handled = handler(action.key_command_id(), window, cx);
+
+        if !handled {
+            cx.propagate();
+        }
+    })
 }
 
 /// The product-installed table of semantic commands: for each [`Command`]
@@ -162,13 +171,13 @@ pub fn last_keystroke(cx: &App) -> Option<Keystroke> {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{IntoElement, ParentElement, Render, TestAppContext, Window, div};
+    use gpui::{Context, IntoElement, ParentElement, Render, TestAppContext, Window, div};
 
     use super::*;
 
     /// A no-op stand-in for a product's attach hook: the lookups under test
     /// never run it.
-    fn test_attach(element: Stateful<Div>, _cx: &mut Context<Dropdown>) -> Stateful<Div> {
+    fn test_attach(element: Stateful<Div>, _handler: super::KeyCommandHandler) -> Stateful<Div> {
         element
     }
 

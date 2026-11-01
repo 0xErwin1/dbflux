@@ -1175,7 +1175,7 @@ mod tests {
     /// never attached to an element.
     fn test_attach(
         element: gpui::Stateful<gpui::Div>,
-        _cx: &mut gpui::Context<crate::controls::Dropdown>,
+        _handler: crate::keymap::KeyCommandHandler,
     ) -> gpui::Stateful<gpui::Div> {
         element
     }

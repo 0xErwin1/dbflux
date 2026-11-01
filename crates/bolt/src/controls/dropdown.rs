@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::prelude::*;
@@ -664,23 +665,22 @@ impl Dropdown {
     }
 
     /// Answers the menu commands of the installed [`crate::keymap::CommandSet`]
-    /// while the dropdown has focus. A key it has no use for in its current
-    /// state propagates to the pane around it.
+    /// while the dropdown has focus. Answers whether the command was
+    /// handled; the attach hook propagates the ones it was not.
     pub(crate) fn handle_key_command(
         &mut self,
         action_id: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let Some(key) = cx
             .try_global::<CommandSet>()
             .and_then(|keys| menu_key(keys, action_id))
         else {
-            cx.propagate();
-            return;
+            return false;
         };
 
-        let handled = match key {
+        match key {
             MenuKey::SelectNext if self.open => {
                 self.select_next_item(cx);
                 true
@@ -709,10 +709,6 @@ impl Dropdown {
                 true
             }
             _ => false,
-        };
-
-        if !handled {
-            cx.propagate();
         }
     }
 
@@ -1006,7 +1002,19 @@ impl Render for Dropdown {
         if let Some(keys) = cx.try_global::<CommandSet>() {
             let attach = keys.attach;
             let key_context = keys.key_context.clone();
-            element = attach(element.key_context(key_context.as_ref()), cx);
+            let handle = cx.entity().downgrade();
+            let handler: crate::keymap::KeyCommandHandler =
+                Rc::new(move |action_id, window, cx| {
+                    let Some(entity) = handle.upgrade() else {
+                        return false;
+                    };
+
+                    entity.update(cx, |this, cx| {
+                        this.handle_key_command(action_id, window, cx)
+                    })
+                });
+
+            element = attach(element.key_context(key_context.as_ref()), handler);
         }
 
         element
