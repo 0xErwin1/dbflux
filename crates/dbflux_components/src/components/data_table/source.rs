@@ -67,18 +67,18 @@ impl<'a> GridRowSource<'a> {
     }
 }
 
-/// The cell as `bolt::data` expresses it: the model's display text plus
-/// the tone precedence the grid painter applies — a missing field and a
-/// nested summary come first, then a staged edit, then null, then a column
-/// default or a placeholder legend, then the pending-delete mute.
+/// The cell as `bolt::data` expresses it: the model's display text, the
+/// tone precedence the grid painter applies — a missing field and a nested
+/// summary come first, then null, then a column default or a placeholder
+/// legend, then the pending-delete mute — and the edit state as its own
+/// fact on [`CellView::dirty`], so a staged edit over a null carries the
+/// null styling and the dirty fact at once.
 ///
-/// A staged edit outranks null because SetNull stages `CellValue::null`:
-/// the cell must still read as edited so a renderer keeps its dirty mark.
-/// Null and muted outrank the pending-delete mute because the painter
-/// italicizes null and legend cells and strikes pending-delete rows
-/// independently; the strike comes from [`RowSource::row_state`], which
-/// every cell of the row shares, and the muted color of a deleted row's
-/// cells comes from that same row state, not from the tone.
+/// The tone says what the value *is*; the pending-delete mute follows the
+/// same rule: it changes the color of the row's ordinary cells, while null
+/// and muted cells keep their own italic and the painter mutes their color
+/// from the row state. The strike comes from [`RowSource::row_state`],
+/// which every cell of the row shares.
 ///
 /// `replaced` is the value a document grid draws the staged edit against;
 /// `None` draws the cell's own text plain.
@@ -93,8 +93,6 @@ fn cell_view(
         CellTone::Missing
     } else if cell.is_nested() {
         CellTone::Nested
-    } else if is_dirty {
-        CellTone::Dirty
     } else if cell.is_null() {
         CellTone::Null
     } else if cell.is_auto_generated() || cell.is_placeholder() {
@@ -139,6 +137,7 @@ fn cell_view(
     CellView {
         content,
         tone,
+        dirty: is_dirty,
         align,
         secondary,
         nested,
@@ -517,9 +516,11 @@ mod tests {
         let source = GridRowSource::new(&model, &edits);
 
         assert_eq!(source.cell(0, 0).expect("cell").tone, CellTone::Normal);
-        assert_eq!(source.cell(0, 1).expect("cell").tone, CellTone::Dirty);
+        let staged = source.cell(0, 1).expect("cell");
+        assert!(staged.dirty, "the staged cell reads as edited");
+        assert_eq!(staged.tone, CellTone::Normal);
         assert_eq!(
-            drawn_text(&source.cell(0, 1).expect("cell")),
+            drawn_text(&staged),
             "B",
             "the staged override is what the renderer draws"
         );
@@ -589,7 +590,8 @@ mod tests {
                 to: staged.into(),
             }
         );
-        assert_eq!(cell.tone, CellTone::Dirty);
+        assert!(cell.dirty, "the transitioned cell is an uncommitted edit");
+        assert_eq!(cell.tone, CellTone::Normal);
     }
 
     #[test]
@@ -604,7 +606,8 @@ mod tests {
         // Without a document presentation the painter marks the cell dirty
         // and draws the staged text alone; no transition is composed.
         let cell = source.cell(0, 0).expect("cell");
-        assert_eq!(cell.tone, CellTone::Dirty);
+        assert!(cell.dirty);
+        assert_eq!(cell.tone, CellTone::Normal);
         assert_eq!(
             drawn_text(&cell),
             CellValue::text("new").display_text().as_ref(),
@@ -628,7 +631,8 @@ mod tests {
         // text whatever its kind (`base_value.display_text()`), while every
         // mark — the tone included — follows the value the cell draws now.
         let cell = source.cell(0, 0).expect("cell");
-        assert_eq!(cell.tone, CellTone::Dirty);
+        assert!(cell.dirty);
+        assert_eq!(cell.tone, CellTone::Normal);
         assert_eq!(
             cell.content,
             CellContent::Transition {
@@ -718,6 +722,30 @@ mod tests {
     }
 
     #[test]
+    fn a_staged_null_edit_draws_the_null_styling_and_the_dirty_mark_together() {
+        let model = model_with(vec![text_spec("v")], vec![vec![CellValue::text("old")]]);
+        let mut edits = EditBuffer::new();
+        edits.set_base_row_count(model.row_count());
+        // SetNull stages `CellValue::null` (`handle_set_null`), so a staged
+        // edit whose value is null is a first-class input.
+        edits.set_cell(0, 0, CellValue::null());
+
+        let source = GridRowSource::new(&model, &edits);
+
+        // The painter needs two independent facts: the tone says what the
+        // value is (null styling: null color and italic) and the dirty fact
+        // says the cell holds an uncommitted edit (the amber mark). The old
+        // painter drew both at once; the contract must carry both at once.
+        let cell = source.cell(0, 0).expect("cell");
+        assert_eq!(
+            cell.tone,
+            CellTone::Null,
+            "the staged null keeps the null styling the old painter drew"
+        );
+        assert!(cell.dirty, "the staged null still carries the edit state");
+    }
+
+    #[test]
     fn a_staged_null_edit_reads_dirty_so_its_mark_survives() {
         let model = model_with(vec![text_spec("v")], vec![vec![CellValue::text("old")]]);
         let mut edits = EditBuffer::new();
@@ -728,11 +756,12 @@ mod tests {
 
         let source = GridRowSource::new(&model, &edits);
 
-        // The cell must read as a staged edit — a renderer keeps the dirty
-        // mark on it — even though the value it now holds is null. The null
-        // styling of the text yields; the unsaved-change mark does not.
+        // The tone says what the value is — a staged null keeps the null
+        // styling the old painter drew — and `dirty` carries the edit state
+        // separately, so a renderer keeps the unsaved-change mark too.
         let cell = source.cell(0, 0).expect("cell");
-        assert_eq!(cell.tone, CellTone::Dirty);
+        assert_eq!(cell.tone, CellTone::Null);
+        assert!(cell.dirty, "the staged null still reads as edited");
         assert_eq!(drawn_text(&cell), "NULL");
     }
 

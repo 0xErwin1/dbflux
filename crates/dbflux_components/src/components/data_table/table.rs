@@ -1338,7 +1338,7 @@ fn cell_paint(
             CellTone::Nested => theme.info,
             CellTone::PendingDelete | CellTone::Muted => theme.muted_foreground,
             CellTone::Null => null_color,
-            CellTone::Normal | CellTone::Dirty | CellTone::PendingInsert | CellTone::Error => {
+            CellTone::Normal | CellTone::PendingInsert | CellTone::Error => {
                 if is_active {
                     ChromeColors::strong(theme)
                 } else {
@@ -1355,7 +1355,10 @@ fn cell_paint(
             CellTone::Null | CellTone::Muted | CellTone::Missing
         ),
         line_through: row_pending_delete,
-        dirty_mark: !transition && view.tone == CellTone::Dirty,
+        // The mark follows the edit-state fact, not the tone: a staged null
+        // draws the null styling and the mark at once, which a single tone
+        // cannot express.
+        dirty_mark: !transition && view.dirty,
         transition,
         group_wash: group_child,
     }
@@ -1603,7 +1606,6 @@ fn render_rows(
                                         }
                                         CellTone::Null => null_color,
                                         CellTone::Normal
-                                        | CellTone::Dirty
                                         | CellTone::PendingInsert
                                         | CellTone::Error => theme.foreground,
                                     })
@@ -2095,19 +2097,23 @@ mod tests {
     /// the content outranks the tone in the text color.
     #[gpui::test]
     fn a_transition_cell_takes_the_transition_color_over_its_tone(cx: &mut TestAppContext) {
-        let (dirty, theme, _) = paint_of(
+        let (transitioning, theme, _) = paint_of(
             cx,
-            &CellView::transition("old", "new", CellTone::Dirty, CellAlignment::Left),
+            &CellView::transition("old", "new", CellTone::Normal, CellAlignment::Left)
+                .with_dirty(true),
             false,
             false,
             false,
         );
         assert_eq!(
-            dirty.text_color, theme.warning,
-            "the transition beats the dirty tone"
+            transitioning.text_color, theme.warning,
+            "the transition beats the cell's own color"
         );
-        assert!(dirty.transition);
-        assert!(!dirty.dirty_mark, "a transition never draws the dirty mark");
+        assert!(transitioning.transition);
+        assert!(
+            !transitioning.dirty_mark,
+            "a transition never draws the dirty mark"
+        );
 
         // Even a null tone under a transition stays in the transition color.
         let (nulled, theme, null_color) = paint_of(
@@ -2124,7 +2130,7 @@ mod tests {
         // what makes the precedence observable.
         let (plain_dirty, theme, _) = paint_of(
             cx,
-            &CellView::new("new", CellTone::Dirty, CellAlignment::Left),
+            &CellView::new("new", CellTone::Normal, CellAlignment::Left).with_dirty(true),
             false,
             false,
             false,
@@ -2138,7 +2144,7 @@ mod tests {
     fn a_plain_dirty_cell_draws_the_mark_and_a_transition_does_not(cx: &mut TestAppContext) {
         let (plain, _, _) = paint_of(
             cx,
-            &CellView::new("new", CellTone::Dirty, CellAlignment::Left),
+            &CellView::new("new", CellTone::Normal, CellAlignment::Left).with_dirty(true),
             false,
             false,
             false,
@@ -2148,13 +2154,106 @@ mod tests {
 
         let (transition, _, _) = paint_of(
             cx,
-            &CellView::transition("old", "new", CellTone::Dirty, CellAlignment::Left),
+            &CellView::transition("old", "new", CellTone::Normal, CellAlignment::Left)
+                .with_dirty(true),
             false,
             false,
             false,
         );
         assert!(transition.transition, "the transition wash draws");
         assert!(!transition.dirty_mark);
+    }
+
+    /// The accepted-defect regression: a relational staged null draws the
+    /// null styling (null color, italic) and the amber dirty mark at once.
+    /// The two facts are orthogonal — the tone says what the value is, the
+    /// dirty flag says it holds an uncommitted edit — so the cell needs
+    /// neither sacrificed for the other.
+    #[gpui::test]
+    fn a_staged_null_edit_draws_the_null_styling_and_the_dirty_mark_together(
+        cx: &mut TestAppContext,
+    ) {
+        use super::super::model::{CellValue, EditBuffer};
+
+        cx.update(crate::theme::init);
+
+        let model = TableModel::new(
+            vec![super::super::model::ColumnSpec {
+                id: "v".into(),
+                title: "v".into(),
+                kind: super::super::model::ColumnKind::Text,
+                align: gpui::TextAlign::Left,
+                type_name: "text".into(),
+            }],
+            vec![super::super::model::RowData {
+                cells: vec![CellValue::text("old")],
+            }],
+        );
+        let mut edits = EditBuffer::new();
+        edits.set_base_row_count(model.row_count());
+        // SetNull stages `CellValue::null` (`handle_set_null`).
+        edits.set_cell(0, 0, CellValue::null());
+        let source = GridRowSource::new(&model, &edits);
+
+        let (staged_null, _, null_color) =
+            paint_of(cx, &source.cell(0, 0).expect("cell"), false, false, false);
+        assert_eq!(
+            staged_null.text_color, null_color,
+            "the staged null draws the null color"
+        );
+        assert!(staged_null.italic, "the staged null draws the null italic");
+        assert!(
+            staged_null.dirty_mark,
+            "the staged null still draws the dirty mark"
+        );
+        assert!(!staged_null.transition);
+    }
+
+    /// The pending-delete combinations: the row strikes every cell, the
+    /// row mutes the color of its ordinary cells, and a null or muted cell
+    /// keeps its own italic on top.
+    #[gpui::test]
+    fn pending_delete_rows_strike_all_cells_and_mute_the_ordinary_ones(cx: &mut TestAppContext) {
+        let alignment = CellAlignment::Left;
+
+        let (struck, theme, _) = paint_of(
+            cx,
+            &CellView::new("x", CellTone::Normal, alignment),
+            false,
+            true,
+            false,
+        );
+        assert!(struck.line_through);
+        assert!(!struck.italic, "a struck ordinary cell does not italicize");
+        assert_eq!(
+            struck.text_color, theme.muted_foreground,
+            "the row's ordinary cells take the pending-delete color"
+        );
+
+        let (struck_null, _, null_color) = paint_of(
+            cx,
+            &CellView::new("NULL", CellTone::Null, alignment),
+            false,
+            true,
+            false,
+        );
+        assert!(struck_null.line_through);
+        assert!(struck_null.italic, "a null cell keeps its own italic");
+        assert_ne!(
+            struck_null.text_color, null_color,
+            "the row mutes the null color, as the old painter drew it"
+        );
+
+        let (struck_muted, theme, _) = paint_of(
+            cx,
+            &CellView::new("auto", CellTone::Muted, alignment),
+            false,
+            true,
+            false,
+        );
+        assert!(struck_muted.line_through);
+        assert!(struck_muted.italic, "a muted cell keeps its own italic");
+        assert_eq!(struck_muted.text_color, theme.muted_foreground);
     }
 
     /// A group-child cell of a document grid draws the wash; the fact comes
@@ -2239,8 +2338,13 @@ mod tests {
             (CellView::new("x", CellTone::Muted, alignment), true),
             (CellView::new("x", CellTone::Missing, alignment), true),
             (CellView::new("x", CellTone::Normal, alignment), false),
-            (CellView::new("x", CellTone::Dirty, alignment), false),
             (CellView::new("x", CellTone::Nested, alignment), false),
+            // The edit state does not italicize; a staged text edit draws
+            // upright, as the old painter drew it.
+            (
+                CellView::new("x", CellTone::Normal, alignment).with_dirty(true),
+                false,
+            ),
         ] {
             let (paint, _, _) = paint_of(cx, &view, false, false, false);
             assert_eq!(
@@ -2250,28 +2354,6 @@ mod tests {
             );
             assert!(!paint.line_through);
         }
-
-        let (struck, _, _) = paint_of(
-            cx,
-            &CellView::new("x", CellTone::Normal, alignment),
-            false,
-            true,
-            false,
-        );
-        assert!(struck.line_through);
-        assert!(!struck.italic, "a struck ordinary cell does not italicize");
-
-        let (struck_null, theme, _) = paint_of(
-            cx,
-            &CellView::new("NULL", CellTone::Null, alignment),
-            false,
-            true,
-            false,
-        );
-        assert!(struck_null.line_through);
-        assert!(struck_null.italic);
-        // And the row's pending delete mutes the cell's color.
-        assert_eq!(struck_null.text_color, theme.muted_foreground);
     }
 
     /// The ordinary tone colors: foreground, the active cell's strong tint,

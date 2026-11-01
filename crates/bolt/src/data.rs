@@ -64,7 +64,10 @@ impl CellAlignment {
 
 /// The emphasis a cell's text is drawn with. A tone names a rendering
 /// treatment (color, italic, strikethrough), not a meaning: the same tone
-/// may be produced by different situations in different surfaces.
+/// may be produced by different situations in different surfaces. What a
+/// cell *is* and whether it *holds an uncommitted edit* are independent:
+/// a staged edit over a null still draws the null styling, so the edit
+/// state travels on [`CellView::dirty`], not here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CellTone {
     /// An ordinary value in the ordinary text color.
@@ -80,8 +83,6 @@ pub enum CellTone {
     /// A summary of a nested value that can be stepped into rather than
     /// edited in place (`{4 fields}`, `[3]`).
     Nested,
-    /// The cell holds a staged, not-yet-saved edit.
-    Dirty,
     /// The cell sits in a row that is a new, not-yet-saved insert.
     PendingInsert,
     /// The cell sits in a row marked for deletion; renderers typically mute
@@ -214,6 +215,11 @@ pub struct CellView {
     pub content: CellContent,
     /// The emphasis the content is drawn with.
     pub tone: CellTone,
+    /// Whether the cell holds an uncommitted edit. Independent of the
+    /// tone: a staged edit over a null keeps the null styling and still
+    /// draws the unsaved-change mark, so a renderer needs both facts and
+    /// neither can stand in for the other.
+    pub dirty: bool,
     /// How the content aligns in its column.
     pub align: CellAlignment,
     /// A second text drawn after the content with its own tone, if the
@@ -226,11 +232,12 @@ pub struct CellView {
 }
 
 impl CellView {
-    /// A plain cell of `text`, `tone` and `align`.
+    /// A plain cell of `text`, `tone` and `align`, not edited.
     pub fn new(text: impl Into<SharedString>, tone: CellTone, align: CellAlignment) -> Self {
         Self {
             content: CellContent::Plain(text.into()),
             tone,
+            dirty: false,
             align,
             secondary: None,
             nested: None,
@@ -250,10 +257,17 @@ impl CellView {
                 to: to.into(),
             },
             tone,
+            dirty: false,
             align,
             secondary: None,
             nested: None,
         }
+    }
+
+    /// Mark whether the cell holds an uncommitted edit.
+    pub fn with_dirty(mut self, dirty: bool) -> Self {
+        self.dirty = dirty;
+        self
     }
 
     /// Draw a second text after the content with its own tone.
@@ -406,18 +420,26 @@ mod tests {
 
     #[test]
     fn cell_view_keeps_what_it_is_given() {
-        let cell = CellView::new("42", CellTone::Dirty, CellAlignment::Right);
+        let cell = CellView::new("42", CellTone::Normal, CellAlignment::Right);
 
         assert_eq!(plain(cell.clone()), "42");
-        assert_eq!(cell.tone, CellTone::Dirty);
+        assert_eq!(cell.tone, CellTone::Normal);
+        assert!(!cell.dirty, "a plain cell is not edited");
         assert_eq!(cell.align, CellAlignment::Right);
         assert_eq!(cell.secondary, None);
         assert_eq!(cell.nested, None);
+
+        // The edit state is independent of the tone: a staged edit over a
+        // null keeps the null styling and still reads as edited.
+        let staged = CellView::new("NULL", CellTone::Null, CellAlignment::Right).with_dirty(true);
+        assert_eq!(staged.tone, CellTone::Null);
+        assert!(staged.dirty);
     }
 
     #[test]
     fn cell_view_carries_its_extras() {
-        let cell = CellView::transition("old", "new", CellTone::Dirty, CellAlignment::Left)
+        let cell = CellView::transition("old", "new", CellTone::Normal, CellAlignment::Left)
+            .with_dirty(true)
             .with_secondary(CellSpan {
                 text: " · #8".into(),
                 tone: CellTone::Muted,
