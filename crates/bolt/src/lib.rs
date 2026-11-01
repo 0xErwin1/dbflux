@@ -34,3 +34,4 @@ pub mod shell;
 pub mod theme;
 pub mod tokens;
 pub mod typography;
+pub mod vim;

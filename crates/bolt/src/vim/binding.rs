@@ -21,14 +21,12 @@
 //! [`VimBinding::editor`] builds the editor element with the lock applied,
 //! because the element re-applies its read-only flag to the state every frame.
 
-use super::machine::{self, FindKind, LineMotion, TextObject, VimCommand, VimKey};
-use super::{LeaderCommand, VimMode, VimSettingGlobal, vim_enabled, vim_mode_label};
-use crate::actions::{RunCommand, last_keystroke};
+use super::machine::{self, FindKind, LineMotion, TextObject, VimCommand, VimKey, VimMode};
+use super::{VimSettingGlobal, vim_enabled};
 use crate::controls::{Rope, RopeExt};
+use crate::keymap::{Command as KeymapCommand, CommandSet, last_keystroke};
 use crate::primitives::Text;
 use crate::tokens::{Heights, Spacing};
-use dbflux_core::LogErr;
-use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Action, App, Context, Div, Entity, EntityId, EntityInputHandler as _, Focusable as _,
@@ -41,6 +39,53 @@ use gpui_component::input::{Editor, EditorState, InputEvent, Redo, Undo};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_CHANGE_GROUP: AtomicU64 = AtomicU64::new(1);
+
+/// The handler the product's leader capture invokes with the command id the
+/// product's leader action carries. Stopping propagation is the capture's
+/// own job: a leader sequence never reaches the editor or the keymap.
+pub type LeaderCommandHandler = std::sync::Arc<dyn Fn(&str, &mut Window, &mut App)>;
+
+/// The handler the product's run-command capture invokes with the erased
+/// action and whether the binding that ran it was made by the user.
+pub type RunCommandHandler = std::sync::Arc<dyn Fn(&dyn Action, bool, &mut Window, &mut App)>;
+
+/// The product-installed seams vim reads: the leader and run-command actions
+/// its keymap dispatches, the key contexts its keymap binds, and the mode
+/// labels it translates.
+///
+/// Install one value per app at startup with [`set_vim_seams`], before the
+/// first window. An editor wired without one answers its command keys but no
+/// leader sequence and shows no mode label.
+pub struct VimSeams {
+    /// The key context the product's keymap binds the Vim leader keys in (see
+    /// [`VimBinding::leader_key_context`]).
+    pub leader_key_context: &'static str,
+    /// The key context that marks a modal dialog on the key path: while it
+    /// sits between the focused editor and the window root, a leader command
+    /// goes to the dialog instead of the host.
+    pub modal_key_context: &'static str,
+    /// The product's label for a Vim mode, for the mode indicator row.
+    pub mode_label: fn(VimMode) -> SharedString,
+    /// Builds the product's run-command action for `command`, dispatched so
+    /// the host runs what the command means to it.
+    pub make_run_command_action: fn(command: SharedString) -> Box<dyn Action>,
+    /// Registers on `element` the capture listener for the product's leader
+    /// action: it invokes `on_command` with the action's command id and stops
+    /// propagation, as a leader sequence always does.
+    pub capture_leader_action: fn(element: Div, on_command: LeaderCommandHandler) -> Div,
+    /// Registers on `element` the capture listener for the product's
+    /// run-command action: it invokes `on_command` with the erased action and
+    /// whether the binding was made by the user.
+    pub capture_run_command: fn(element: Div, on_command: RunCommandHandler) -> Div,
+}
+
+impl gpui::Global for VimSeams {}
+
+/// Installs the product's Vim seams. Call once at startup, before the first
+/// window; installing again replaces the value.
+pub fn set_vim_seams(cx: &mut App, seams: VimSeams) {
+    cx.set_global(seams);
+}
 
 /// A view that hosts one or more editors with Vim mode.
 ///
@@ -70,27 +115,58 @@ pub trait VimHost: 'static + Sized {
     fn vim_text_changed(&mut self, _input: EntityId, _cx: &mut Context<Self>) {}
 
     /// A leader command typed in `input` while the editor sits inside a
-    /// dialog. The dialog runs what the command means to it, such as Save
-    /// confirming the dialog. The default does nothing, and so does a dialog
-    /// for every command it gives no meaning to: a leader command typed in a
-    /// dialog never reaches the document behind it.
+    /// dialog, named by the command id the product's leader action carries.
+    /// The dialog runs what the command means to it, such as Save confirming
+    /// the dialog. The default does nothing, and so does a dialog for every
+    /// command it gives no meaning to: a leader command typed in a dialog
+    /// never reaches the document behind it.
+    ///
+    /// The command arrives as its action id — the keymap's own vocabulary —
+    /// because the vocabulary a dialog answers in is the product's.
     fn vim_dialog_command(
         &mut self,
         _input: EntityId,
-        _command: Command,
+        _command_id: &str,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) {
     }
 }
 
-/// Whether the keyboard is inside a dialog: a `Modal` key context sits on
-/// the path to the focused element.
-fn in_dialog(window: &Window) -> bool {
+/// The product's leader capture, or `None` without the seams installed: an
+/// editor wired without them answers its command keys but no leader sequence.
+fn leader_capture<H: VimHost>(
+    input: EntityId,
+    cx: &mut Context<H>,
+) -> Option<impl FnOnce(Div) -> Div> {
+    let capture = cx.try_global::<VimSeams>()?.capture_leader_action;
+    let view = cx.entity().downgrade();
+    let on_command: LeaderCommandHandler =
+        std::sync::Arc::new(move |command: &str, window: &mut Window, cx: &mut App| {
+            if view
+                .update(cx, |host, cx| {
+                    VimBinding::leader_command(host, input, command, window, cx);
+                })
+                .is_err()
+            {
+                log::error!("Vim leader command: the editor's host is gone");
+            }
+        });
+
+    Some(move |element: Div| capture(element, on_command))
+}
+
+/// Whether the keyboard is inside a dialog: the product's modal key context
+/// sits on the path to the focused element. Without the seams installed
+/// (component tests that never install them) no context reads as a dialog.
+fn in_dialog(window: &Window, cx: &App) -> bool {
+    let Some(seams) = cx.try_global::<VimSeams>() else {
+        return false;
+    };
     window
         .context_stack()
         .iter()
-        .any(|context| context.contains(crate::modals::MODAL_KEY_CONTEXT))
+        .any(|context| context.contains(seams.modal_key_context))
 }
 
 /// `Ctrl+Shift+V` and no other modifier, Vim's paste shortcut.
@@ -517,10 +593,14 @@ impl VimBinding {
 
     /// The key context identifier of the Vim leader bindings while
     /// [`VimBinding::leader_active`], for a host that builds the key context
-    /// of the editor's container itself.
+    /// of the editor's container itself. `None` without the seams installed.
     pub fn leader_key_context(&self, cx: &App) -> Option<&'static str> {
-        self.leader_active(cx)
-            .then_some(ContextId::VimNormal.as_gpui_context())
+        if !self.leader_active(cx) {
+            return None;
+        }
+
+        cx.try_global::<VimSeams>()
+            .map(|seams| seams.leader_key_context)
     }
 
     /// `element` with the key context of the Vim leader bindings while
@@ -539,6 +619,10 @@ impl VimBinding {
     pub fn render_indicator(&self, cx: &App) -> Option<Stateful<Div>> {
         let mode = self.mode()?;
         let theme = cx.theme();
+        let label = cx
+            .try_global::<VimSeams>()
+            .map(|seams| (seams.mode_label)(mode))
+            .unwrap_or_default();
 
         Some(
             div()
@@ -551,7 +635,7 @@ impl VimBinding {
                 .border_t_1()
                 .border_color(theme.border)
                 .bg(theme.tab_bar)
-                .child(Text::caption(vim_mode_label(mode)))
+                .child(Text::caption(label))
                 .when(!self.pending_keys.is_empty(), |el| {
                     el.child(
                         div()
@@ -564,17 +648,16 @@ impl VimBinding {
     }
 
     /// Installs Vim's listeners on the element that wraps the editor: the
-    /// editor's Escape, Undo and Redo actions in their capture phase, the
-    /// leader command the editor answers itself, and the command keys ahead
-    /// of the editor.
+    /// product's leader action the editor answers itself, the editor's
+    /// Escape, Undo and Redo actions in their capture phase, and the command
+    /// keys ahead of the editor.
     pub fn wire<H: VimHost>(element: Div, input: EntityId, cx: &mut Context<H>) -> Div {
+        let element = match leader_capture(input, cx) {
+            Some(capture) => capture(element),
+            None => element,
+        };
+
         element
-            .capture_action(
-                cx.listener(move |host, action: &LeaderCommand, window, cx| {
-                    Self::leader_command(host, input, action, window, cx);
-                    cx.stop_propagation();
-                }),
-            )
             .capture_action(cx.listener(
                 move |host, _: &gpui_component::input::Escape, window, cx| {
                     if Self::escape_action(host, input, window, cx) {
@@ -599,26 +682,46 @@ impl VimBinding {
             }))
     }
 
-    /// Hands the keymap's `RunCommand` to Vim first, for hosts without a
-    /// `RunCommand` capture of their own. A binding the user made wins over
-    /// Vim, as in [`VimBinding::route_binding`].
+    /// Hands the keymap's run-command action to Vim first, for hosts without
+    /// a run-command capture of their own. A binding the user made wins over
+    /// Vim, as in [`VimBinding::route_binding`]. Without the seams installed
+    /// the element is returned unchanged.
     pub fn capture_run_command<H: VimHost>(
         element: Div,
         input: EntityId,
         cx: &mut Context<H>,
     ) -> Div {
-        element.capture_action(cx.listener(move |host, action: &RunCommand, window, cx| {
-            if action.from_user_binding {
-                if let Some(binding) = host.vim_mut(input) {
-                    binding.clear_vim_count_and_notify(cx);
-                }
-                return;
-            }
+        let Some(seams) = cx.try_global::<VimSeams>() else {
+            return element;
+        };
 
-            if Self::route_bound_key(host, input, action, window, cx) {
-                cx.stop_propagation();
-            }
-        }))
+        let view = cx.entity().downgrade();
+        let on_command: RunCommandHandler = std::sync::Arc::new(
+            move |action: &dyn Action,
+                  from_user_binding: bool,
+                  window: &mut Window,
+                  cx: &mut App| {
+                if view
+                    .update(cx, |host, cx| {
+                        if from_user_binding {
+                            if let Some(binding) = host.vim_mut(input) {
+                                binding.clear_vim_count_and_notify(cx);
+                            }
+                            return;
+                        }
+
+                        if Self::route_bound_key(host, input, action, window, cx) {
+                            cx.stop_propagation();
+                        }
+                    })
+                    .is_err()
+                {
+                    log::error!("Vim run command: the editor's host is gone");
+                }
+            },
+        );
+
+        (seams.capture_run_command)(element, on_command)
     }
 
     /// Hands a host action bound to a key (a modal's Cancel or Execute, a
@@ -738,16 +841,17 @@ impl VimBinding {
         consumed
     }
 
-    /// Runs the command of a leader sequence. Focus search opens the editor's
-    /// own find panel, as `/` does. Inside a dialog every other command goes
-    /// to the dialog ([`VimHost::vim_dialog_command`]) and stops there;
-    /// elsewhere it goes up to the host as a `RunCommand` that Vim leaves
-    /// alone, and does nothing when no host handles it. A half-typed count
-    /// or operator is dropped either way.
+    /// Runs the command of a leader sequence, named by the command id the
+    /// product's leader action carries. Focus search opens the editor's own
+    /// find panel, as `/` does. Inside a dialog every other command goes to
+    /// the dialog ([`VimHost::vim_dialog_command`]) and stops there;
+    /// elsewhere it goes up to the host as the product's run-command action,
+    /// which Vim leaves alone, and does nothing when no host handles it. A
+    /// half-typed count or operator is dropped either way.
     fn leader_command<H: VimHost>(
         host: &mut H,
         input: EntityId,
-        action: &LeaderCommand,
+        command: &str,
         window: &mut Window,
         cx: &mut Context<H>,
     ) {
@@ -758,7 +862,11 @@ impl VimBinding {
 
         binding.clear_vim_count_and_notify(cx);
 
-        if action.command.as_ref() == Command::FocusSearch.id() {
+        let focus_search = cx
+            .try_global::<CommandSet>()
+            .and_then(|set| set.action_id(KeymapCommand::FocusSearch))
+            .is_some_and(|id| id == command);
+        if focus_search {
             if binding.vim_owns_keys(window, cx) {
                 binding
                     .input
@@ -767,17 +875,14 @@ impl VimBinding {
             return;
         }
 
-        if in_dialog(window) {
-            if let Some(command) = Command::from_action_id(&action.command) {
-                host.vim_dialog_command(input, command, window, cx);
-            }
+        if in_dialog(window, cx) {
+            host.vim_dialog_command(input, command, window, cx);
             return;
         }
 
-        window.dispatch_action(
-            Box::new(RunCommand::from_user_binding(action.command.clone())),
-            cx,
-        );
+        if let Some(seams) = cx.try_global::<VimSeams>() {
+            window.dispatch_action((seams.make_run_command_action)(command.into()), cx);
+        }
     }
 
     /// See `handle_vim_escape_action`.
@@ -3148,7 +3253,8 @@ impl VimBinding {
                 }
                 cx.notify();
             })
-            .log_err();
+            .inspect_err(|err| log::error!("Vim history: {err}"))
+            .ok();
         });
     }
 

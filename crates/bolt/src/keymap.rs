@@ -12,7 +12,7 @@
 //! cannot have one component with one table and another with a different
 //! one.
 
-use gpui::{Action, Context, Div, InteractiveElement, SharedString, Stateful};
+use gpui::{Action, App, Context, Div, InteractiveElement, Keystroke, SharedString, Stateful};
 
 use crate::controls::Dropdown;
 
@@ -134,9 +134,32 @@ impl CommandSet {
     }
 }
 
+/// The last key pressed in any window, and the interceptor that records it.
+#[derive(Default)]
+struct LastKeystroke(Option<Keystroke>, Option<gpui::Subscription>);
+
+impl gpui::Global for LastKeystroke {}
+
+/// Starts recording the last key pressed in any window, for
+/// [`last_keystroke`]. The keymap calls it once at startup.
+pub fn record_last_keystroke(cx: &mut App) {
+    let recorder = cx.intercept_keystrokes(|event, _window, cx| {
+        cx.default_global::<LastKeystroke>().0 = Some(event.keystroke.clone());
+    });
+    cx.default_global::<LastKeystroke>().1 = Some(recorder);
+}
+
+/// The key whose binding is being dispatched: interceptors run before key
+/// bindings, so while a binding's action runs this is the keystroke that
+/// matched it (the last one of a key sequence).
+pub fn last_keystroke(cx: &App) -> Option<Keystroke> {
+    cx.try_global::<LastKeystroke>()
+        .and_then(|recorded| recorded.0.clone())
+}
+
 #[cfg(test)]
 mod tests {
-    use gpui::TestAppContext;
+    use gpui::{IntoElement, ParentElement, Render, TestAppContext, Window, div};
 
     use super::*;
 
@@ -218,6 +241,72 @@ mod tests {
     #[gpui::test]
     fn an_app_without_an_installed_set_has_no_global(cx: &mut TestAppContext) {
         cx.update(|cx| assert!(cx.try_global::<CommandSet>().is_none()));
+    }
+
+    #[gpui::test]
+    fn without_a_recorder_no_last_keystroke_is_reported(cx: &mut TestAppContext) {
+        cx.update(|cx| assert_eq!(last_keystroke(cx), None));
+    }
+
+    #[gpui::test]
+    fn the_recorded_last_keystroke_is_the_one_dispatched(cx: &mut TestAppContext) {
+        struct Host {
+            focus: gpui::FocusHandle,
+        }
+
+        impl Render for Host {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().id("host").track_focus(&self.focus).child("")
+            }
+        }
+
+        cx.update(|cx| {
+            record_last_keystroke(cx);
+            assert_eq!(last_keystroke(cx), None, "nothing pressed yet");
+        });
+
+        let (host, window) = cx.add_window_view(|_, cx| Host {
+            focus: cx.focus_handle(),
+        });
+        window.update(|window, cx| {
+            let focus = host.read(cx).focus.clone();
+            focus.focus(window, cx);
+        });
+        window.simulate_keystrokes("a");
+        window.update(|_, cx| {
+            let keystroke = last_keystroke(cx).expect("a key was pressed");
+            assert_eq!(keystroke.key, "a");
+        });
+
+        window.simulate_keystrokes("shift-b");
+        window.update(|_, cx| {
+            let keystroke = last_keystroke(cx).expect("another key was pressed");
+            assert_eq!(keystroke.key, "b");
+            assert!(keystroke.modifiers.shift);
+        });
+    }
+
+    #[gpui::test]
+    fn an_app_without_a_recorder_never_reports_a_keystroke(cx: &mut TestAppContext) {
+        struct Host {
+            focus: gpui::FocusHandle,
+        }
+
+        impl Render for Host {
+            fn render(&mut self, _: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+                div().id("host").track_focus(&self.focus).child("")
+            }
+        }
+
+        let (host, window) = cx.add_window_view(|_, cx| Host {
+            focus: cx.focus_handle(),
+        });
+        window.update(|window, cx| {
+            let focus = host.read(cx).focus.clone();
+            focus.focus(window, cx);
+        });
+        window.simulate_keystrokes("a");
+        window.update(|_, cx| assert_eq!(last_keystroke(cx), None));
     }
 
     #[gpui::test]

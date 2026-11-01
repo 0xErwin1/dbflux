@@ -149,11 +149,11 @@ impl VimHost for DocumentPreviewModal {
     fn vim_dialog_command(
         &mut self,
         _input: EntityId,
-        command: Command,
+        command_id: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if command == Command::SaveQuery {
+        if command_id == Command::SaveQuery.action_id() {
             self.save(window, cx);
         }
     }

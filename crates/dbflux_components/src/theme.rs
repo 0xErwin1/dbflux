@@ -50,6 +50,7 @@ pub fn init(cx: &mut App) {
     crate::highlighting::register_languages();
     load_bundled_fonts(cx);
     crate::controls::install_keymap_seams(cx);
+    crate::vim::install_vim_seams(cx);
     apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx);
 }
 
