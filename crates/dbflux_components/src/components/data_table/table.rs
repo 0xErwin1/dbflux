@@ -19,10 +19,13 @@ use gpui_component::{ActiveTheme, Sizable};
 
 use super::document::DocumentPresentation;
 use super::events::{ContextMenuAction, DataTableEvent, Direction, Edge};
-use super::model::TableModel;
 use super::selection::{CellCoord, SelectionState};
+use super::source::GridRowSource;
 use super::state::DataTableState;
 use super::theme::{CELL_PADDING_X, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
+use bolt::data::{
+    CellAlignment, CellContent, CellTone, CellView, NestedMarker, RowSource as _, RowVisualState,
+};
 use dbflux_core::SortDirection;
 
 /// Cached scroll state to prevent unnecessary syncs
@@ -1246,19 +1249,21 @@ impl DataTable {
                 let editing_cell = state.editing_cell();
                 let cell_input = state.cell_input().cloned();
                 let enum_dropdown = state.enum_dropdown().cloned();
-                let edit_buffer = state.edit_buffer();
+                let source = GridRowSource::with_document(
+                    &model,
+                    state.edit_buffer(),
+                    state.document_presentation(),
+                );
 
                 render_rows(
                     &state_entity,
                     visible_range,
-                    &model,
+                    &source,
                     state.column_widths(),
                     state.selection(),
                     editing_cell,
                     cell_input.as_ref(),
                     enum_dropdown.as_ref(),
-                    edit_buffer,
-                    state.document_presentation(),
                     state.has_reference_row(),
                     total_width,
                     font_size,
@@ -1293,19 +1298,80 @@ impl DataTable {
     }
 }
 
+/// The paint decisions one cell derives from the [`CellView`] contract plus
+/// the host state that is not data (the active cell, the row's pending
+/// delete). Split from the element builder so every branch the painter takes
+/// is assertable without pixels.
+#[derive(Clone)]
+struct CellPaint {
+    /// The color of the cell's leading text.
+    text_color: Hsla,
+    italic: bool,
+    line_through: bool,
+    /// The relational dirty mark: a dirty background and a 2px warning
+    /// accent. A document grid stages its edits as transitions instead.
+    dirty_mark: bool,
+    /// The document transition: a warning wash and a chamfer, whatever the
+    /// tone says.
+    transition: bool,
+    /// The group wash of a grouped document column.
+    group_wash: bool,
+}
+
+fn cell_paint(
+    view: &CellView,
+    group_child: bool,
+    row_pending_delete: bool,
+    is_active: bool,
+    theme: &gpui_component::theme::Theme,
+    null_color: Hsla,
+) -> CellPaint {
+    let transition = matches!(view.content, CellContent::Transition { .. });
+    let text_color = if transition {
+        // The transition takes the color precedence over the tone.
+        theme.warning
+    } else if row_pending_delete && !matches!(view.tone, CellTone::Missing | CellTone::Nested) {
+        theme.muted_foreground
+    } else {
+        match view.tone {
+            CellTone::Missing => theme.input,
+            CellTone::Nested => theme.info,
+            CellTone::PendingDelete | CellTone::Muted => theme.muted_foreground,
+            CellTone::Null => null_color,
+            CellTone::Normal | CellTone::Dirty | CellTone::PendingInsert | CellTone::Error => {
+                if is_active {
+                    ChromeColors::strong(theme)
+                } else {
+                    theme.foreground
+                }
+            }
+        }
+    };
+
+    CellPaint {
+        text_color,
+        italic: matches!(
+            view.tone,
+            CellTone::Null | CellTone::Muted | CellTone::Missing
+        ),
+        line_through: row_pending_delete,
+        dirty_mark: !transition && view.tone == CellTone::Dirty,
+        transition,
+        group_wash: group_child,
+    }
+}
+
 /// Renders the visible rows for the uniform_list.
 #[allow(clippy::too_many_arguments)]
 fn render_rows(
     state_entity: &Entity<DataTableState>,
     visible_range: Range<usize>,
-    model: &TableModel,
+    source: &GridRowSource<'_>,
     column_widths: &[f32],
     selection: &SelectionState,
     editing_cell: Option<CellCoord>,
     cell_input: Option<&Entity<InputState>>,
     enum_dropdown: Option<&Entity<crate::controls::Dropdown>>,
-    edit_buffer: &super::model::EditBuffer,
-    document: Option<&DocumentPresentation>,
     reference_row: bool,
     total_width: f32,
     font_size: Pixels,
@@ -1314,37 +1380,9 @@ fn render_rows(
     null_color: Hsla,
     theme: &gpui_component::theme::Theme,
 ) -> Vec<AnyElement> {
-    use super::model::VisualRowSource;
-
-    // Compute visual ordering once for this render pass
-    let visual_order = edit_buffer.compute_visual_order();
-
     visible_range
         .map(|visual_ix| {
-            // Map visual index to actual data source
-            let source = visual_order.get(visual_ix).copied();
-
-            // Get row data and state based on source type
-            let (row_data, pending_insert_data, row_state, data_row_ix) = match source {
-                Some(VisualRowSource::Base(base_idx)) => {
-                    let row = model.rows.get(base_idx);
-                    let state = edit_buffer.row_state(base_idx);
-                    (row, None, state.clone(), base_idx)
-                }
-                Some(VisualRowSource::Insert(insert_idx)) => {
-                    let data = edit_buffer.get_pending_insert_by_idx(insert_idx);
-                    (None, data, dbflux_core::RowState::PendingInsert, visual_ix)
-                }
-                None => {
-                    // Should not happen, but handle gracefully
-                    (None, None, dbflux_core::RowState::Clean, visual_ix)
-                }
-            };
-
-            let is_pending_insert_row = matches!(source, Some(VisualRowSource::Insert(_)));
-
-            // Use visual_ix for selection/display, but data_row_ix for edit buffer access
-            let row_ix = visual_ix;
+            let row_state = source.row_state(visual_ix);
 
             // Row background based on state
             // - Dirty: cell-level only (no row bg)
@@ -1353,33 +1391,49 @@ fn render_rows(
             // - PendingInsert: green-ish to indicate new row
             // - PendingDelete: red-ish with visual indication of deletion
             let row_bg = match row_state {
-                dbflux_core::RowState::Dirty => None, // Cell-level only — see dirty cell highlight below
-                dbflux_core::RowState::Saving => Some(RowColors::saving(theme)),
-                dbflux_core::RowState::Error(_) => Some(RowColors::error(theme)),
-                dbflux_core::RowState::Clean => None,
-                dbflux_core::RowState::PendingInsert => Some(RowColors::insert(theme)),
-                dbflux_core::RowState::PendingDelete => Some(RowColors::delete(theme)),
+                RowVisualState::Dirty => None, // Cell-level only — see dirty cell highlight below
+                RowVisualState::Saving => Some(RowColors::saving(theme)),
+                RowVisualState::Error => Some(RowColors::error(theme)),
+                RowVisualState::Clean => None,
+                RowVisualState::PendingInsert => Some(RowColors::insert(theme)),
+                RowVisualState::PendingDelete => Some(RowColors::delete(theme)),
             };
 
-            let is_pending_delete = row_state.is_pending_delete();
-            let is_active_row = selection.active.is_some_and(|active| active.row == row_ix);
+            let is_pending_delete = row_state == RowVisualState::PendingDelete;
+            let is_active_row = selection
+                .active
+                .is_some_and(|active| active.row == visual_ix);
             let tint = ChromeColors::tint(theme);
             let cell_wash = tint.opacity(GridMetrics::CELL_SELECTED_ALPHA);
-            let is_reference_row = reference_row && row_ix == 0;
+            let is_reference_row = reference_row && visual_ix == 0;
             // Under a reference row the others are numbered from 1, so the
             // number reads as their rank.
-            let row_number = if reference_row { row_ix } else { row_ix + 1 };
+            let row_number = if reference_row {
+                visual_ix
+            } else {
+                visual_ix + 1
+            };
 
-            let cells: Vec<AnyElement> = (0..model.col_count())
+            // The column facts the cells read, once per row render.
+            let group_children: Vec<bool> = (0..source.column_count())
                 .map(|col_ix| {
-                    // Get cell either from model or from pending insert
-                    let cell = if let Some(insert_data) = pending_insert_data {
-                        insert_data.get(col_ix)
-                    } else {
-                        row_data.and_then(|r| r.cells.get(col_ix))
-                    };
+                    source
+                        .column(col_ix)
+                        .is_some_and(|column| column.group_child)
+                })
+                .collect();
+
+            let cells: Vec<AnyElement> = (0..source.column_count())
+                .map(|col_ix| {
+                    let view = source.cell(visual_ix, col_ix).unwrap_or_else(|| {
+                        CellView::new(
+                            SharedString::default(),
+                            CellTone::Normal,
+                            CellAlignment::Left,
+                        )
+                    });
                     let width = column_widths.get(col_ix).copied().unwrap_or(120.0);
-                    let coord = CellCoord::new(row_ix, col_ix);
+                    let coord = CellCoord::new(visual_ix, col_ix);
                     let is_selected = selection.is_selected(coord);
                     let is_active = selection.active == Some(coord);
                     let is_editing = editing_cell == Some(coord);
@@ -1387,7 +1441,7 @@ fn render_rows(
                     if is_editing {
                         if let Some(dropdown) = enum_dropdown {
                             return div()
-                                .id(("cell", row_ix * 10000 + col_ix))
+                                .id(("cell", visual_ix * 10000 + col_ix))
                                 .flex()
                                 .flex_shrink_0()
                                 .items_center()
@@ -1403,7 +1457,7 @@ fn render_rows(
 
                         if let Some(input_state) = cell_input {
                             return div()
-                                .id(("cell", row_ix * 10000 + col_ix))
+                                .id(("cell", visual_ix * 10000 + col_ix))
                                 .flex()
                                 .flex_shrink_0()
                                 .items_center()
@@ -1418,65 +1472,31 @@ fn render_rows(
                         }
                     }
 
-                    // For edit buffer access, use the data row index (model index for base rows)
-                    let is_cell_dirty = if is_pending_insert_row {
-                        false // Pending inserts don't have cell-level dirty tracking
-                    } else {
-                        edit_buffer.is_cell_dirty(data_row_ix, col_ix)
+                    let paint = cell_paint(
+                        &view,
+                        group_children.get(col_ix).copied().unwrap_or(false),
+                        is_pending_delete,
+                        is_active,
+                        theme,
+                        null_color,
+                    );
+
+                    // The text the cell leads with: the contract's plain text,
+                    // or the transition composed for drawing.
+                    let content_text: SharedString = match &view.content {
+                        CellContent::Plain(text) => text.clone(),
+                        CellContent::Transition { from, to } => {
+                            format!("{from} \u{2192} {to}").into()
+                        }
                     };
-                    let null_value = super::model::CellValue::null();
-                    let base_value = cell.unwrap_or(&null_value);
-                    let display_value = if is_pending_insert_row {
-                        base_value // For pending inserts, just use the cell value directly
-                    } else {
-                        edit_buffer.get_cell(data_row_ix, col_ix, base_value)
-                    };
-                    let is_document = document.is_some();
-                    let shows_transition = is_document && is_cell_dirty;
-                    let display_text: Arc<str> = if shows_transition {
-                        format!(
-                            "{} \u{2192} {}",
-                            base_value.display_text(),
-                            display_value.display_text()
-                        )
-                        .into()
-                    } else {
-                        display_value.display_text()
-                    };
-                    let is_null = display_value.is_null();
-                    let is_auto_generated = display_value.is_auto_generated();
-                    let is_placeholder = display_value.is_placeholder();
-                    let is_missing = display_value.is_missing();
-                    let nested_kind = match display_value.kind {
-                        super::model::CellKind::Nested { is_array, .. } => Some(is_array),
-                        _ => None,
-                    };
-                    let fk_spans = display_value.fk_spans();
-                    let has_fk_spans = fk_spans.is_some();
-                    let is_group_child =
-                        document.is_some_and(|document| document.is_group_child(col_ix));
+                    let secondary = view.secondary.clone();
+                    let has_secondary = secondary.is_some();
 
                     let state_for_click = state_entity.clone();
                     let state_for_context = state_entity.clone();
 
-                    let text_color = if shows_transition {
-                        theme.warning
-                    } else if is_missing {
-                        theme.input
-                    } else if nested_kind.is_some() {
-                        theme.info
-                    } else if is_pending_delete || is_auto_generated || is_placeholder {
-                        theme.muted_foreground
-                    } else if is_null {
-                        null_color
-                    } else if is_active {
-                        ChromeColors::strong(theme)
-                    } else {
-                        theme.foreground
-                    };
-
                     div()
-                        .id(("cell", row_ix * 10000 + col_ix))
+                        .id(("cell", visual_ix * 10000 + col_ix))
                         .relative()
                         .flex()
                         .flex_shrink_0()
@@ -1489,16 +1509,16 @@ fn render_rows(
                         // Highlight individual dirty cells (like DBeaver).
                         // Uses RowColors::dirty for the background and the
                         // theme warning for the 2px left accent stroke.
-                        .when(is_group_child, |d| {
+                        .when(paint.group_wash, |d| {
                             d.bg(tint.opacity(CollectionMetrics::GROUP_CHILD_CELL_ALPHA))
                         })
-                        .when(is_cell_dirty && !is_document, |d| {
+                        .when(paint.dirty_mark, |d| {
                             d.bg(RowColors::dirty(theme))
                                 .border_l_2()
                                 .border_color(theme.warning)
                         })
                         .when(is_selected || is_active, |d| d.bg(cell_wash))
-                        .when(shows_transition, |d| {
+                        .when(paint.transition, |d| {
                             d.bg(theme.warning.opacity(CollectionMetrics::EDITED_CELL_ALPHA))
                                 .child(
                                     Chamfer::new(Pixels::ZERO)
@@ -1510,11 +1530,8 @@ fn render_rows(
                         .when(is_active, |d| {
                             d.child(Chamfer::new(Pixels::ZERO).ring(ChamferRing::focus(tint)))
                         })
-                        .when(
-                            is_null || is_auto_generated || is_placeholder || is_missing,
-                            |d| d.italic(),
-                        )
-                        .when(is_pending_delete, |d| d.line_through())
+                        .when(paint.italic, |d| d.italic())
+                        .when(paint.line_through, |d| d.line_through())
                         .on_click(move |event: &ClickEvent, window, cx| {
                             state_for_click.update(cx, |state, cx| {
                                 state.focus(window, cx);
@@ -1548,48 +1565,71 @@ fn render_rows(
                                 });
                             },
                         )
-                        .when_some(nested_kind, |d, _| {
+                        .when_some(view.nested, |d, _| {
                             d.gap(GridMetrics::HEADER_GAP).child(
-                                Icon::new(AppIcon::Braces)
-                                    .size(nested_icon)
-                                    .color(text_color),
+                                div()
+                                    .debug_selector(|| "table-cell-braces".to_string())
+                                    .child(
+                                        Icon::new(AppIcon::Braces)
+                                            .size(nested_icon)
+                                            .color(paint.text_color),
+                                    ),
                             )
                         })
                         // A resolved foreign key draws its label in the
-                        // cell's text color with the raw id muted after it.
-                        .when_some(fk_spans, |d, (label, id_suffix)| {
+                        // cell's text color with the raw id muted after it;
+                        // the pair replaces the cell's own display text.
+                        .when_some(secondary, |d, span| {
                             d.child(
                                 div()
+                                    .debug_selector(|| "table-cell-label".to_string())
                                     .min_w_0()
                                     .truncate()
                                     .text_size(font_size)
-                                    .text_color(text_color)
-                                    .child(label.to_string()),
+                                    .text_color(paint.text_color)
+                                    .child(content_text.clone()),
                             )
                             .child(
                                 div()
+                                    .debug_selector(|| "table-cell-secondary".to_string())
                                     .flex_shrink_0()
                                     .whitespace_nowrap()
                                     .text_size(font_size)
-                                    .text_color(theme.muted_foreground)
-                                    .child(id_suffix.to_string()),
+                                    .text_color(match span.tone {
+                                        CellTone::Missing => theme.input,
+                                        CellTone::Nested => theme.info,
+                                        CellTone::PendingDelete | CellTone::Muted => {
+                                            theme.muted_foreground
+                                        }
+                                        CellTone::Null => null_color,
+                                        CellTone::Normal
+                                        | CellTone::Dirty
+                                        | CellTone::PendingInsert
+                                        | CellTone::Error => theme.foreground,
+                                    })
+                                    .child(span.text.to_string()),
                             )
                         })
-                        .when(!has_fk_spans, |d| {
+                        .when(!has_secondary, |d| {
                             d.child(
                                 div()
+                                    .debug_selector(|| "table-cell-text".to_string())
                                     .min_w_0()
                                     .truncate()
                                     .text_size(font_size)
-                                    .text_color(text_color)
-                                    .child(display_text.to_string()),
+                                    .text_color(paint.text_color)
+                                    .child(content_text),
                             )
                         })
-                        .when(nested_kind == Some(true), |d| {
+                        .when(view.nested == Some(NestedMarker { is_array: true }), |d| {
                             d.child(
-                                Icon::new(AppIcon::ChevronRight)
-                                    .size(nested_icon)
-                                    .color(text_color),
+                                div()
+                                    .debug_selector(|| "table-cell-chevron".to_string())
+                                    .child(
+                                        Icon::new(AppIcon::ChevronRight)
+                                            .size(nested_icon)
+                                            .color(paint.text_color),
+                                    ),
                             )
                         })
                         .into_any_element()
@@ -1597,7 +1637,7 @@ fn render_rows(
                 .collect();
 
             div()
-                .id(("row", row_ix))
+                .id(("row", visual_ix))
                 .flex()
                 .flex_shrink_0()
                 .w(px(total_width))
@@ -1618,7 +1658,7 @@ fn render_rows(
                     |d| d.bg(theme.table_active),
                 )
                 .when(
-                    row_bg.is_none() && !is_reference_row && !is_active_row && row_ix % 2 == 1,
+                    row_bg.is_none() && !is_reference_row && !is_active_row && visual_ix % 2 == 1,
                     |d| d.bg(theme.table_even),
                 )
                 .child(
@@ -1654,6 +1694,7 @@ fn render_rows(
 
 #[cfg(test)]
 mod tests {
+    use super::super::model::TableModel;
     use super::*;
     use gpui::{AppContext as _, Render, TestAppContext, VisualTestContext, div};
     use gpui_base::ScrollbarHandle as _;
@@ -1892,6 +1933,92 @@ mod tests {
         visual
     }
 
+    /// A one-column, one-row grid whose single cell holds `cell`, so the
+    /// debug selectors below name exactly one element.
+    fn single_cell_harness(
+        cx: &mut TestAppContext,
+        cell: super::super::model::CellValue,
+    ) -> &mut VisualTestContext {
+        use super::super::model::{ColumnKind, ColumnSpec, RowData};
+        use gpui::TextAlign;
+
+        cx.update(crate::theme::init);
+
+        let model = Arc::new(TableModel::new(
+            vec![ColumnSpec {
+                id: "v".into(),
+                title: "v".into(),
+                kind: ColumnKind::Text,
+                align: TextAlign::Left,
+                type_name: "text".into(),
+            }],
+            vec![RowData { cells: vec![cell] }],
+        ));
+
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(model.clone(), cx));
+            let table = cx.new(|cx| DataTable::new("cell-test-table", state, cx));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+
+        visual
+    }
+
+    #[gpui::test]
+    fn an_array_cell_draws_the_braces_and_the_chevron(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::nested(true, 4));
+
+        assert!(
+            visual.debug_bounds("table-cell-braces").is_some(),
+            "a nested summary draws the braces marker"
+        );
+        assert!(
+            visual.debug_bounds("table-cell-chevron").is_some(),
+            "an array draws the step-in chevron"
+        );
+    }
+
+    #[gpui::test]
+    fn a_document_cell_draws_the_braces_but_not_the_chevron(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::nested(false, 3));
+
+        assert!(visual.debug_bounds("table-cell-braces").is_some());
+        assert!(
+            visual.debug_bounds("table-cell-chevron").is_none(),
+            "only an array steps in; a document draws no chevron"
+        );
+    }
+
+    #[gpui::test]
+    fn a_plain_cell_draws_one_text_span(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::text("value"));
+
+        assert!(visual.debug_bounds("table-cell-text").is_some());
+        assert!(visual.debug_bounds("table-cell-secondary").is_none());
+        assert!(visual.debug_bounds("table-cell-label").is_none());
+    }
+
+    #[gpui::test]
+    fn a_foreign_key_cell_draws_two_spans_and_suppresses_the_main_text(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::int(8).with_fk_label("Alice"));
+
+        assert!(
+            visual.debug_bounds("table-cell-text").is_none(),
+            "the two-tone pair replaces the cell's own display text"
+        );
+        assert!(visual.debug_bounds("table-cell-label").is_some());
+        assert!(visual.debug_bounds("table-cell-secondary").is_some());
+    }
+
     #[gpui::test]
     fn a_table_without_annotations_keeps_its_header_height(cx: &mut TestAppContext) {
         let visual = header_harness(cx, None);
@@ -1926,6 +2053,264 @@ mod tests {
         assert!(
             visual.debug_bounds("table-header-annotation").is_some(),
             "the annotated column draws its facts"
+        );
+    }
+
+    /// The paint decisions of one cell, computed against the live theme.
+    /// Returns the decision, the theme it was computed against and the null
+    /// color, so assertions compare against the same values.
+    fn paint_of(
+        cx: &mut TestAppContext,
+        view: &CellView,
+        group_child: bool,
+        row_pending_delete: bool,
+        is_active: bool,
+    ) -> (CellPaint, gpui_component::theme::Theme, Hsla) {
+        cx.update(crate::theme::init);
+        let paint = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let paint_for_assert = paint.clone();
+        cx.update(move |cx| {
+            let theme = cx.theme().clone();
+            let null_color = crate::tokens::SyntaxColors::for_current(cx).number;
+            paint_for_assert.replace(Some((
+                cell_paint(
+                    view,
+                    group_child,
+                    row_pending_delete,
+                    is_active,
+                    &theme,
+                    null_color,
+                ),
+                theme,
+                null_color,
+            )));
+        });
+        paint
+            .borrow()
+            .clone()
+            .expect("the paint decision must be computed")
+    }
+
+    /// A transition cell takes the transition color whatever its tone says:
+    /// the content outranks the tone in the text color.
+    #[gpui::test]
+    fn a_transition_cell_takes_the_transition_color_over_its_tone(cx: &mut TestAppContext) {
+        let (dirty, theme, _) = paint_of(
+            cx,
+            &CellView::transition("old", "new", CellTone::Dirty, CellAlignment::Left),
+            false,
+            false,
+            false,
+        );
+        assert_eq!(
+            dirty.text_color, theme.warning,
+            "the transition beats the dirty tone"
+        );
+        assert!(dirty.transition);
+        assert!(!dirty.dirty_mark, "a transition never draws the dirty mark");
+
+        // Even a null tone under a transition stays in the transition color.
+        let (nulled, theme, null_color) = paint_of(
+            cx,
+            &CellView::transition("old", "NULL", CellTone::Null, CellAlignment::Left),
+            false,
+            false,
+            false,
+        );
+        assert_eq!(nulled.text_color, theme.warning);
+        assert_ne!(nulled.text_color, null_color);
+
+        // And the same tone without the transition draws normally, which is
+        // what makes the precedence observable.
+        let (plain_dirty, theme, _) = paint_of(
+            cx,
+            &CellView::new("new", CellTone::Dirty, CellAlignment::Left),
+            false,
+            false,
+            false,
+        );
+        assert_eq!(plain_dirty.text_color, theme.foreground);
+    }
+
+    /// A plain staged edit draws the dirty mark; a transition draws the
+    /// transition wash instead. The two treatments are mutually exclusive.
+    #[gpui::test]
+    fn a_plain_dirty_cell_draws_the_mark_and_a_transition_does_not(cx: &mut TestAppContext) {
+        let (plain, _, _) = paint_of(
+            cx,
+            &CellView::new("new", CellTone::Dirty, CellAlignment::Left),
+            false,
+            false,
+            false,
+        );
+        assert!(plain.dirty_mark, "the relational dirty mark draws");
+        assert!(!plain.transition);
+
+        let (transition, _, _) = paint_of(
+            cx,
+            &CellView::transition("old", "new", CellTone::Dirty, CellAlignment::Left),
+            false,
+            false,
+            false,
+        );
+        assert!(transition.transition, "the transition wash draws");
+        assert!(!transition.dirty_mark);
+    }
+
+    /// A group-child cell of a document grid draws the wash; the fact comes
+    /// from `RowSource::column`, exactly as the painter reads it.
+    #[gpui::test]
+    fn a_group_child_cell_draws_the_wash(cx: &mut TestAppContext) {
+        use super::super::document::{
+            ColumnGroupHeader, DocumentColumnHeader, DocumentPresentation,
+        };
+        use super::super::model::{CellValue, ColumnKind, ColumnSpec, RowData};
+        use gpui::TextAlign;
+
+        cx.update(crate::theme::init);
+
+        let model = TableModel::new(
+            vec![
+                ColumnSpec {
+                    id: "a".into(),
+                    title: "a".into(),
+                    kind: ColumnKind::Text,
+                    align: TextAlign::Left,
+                    type_name: "text".into(),
+                },
+                ColumnSpec {
+                    id: "b".into(),
+                    title: "b".into(),
+                    kind: ColumnKind::Text,
+                    align: TextAlign::Left,
+                    type_name: "text".into(),
+                },
+            ],
+            vec![RowData {
+                cells: vec![CellValue::text("x"), CellValue::text("y")],
+            }],
+        );
+        let document = DocumentPresentation {
+            headers: vec![
+                DocumentColumnHeader::default(),
+                DocumentColumnHeader {
+                    group: Some(ColumnGroupHeader {
+                        key: "price".into(),
+                        label: "price".into(),
+                        type_label: "obj".into(),
+                    }),
+                    presence: None,
+                },
+            ],
+        };
+        let edits = super::super::model::EditBuffer::new();
+        let source = GridRowSource::with_document(&model, &edits, Some(&document));
+
+        let (washed, _, _) = paint_of(
+            cx,
+            &source.cell(0, 1).expect("cell"),
+            source.column(1).expect("column").group_child,
+            false,
+            false,
+        );
+        assert!(
+            washed.group_wash,
+            "the grouped column's cell draws the wash"
+        );
+
+        let (unwashed, _, _) = paint_of(
+            cx,
+            &source.cell(0, 0).expect("cell"),
+            source.column(0).expect("column").group_child,
+            false,
+            false,
+        );
+        assert!(!unwashed.group_wash);
+    }
+
+    /// The italic and strike decisions: null, muted and missing cells
+    /// italicize; a pending-delete row strikes all its cells whatever their
+    /// tone, and nothing else strikes.
+    #[gpui::test]
+    fn null_muted_and_missing_italicize_and_pending_delete_strikes(cx: &mut TestAppContext) {
+        let alignment = CellAlignment::Left;
+        for (view, expect_italic) in [
+            (CellView::new("x", CellTone::Null, alignment), true),
+            (CellView::new("x", CellTone::Muted, alignment), true),
+            (CellView::new("x", CellTone::Missing, alignment), true),
+            (CellView::new("x", CellTone::Normal, alignment), false),
+            (CellView::new("x", CellTone::Dirty, alignment), false),
+            (CellView::new("x", CellTone::Nested, alignment), false),
+        ] {
+            let (paint, _, _) = paint_of(cx, &view, false, false, false);
+            assert_eq!(
+                paint.italic, expect_italic,
+                "tone {:?} italic decision",
+                view.tone
+            );
+            assert!(!paint.line_through);
+        }
+
+        let (struck, _, _) = paint_of(
+            cx,
+            &CellView::new("x", CellTone::Normal, alignment),
+            false,
+            true,
+            false,
+        );
+        assert!(struck.line_through);
+        assert!(!struck.italic, "a struck ordinary cell does not italicize");
+
+        let (struck_null, theme, _) = paint_of(
+            cx,
+            &CellView::new("NULL", CellTone::Null, alignment),
+            false,
+            true,
+            false,
+        );
+        assert!(struck_null.line_through);
+        assert!(struck_null.italic);
+        // And the row's pending delete mutes the cell's color.
+        assert_eq!(struck_null.text_color, theme.muted_foreground);
+    }
+
+    /// The ordinary tone colors: foreground, the active cell's strong tint,
+    /// and the null color.
+    #[gpui::test]
+    fn ordinary_cells_take_the_foreground_and_the_active_cell_the_strong_tint(
+        cx: &mut TestAppContext,
+    ) {
+        let (normal, theme, _) = paint_of(
+            cx,
+            &CellView::new("x", CellTone::Normal, CellAlignment::Left),
+            false,
+            false,
+            false,
+        );
+        assert_eq!(normal.text_color, theme.foreground);
+
+        let (active, theme, _) = paint_of(
+            cx,
+            &CellView::new("x", CellTone::Normal, CellAlignment::Left),
+            false,
+            false,
+            true,
+        );
+        assert_eq!(
+            active.text_color,
+            crate::tokens::ChromeColors::strong(&theme)
+        );
+
+        let (null_cell, _, null_color) = paint_of(
+            cx,
+            &CellView::new("NULL", CellTone::Null, CellAlignment::Left),
+            false,
+            false,
+            true,
+        );
+        assert_eq!(
+            null_cell.text_color, null_color,
+            "null outranks the active tint, as the painter draws it today"
         );
     }
 }
