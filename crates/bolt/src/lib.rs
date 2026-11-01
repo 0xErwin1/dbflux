@@ -27,6 +27,7 @@ pub mod icon;
 pub mod palette;
 pub mod primitives;
 pub mod semantic;
+pub mod shell;
 pub mod theme;
 pub mod tokens;
 pub mod typography;
