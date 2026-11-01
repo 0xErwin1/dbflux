@@ -10,6 +10,13 @@ The crate lives in `crates/bolt` while its API settles. It is designed to move
 to its own repository without touching a screen: see
 [Consuming Bolt from another repository](#consuming-bolt-from-another-repository).
 
+**The rule that decides every borderline case: Bolt carries no product logic and
+no product components.** The test is not "does this compile without naming a
+product" but "would an app in a completely different domain need this exact
+thing". A chart renderer passes; a chart renderer that knows what a series means
+in a SQL result does not. When the two are entangled the answer is a split — the
+rendering in Bolt, the domain knowledge behind a seam the product fills.
+
 ## What Bolt owns
 
 | Module | Contents |
@@ -29,8 +36,19 @@ to its own repository without touching a screen: see
 | `bolt::composites` | Tabs (document, result, inline), menu item and popup menu, list row, empty state, split button, splitter, field row, island |
 | `bolt::selector` | `id_selector`: the gpui debug selector every id-bearing component records for its element id |
 | `bolt::modals` | The modal dialog, its focus helper and the shared body blocks (lead, statement, field, form row, value field) |
+| `bolt::shell` | The activity rail: view buttons with one active entry, top or bottom pinned |
+| `bolt::data` | The row-and-cell contract: `ColumnView`, `CellView`, `CellTone`, `CellContent`, `RowSource`, `RowVisualState`, `ColumnKind` |
+| `bolt::components::grid` | The data-grid row list and cell painter over `RowSource`, plus the `GridHost` carrying the host facts |
+| `bolt::components::tree_nav` | Tree navigation: flattening, cursor, expansion, the gutter |
+| `bolt::components::document_tree` | The document-tree row painter, its value-type colors and its row host |
+| `bolt::chart` | Decimation, axis ticks, series stats, legend, axis bar, point inspector, the spec's value types and the readout formatters |
+| `bolt::command_palette` | The palette engine: fuzzy query, scopes, grouping, cursor, highlighting, card and footer |
+| `bolt::keymap` | The semantic command vocabulary, the installed `CommandSet` and the attach hook |
+| `bolt::strings` | The text seam: a key and a key with named arguments, answered by the product |
+| `bolt::vim` | The modal-editing engine and its binding layer |
 
-Bolt depends on `gpui`, `gpui-component`, `gpui-base`, `log` and `serde_json`.
+Bolt depends on `gpui`, `gpui-component`, `gpui-base`, `fuzzy-matcher`, `log`,
+`chrono`, `serde` and `serde_json`, and on no product crate.
 It never depends on DBFlux's domain crates and never names a product, a driver,
 a database or a design board: a source-scanning guardrail in
 `crates/bolt/tests/guardrail.rs` enforces that.
@@ -60,6 +78,26 @@ a database or a design board: a source-scanning guardrail in
   command search field and the notification bell draw. Without it they use
   gpui-component's `Search` and `Bell`; DBFlux installs its own `AppIcon`s
   with `install_shell_icons`.
+- **Its text.** `bolt::strings` holds two function pointers, one for a key and
+  one for a key with named arguments (`%{name}`). The catalogue, the locale and
+  the placeholder replacement all stay in the product's own functions.
+- **Its commands.** `bolt::keymap::CommandSet` maps a small semantic vocabulary
+  onto the product's action ids, both directions, together with the key context
+  and the attach hook. The dropdown, the command palette and vim all dispatch
+  through that one set.
+- **Its editor bindings.** `VimSeams` supplies the leader action factory, the
+  attach hook, the Vim key contexts and the mode labels, because action ids and
+  context names are persisted in users' keybinding overrides and may not change.
+- **Its rows.** Anything that draws data takes a `RowSource`; the host facts a
+  painter cannot know arrive separately — `GridHost` for the grid, a row host
+  for the document tree — so the model and the value types stay where the data
+  lives.
+- **Its palette items.** `PaletteEntry` describes one palette row and
+  `PaletteHost` supplies the key context, the footer key labels, the attach hook
+  and the closed event.
+- **Its chart chrome.** `ChartColumn { name, kind }` is what detection reads;
+  `AxisBarChrome` and `PointInspectorText` carry the icons and translated labels
+  those two surfaces need, since they translate at build time with no `cx`.
 
 ## Finding components in tests
 
@@ -298,11 +336,51 @@ Two source-scanning tests keep the boundary honest:
 Both run with the test suite, so a violation fails the build rather than the
 review.
 
-## What Bolt does not own yet
+## What stays product-side, and why
 
-Domain components stay in `dbflux_components` until their seams exist:
-`data_table`, `document_tree`, the product dialogs built on `Modal`, the chart
-engine, `result_panel`, the Vim layer and the composites that read product
-state (rail navigation, notification center, wizard rail). They read `ColumnMeta`, `Value`, `QueryLanguage`
-and `ContextId` from `dbflux_core`, so moving them means opening a generic seam
-in the core first, one component at a time.
+The migration moved what a second app would need unchanged and left what only a
+database client would. Each of these stays in `dbflux_components` for a reason,
+not by omission:
+
+| Stays | Why |
+|---|---|
+| `Value`, its formatting, and every extractor that reads it | The value model is the product's data contract. `extract_f64`, `group_key`, `time_axis_epoch_ms` and cell text all interpret a value, and formatting belongs with the owner of the data. |
+| The data grid's header chrome | Titles, type labels, primary and foreign key icons, sort arrows, annotations and the document group row are host state. The cell painter moved; the header did not. |
+| `ChartView` (the chart entity) and its data sources | `build` takes a `QueryResult`, and the orphan rule makes a Bolt-side impl for a product type impossible. A second pass could split the resolved-series renderer from the extraction. |
+| The persisted `ChartSpec` composite and the saved-chart sources | They bind `&[ColumnMeta]` and `&QueryResult`; the spec's *value* types moved, the product's composite did not. |
+| The document tree's state machine and events | Its public API is `Value`-typed and consumed untouched from the UI crates. |
+| The semantic vocabulary's product half | The `Command` enum, `RunCommand`, the leader action, the keybinding registration. Bolt owns the table; the product owns the actions. |
+| The icon catalogue (`AppIcon`), the accents, the adapters onto `ThemeSetting`/`AppStyle`, i18n, the SQL keyword table, `rail_nav` | Product identity, product settings, product language, product language *again*, and a controller that depends on the product's `Command` and menu composite. |
+
+Two things follow from this that are easy to get wrong later:
+
+- **A seam is not a place to smuggle a product concept.** When the point
+  inspector's quick action was called `show-in-tree`, it moved as data
+  (`quick_action_slug`) instead of keeping a name only a database tree explains.
+  When the modal grew a SQL keyword list, it went back to the product and Bolt
+  kept a statement block that highlights whatever ranges it is given.
+- **A contract that cannot carry a rendering decision gets the missing fact, not
+  a winner.** The grid's `dirty` flag exists because one `CellTone` could not say
+  both what a value is and whether it holds an uncommitted edit, and picking one
+  silently changed a pixel.
+
+## Verifying a move
+
+Every slice of this work followed the same shape, and a future one should:
+
+1. Measure the coupling, not the line count. `vim` was 5,750 lines with one
+   domain reference; the chart was 10,299 with forty-three, concentrated in two
+   files.
+2. Move or split according to that map, never by size.
+3. Keep the product's public paths alive by re-exporting what moved.
+4. Pin the surviving behaviour with a test that asserts the values the old code
+   produced, then delete the losing side of any duplicate pair.
+5. Close with the full gate: `cargo check --workspace --all-targets`,
+   `scripts/lint.py fmt --check`, `clippy`, `mouse-down`, the crate suites and
+   `crates/bolt/tests/guardrail.rs`.
+
+What that gate does not cover is pixels. The tests assert the decisions a painter
+makes — tone, colour role, italic, strike, mark, wash, chevron — and element-tree
+selectors let them read the real render, but no test compares a rendered frame
+against a reference. A visual pass over the running app is still the check for a
+change to the design system, and it is worth doing before a release.
