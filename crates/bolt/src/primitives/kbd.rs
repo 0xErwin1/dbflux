@@ -143,8 +143,9 @@ impl Kbd {
     }
 
     /// Accessible label of the key row, read by assistive technology and
-    /// automation. It needs [`Self::id`]: a row without an id has no
-    /// accessibility node to carry it.
+    /// automation, instead of the keys it draws (joined by `+`). It needs
+    /// [`Self::id`]: a row without an id has no accessibility node to carry
+    /// it.
     pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
         self.aria_label = Some(label.into());
         self
@@ -192,6 +193,9 @@ impl RenderOnce for Kbd {
         let separator_color = cx.theme().muted_foreground;
         let key_count = self.keys.len();
         let tone = self.tone;
+        let accessible_name = self
+            .aria_label
+            .unwrap_or_else(|| self.keys.join("+").into());
 
         let mut row = div().flex().items_center().gap(KbdMetrics::CHORD_GAP);
 
@@ -210,15 +214,7 @@ impl RenderOnce for Kbd {
             }
         }
 
-        match (self.id, self.aria_label) {
-            (Some(id), Some(label)) => row
-                .debug_selector(crate::selector::id_selector(&id))
-                .id(id)
-                .role(gpui::Role::Label)
-                .aria_label(label)
-                .into_any_element(),
-            (id, _) => crate::selector::with_optional_id(row, id),
-        }
+        crate::selector::with_optional_label(row, self.id, accessible_name)
     }
 }
 
@@ -255,6 +251,30 @@ mod tests {
         assert_eq!(key_label("+"), "+");
         assert_eq!(key_label("Ctrl +"), "Ctrl +");
         assert_eq!(Kbd::chord(["g", "g"]).keys(), ["g", "g"]);
+    }
+
+    fn keycaps(_cx: &mut App) -> gpui::AnyElement {
+        div()
+            .child(Kbd::new("Ctrl n").id("single"))
+            .child(Kbd::chord(["Ctrl", "Shift", "p"]).id("chord"))
+            .child(Kbd::new("Esc").id("named").aria_label("Close"))
+            .into_any_element()
+    }
+
+    #[gpui::test]
+    fn a_keycap_with_an_id_is_named_by_the_keys_it_draws(cx: &mut gpui::TestAppContext) {
+        use crate::accessibility::{accessibility_node, accessible_name, render_frame};
+
+        let frame = render_frame(cx, keycaps);
+
+        let single = accessibility_node(&frame, "single").expect("keycap node");
+        assert_eq!(single.role(), gpui::Role::Label);
+        assert_eq!(accessible_name(&frame, "single").as_deref(), Some("Ctrl N"));
+        assert_eq!(
+            accessible_name(&frame, "chord").as_deref(),
+            Some("Ctrl+Shift+P")
+        );
+        assert_eq!(accessible_name(&frame, "named").as_deref(), Some("Close"));
     }
 
     #[test]

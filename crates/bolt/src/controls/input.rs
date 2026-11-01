@@ -63,6 +63,7 @@ pub struct Input {
     padding: Option<(Pixels, Pixels)>,
     text_size: Option<AbsoluteLength>,
     line_height: Option<DefiniteLength>,
+    font_weight: Option<FontWeight>,
 }
 
 impl Input {
@@ -83,6 +84,7 @@ impl Input {
             padding: None,
             text_size: None,
             line_height: None,
+            font_weight: None,
         }
     }
 
@@ -105,6 +107,14 @@ impl Input {
     /// Replaces the line height of the input.
     pub fn line_height(mut self, height: impl Into<DefiniteLength>) -> Self {
         self.line_height = Some(height.into());
+        self
+    }
+
+    /// Replaces the text weight: normal in a framed field and medium in a
+    /// bare one by default. A bare field set to normal matches text drawn at
+    /// the regular weight.
+    pub fn font_weight(mut self, weight: FontWeight) -> Self {
+        self.font_weight = Some(weight);
         self
     }
 
@@ -197,12 +207,12 @@ impl RenderOnce for Input {
                 })
                 .px(Fields::PADDING_X)
                 .gap(Fields::GAP)
-                .font_weight(FontWeight::NORMAL)
+                .font_weight(text_weight(true, self.font_weight))
                 .text_size(Fields::TEXT)
                 .text_color(cx.theme().accent_foreground)
         } else {
             input
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(text_weight(false, self.font_weight))
                 .text_size(if self.small {
                     FontSizes::SM
                 } else {
@@ -284,6 +294,16 @@ impl RenderOnce for Input {
             .child(input)
             .into_any_element()
     }
+}
+
+/// Weight of the text of an input: `weight` when the caller set one,
+/// otherwise normal in a framed field and medium in a bare one.
+fn text_weight(chamfered: bool, weight: Option<FontWeight>) -> FontWeight {
+    weight.unwrap_or(if chamfered {
+        FontWeight::NORMAL
+    } else {
+        FontWeight::MEDIUM
+    })
 }
 
 /// The chamfered shape behind a text field: `fill` with a 1 px line on the
@@ -1083,5 +1103,21 @@ mod tests {
 
         assert!(applied, "the editable editor handles the SetValue action");
         assert_eq!(editor_value(&view, visual), "SELECT 2");
+    }
+
+    #[test]
+    fn the_text_weight_defaults_by_frame_and_takes_the_callers_weight() {
+        use gpui::FontWeight;
+
+        assert_eq!(super::text_weight(true, None), FontWeight::NORMAL);
+        assert_eq!(super::text_weight(false, None), FontWeight::MEDIUM);
+        assert_eq!(
+            super::text_weight(false, Some(FontWeight::NORMAL)),
+            FontWeight::NORMAL
+        );
+        assert_eq!(
+            super::text_weight(true, Some(FontWeight::BOLD)),
+            FontWeight::BOLD
+        );
     }
 }

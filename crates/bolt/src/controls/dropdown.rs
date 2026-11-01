@@ -998,6 +998,7 @@ impl Dropdown {
                     trigger,
                     SelectField {
                         label,
+                        label_style: Default::default(),
                         leading_icon: self.leading_icon.clone(),
                         disabled,
                         ring,

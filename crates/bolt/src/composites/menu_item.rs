@@ -275,7 +275,7 @@ pub fn menu_row(
 
     let id = id.into();
     let check_selector = format!("{id}-check");
-    let key_selector = format!("{id}-key");
+    let key_id = format!("{id}-key");
     let is_item = !item.is_header && !item.is_separator;
 
     div()
@@ -357,15 +357,18 @@ pub fn menu_row(
             )
         })
         .when_some(item.shortcut.as_ref(), |row, shortcut| {
-            row.child(
+            let shortcut = key_label(shortcut);
+
+            row.child(crate::selector::labeled(
                 div()
-                    .debug_selector(move || key_selector)
                     .flex_shrink_0()
                     .font_family(crate::fonts::editor_family(cx))
                     .text_size(KbdMetrics::FONT)
                     .text_color(shortcut_color)
-                    .child(key_label(shortcut)),
-            )
+                    .child(shortcut.clone()),
+                SharedString::from(key_id),
+                shortcut,
+            ))
         })
         .when(item.has_submenu, |row| {
             row.child(
@@ -648,6 +651,28 @@ mod tests {
             assert!(
                 window.debug_bounds("row-open-key").is_none(),
                 "a row without a shortcut draws no keycap"
+            );
+        }
+
+        fn copy_row(cx: &mut gpui::App) -> gpui::AnyElement {
+            menu_row(
+                "row-copy",
+                &MenuItem::new("Copy").shortcut("Ctrl+c"),
+                false,
+                cx,
+            )
+            .into_any_element()
+        }
+
+        #[gpui::test]
+        fn the_shortcut_keycap_reads_its_shortcut(cx: &mut TestAppContext) {
+            use crate::accessibility::{accessible_name, render_frame};
+
+            let frame = render_frame(cx, copy_row);
+
+            assert_eq!(
+                accessible_name(&frame, "row-copy-key").as_deref(),
+                Some("Ctrl+C")
             );
         }
     }

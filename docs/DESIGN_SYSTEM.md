@@ -92,9 +92,28 @@ UI automation read them. Rail buttons and the command search field have the
 button role; a rail button reports itself selected while its entry is active.
 
 `Badge`, `Kbd`, `BannerBlock` and `EmptyState` take an optional id with
-`.id(..)`. A `Kbd` with an id also takes `.aria_label(..)`. Without one they render exactly as before; with one, the element
+`.id(..)`. Without one they render exactly as before; with one, the element
 carries that id and its debug selector, so a product finds it without a
 wrapper.
+
+With an id, a `Badge` and a `Kbd` are also label nodes in the accessibility
+tree, named by the text they draw: the badge label, or the keys joined by
+`+` (`Ctrl+Shift+P`). `.aria_label(..)` replaces that name on both, for a
+badge whose text needs context (`3` read as `3 headers`). gpui creates an
+accessibility node only for an element with a role, so an id-less badge or
+keycap has no node and its label has nothing to carry it.
+
+An `EmptyState` with an id names its parts after it, each a label node named
+by its text:
+
+| Part | Id |
+|---|---|
+| The title | `<id>-title` |
+| The sentence | `<id>-text` |
+| The keycaps of the key-hint actions, numbered from 0 across all actions | `<id>-key-<n>` |
+
+The shortcut keycap of a `menu_row` (`<row id>-key`) is a label node named by
+the shortcut text it draws (`Ctrl+C`).
 
 ## Options for products
 
@@ -104,8 +123,11 @@ one is off by default, so DBFlux draws the same pixels without them.
 | Component | Option | What it does |
 |---|---|---|
 | `SegmentedControl` | `.tabs(true)` | A named control becomes a tab list and its segments tabs, selected when active, for a segmented control that switches views. The look and ids stay the same; the default is a radio group. |
+| `SegmentedControl` | `.track_id(..)`, `.aria_label(..)` | Replace the track's element and accessibility id (`segmented-<group>` by default; the segment ids keep the group) and name the radio group or tab list. Both need `.group(..)`: an unnamed control has no accessibility node. |
+| `SelectTrigger` | `.label_color(..)`, `.label_weight(..)`, `.label_font_family(..)` | Draw the label in a color, weight and font family of its own, such as an HTTP method chip (bold, mono, colored). A disabled trigger keeps the faded text color. Unset parts follow the field. |
 | `SelectTrigger` | `SelectTrigger::new(id, label)` | The closed field of a select, drawn by the same code as a standard `Dropdown` trigger: cut-6 field, optional leading icon, truncated label, chevron. It is a button with the caller's click handler, `.disabled(..)`, `.focus_ring(..)` or `.focused(..)`, for a product that opens its own popup. The `Dropdown` entity itself is unchanged. |
 | `Input` | `.padding(x, y)`, `.text_size(..)`, `.line_height(..)` | Replace the inner padding (the height then follows the line), the text size and the line height. With `appearance(false)`, set them to the values of the text the field replaces so nothing moves when the text turns into a field. Without them a bare input keeps gpui-component's size. |
+| `Input` | `.font_weight(..)` | Replaces the text weight, normal in a framed field and medium in a bare one. Set a bare field to normal so it matches text drawn at the regular weight. |
 | `EmptyState` | `.primary_action(Button)` | A real button under the sentence for the one thing the region asks for. The key-hint actions stay below it. |
 | `MenuItem` | `.checked(bool)` | A checkable row: `true` draws a tint check mark (`MenuMetrics::CHECK_ICON`) after the label. The row reports itself as a checkable menu item, toggled or not. A row without it is a plain menu item. |
 | `Splitter` | `Splitter::new(id, SplitAxis)` | The resize gutter between two panes (see below). |
@@ -152,8 +174,11 @@ The owner keeps the pane size, and the splitter reports what the user does:
 - `.on_toggle_collapse(|window, cx| ..)`: a double click, or Enter while
   focused.
 
-Its accessibility role is a splitter, oriented across the axis. DBFlux's
-sidebar and inspector keep their own grips.
+Its accessibility role is a splitter, oriented across the axis.
+`.aria_label(..)` names it (`Resize request and response`), and
+`.value_percent(..)` reports the first pane's share of the split as its value,
+numeric from 0 to 100 and as text (`62%`). DBFlux's sidebar and inspector keep
+their own grips.
 
 ## Reading colors
 

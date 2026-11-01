@@ -206,6 +206,41 @@ impl FrameCapture {
     }
 }
 
+/// Renders `render` alone in a themed test window and returns its frame.
+#[cfg(test)]
+pub(crate) fn render_frame(
+    cx: &mut gpui::TestAppContext,
+    render: fn(&mut gpui::App) -> gpui::AnyElement,
+) -> AccessibilityFrame {
+    struct Surface(fn(&mut gpui::App) -> gpui::AnyElement);
+
+    impl gpui::Render for Surface {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::{ParentElement as _, Styled as _};
+
+            gpui::div().size_full().child((self.0)(cx))
+        }
+    }
+
+    cx.update(gpui_component::init);
+    cx.update(|cx| {
+        crate::theme::install(
+            crate::brand::Brand::neutral(),
+            crate::palette::PaletteMode::Dark,
+            crate::density::Density::Default,
+            cx,
+        );
+    });
+
+    let (_view, window) = cx.add_window_view(move |_, _| Surface(render));
+    let capture = FrameCapture::observe(window);
+    capture.frame(window)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{accessible_name, assert_clickables_named, unnamed_clickables};

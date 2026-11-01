@@ -7,7 +7,7 @@ use gpui::{
     Styled as _, TestAppContext, VisualTestContext, Window, div, px,
 };
 
-use super::SelectTrigger;
+use super::{SelectTrigger, select_label};
 use crate::controls::{Dropdown, DropdownItem};
 use crate::icon::IconSource;
 
@@ -137,4 +137,38 @@ fn the_trigger_is_a_button_named_by_its_label(cx: &mut TestAppContext) {
 
     assert_eq!(node.role(), Role::Button);
     assert_eq!(node.label(), Some("One"));
+}
+
+#[test]
+fn the_label_takes_the_callers_color_weight_and_family() {
+    let default_color = gpui::white();
+    let method_color = gpui::red();
+    let trigger = SelectTrigger::new("method", "GET")
+        .label_color(method_color)
+        .label_weight(gpui::FontWeight::BOLD)
+        .label_font_family("JetBrains Mono");
+
+    let mut label = select_label("GET".into(), &trigger.label_style, false, default_color);
+    let text = &label.style().text;
+    assert_eq!(text.color, Some(method_color));
+    assert_eq!(text.font_weight, Some(gpui::FontWeight::BOLD));
+    assert_eq!(text.font_family.as_deref(), Some("JetBrains Mono"));
+
+    let mut faded = select_label("GET".into(), &trigger.label_style, true, default_color);
+    assert_eq!(
+        faded.style().text.color,
+        Some(default_color),
+        "a disabled trigger keeps the faded text color"
+    );
+}
+
+#[test]
+fn an_unstyled_label_inherits_the_field_text() {
+    let trigger = SelectTrigger::new("pick", "One");
+
+    let mut label = select_label("One".into(), &trigger.label_style, false, gpui::white());
+    let text = &label.style().text;
+    assert_eq!(text.color, None);
+    assert_eq!(text.font_weight, None);
+    assert_eq!(text.font_family, None);
 }
