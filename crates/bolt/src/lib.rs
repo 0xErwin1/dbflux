@@ -29,6 +29,13 @@ pub mod controls;
 pub mod density;
 pub mod fonts;
 pub mod icon;
+
+/// The keyboard-coverage rule as a reusable registry: a product fills in its
+/// surfaces, element ids and commands over its own keyboard vocabulary, and
+/// a rendered-frame check fails when a clickable element has no keyboard
+/// path, or a registered command has no key.
+pub mod keyboard_coverage;
+
 pub mod keymap;
 
 /// The keyboard engine: key chords, keymap layers, user overrides, conflict

@@ -3943,6 +3943,7 @@ name = "dbflux_ui_base"
 version = "0.10.0-dev.0"
 dependencies = [
  "anyhow",
+ "bolt",
  "chrono",
  "dbflux_app",
  "dbflux_aws",

@@ -1,21 +1,30 @@
 //! Keyboard coverage guard for rendered surfaces.
 //!
 //! Every element that runs an action on click shows up in the accessibility
-//! tree of a rendered frame as a node supporting [`AccessibleAction::Click`]
+//! tree of a rendered frame as a node supporting `AccessibleAction::Click`
 //! (GPUI gives that action to every element with an `on_click` handler). A
-//! surface test renders the surface, captures a frame with [`FrameCapture`]
-//! and checks every such node with [`Coverage`] against the surface's
-//! [`SurfaceRegistry`]: each element id must name the keyboard path that runs
-//! the same action.
+//! surface test renders the surface, captures a frame with
+//! [`FrameCapture`] and checks every such node with [`Coverage`] against the
+//! surface's [`SurfaceRegistry`]: each element id must name the keyboard
+//! path that runs the same action.
+//!
+//! The registry machinery — the pattern matching, the checks in both
+//! directions, the frame capture — is product-neutral and lives in
+//! `bolt::keyboard_coverage`, generic over a product's keyboard vocabulary.
+//! This module is DBFlux's registration on it: the [`DbFluxKeymap`]
+//! vocabulary (the `Command`/`ContextId` types the keymap dispatches, their
+//! id strings, and the live-keymap lookup), the aliases every surface's
+//! registry is declared with, and the dialog chrome the `Modal` primitive
+//! draws.
 //!
 //! - [`KeyboardPath::Command`]: a command bound in one of the surface's key
 //!   contexts (or a context they inherit from), or listed in the command
 //!   palette when the test supplies it.
+//! - [`KeyboardPath::TabStop`]: a control of a dialog, which keeps Tab inside
+//!   it; the element must take focus.
 //! - [`KeyboardPath::Menu`]: an entry of a keyboard-openable menu (the pane
 //!   actions, a table or rail menu). The test builds the menu and passes its
 //!   entry ids, so a removed entry fails the check.
-//! - [`KeyboardPath::TabStop`]: a control of a dialog, which keeps Tab inside
-//!   it; the element must take focus.
 //! - [`KeyboardPath::MouseOnly`]: an element with no keyboard path, with the
 //!   reason. Reasons that start with `gap:` mark a known missing path.
 //!
@@ -26,88 +35,63 @@
 //! instead of the click never reach the accessibility tree; the static lint
 //! (`python3 scripts/lint.py mouse-down`) covers those.
 
+use bolt::keyboard_coverage::CoverageVocabulary;
 use dbflux_app::keymap::{Command, ContextId};
-use gpui::{AccessibilityFrame, AccessibleAction, FrameObserver, VisualTestContext};
-use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex};
 
-/// How the action of a clickable element is reached without the pointer.
+/// DBFlux's keyboard vocabulary for the coverage registry.
+///
+/// The command and context types are the keymap's persisted vocabulary; the
+/// bound check reads the effective keymap — the default bindings with the
+/// user's overrides applied — the same way key dispatch does, including the
+/// fallback to parent contexts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum KeyboardPath {
-    /// The command bound in the surface's key contexts that runs the action.
-    Command(Command),
-    /// A control of a dialog, reached with Tab (a dialog keeps Tab inside
-    /// it) and pressed with Space or Enter. The element must take focus.
-    TabStop,
-    /// The id of the menu entry that runs the action. A trailing `*` accepts
-    /// any entry id with that prefix, for rows whose entries are generated
-    /// (one per toast action, one per task).
-    Menu(&'static str),
-    /// No keyboard path, with the reason (`gap: ...` for a known gap).
-    MouseOnly(&'static str),
-}
+pub struct DbFluxKeymap;
 
-impl KeyboardPath {
-    /// Whether this is a mouse-only entry recorded as a known gap.
-    pub fn is_gap(&self) -> bool {
-        matches!(self, KeyboardPath::MouseOnly(reason) if reason.starts_with("gap:"))
+impl CoverageVocabulary for DbFluxKeymap {
+    type Command = Command;
+    type Context = ContextId;
+
+    fn command_id(command: Command) -> &'static str {
+        command.id()
+    }
+
+    fn context_id(context: ContextId) -> &'static str {
+        context.id()
+    }
+
+    fn is_bound(context: ContextId, command: Command) -> bool {
+        crate::keymap::effective_keymap()
+            .keys_for_command(context, command)
+            .is_some()
     }
 }
 
+/// How the action of a clickable element is reached without the pointer.
+pub type KeyboardPath = bolt::keyboard_coverage::KeyboardPath<DbFluxKeymap>;
+
 /// One registry row: an element id pattern and its keyboard path.
-///
-/// A `*` in a pattern stands for any run of characters (`pane-action-*`,
-/// `qb-*-rm*`); a pattern without one matches the id exactly. A pattern
-/// with a `.` matches the end of the element path instead, for an element
-/// whose own id is shared (`sql-auto-refresh.*` names the trigger of the
-/// `sql-auto-refresh` dropdown).
-pub type CoverageEntry = (&'static str, KeyboardPath);
+pub type CoverageEntry = bolt::keyboard_coverage::CoverageEntry<DbFluxKeymap>;
 
 /// The number of registry rows of each kind.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct CoverageCounts {
-    pub command: usize,
-    pub tab_stop: usize,
-    pub menu: usize,
-    pub mouse_only: usize,
-    pub gap: usize,
-}
+pub use bolt::keyboard_coverage::CoverageCounts;
 
 /// The coverage registry of one surface: its element id patterns, and the
 /// key contexts whose bindings (or their parents') its commands must have.
-#[derive(Clone, Copy, Debug)]
-pub struct SurfaceRegistry {
-    pub name: &'static str,
-    pub contexts: &'static [ContextId],
-    pub entries: &'static [CoverageEntry],
-}
+pub type SurfaceRegistry = bolt::keyboard_coverage::SurfaceRegistry<DbFluxKeymap>;
 
-impl SurfaceRegistry {
-    /// The number of registry rows of each kind.
-    pub fn counts(&self) -> CoverageCounts {
-        let mut counts = CoverageCounts::default();
+/// The checks a rendered frame is run against.
+pub type Coverage = bolt::keyboard_coverage::Coverage<DbFluxKeymap>;
 
-        for (_, path) in self.entries {
-            match path {
-                KeyboardPath::Command(_) => counts.command += 1,
-                KeyboardPath::TabStop => counts.tab_stop += 1,
-                KeyboardPath::Menu(_) => counts.menu += 1,
-                KeyboardPath::MouseOnly(_) if path.is_gap() => counts.gap += 1,
-                KeyboardPath::MouseOnly(_) => counts.mouse_only += 1,
-            }
-        }
+/// A rendered element that runs an action on click.
+pub use bolt::keyboard_coverage::ClickableElement;
 
-        counts
-    }
+/// Every element of `frame` whose accessibility node supports a click, in
+/// element path order.
+pub use bolt::keyboard_coverage::clickable_elements;
 
-    fn context_names(&self) -> String {
-        self.contexts
-            .iter()
-            .map(|context| context.id())
-            .collect::<Vec<_>>()
-            .join(" / ")
-    }
-}
+/// Keeps the latest accessibility frame of the window it observes.
+#[cfg(any(test, feature = "test-support"))]
+pub use bolt::keyboard_coverage::FrameCapture;
 
 /// The chrome of the `Modal` primitive every dialog is drawn in: its close
 /// button answers Escape, which the Modal key context binds to Cancel.
@@ -117,339 +101,10 @@ pub const MODAL_CHROME: SurfaceRegistry = SurfaceRegistry {
     entries: &[("modal-close", KeyboardPath::Command(Command::Cancel))],
 };
 
-/// The registries a rendered frame is checked against, with the menus the
-/// test built and the subtrees other surface tests own.
-pub struct Coverage {
-    surfaces: Vec<SurfaceRegistry>,
-    delegated: Vec<(&'static str, &'static str)>,
-    menu_entries: BTreeSet<String>,
-    palette: Vec<Command>,
-}
-
-impl Coverage {
-    /// Checks frames against `surface`.
-    pub fn new(surface: SurfaceRegistry) -> Self {
-        Self {
-            surfaces: vec![surface],
-            delegated: Vec::new(),
-            menu_entries: BTreeSet::new(),
-            palette: Vec::new(),
-        }
-    }
-
-    /// Also checks against `surface`, for a frame that draws several
-    /// surfaces. An element takes the first registry that lists it.
-    pub fn with_surface(mut self, surface: SurfaceRegistry) -> Self {
-        self.surfaces.push(surface);
-        self
-    }
-
-    /// Skips every element inside an element whose id matches `pattern`:
-    /// the test of `owner` covers that subtree.
-    pub fn delegate(mut self, pattern: &'static str, owner: &'static str) -> Self {
-        self.delegated.push((pattern, owner));
-        self
-    }
-
-    /// Adds the entry ids of a menu the test built, for the registries'
-    /// [`KeyboardPath::Menu`] rows.
-    pub fn with_menu_entries<I, S>(mut self, entries: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.menu_entries
-            .extend(entries.into_iter().map(Into::into));
-        self
-    }
-
-    /// Adds the commands the command palette lists: a registry command that
-    /// has no key in the surface's contexts still counts when listed here.
-    pub fn with_palette(mut self, commands: impl IntoIterator<Item = Command>) -> Self {
-        self.palette.extend(commands);
-        self
-    }
-
-    /// Checks every clickable element of `frame`, returning one line per
-    /// problem found.
-    pub fn problems(&self, frame: &AccessibilityFrame) -> Vec<String> {
-        let keymap = crate::keymap::effective_keymap();
-        let mut problems = Vec::new();
-
-        for element in clickable_elements(frame) {
-            if self.is_delegated(&element) {
-                continue;
-            }
-
-            let found = self.surfaces.iter().find_map(|surface| {
-                surface
-                    .entries
-                    .iter()
-                    .find(|(pattern, _)| matches_element(pattern, &element))
-                    .map(|(pattern, path)| (surface, *pattern, *path))
-            });
-
-            let Some((surface, pattern, path)) = found else {
-                problems.push(format!(
-                    "clickable element `{}` (path `{}`) has no keyboard path: add a Command \
-                     bound in the surface's key context or an entry in its menu (pane actions, \
-                     `m` menu) that runs the same action, then register the id in the coverage \
-                     registry of the surface that draws it ({}); list it as \
-                     MouseOnly(\"reason\") only for window chrome or pointer gestures",
-                    element.id,
-                    element.path,
-                    self.surface_names(),
-                ));
-                continue;
-            };
-
-            match path {
-                KeyboardPath::Command(command) => {
-                    let bound = surface
-                        .contexts
-                        .iter()
-                        .any(|context| keymap.keys_for_command(*context, command).is_some());
-
-                    if !bound && !self.palette.contains(&command) {
-                        problems.push(format!(
-                            "`{}` (pattern `{pattern}` of {}, path `{}`) names command `{}`, \
-                             which has no key in {} and is not in the command palette",
-                            element.id,
-                            surface.name,
-                            element.path,
-                            command.id(),
-                            surface.context_names(),
-                        ));
-                    }
-                }
-                KeyboardPath::TabStop => {
-                    if !element.focusable {
-                        problems.push(format!(
-                            "`{}` (pattern `{pattern}` of {}, path `{}`) is a TabStop but \
-                             takes no focus, so Tab never reaches it",
-                            element.id, surface.name, element.path,
-                        ));
-                    }
-                }
-                KeyboardPath::Menu(entry) => {
-                    let listed = self
-                        .menu_entries
-                        .iter()
-                        .any(|built| matches_pattern(entry, built));
-
-                    if !listed {
-                        problems.push(format!(
-                            "`{}` (pattern `{pattern}` of {}, path `{}`) names menu entry \
-                             `{entry}`, which the menus built by the test do not contain",
-                            element.id, surface.name, element.path,
-                        ));
-                    }
-                }
-                KeyboardPath::MouseOnly(reason) => {
-                    if reason.trim().is_empty() {
-                        problems.push(format!(
-                            "`{}` (pattern `{pattern}` of {}) is MouseOnly without a reason",
-                            element.id, surface.name,
-                        ));
-                    }
-                }
-            }
-        }
-
-        problems
-    }
-
-    /// Panics listing every clickable element of `frame` that has no
-    /// keyboard path in the registries. Returns the ids of the elements it
-    /// checked, so a test can also prove the surface it meant to check was
-    /// drawn.
-    #[track_caller]
-    #[expect(
-        clippy::panic,
-        reason = "assert_covered is a coverage-assertion helper: failing the check is its contract, and the panic carries the full problem list"
-    )]
-    pub fn assert_covered(&self, frame: &AccessibilityFrame) -> Vec<String> {
-        let problems = self.problems(frame);
-
-        if problems.is_empty() {
-            return clickable_elements(frame)
-                .into_iter()
-                .filter(|element| !self.is_delegated(element))
-                .map(|element| element.id)
-                .collect();
-        }
-
-        let mut message = format!(
-            "keyboard coverage of {} failed ({} problem(s)):",
-            self.surface_names(),
-            problems.len()
-        );
-        for problem in problems {
-            message.push_str("\n  - ");
-            message.push_str(&problem);
-        }
-
-        panic!("{message}");
-    }
-
-    fn is_delegated(&self, element: &ClickableElement) -> bool {
-        let Some(ancestors) = element.path.strip_suffix(element.id.as_str()) else {
-            return false;
-        };
-
-        ancestors.split('.').any(|segment| {
-            self.delegated
-                .iter()
-                .any(|(pattern, _)| matches_pattern(pattern, segment))
-        })
-    }
-
-    fn surface_names(&self) -> String {
-        self.surfaces
-            .iter()
-            .map(|surface| surface.name)
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-}
-
-/// A rendered element that runs an action on click.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ClickableElement {
-    pub id: String,
-    pub path: String,
-    /// Whether the element takes keyboard focus.
-    pub focusable: bool,
-}
-
-/// Every element of `frame` whose accessibility node supports a click, in
-/// element path order.
-pub fn clickable_elements(frame: &AccessibilityFrame) -> Vec<ClickableElement> {
-    let mut elements: Vec<ClickableElement> = frame
-        .nodes()
-        .filter_map(|(_, node)| {
-            let accessible = frame.accessibility_node(node)?;
-
-            accessible
-                .supports_action(AccessibleAction::Click)
-                .then(|| ClickableElement {
-                    id: node.id().to_string(),
-                    path: node.path().to_string(),
-                    focusable: accessible.supports_action(AccessibleAction::Focus),
-                })
-        })
-        .collect();
-
-    elements.sort();
-    elements
-}
-
-/// Whether the registry `pattern` names `element`. A pattern with a `.` names
-/// an element by the end of its element path (`sql-auto-refresh.*` for the
-/// trigger inside the `sql-auto-refresh` dropdown), whatever its frame
-/// identity is; any other pattern is matched with [`matches_pattern`].
-fn matches_element(pattern: &str, element: &ClickableElement) -> bool {
-    if !pattern.contains('.') {
-        return matches_pattern(pattern, &element.id);
-    }
-
-    glob_matches(pattern, &element.path)
-        || element
-            .path
-            .match_indices('.')
-            .any(|(index, _)| glob_matches(pattern, &element.path[index + 1..]))
-}
-
-/// Whether `pattern` matches `id`, or the trailing run of `id` after one of
-/// its `.` separators (a repeated element id is named by its path suffix).
-fn matches_pattern(pattern: &str, id: &str) -> bool {
-    glob_matches(pattern, id)
-        || id
-            .match_indices('.')
-            .any(|(index, _)| glob_matches(pattern, &id[index + 1..]))
-}
-
-/// Whether `candidate` matches `pattern`, where each `*` stands for any run
-/// of characters, possibly empty.
-fn glob_matches(pattern: &str, candidate: &str) -> bool {
-    let mut parts = pattern.split('*');
-    let first = parts.next().unwrap_or_default();
-
-    let Some(mut rest) = candidate.strip_prefix(first) else {
-        return false;
-    };
-
-    let parts: Vec<&str> = parts.collect();
-    let Some((last, middle)) = parts.split_last() else {
-        return rest.is_empty();
-    };
-
-    for part in middle {
-        match rest.find(part) {
-            Some(index) => rest = &rest[index + part.len()..],
-            None => return false,
-        }
-    }
-
-    rest.ends_with(last)
-}
-
-/// Keeps the latest accessibility frame of the window it observes.
-#[derive(Default)]
-pub struct FrameCapture(Mutex<Option<AccessibilityFrame>>);
-
-impl FrameObserver for FrameCapture {
-    fn accessibility_updated(&self, frame: &AccessibilityFrame) {
-        let mut latest = self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *latest = Some(frame.clone());
-    }
-}
-
-impl FrameCapture {
-    /// Starts observing the frames of `window`.
-    pub fn observe(window: &mut VisualTestContext) -> Arc<Self> {
-        let capture = Arc::new(Self::default());
-
-        window.update(|window, _| {
-            window.observe_frames(&capture);
-            window.refresh();
-        });
-        window.run_until_parked();
-
-        capture
-    }
-
-    /// Draws a new frame of `window` and returns it.
-    #[track_caller]
-    pub fn frame(&self, window: &mut VisualTestContext) -> AccessibilityFrame {
-        window.update(|window, _| window.refresh());
-        window.run_until_parked();
-
-        match self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-        {
-            Some(frame) => frame,
-            #[expect(
-                clippy::panic,
-                reason = "frame() is a test-observation helper: a caller asking for a frame before any frame was drawn is a broken test and must fail here"
-            )]
-            None => panic!("the observed window has not drawn a frame"),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        ClickableElement, Coverage, FrameCapture, KeyboardPath, SurfaceRegistry, matches_element,
-        matches_pattern,
-    };
+    use super::{Coverage, FrameCapture, KeyboardPath, MODAL_CHROME, SurfaceRegistry};
+    use crate::keymap::init_keymap;
     use dbflux_app::keymap::{Command, ContextId};
     use gpui::prelude::FluentBuilder as _;
     use gpui::{
@@ -497,7 +152,7 @@ mod tests {
     };
 
     fn render(cx: &mut TestAppContext, extra: bool) -> gpui::AccessibilityFrame {
-        cx.update(crate::keymap::init_keymap);
+        cx.update(init_keymap);
         let (_, window) = cx.add_window_view(|_, _| Surface { extra });
         let capture = FrameCapture::observe(window);
         capture.frame(window)
@@ -507,29 +162,6 @@ mod tests {
         Coverage::new(SURFACE)
             .delegate("embedded", "the embedded surface")
             .with_menu_entries(["open-row"])
-    }
-
-    #[test]
-    fn patterns_match_exact_ids_prefixes_and_path_suffixes() {
-        assert!(matches_pattern("run", "run"));
-        assert!(!matches_pattern("run", "running"));
-        assert!(matches_pattern("row-*", "row-12"));
-        assert!(matches_pattern("close", "tab-3.close"));
-        assert!(!matches_pattern("close", "tab-3.closed"));
-        assert!(matches_pattern("qb-*-rm*", "qb-pred-rm-0"));
-        assert!(matches_pattern("qb-*-rm*", "qb-agg-rm"));
-        assert!(!matches_pattern("qb-*-rm*", "qb-rm-sort"));
-        assert!(matches_pattern("*-close", "tab-close"));
-        assert!(!matches_pattern("a*b*c", "a-c"));
-
-        let trigger = ClickableElement {
-            id: "dropdown-trigger".to_string(),
-            path: "root.panel.sql-auto-refresh.dropdown-trigger".to_string(),
-            focusable: false,
-        };
-        assert!(matches_element("sql-auto-refresh.*", &trigger));
-        assert!(matches_element("dropdown-trigger", &trigger));
-        assert!(!matches_element("panel.dropdown-trigger", &trigger));
     }
 
     #[gpui::test]
@@ -690,7 +322,7 @@ mod tests {
             entries: &[("apply", KeyboardPath::TabStop)],
         };
 
-        cx.update(crate::keymap::init_keymap);
+        cx.update(init_keymap);
         let (_, window) = cx.add_window_view(|_, cx| Dialog {
             focus: cx.focus_handle(),
         });
@@ -727,6 +359,16 @@ mod tests {
                 counts.gap
             ),
             (1, 1, 1, 1, 1)
+        );
+    }
+
+    #[test]
+    fn the_dialog_chrome_registry_names_the_modal_cancel_command() {
+        assert_eq!(MODAL_CHROME.name, "dialog chrome");
+        assert_eq!(MODAL_CHROME.contexts, &[ContextId::Modal]);
+        assert_eq!(
+            MODAL_CHROME.entries,
+            &[("modal-close", KeyboardPath::Command(Command::Cancel))]
         );
     }
 }
