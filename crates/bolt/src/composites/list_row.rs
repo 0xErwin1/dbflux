@@ -149,10 +149,10 @@ mod tests {
         fn open(selected: bool, cx: &mut gpui::TestAppContext) -> &mut gpui::VisualTestContext {
             cx.update(gpui_component::init);
             cx.update(|cx| {
-                bolt::theme::install(
-                    bolt::brand::Brand::neutral(),
-                    bolt::palette::PaletteMode::Dark,
-                    bolt::density::Density::Default,
+                crate::theme::install(
+                    crate::brand::Brand::neutral(),
+                    crate::palette::PaletteMode::Dark,
+                    crate::density::Density::Default,
                     cx,
                 );
             });

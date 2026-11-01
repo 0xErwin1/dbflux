@@ -23,3 +23,12 @@ impl From<gpui_component::IconName> for IconSource {
         Self::Named(name)
     }
 }
+
+impl From<IconSource> for gpui_component::Icon {
+    fn from(source: IconSource) -> Self {
+        match source {
+            IconSource::Named(name) => gpui_component::Icon::new(name),
+            IconSource::Svg(path) => gpui_component::Icon::default().path(path),
+        }
+    }
+}

@@ -195,7 +195,7 @@ impl SettingsCoordinator {
                     this.request_section_transition(section, window, cx);
                 }
             }))
-            .when_some(row.icon, |row, icon| {
+            .when_some(row.icon.clone(), |row, icon| {
                 row.child(
                     Icon::new(icon)
                         .size(SettingsMetrics::NAV_ICON)

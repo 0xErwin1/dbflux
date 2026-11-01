@@ -1,13 +1,14 @@
 mod activity_rail;
 mod breadcrumb;
 // Moved to `bolt`; re-exported as the module at its old path so every
-// `composites::control_shell` / `composites::header` path keeps compiling.
+// `composites::control_shell` / `composites::header` / `composites::list_row`
+// path keeps compiling.
 pub use bolt::composites::control_shell;
 pub use bolt::composites::header;
+pub use bolt::composites::list_row;
 mod empty_state;
 mod field_row;
 mod island;
-mod list_row;
 mod master_detail_list;
 mod menu_item;
 mod menu_popup;

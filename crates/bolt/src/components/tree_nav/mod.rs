@@ -2,7 +2,7 @@ mod gutter;
 
 pub use gutter::{GutterInfo, render_gutter, tree_line_color};
 
-use crate::icons::AppIcon;
+use crate::icon::IconSource;
 use gpui::SharedString;
 use std::collections::HashSet;
 
@@ -10,7 +10,7 @@ use std::collections::HashSet;
 pub struct TreeNavNode {
     pub id: SharedString,
     pub label: SharedString,
-    pub icon: Option<AppIcon>,
+    pub icon: Option<IconSource>,
     pub children: Vec<TreeNavNode>,
     pub selectable: bool,
 }
@@ -19,7 +19,7 @@ pub struct TreeNavNode {
 pub struct FlatRow {
     pub id: SharedString,
     pub label: SharedString,
-    pub icon: Option<AppIcon>,
+    pub icon: Option<IconSource>,
     pub depth: usize,
     pub selectable: bool,
     pub has_children: bool,
@@ -276,7 +276,7 @@ fn flatten_recursive(
         out.push(FlatRow {
             id: node.id.clone(),
             label: node.label.clone(),
-            icon: node.icon,
+            icon: node.icon.clone(),
             depth,
             selectable: node.selectable,
             has_children,
@@ -297,12 +297,12 @@ impl TreeNavNode {
     pub fn leaf(
         id: impl Into<SharedString>,
         label: impl Into<SharedString>,
-        icon: Option<AppIcon>,
+        icon: Option<impl Into<IconSource>>,
     ) -> Self {
         Self {
             id: id.into(),
             label: label.into(),
-            icon,
+            icon: icon.map(Into::into),
             children: Vec::new(),
             selectable: true,
         }
@@ -311,13 +311,13 @@ impl TreeNavNode {
     pub fn group(
         id: impl Into<SharedString>,
         label: impl Into<SharedString>,
-        icon: Option<AppIcon>,
+        icon: Option<impl Into<IconSource>>,
         children: Vec<TreeNavNode>,
     ) -> Self {
         Self {
             id: id.into(),
             label: label.into(),
-            icon,
+            icon: icon.map(Into::into),
             children,
             selectable: false,
         }
@@ -327,33 +327,40 @@ impl TreeNavNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::icons::AppIcon;
+    use crate::icon::IconSource;
+    use gpui::SharedString;
+
+    /// A test icon: any `IconSource` value works, since the navigation logic
+    /// carries icons opaquely.
+    fn icon(name: &str) -> Option<IconSource> {
+        Some(IconSource::Svg(SharedString::from(name.to_string())))
+    }
 
     fn make_test_tree() -> Vec<TreeNavNode> {
         vec![
-            TreeNavNode::leaf("general", "General", Some(AppIcon::Settings)),
-            TreeNavNode::leaf("keybindings", "Keybindings", Some(AppIcon::Keyboard)),
+            TreeNavNode::leaf("general", "General", icon("settings")),
+            TreeNavNode::leaf("keybindings", "Keybindings", icon("keybindings")),
             TreeNavNode::group(
                 "network",
                 "Network",
-                None,
+                None::<IconSource>,
                 vec![TreeNavNode::leaf(
                     "ssh-tunnels",
                     "SSH Tunnels",
-                    Some(AppIcon::FingerprintPattern),
+                    icon("fingerprint"),
                 )],
             ),
             TreeNavNode::group(
                 "connection",
                 "Connection",
-                None,
+                None::<IconSource>,
                 vec![
-                    TreeNavNode::leaf("services", "Services", Some(AppIcon::Plug)),
-                    TreeNavNode::leaf("hooks", "Hooks", Some(AppIcon::SquareTerminal)),
-                    TreeNavNode::leaf("drivers", "Drivers", Some(AppIcon::Database)),
+                    TreeNavNode::leaf("services", "Services", icon("plug")),
+                    TreeNavNode::leaf("hooks", "Hooks", icon("terminal")),
+                    TreeNavNode::leaf("drivers", "Drivers", icon("database")),
                 ],
             ),
-            TreeNavNode::leaf("about", "About", Some(AppIcon::Info)),
+            TreeNavNode::leaf("about", "About", icon("info")),
         ]
     }
 
@@ -371,7 +378,7 @@ mod tests {
 
     #[test]
     fn flatten_single_root() {
-        let nodes = vec![TreeNavNode::leaf("a", "A", None)];
+        let nodes = vec![TreeNavNode::leaf("a", "A", None::<IconSource>)];
         let rows = flatten_tree(&nodes, &HashSet::new());
 
         assert_eq!(rows.len(), 1);
@@ -384,8 +391,8 @@ mod tests {
     #[test]
     fn flatten_two_roots() {
         let nodes = vec![
-            TreeNavNode::leaf("a", "A", None),
-            TreeNavNode::leaf("b", "B", None),
+            TreeNavNode::leaf("a", "A", None::<IconSource>),
+            TreeNavNode::leaf("b", "B", None::<IconSource>),
         ];
         let rows = flatten_tree(&nodes, &HashSet::new());
 
@@ -399,10 +406,10 @@ mod tests {
         let nodes = vec![TreeNavNode::group(
             "parent",
             "Parent",
-            None,
+            None::<IconSource>,
             vec![
-                TreeNavNode::leaf("child-a", "A", None),
-                TreeNavNode::leaf("child-b", "B", None),
+                TreeNavNode::leaf("child-a", "A", None::<IconSource>),
+                TreeNavNode::leaf("child-b", "B", None::<IconSource>),
             ],
         )];
         let expanded = HashSet::from(["parent".into()]);
@@ -431,10 +438,10 @@ mod tests {
         let nodes = vec![TreeNavNode::group(
             "parent",
             "Parent",
-            None,
+            None::<IconSource>,
             vec![
-                TreeNavNode::leaf("child-a", "A", None),
-                TreeNavNode::leaf("child-b", "B", None),
+                TreeNavNode::leaf("child-a", "A", None::<IconSource>),
+                TreeNavNode::leaf("child-b", "B", None::<IconSource>),
             ],
         )];
         let rows = flatten_tree(&nodes, &HashSet::new());
@@ -451,15 +458,15 @@ mod tests {
             TreeNavNode::group(
                 "g1",
                 "G1",
-                None,
+                None::<IconSource>,
                 vec![TreeNavNode::group(
                     "g1-child",
                     "G1Child",
-                    None,
-                    vec![TreeNavNode::leaf("deep", "Deep", None)],
+                    None::<IconSource>,
+                    vec![TreeNavNode::leaf("deep", "Deep", None::<IconSource>)],
                 )],
             ),
-            TreeNavNode::leaf("sibling", "Sibling", None),
+            TreeNavNode::leaf("sibling", "Sibling", None::<IconSource>),
         ];
         let expanded = HashSet::from(["g1".into(), "g1-child".into()]);
         let rows = flatten_tree(&nodes, &expanded);
@@ -545,7 +552,7 @@ mod tests {
 
     #[test]
     fn move_on_single_row() {
-        let nodes = vec![TreeNavNode::leaf("only", "Only", None)];
+        let nodes = vec![TreeNavNode::leaf("only", "Only", None::<IconSource>)];
         let mut nav = TreeNav::new(nodes, HashSet::new());
         assert_eq!(nav.cursor(), 0);
         nav.move_next();
@@ -590,8 +597,8 @@ mod tests {
         let nodes = vec![TreeNavNode::group(
             "g",
             "Group",
-            None,
-            vec![TreeNavNode::leaf("only", "Only", None)],
+            None::<IconSource>,
+            vec![TreeNavNode::leaf("only", "Only", None::<IconSource>)],
         )];
         let expanded: HashSet<SharedString> = ["g".into()].into_iter().collect();
         let mut nav = TreeNav::new(nodes, expanded);
@@ -621,8 +628,8 @@ mod tests {
         let nodes = vec![TreeNavNode::group(
             "g",
             "Group",
-            None,
-            vec![TreeNavNode::leaf("c", "Child", None)],
+            None::<IconSource>,
+            vec![TreeNavNode::leaf("c", "Child", None::<IconSource>)],
         )];
         let mut nav = TreeNav::new(nodes, HashSet::new());
 
@@ -643,8 +650,8 @@ mod tests {
         let nodes = vec![TreeNavNode::group(
             "g",
             "Group",
-            None,
-            vec![TreeNavNode::leaf("c", "Child", None)],
+            None::<IconSource>,
+            vec![TreeNavNode::leaf("c", "Child", None::<IconSource>)],
         )];
         let mut nav = TreeNav::new(nodes, HashSet::from(["g".into()]));
 
@@ -665,10 +672,10 @@ mod tests {
         let nodes = vec![TreeNavNode::group(
             "g",
             "Group",
-            None,
+            None::<IconSource>,
             vec![
-                TreeNavNode::leaf("c1", "C1", None),
-                TreeNavNode::leaf("c2", "C2", None),
+                TreeNavNode::leaf("c1", "C1", None::<IconSource>),
+                TreeNavNode::leaf("c2", "C2", None::<IconSource>),
             ],
         )];
         let mut nav = TreeNav::new(nodes, HashSet::from(["g".into()]));
@@ -775,27 +782,27 @@ mod tests {
 
         // Reordered tree: "about" now comes first, shifting "hooks" to a different index.
         let reordered = vec![
-            TreeNavNode::leaf("about", "About", Some(AppIcon::Info)),
-            TreeNavNode::leaf("general", "General", Some(AppIcon::Settings)),
-            TreeNavNode::leaf("keybindings", "Keybindings", Some(AppIcon::Keyboard)),
+            TreeNavNode::leaf("about", "About", icon("info")),
+            TreeNavNode::leaf("general", "General", icon("settings")),
+            TreeNavNode::leaf("keybindings", "Keybindings", icon("keybindings")),
             TreeNavNode::group(
                 "network",
                 "Network",
-                None,
+                None::<IconSource>,
                 vec![TreeNavNode::leaf(
                     "ssh-tunnels",
                     "SSH Tunnels",
-                    Some(AppIcon::FingerprintPattern),
+                    icon("fingerprint"),
                 )],
             ),
             TreeNavNode::group(
                 "connection",
                 "Connection",
-                None,
+                None::<IconSource>,
                 vec![
-                    TreeNavNode::leaf("services", "Services", Some(AppIcon::Plug)),
-                    TreeNavNode::leaf("hooks", "Hooks", Some(AppIcon::SquareTerminal)),
-                    TreeNavNode::leaf("drivers", "Drivers", Some(AppIcon::Database)),
+                    TreeNavNode::leaf("services", "Services", icon("plug")),
+                    TreeNavNode::leaf("hooks", "Hooks", icon("terminal")),
+                    TreeNavNode::leaf("drivers", "Drivers", icon("database")),
                 ],
             ),
         ];
@@ -814,8 +821,8 @@ mod tests {
 
         // New tree drops "about" and is shorter than the previous cursor index.
         let shorter = vec![
-            TreeNavNode::leaf("general", "General", Some(AppIcon::Settings)),
-            TreeNavNode::leaf("keybindings", "Keybindings", Some(AppIcon::Keyboard)),
+            TreeNavNode::leaf("general", "General", icon("settings")),
+            TreeNavNode::leaf("keybindings", "Keybindings", icon("keybindings")),
         ];
 
         nav.set_nodes(shorter);
