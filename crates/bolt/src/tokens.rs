@@ -965,6 +965,8 @@ impl GridMetrics {
     pub const ROW_HEIGHT: Pixels = px(31.0);
     /// Horizontal cell padding. (10 px)
     pub const CELL_PADDING_X: Pixels = px(10.0);
+    /// Width a column falls back to when the host has not sized it. (120 px)
+    pub const DEFAULT_COLUMN_WIDTH: Pixels = px(120.0);
     /// Row-number column width. (46 px)
     pub const ROW_NUMBER_WIDTH: Pixels = px(46.0);
     /// Cell text and column name size, JetBrains Mono. (12.5 px)
