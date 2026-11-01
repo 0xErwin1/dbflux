@@ -1,15 +1,25 @@
 //! Composites: the tabs, menus, list rows, empty states, split buttons,
-//! splitters, field rows and islands a screen builds out of the primitives and controls.
+//! splitters, field rows and islands a screen builds out of the primitives and
+//! controls, and the shell chrome: the activity rail, the title bar's command
+//! search and notification bell, and the status bar's chips.
 
+mod activity_rail;
 mod empty_state;
 mod field_row;
 mod island;
 mod list_row;
 mod menu_item;
 mod menu_popup;
+mod shell_bar;
 mod split_button;
 mod splitter;
+mod status_chip;
 mod tabs;
+
+pub use activity_rail::{
+    ACTIVITY_RAIL_KEY_CONTEXT, ActivityRail, RailButtonColors, RailEntry, RailPlacement,
+    rail_button_colors,
+};
 
 pub use empty_state::{EmptyState, EmptyStateAction};
 pub use field_row::{
@@ -25,8 +35,12 @@ pub use menu_item::{
     render_separator,
 };
 pub use menu_popup::{render_menu_items, render_menu_overlay};
+pub use shell_bar::{
+    BellUrgency, COMMAND_SEARCH_KEY_CONTEXT, CommandSearch, NotificationBell, ShellIcons,
+};
 pub use split_button::SplitButton;
 pub use splitter::{SplitAxis, Splitter};
+pub use status_chip::StatusChip;
 pub use tabs::{
     document_tab, document_tab_bar, document_tab_title, inline_tab, inline_tab_bar, result_tab,
     result_tab_bar,

@@ -1,4 +1,3 @@
-mod activity_rail;
 mod breadcrumb;
 mod control_shell;
 mod header;
@@ -6,11 +5,27 @@ mod master_detail_list;
 mod notification_center;
 mod rail_nav;
 mod refresh_split_button;
-mod shell_bar;
 mod wizard_rail;
+
+#[cfg(test)]
+mod tests;
+
+/// Installs the icons bolt's title-bar controls draw: the app's own search
+/// and bell glyphs. `theme::init` calls it.
+pub fn install_shell_icons(cx: &mut gpui::App) {
+    cx.set_global(ShellIcons {
+        search: crate::icons::AppIcon::Search.into(),
+        bell: crate::icons::AppIcon::Bell.into(),
+    });
+}
 
 // The generic composites moved to `bolt`; re-exported at these paths so call
 // sites keep compiling.
+pub use bolt::composites::{
+    ACTIVITY_RAIL_KEY_CONTEXT, ActivityRail, BellUrgency, COMMAND_SEARCH_KEY_CONTEXT,
+    CommandSearch, NotificationBell, RailButtonColors, RailEntry, RailPlacement, ShellIcons,
+    StatusChip, rail_button_colors,
+};
 pub use bolt::composites::{
     EmptyState, EmptyStateAction, Island, IslandInspection, ListRow, MenuItem, SplitButton,
     docked_island_frame, document_tab, document_tab_bar, document_tab_title, field_row,
@@ -20,9 +35,6 @@ pub use bolt::composites::{
     render_menu_items, render_menu_overlay, render_separator, result_tab, result_tab_bar,
 };
 
-pub use activity_rail::{
-    ActivityRail, RailButtonColors, RailEntry, RailPlacement, rail_button_colors,
-};
 pub use breadcrumb::{Breadcrumb, BreadcrumbSegment};
 pub use control_shell::control_shell;
 pub use header::{
@@ -42,7 +54,6 @@ pub use rail_nav::{
     RailRow, RailTarget, rail_command, rail_scroll_area, render_rail_menu,
 };
 pub use refresh_split_button::{refresh_policy_label, refresh_split_button};
-pub use shell_bar::{BellUrgency, CommandSearch, NotificationBell};
 pub use wizard_rail::{
     RailItem, WIZARD_MODAL_HEIGHT_FRACTION, WIZARD_MODAL_WIDTH, render_wizard_progress_bar,
     render_wizard_rail, render_wizard_stepper, wizard_progress_fraction,

@@ -1,5 +1,5 @@
-//! `ActivityRail` — the column of view buttons at the left edge of the main
-//! window (AppByzTable, DSAppPlan "ActivityRail").
+//! `ActivityRail` — the column of view buttons at the left edge of a main
+//! window.
 
 use std::rc::Rc;
 
@@ -8,9 +8,13 @@ use gpui::{App, ElementId, Hsla, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 use gpui_component::tooltip::Tooltip;
 
-use crate::icons::AppIcon;
+use super::shell_bar::{BellUrgency, NotificationBell, count_badge};
+use crate::icon::IconSource;
 use crate::primitives::{Chamfer, Icon};
 use crate::tokens::{ButtonMetrics, ChamferCut, ChromeColors, ShellMetrics};
+
+/// Key context the rail sets on itself, so a keymap predicate can name it.
+pub const ACTIVITY_RAIL_KEY_CONTEXT: &str = "ActivityRail";
 
 /// Where an entry sits in the rail: stacked from the top, or pinned to the
 /// bottom edge.
@@ -27,22 +31,30 @@ pub struct RailEntry {
     /// Stable identifier, passed back to the selection handler and used as
     /// the element id (`rail-<id>`).
     pub id: SharedString,
-    pub icon: AppIcon,
+    pub icon: IconSource,
     /// Tooltip and accessible name.
     pub label: SharedString,
     /// The view the entry opens is the one on screen.
     pub active: bool,
     pub placement: RailPlacement,
+    /// Count shown in a badge over the button's top-right corner, with the
+    /// urgency that colors it. A zero count shows no badge.
+    pub count: Option<(usize, BellUrgency)>,
 }
 
 impl RailEntry {
-    pub fn new(id: impl Into<SharedString>, icon: AppIcon, label: impl Into<SharedString>) -> Self {
+    pub fn new(
+        id: impl Into<SharedString>,
+        icon: impl Into<IconSource>,
+        label: impl Into<SharedString>,
+    ) -> Self {
         Self {
             id: id.into(),
-            icon,
+            icon: icon.into(),
             label: label.into(),
             active: false,
             placement: RailPlacement::Top,
+            count: None,
         }
     }
 
@@ -56,15 +68,27 @@ impl RailEntry {
         self
     }
 
+    /// Shows `count` in a badge colored by `urgency`, as the notification
+    /// bell does.
+    pub fn count(mut self, count: usize, urgency: BellUrgency) -> Self {
+        self.count = Some((count, urgency));
+        self
+    }
+
     /// Element id of the entry's button.
     pub fn element_id(&self) -> SharedString {
         format!("rail-{}", self.id).into()
+    }
+
+    /// Element id of the entry's count badge.
+    pub fn count_element_id(&self) -> SharedString {
+        format!("rail-{}-count", self.id).into()
     }
 }
 
 /// Fills and icon color of a rail button: the active entry takes a tint wash
 /// and a tint icon, the others are transparent with a muted icon and the
-/// ghost hover and press fills (DSStates).
+/// ghost hover and press fills.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RailButtonColors {
     pub rest: Hsla,
@@ -135,13 +159,20 @@ impl ActivityRail {
         on_select: Option<RailSelectHandler>,
         cx: &App,
     ) -> impl IntoElement {
-        let colors = rail_button_colors(cx.theme(), entry.active);
+        let theme = cx.theme();
+        let colors = rail_button_colors(theme, entry.active);
         let element_id = entry.element_id();
         let entry_id = entry.id.clone();
         let label = entry.label.clone();
+        let badge = entry.count.and_then(|(count, urgency)| {
+            NotificationBell::badge_text(count).zip(NotificationBell::badge_colors(urgency, theme))
+        });
+        let badge_id = entry.count_element_id();
+        let element_id = ElementId::Name(element_id);
 
         div()
-            .id(ElementId::Name(element_id))
+            .debug_selector(crate::selector::id_selector(&element_id))
+            .id(element_id)
             .aria_label(label.clone())
             .relative()
             .flex()
@@ -158,10 +189,13 @@ impl ActivityRail {
                     .interactive("rail-button-chamfer"),
             )
             .child(
-                Icon::new(entry.icon)
+                Icon::new(entry.icon.clone())
                     .size(ShellMetrics::RAIL_ICON)
                     .color(colors.icon),
             )
+            .when_some(badge, |button, (text, colors)| {
+                button.child(count_badge(badge_id, text, colors))
+            })
             .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
             .when_some(on_select, |button, handler| {
                 button.on_click(move |_, window, cx| handler(&entry_id, window, cx))
@@ -184,7 +218,7 @@ impl RenderOnce for ActivityRail {
 
         div()
             .id(self.id)
-            .key_context(crate::key_contexts::ACTIVITY_RAIL)
+            .key_context(ACTIVITY_RAIL_KEY_CONTEXT)
             .flex()
             .flex_col()
             .flex_shrink_0()
@@ -201,54 +235,4 @@ impl RenderOnce for ActivityRail {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn entries() -> Vec<RailEntry> {
-        vec![
-            RailEntry::new("connections", AppIcon::Database, "Connections").active(true),
-            RailEntry::new("settings", AppIcon::Settings, "Settings").bottom(),
-            RailEntry::new("scripts", AppIcon::SquareTerminal, "Scripts"),
-            RailEntry::new("approvals", AppIcon::Bot, "Approvals"),
-        ]
-    }
-
-    #[test]
-    fn partition_keeps_order_within_each_edge() {
-        let entries = entries();
-        let (top, bottom) = ActivityRail::partition(&entries);
-
-        let top_ids: Vec<&str> = top.iter().map(|entry| entry.id.as_ref()).collect();
-        let bottom_ids: Vec<&str> = bottom.iter().map(|entry| entry.id.as_ref()).collect();
-
-        assert_eq!(top_ids, ["connections", "scripts", "approvals"]);
-        assert_eq!(bottom_ids, ["settings"]);
-    }
-
-    #[test]
-    fn builders_set_state_and_placement() {
-        let entry = RailEntry::new("audit", AppIcon::FingerprintPattern, "Audit");
-        assert!(!entry.active);
-        assert_eq!(entry.placement, RailPlacement::Top);
-        assert_eq!(entry.element_id().as_ref(), "rail-audit");
-
-        let entry = entry.active(true).bottom();
-        assert!(entry.active);
-        assert_eq!(entry.placement, RailPlacement::Bottom);
-    }
-
-    #[test]
-    fn active_button_takes_the_tint_wash_and_idle_stays_transparent() {
-        let theme = gpui_component::Theme::default();
-        let tint = ChromeColors::tint(&theme);
-
-        let active = rail_button_colors(&theme, true);
-        assert_eq!(active.rest, tint.opacity(ShellMetrics::RAIL_ACTIVE_ALPHA));
-        assert_eq!(active.icon, tint);
-
-        let idle = rail_button_colors(&theme, false);
-        assert_eq!(idle.rest, gpui::transparent_black());
-        assert_eq!(idle.hover, theme.secondary);
-        assert_eq!(idle.icon, theme.muted_foreground);
-    }
-}
+mod tests;

@@ -275,6 +275,7 @@ pub fn menu_row(
 
     let id = id.into();
     let check_selector = format!("{id}-check");
+    let key_selector = format!("{id}-key");
     let is_item = !item.is_header && !item.is_separator;
 
     div()
@@ -358,6 +359,7 @@ pub fn menu_row(
         .when_some(item.shortcut.as_ref(), |row, shortcut| {
             row.child(
                 div()
+                    .debug_selector(move || key_selector)
                     .flex_shrink_0()
                     .font_family(crate::fonts::editor_family(cx))
                     .text_size(KbdMetrics::FONT)
@@ -595,6 +597,58 @@ mod tests {
             let open = node("row-open");
             assert_eq!(open.role(), Role::MenuItem, "a plain row stays a menu item");
             assert_eq!(open.toggled(), None);
+        }
+    }
+
+    mod shortcut_key {
+        use super::super::{MenuItem, menu_row};
+        use gpui::{
+            Context, IntoElement, ParentElement as _, Render, Styled as _, TestAppContext, Window,
+            div,
+        };
+
+        struct Rows;
+
+        impl Render for Rows {
+            fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(menu_row(
+                        "row-copy",
+                        &MenuItem::new("Copy").shortcut("Ctrl+C"),
+                        false,
+                        cx,
+                    ))
+                    .child(menu_row("row-open", &MenuItem::new("Open"), false, cx))
+            }
+        }
+
+        #[gpui::test]
+        fn the_shortcut_keycap_is_found_under_the_row_id(cx: &mut TestAppContext) {
+            cx.update(gpui_component::init);
+            cx.update(|cx| {
+                crate::theme::install(
+                    crate::brand::Brand::neutral(),
+                    crate::palette::PaletteMode::Dark,
+                    crate::density::Density::Default,
+                    cx,
+                );
+            });
+
+            let (_view, window) = cx.add_window_view(|_, _| Rows);
+            window.run_until_parked();
+
+            let row = window.debug_bounds("row-copy").expect("row laid out");
+            let key = window
+                .debug_bounds("row-copy-key")
+                .expect("the shortcut keycap carries the row id");
+            assert!(row.contains(&key.center()));
+            assert!(
+                window.debug_bounds("row-open-key").is_none(),
+                "a row without a shortcut draws no keycap"
+            );
         }
     }
 

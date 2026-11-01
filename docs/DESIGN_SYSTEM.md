@@ -56,6 +56,10 @@ a database or a design board: a source-scanning guardrail in
   with `on_modal_key`, says which command a deferring modal runs, and supplies
   the Escape keycap label, the close icon and its translated name. A modal
   rendered before the seam is installed answers no keys.
+- **Its title-bar icons.** `ShellIcons` (a global) holds the glyphs the
+  command search field and the notification bell draw. Without it they use
+  gpui-component's `Search` and `Bell`; DBFlux installs its own `AppIcon`s
+  with `install_shell_icons`.
 
 ## Finding components in tests
 
@@ -68,6 +72,18 @@ records that id as its gpui debug selector, so a product's GPUI test finds it wi
 records its selector on its frame, so a bare input (`appearance(false)`) has
 none. gpui records selectors only in debug builds with `test-support`;
 nothing changes in what is drawn.
+
+Some parts get an id derived from their owner's id:
+
+| Part | Selector |
+|---|---|
+| A button's `.kbd(..)` keycap | `<button id>-key` |
+| A menu row's shortcut | `<row id>-key` |
+| A menu row's check mark | `<row id>-check` |
+| The command search field's shortcut keycap | `<field id>-key` |
+| An activity rail button | `rail-<entry id>` |
+| A rail button's count badge | `rail-<entry id>-count` |
+| The notification bell's count badge | `notifications-badge` |
 
 `Badge`, `Kbd`, `BannerBlock` and `EmptyState` take an optional id with
 `.id(..)`. Without one they render exactly as before; with one, the element
@@ -87,6 +103,28 @@ one is off by default, so DBFlux draws the same pixels without them.
 | `EmptyState` | `.primary_action(Button)` | A real button under the sentence for the one thing the region asks for. The key-hint actions stay below it. |
 | `MenuItem` | `.checked(bool)` | A checkable row: `true` draws a tint check mark (`MenuMetrics::CHECK_ICON`) after the label. The row reports itself as a checkable menu item, toggled or not. A row without it is a plain menu item. |
 | `Splitter` | `Splitter::new(id, SplitAxis)` | The resize gutter between two panes (see below). |
+| `RailEntry` | `.count(n, BellUrgency)` | A count badge over the rail button's top-right corner, sized and colored like the notification bell's. A zero count shows none. |
+| `StatusChip` | `.tone(color)`, `.wash(true)` | A tone draws the chip's text in that color, semibold. With the wash the chip also sits on the tone at `ShellMetrics::STATUS_CHIP_ALPHA` instead of the island fill. |
+
+### Shell chrome
+
+The window shell is built from four composites:
+
+- `ActivityRail::new(id, entries)`: the column of view buttons at the left
+  edge, `ShellMetrics::RAIL_WIDTH` wide with no fill of its own. Each
+  `RailEntry` has an id, an icon, a label (tooltip and accessible name), an
+  active flag and a placement; `.bottom()` pins it to the bottom edge.
+  `.on_select(..)` gets the entry id. The rail sets the
+  `ACTIVITY_RAIL_KEY_CONTEXT` key context.
+- `CommandSearch::new(id, placeholder)`: the title bar's search trigger. It
+  is not an editor: a click, or Enter or Space while its `.focus_handle(..)`
+  holds focus, runs `.on_open(..)`. `.shortcut(keys)` shows the chord as one
+  keycap. It sets the `COMMAND_SEARCH_KEY_CONTEXT` key context.
+- `NotificationBell::new(id, label, count)`: the title bar's bell, with a
+  count badge (capped at "99+") colored by its `BellUrgency`, and a deeper
+  wash while `.open(true)`.
+- `StatusChip::new(id)`: a status bar segment. `.build(cx)` returns the row,
+  so the caller adds its icon and text.
 
 ### Splitter
 
@@ -172,7 +210,8 @@ extensions over the generic primitive: `EnvTag` and `environment_badge_tone`
 over `Badge`, the per-variant banner icon over `BannerBlock`, the translated
 placeholder over `FilePicker`, `DropdownEnvironment` over `Dropdown`, and
 `install_modal_seams` (keymap actions, keycap, close icon and name) over
-`Modal`.
+`Modal`, and `install_shell_icons` (the search and bell glyphs) over
+`CommandSearch` and `NotificationBell`.
 
 ## Consuming Bolt from another repository
 
@@ -229,7 +268,6 @@ review.
 Domain components stay in `dbflux_components` until their seams exist:
 `data_table`, `document_tree`, the product dialogs built on `Modal`, the chart
 engine, `result_panel`, the Vim layer and the composites that read product
-state (activity rail, rail navigation, shell bar, notification center,
-wizard rail). They read `ColumnMeta`, `Value`, `QueryLanguage`
+state (rail navigation, notification center, wizard rail). They read `ColumnMeta`, `Value`, `QueryLanguage`
 and `ContextId` from `dbflux_core`, so moving them means opening a generic seam
 in the core first, one component at a time.

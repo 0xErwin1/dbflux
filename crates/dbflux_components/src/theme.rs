@@ -51,6 +51,7 @@ pub fn init(cx: &mut App) {
     load_bundled_fonts(cx);
     crate::controls::install_dropdown_seams(cx);
     crate::modals::modal::install_modal_seams(cx);
+    crate::composites::install_shell_icons(cx);
     apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx);
 }
 

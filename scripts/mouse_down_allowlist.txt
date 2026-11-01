@@ -28,7 +28,7 @@ crates/dbflux_components/src/components/document_tree/tree.rs:render_value_previ
 crates/bolt/src/composites/menu_item.rs:menu_frame: propagation guard
 crates/bolt/src/composites/menu_popup.rs:render_menu_overlay: outside-press dismiss
 crates/dbflux_components/src/composites/notification_center.rs:render: propagation guard
-crates/dbflux_components/src/composites/shell_bar.rs:render: focus guard
+crates/bolt/src/composites/shell_bar/mod.rs:render: focus guard
 crates/bolt/src/controls/button.rs:render: focus guard
 crates/bolt/src/controls/checkbox.rs:render: focus guard
 crates/bolt/src/modals/modal.rs:render: propagation guard

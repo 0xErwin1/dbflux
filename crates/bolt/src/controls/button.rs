@@ -500,6 +500,8 @@ impl RenderOnce for Button {
             }
         });
 
+        let key_id = SharedString::from(format!("{id}-key"));
+
         let mut button = div()
             .debug_selector(id_selector(&id))
             .id(id)
@@ -556,7 +558,7 @@ impl RenderOnce for Button {
                 ButtonVariant::Primary => KbdTone::OnFill,
                 _ => KbdTone::Default,
             };
-            button = button.child(Kbd::new(shortcut).tone(tone));
+            button = button.child(Kbd::new(shortcut).tone(tone).id(key_id));
         }
 
         if let Some(tip) = tooltip {
@@ -1029,6 +1031,31 @@ mod tests {
 
         fn name_of(frame: &gpui::AccessibilityFrame, id: &str) -> Option<String> {
             accessible_name(frame, id)
+        }
+
+        #[gpui::test]
+        fn the_shortcut_keycap_is_found_under_the_button_id(cx: &mut gpui::TestAppContext) {
+            install_test_theme(cx);
+
+            let (_, window) = cx.add_window_view(|_, _| {
+                ButtonRow(std::sync::Arc::new(|| {
+                    vec![
+                        Button::new("approve", "Approve").kbd("Ctrl Enter"),
+                        Button::new("reject", "Reject"),
+                    ]
+                }))
+            });
+            window.run_until_parked();
+
+            let button = window.debug_bounds("approve").expect("button laid out");
+            let key = window
+                .debug_bounds("approve-key")
+                .expect("the keycap carries the button id");
+            assert!(button.contains(&key.center()));
+            assert!(
+                window.debug_bounds("reject-key").is_none(),
+                "a button without a shortcut draws no keycap"
+            );
         }
 
         #[gpui::test]
