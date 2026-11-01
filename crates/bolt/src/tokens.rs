@@ -1600,6 +1600,9 @@ impl ShellMetrics {
     /// Command search field, centered in the title bar: 420 by 30 px, cut
     /// 6, 10 px padding, 8 px gap, 14 px search icon, 12.5 px text.
     pub const COMMAND_SEARCH_WIDTH: Rems = ui(420.0);
+    /// Narrowest a shrinkable field gets: the icon, a few characters of the
+    /// placeholder and the keycap.
+    pub const COMMAND_SEARCH_MIN_WIDTH: Rems = ui(160.0);
     pub const COMMAND_SEARCH_HEIGHT: Rems = ui(30.0);
     pub const COMMAND_SEARCH_PADDING_X: Pixels = px(10.0);
     pub const COMMAND_SEARCH_GAP: Pixels = px(8.0);

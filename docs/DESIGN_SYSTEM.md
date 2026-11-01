@@ -88,8 +88,10 @@ Some parts get an id derived from their owner's id:
 The rail root carries its own id as a selector too. The count badges carry
 the count they draw as their accessible label (none while hidden), and the
 command search keycap carries its shortcut text, so the accessibility tree and
-UI automation read them. Rail buttons and the command search field have the
-button role; a rail button reports itself selected while its entry is active.
+UI automation read them. Rail buttons, the command search field and the
+notification bell have the button role, named by their label, so automation
+finds and clicks them by id even when the bell has no click handler of its
+own; a rail button reports itself selected while its entry is active.
 
 `Badge`, `Kbd`, `BannerBlock` and `EmptyState` take an optional id with
 `.id(..)`. Without one they render exactly as before; with one, the element
@@ -110,6 +112,7 @@ by its text:
 |---|---|
 | The title | `<id>-title` |
 | The sentence | `<id>-text` |
+| The label of the `n`th key-hint action, numbered from 0 | `<id>-action-<n>` |
 | The keycaps of the key-hint actions, numbered from 0 across all actions | `<id>-key-<n>` |
 
 The shortcut keycap of a `menu_row` (`<row id>-key`) is a label node named by
@@ -128,6 +131,7 @@ one is off by default, so DBFlux draws the same pixels without them.
 | `SelectTrigger` | `SelectTrigger::new(id, label)` | The closed field of a select, drawn by the same code as a standard `Dropdown` trigger: cut-6 field, optional leading icon, truncated label, chevron. It is a button with the caller's click handler, `.disabled(..)`, `.focus_ring(..)` or `.focused(..)`, for a product that opens its own popup. The `Dropdown` entity itself is unchanged. |
 | `Input` | `.padding(x, y)`, `.text_size(..)`, `.line_height(..)` | Replace the inner padding (the height then follows the line), the text size and the line height. With `appearance(false)`, set them to the values of the text the field replaces so nothing moves when the text turns into a field. Without them a bare input keeps gpui-component's size. |
 | `Input` | `.font_weight(..)` | Replaces the text weight, normal in a framed field and medium in a bare one. Set a bare field to normal so it matches text drawn at the regular weight. |
+| `CommandSearch` | `.shrinkable(true)` | The field shrinks below its 420 px width in a narrow title bar, down to `ShellMetrics::COMMAND_SEARCH_MIN_WIDTH`, and the placeholder truncates with an ellipsis. By default it keeps its width and never shrinks. |
 | `EmptyState` | `.primary_action(Button)` | A real button under the sentence for the one thing the region asks for. The key-hint actions stay below it. |
 | `MenuItem` | `.checked(bool)` | A checkable row: `true` draws a tint check mark (`MenuMetrics::CHECK_ICON`) after the label. The row reports itself as a checkable menu item, toggled or not. A row without it is a plain menu item. |
 | `Splitter` | `Splitter::new(id, SplitAxis)` | The resize gutter between two panes (see below). |

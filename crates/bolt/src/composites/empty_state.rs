@@ -127,12 +127,14 @@ impl EmptyState {
         crate::selector::with_optional_label(part, id, text)
     }
 
-    /// One action row. Its keycaps are numbered from `first_key` across the
-    /// whole state, so `<id>-key-<n>` stays unique.
+    /// One action row, the `index`th of the state; its label is
+    /// `<id>-action-<index>`. Its keycaps are numbered from `first_key`
+    /// across the whole state, so `<id>-key-<n>` stays unique.
     fn render_action(
         action: EmptyStateAction,
         muted: Hsla,
         id: Option<&ElementId>,
+        index: usize,
         first_key: usize,
     ) -> gpui::Div {
         let keys = action
@@ -161,7 +163,16 @@ impl EmptyState {
                     .size(NavigationMetrics::EMPTY_ACTION_ICON)
                     .color(muted),
             )
-            .child(div().flex_1().min_w_0().truncate().child(action.label))
+            .child(Self::named_part(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(action.label.clone()),
+                id,
+                &format!("action-{index}"),
+                action.label,
+            ))
             .children(keys)
     }
 }
@@ -182,10 +193,11 @@ impl RenderOnce for EmptyState {
         let actions: Vec<gpui::Div> = self
             .actions
             .into_iter()
-            .map(|action| {
+            .enumerate()
+            .map(|(index, action)| {
                 let first_key = key_count;
                 key_count += action.keys.len();
-                Self::render_action(action, muted, id.as_ref(), first_key)
+                Self::render_action(action, muted, id.as_ref(), index, first_key)
             })
             .collect();
 
@@ -377,6 +389,25 @@ mod tests {
             accessible_name(&frame, "empty-key-1").as_deref(),
             Some("Ctrl I")
         );
+        assert_eq!(
+            accessible_name(&frame, "empty-action-0").as_deref(),
+            Some("New request")
+        );
+        assert_eq!(
+            accessible_name(&frame, "empty-action-1").as_deref(),
+            Some("Import")
+        );
+    }
+
+    #[gpui::test]
+    fn an_action_label_is_found_by_its_selector(cx: &mut TestAppContext) {
+        let (_clicks, window) = open(false, cx);
+
+        let state = window.debug_bounds("empty").expect("the state is laid out");
+        let label = window
+            .debug_bounds("empty-action-0")
+            .expect("the action label is found under the state id");
+        assert!(state.contains(&label.center()));
     }
 
     #[gpui::test]

@@ -95,6 +95,7 @@ pub struct CommandSearch {
     shortcut: Option<SharedString>,
     focus_handle: Option<FocusHandle>,
     on_open: Option<ActivateHandler>,
+    shrinkable: bool,
 }
 
 impl CommandSearch {
@@ -105,7 +106,17 @@ impl CommandSearch {
             shortcut: None,
             focus_handle: None,
             on_open: None,
+            shrinkable: false,
         }
+    }
+
+    /// Lets the field shrink below its 420 px width, down to
+    /// `ShellMetrics::COMMAND_SEARCH_MIN_WIDTH`, when the title bar is
+    /// narrow; the placeholder truncates with an ellipsis. Off by default:
+    /// the field keeps its width and never shrinks.
+    pub fn shrinkable(mut self, shrinkable: bool) -> Self {
+        self.shrinkable = shrinkable;
+        self
     }
 
     /// The palette's chord, shown as one keycap ("Ctrl Shift P").
@@ -171,8 +182,16 @@ impl RenderOnce for CommandSearch {
             .aria_label(self.placeholder.clone())
             .relative()
             .flex()
-            .flex_shrink_0()
             .w(ShellMetrics::COMMAND_SEARCH_WIDTH)
+            .map(|field| {
+                if self.shrinkable {
+                    field
+                        .flex_shrink(1.0)
+                        .min_w(ShellMetrics::COMMAND_SEARCH_MIN_WIDTH)
+                } else {
+                    field.flex_shrink_0()
+                }
+            })
             .items_center()
             .gap(ShellMetrics::COMMAND_SEARCH_GAP)
             .h(ShellMetrics::COMMAND_SEARCH_HEIGHT)
@@ -346,6 +365,7 @@ impl RenderOnce for NotificationBell {
         div()
             .debug_selector(crate::selector::id_selector(&self.id))
             .id(self.id)
+            .role(Role::Button)
             .aria_label(self.label)
             .relative()
             .flex()
