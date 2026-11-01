@@ -23,8 +23,8 @@ crates/dbflux_components/src/components/data_table/record.rs:render_record: edit
 crates/dbflux_components/src/components/data_table/table.rs:render: focus on press
 crates/dbflux_components/src/components/data_table/table.rs:render_document_header: resize grip
 crates/dbflux_components/src/components/data_table/table.rs:render_header: resize grip
-crates/dbflux_components/src/components/document_tree/tree.rs:render_chevron: propagation guard
-crates/dbflux_components/src/components/document_tree/tree.rs:render_value_preview_with_expand: propagation guard
+crates/bolt/src/components/document_tree/row.rs:render_chevron: propagation guard
+crates/bolt/src/components/document_tree/row.rs:render_row: propagation guard
 crates/bolt/src/composites/menu_item.rs:menu_frame: propagation guard
 crates/bolt/src/composites/menu_popup.rs:render_menu_overlay: outside-press dismiss
 crates/dbflux_components/src/composites/notification_center.rs:render: propagation guard

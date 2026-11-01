@@ -1,4 +1,4 @@
-use gpui::{BoxShadow, Hsla, Pixels, Point, Rems, px, rems, rgb};
+use gpui::{BoxShadow, Hsla, Pixels, Point, Rems, hsla, px, rems, rgb};
 
 /// Rem size, in pixels, at the default interface font size.
 pub const BASE_REM: f32 = 16.0;
@@ -602,6 +602,25 @@ impl ChromeColors {
     }
 }
 
+/// The value-type colors a document tree paints its value preview and type
+/// badge with: the JSON type colors of a syntax-highlighted document. The
+/// theme expresses the rest (null, object id, bytes, container) through its
+/// own roles; these five have no theme role.
+pub struct ValueTypeColors;
+
+impl ValueTypeColors {
+    /// `true` and `false`.
+    pub const BOOLEAN: Hsla = hsla(280.0 / 360.0, 0.6, 0.6, 1.0); // guardrail-allow: JSON type color, no semantic token
+    /// Whole numbers.
+    pub const INTEGER: Hsla = hsla(120.0 / 360.0, 0.5, 0.5, 1.0); // guardrail-allow: JSON type color
+    /// Numbers with a fraction, including decimals.
+    pub const FLOAT: Hsla = hsla(150.0 / 360.0, 0.5, 0.5, 1.0); // guardrail-allow: JSON type color
+    /// Strings.
+    pub const TEXT: Hsla = hsla(30.0 / 360.0, 0.7, 0.6, 1.0); // guardrail-allow: JSON type color
+    /// Dates, times and timestamps.
+    pub const TEMPORAL: Hsla = hsla(200.0 / 360.0, 0.6, 0.5, 1.0); // guardrail-allow: JSON type color
+}
+
 /// Syntax roles of the palette, per variant.
 ///
 /// The code editor's highlight theme and the schema-tree icons both read these
@@ -952,6 +971,23 @@ impl TreeMetrics {
     pub const META_FONT: Rems = ui(11.0);
     /// Width of the tint bar on the left of the selected row. (2 px)
     pub const SELECTION_BAR: Pixels = px(2.0);
+}
+
+/// Geometry of the document tree's rows (`components::document_tree`).
+///
+/// The document tree is the grid surface of document collections, so its
+/// rows follow the grid font size rather than the interface size: the row
+/// painter scales both values with `fonts::grid_scaled`, so they are plain
+/// design pixels here.
+pub struct DocumentTreeMetrics;
+
+impl DocumentTreeMetrics {
+    /// Row height. (26 px)
+    pub const ROW_HEIGHT: Pixels = px(26.0);
+    /// Indent added per depth level. (16 px)
+    pub const INDENT: Pixels = px(16.0);
+    /// Height an expanded long value may draw before it scrolls. (120 px)
+    pub const EXPANDED_VALUE_MAX_HEIGHT: Pixels = px(120.0);
 }
 
 /// Geometry of the result grid (`components::DataTable`), from the
@@ -2406,9 +2442,9 @@ impl Widths {
 mod tests {
     use super::{
         BASE_REM, Borders, ChartGeometry, ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole,
-        FontSizes, Radii, Shadows, Spacing, ui,
+        DocumentTreeMetrics, FontSizes, Radii, Shadows, Spacing, ValueTypeColors, ui,
     };
-    use gpui::{px, rems};
+    use gpui::{hsla, px, rems};
 
     #[test]
     fn ui_expresses_design_pixels_in_rems_of_the_base_size() {
@@ -2498,6 +2534,25 @@ mod tests {
     #[test]
     fn spacing_xxs_equals_px_6() {
         assert_eq!(Spacing::XXS, px(6.0));
+    }
+
+    #[test]
+    fn document_tree_metrics_pin_the_grid_row_geometry() {
+        assert_eq!(DocumentTreeMetrics::ROW_HEIGHT, px(26.0));
+        assert_eq!(DocumentTreeMetrics::INDENT, px(16.0));
+        assert_eq!(DocumentTreeMetrics::EXPANDED_VALUE_MAX_HEIGHT, px(120.0));
+    }
+
+    #[test]
+    fn value_type_colors_pin_the_json_type_colors() {
+        assert_eq!(ValueTypeColors::BOOLEAN, hsla(280.0 / 360.0, 0.6, 0.6, 1.0));
+        assert_eq!(ValueTypeColors::INTEGER, hsla(120.0 / 360.0, 0.5, 0.5, 1.0));
+        assert_eq!(ValueTypeColors::FLOAT, hsla(150.0 / 360.0, 0.5, 0.5, 1.0));
+        assert_eq!(ValueTypeColors::TEXT, hsla(30.0 / 360.0, 0.7, 0.6, 1.0));
+        assert_eq!(
+            ValueTypeColors::TEMPORAL,
+            hsla(200.0 / 360.0, 0.6, 0.5, 1.0)
+        );
     }
 
     #[test]
