@@ -112,6 +112,7 @@ pub struct Rail {
     id: ElementId,
     entries: Vec<RailEntry>,
     on_select: Option<RailSelectHandler>,
+    key_context: Option<SharedString>,
 }
 
 impl Rail {
@@ -120,6 +121,7 @@ impl Rail {
             id: id.into(),
             entries,
             on_select: None,
+            key_context: None,
         }
     }
 
@@ -129,6 +131,13 @@ impl Rail {
         handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_select = Some(Rc::new(handler));
+        self
+    }
+
+    /// A key context the rail publishes, for hosts that bind keys against
+    /// the rail. The context is host data; this crate never names one.
+    pub fn key_context(mut self, context: impl Into<SharedString>) -> Self {
+        self.key_context = Some(context.into());
         self
     }
 
@@ -198,18 +207,21 @@ impl RenderOnce for Rail {
             rail = rail.debug_selector(move || selector);
         }
 
-        rail.flex()
-            .flex_col()
-            .flex_shrink_0()
-            .items_center()
-            .gap(ShellMetrics::RAIL_GAP)
-            .w(ShellMetrics::RAIL_WIDTH)
-            .h_full()
-            .pt(ShellMetrics::RAIL_PADDING_Y)
-            .pb(ShellMetrics::RAIL_PADDING_Y)
-            .children(top_buttons)
-            .child(div().flex_1())
-            .children(bottom_buttons)
+        rail.when_some(self.key_context.clone(), |rail, context| {
+            rail.key_context(context.as_ref())
+        })
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .items_center()
+        .gap(ShellMetrics::RAIL_GAP)
+        .w(ShellMetrics::RAIL_WIDTH)
+        .h_full()
+        .pt(ShellMetrics::RAIL_PADDING_Y)
+        .pb(ShellMetrics::RAIL_PADDING_Y)
+        .children(top_buttons)
+        .child(div().flex_1())
+        .children(bottom_buttons)
     }
 }
 

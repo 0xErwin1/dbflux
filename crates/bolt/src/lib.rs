@@ -12,6 +12,7 @@
 #![recursion_limit = "512"]
 
 pub mod brand;
+pub mod composites;
 pub mod data;
 
 /// Accessibility checks for rendered surfaces: the accessible-name helpers a

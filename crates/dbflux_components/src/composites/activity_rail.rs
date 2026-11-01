@@ -1,24 +1,21 @@
 //! `ActivityRail` — the column of view buttons at the left edge of the main
 //! window (AppByzTable, DSAppPlan "ActivityRail").
+//!
+//! The rendering is Bolt's `shell::Rail`, the single implementation of this
+//! surface. This adapter keeps the product-facing entry type (its `AppIcon`
+//! icons) and publishes the `ActivityRail` key context, so the workspace
+//! call sites are untouched while the fills, metrics and layout come from
+//! the one rail implementation.
 
 use std::rc::Rc;
 
 use gpui::prelude::*;
-use gpui::{App, ElementId, Hsla, SharedString, Window, div};
-use gpui_component::ActiveTheme;
-use gpui_component::tooltip::Tooltip;
+use gpui::{App, ElementId, SharedString, Window};
 
 use crate::icons::AppIcon;
-use crate::primitives::{Chamfer, Icon};
-use crate::tokens::{ButtonMetrics, ChamferCut, ChromeColors, ShellMetrics};
+use crate::key_contexts::ACTIVITY_RAIL;
 
-/// Where an entry sits in the rail: stacked from the top, or pinned to the
-/// bottom edge.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RailPlacement {
-    Top,
-    Bottom,
-}
+pub use bolt::shell::{RailButtonColors, RailPlacement, rail_button_colors};
 
 /// One button of the rail. The host builds the list from its own state; the
 /// rail never knows which view an entry opens.
@@ -62,42 +59,9 @@ impl RailEntry {
     }
 }
 
-/// Fills and icon color of a rail button: the active entry takes a tint wash
-/// and a tint icon, the others are transparent with a muted icon and the
-/// ghost hover and press fills (DSStates).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RailButtonColors {
-    pub rest: Hsla,
-    pub hover: Hsla,
-    pub pressed: Hsla,
-    pub icon: Hsla,
-}
-
-pub fn rail_button_colors(theme: &gpui_component::Theme, active: bool) -> RailButtonColors {
-    if active {
-        let tint = ChromeColors::tint(theme);
-
-        return RailButtonColors {
-            rest: tint.opacity(ShellMetrics::RAIL_ACTIVE_ALPHA),
-            hover: tint.opacity(ButtonMetrics::SOFT_FILL_HOVER),
-            pressed: tint.opacity(ButtonMetrics::SOFT_FILL_PRESSED),
-            icon: tint,
-        };
-    }
-
-    RailButtonColors {
-        rest: gpui::transparent_black(),
-        hover: theme.secondary,
-        pressed: theme.secondary_hover,
-        icon: theme.muted_foreground,
-    }
-}
-
 type RailSelectHandler = Rc<dyn Fn(&SharedString, &mut Window, &mut App)>;
 
-/// The activity rail: `ShellMetrics::RAIL_WIDTH` wide directly on the desk,
-/// with no fill or line of its own, 38 px buttons stacked from the top and
-/// the bottom entries pinned to the bottom edge.
+/// The activity rail, rendered by Bolt's `shell::Rail`.
 #[derive(IntoElement)]
 pub struct ActivityRail {
     id: ElementId,
@@ -129,80 +93,37 @@ impl ActivityRail {
             .iter()
             .partition(|entry| entry.placement == RailPlacement::Top)
     }
-
-    fn render_button(
-        entry: &RailEntry,
-        on_select: Option<RailSelectHandler>,
-        cx: &App,
-    ) -> impl IntoElement {
-        let colors = rail_button_colors(cx.theme(), entry.active);
-        let element_id = entry.element_id();
-        let entry_id = entry.id.clone();
-        let label = entry.label.clone();
-
-        div()
-            .id(ElementId::Name(element_id))
-            .aria_label(label.clone())
-            .relative()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .justify_center()
-            .size(ShellMetrics::RAIL_BUTTON)
-            .cursor_pointer()
-            .child(
-                Chamfer::new(ChamferCut::CONTROL)
-                    .fill(colors.rest)
-                    .fill_hover(colors.hover)
-                    .fill_active(colors.pressed)
-                    .interactive("rail-button-chamfer"),
-            )
-            .child(
-                Icon::new(entry.icon)
-                    .size(ShellMetrics::RAIL_ICON)
-                    .color(colors.icon),
-            )
-            .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
-            .when_some(on_select, |button, handler| {
-                button.on_click(move |_, window, cx| handler(&entry_id, window, cx))
-            })
-    }
 }
 
 impl RenderOnce for ActivityRail {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let (top, bottom) = Self::partition(&self.entries);
-
-        let top_buttons: Vec<_> = top
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let entries = self
+            .entries
             .into_iter()
-            .map(|entry| Self::render_button(entry, self.on_select.clone(), cx))
-            .collect();
-        let bottom_buttons: Vec<_> = bottom
-            .into_iter()
-            .map(|entry| Self::render_button(entry, self.on_select.clone(), cx))
+            .map(|entry| {
+                let mut mapped = bolt::shell::RailEntry::new(entry.id, entry.icon, entry.label)
+                    .active(entry.active);
+                if entry.placement == RailPlacement::Bottom {
+                    mapped = mapped.bottom();
+                }
+                mapped
+            })
             .collect();
 
-        div()
-            .id(self.id)
-            .key_context(crate::key_contexts::ACTIVITY_RAIL)
-            .flex()
-            .flex_col()
-            .flex_shrink_0()
-            .items_center()
-            .gap(ShellMetrics::RAIL_GAP)
-            .w(ShellMetrics::RAIL_WIDTH)
-            .h_full()
-            .pt(ShellMetrics::RAIL_PADDING_Y)
-            .pb(ShellMetrics::RAIL_PADDING_Y)
-            .children(top_buttons)
-            .child(div().flex_1())
-            .children(bottom_buttons)
+        let mut rail = bolt::shell::Rail::new(self.id, entries);
+        if let Some(handler) = self.on_select {
+            rail = rail.on_select(move |id, window, cx| handler(id, window, cx));
+        }
+
+        rail.key_context(ACTIVITY_RAIL)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tokens::{ChromeColors, ShellMetrics};
+    use gpui::div;
 
     fn entries() -> Vec<RailEntry> {
         vec![
@@ -250,5 +171,100 @@ mod tests {
         assert_eq!(idle.rest, gpui::transparent_black());
         assert_eq!(idle.hover, theme.secondary);
         assert_eq!(idle.icon, theme.muted_foreground);
+    }
+
+    /// Renders the rail as the workspace does and pins the token-derived
+    /// layout: `ShellMetrics::RAIL_BUTTON` square buttons inside a
+    /// `ShellMetrics::RAIL_WIDTH` rail, the bottom entry pinned to the
+    /// bottom padding edge, `rail-<id>` element ids, and the click handler
+    /// receiving the entry id. This is the contract the rendering must
+    /// reproduce whatever implementation sits behind `ActivityRail`.
+    #[gpui::test]
+    fn rail_lays_out_at_the_shell_tokens_and_selects(cx: &mut gpui::TestAppContext) {
+        use crate::tokens::BASE_REM;
+        use gpui::prelude::*;
+        use gpui::{Render, px};
+
+        struct RailHost {
+            selected: std::rc::Rc<std::cell::RefCell<Option<String>>>,
+        }
+
+        impl Render for RailHost {
+            fn render(
+                &mut self,
+                _window: &mut gpui::Window,
+                _cx: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                let selected = self.selected.clone();
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        ActivityRail::new(
+                            "activity-rail",
+                            vec![
+                                RailEntry::new("first", AppIcon::Database, "First").active(true),
+                                RailEntry::new("second", AppIcon::Settings, "Second"),
+                                RailEntry::new("settings", AppIcon::Search, "Settings").bottom(),
+                            ],
+                        )
+                        .on_select(move |id, _, _| {
+                            selected.borrow_mut().replace(id.to_string());
+                        }),
+                    )
+                    .child(div().flex_1())
+            }
+        }
+
+        cx.update(crate::theme::init);
+
+        let selected = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
+        let selected_for_host = selected.clone();
+        let (_, window) = cx.add_window_view(move |window, cx| {
+            let host = cx.new(|_| RailHost {
+                selected: selected_for_host,
+            });
+            gpui_component::Root::new(host, window, cx)
+        });
+        window.run_until_parked();
+
+        let button_size = ShellMetrics::RAIL_BUTTON.to_pixels(px(BASE_REM));
+        let rail_width = ShellMetrics::RAIL_WIDTH.to_pixels(px(BASE_REM));
+
+        let rail = window
+            .debug_bounds("activity-rail")
+            .expect("the rail is laid out");
+        assert_eq!(rail.size.width, rail_width);
+
+        for id in ["first", "second", "settings"] {
+            let button = window
+                .debug_bounds(format!("rail-{id}").leak())
+                .unwrap_or_else(|| panic!("the {id} entry is laid out"));
+            assert_eq!(button.size.width, button_size);
+            assert_eq!(button.size.height, button_size);
+        }
+
+        let first = window.debug_bounds("rail-first").unwrap();
+        let settings = window.debug_bounds("rail-settings").unwrap();
+        assert!(settings.top() > first.bottom());
+        assert_eq!(
+            settings.bottom(),
+            rail.bottom() - ShellMetrics::RAIL_PADDING_Y,
+            "the bottom entry is pinned to the rail's bottom padding edge"
+        );
+
+        let second = window
+            .debug_bounds("rail-second")
+            .expect("the second entry is laid out")
+            .center();
+        window.simulate_click(second, gpui::Modifiers::default());
+        window.run_until_parked();
+
+        assert_eq!(
+            selected.borrow().as_deref(),
+            Some("second"),
+            "the click reaches the handler with the entry id"
+        );
     }
 }

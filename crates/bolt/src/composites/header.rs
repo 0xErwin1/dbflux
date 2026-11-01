@@ -188,3 +188,98 @@ fn page_header_layout(
         .child(text_block)
         .when_some(action, |row, action| row.child(action))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::controls::Button;
+    use crate::tokens::{BASE_REM, Spacing};
+    use gpui::px;
+
+    fn install_test_theme(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::install(
+                crate::brand::Brand::neutral(),
+                crate::palette::PaletteMode::Dark,
+                crate::density::Density::Default,
+                cx,
+            );
+        });
+    }
+
+    struct HeaderHarness;
+
+    impl Render for HeaderHarness {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .debug_selector(|| "panel-header-under-test".to_string())
+                        .child(panel_header_with_actions(
+                            "Connections",
+                            vec![
+                                div()
+                                    .debug_selector(|| "panel-header-action-a".to_string())
+                                    .child(Button::new("panel-header-action-a", "One")),
+                                div()
+                                    .debug_selector(|| "panel-header-action-b".to_string())
+                                    .child(Button::new("panel-header-action-b", "Two")),
+                            ],
+                            cx,
+                        )),
+                )
+                .child(div().flex_1())
+        }
+    }
+
+    /// Pins the panel header's token-derived layout: one
+    /// `HeaderMetrics::PANEL_HEIGHT` tall row, the actions right-aligned
+    /// inside `HeaderMetrics::PANEL_PADDING_RIGHT`, and the actions
+    /// separated by `Spacing::XS`. These are the values the surface
+    /// commits to; any replacement rendering must reproduce them exactly.
+    #[gpui::test]
+    fn panel_header_renders_at_the_header_metrics(cx: &mut gpui::TestAppContext) {
+        install_test_theme(cx);
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let harness = cx.new(|_| HeaderHarness);
+            gpui_component::Root::new(harness, window, cx)
+        });
+        window.run_until_parked();
+
+        let header = window
+            .debug_bounds("panel-header-under-test")
+            .expect("the panel header is laid out");
+        assert_eq!(
+            header.size.height,
+            HeaderMetrics::PANEL_HEIGHT.to_pixels(px(BASE_REM)),
+            "the header is one panel header tall"
+        );
+
+        let action_a = window
+            .debug_bounds("panel-header-action-a")
+            .expect("the first action is laid out");
+        let action_b = window
+            .debug_bounds("panel-header-action-b")
+            .expect("the second action is laid out");
+
+        assert_eq!(
+            action_b.left() - action_a.right(),
+            Spacing::XS,
+            "two actions are separated by the actions-row gap"
+        );
+        assert_eq!(
+            header.right() - action_b.right(),
+            HeaderMetrics::PANEL_PADDING_RIGHT,
+            "the actions end at the header's right padding"
+        );
+    }
+}
