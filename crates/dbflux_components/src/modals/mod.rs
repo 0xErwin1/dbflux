@@ -6,7 +6,8 @@ pub mod drop_table;
 pub mod import_dashboard;
 pub mod modal;
 pub mod mutation_confirm;
-pub mod parts;
+// Moved to `bolt`; re-exported at this path so call sites keep compiling.
+pub use bolt::modals::parts;
 pub mod schema_drift;
 pub mod tunnel_auth;
 pub mod unsaved_changes;

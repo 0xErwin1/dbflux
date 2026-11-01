@@ -25,6 +25,8 @@ to its own repository without touching a screen: see
 | `bolt::icon` | `IconSource`: a named icon or an SVG path |
 | `bolt::primitives` | Badge, banner, chamfer, divider, file picker, focus ring, keycap, label, loading state, segmented control, status, surface, text, type-to-confirm |
 | `bolt::controls` | Button, checkbox, dropdown, input, read-only text view |
+| `bolt::composites` | Tabs (document, result, inline), menu item and popup menu, list row, empty state, split button, field row |
+| `bolt::modals` | The modal dialog, its focus helper and the shared body blocks (lead, statement, field, form row, value field) |
 
 Bolt depends on `gpui`, `gpui-component`, `gpui-base`, `log` and `serde_json`.
 It never depends on DBFlux's domain crates and never names a product, a driver,
@@ -47,7 +49,11 @@ a database or a design board: a source-scanning guardrail in
   `AppIcon` and ReqFlux's Lucide set both plug in.
 - **Its keymap and its copy.** The dropdown takes the action ids it answers and
   a translated placeholder through globals the product installs, so Bolt needs
-  neither the keymap nor the i18n crate.
+  neither the keymap nor the i18n crate. The modal does the same through
+  `ModalSeams`: the product registers its Cancel, Execute and scroll actions
+  with `on_modal_key`, says which command a deferring modal runs, and supplies
+  the Escape keycap label, the close icon and its translated name. A modal
+  rendered before the seam is installed answers no keys.
 
 ## Sizes
 
@@ -73,7 +79,9 @@ compiling and keeps a move from turning into a search-and-replace with no
 behavior change to show for it. Product-coupled helpers stay behind as
 extensions over the generic primitive: `EnvTag` and `environment_badge_tone`
 over `Badge`, the per-variant banner icon over `BannerBlock`, the translated
-placeholder over `FilePicker`, and `DropdownEnvironment` over `Dropdown`.
+placeholder over `FilePicker`, `DropdownEnvironment` over `Dropdown`, and
+`install_modal_seams` (keymap actions, keycap, close icon and name) over
+`Modal`.
 
 ## Consuming Bolt from another repository
 
@@ -128,7 +136,9 @@ review.
 ## What Bolt does not own yet
 
 Domain components stay in `dbflux_components` until their seams exist:
-`data_table`, `document_tree`, the modals, the chart engine, `result_panel`, the
-Vim layer and the composites. They read `ColumnMeta`, `Value`, `QueryLanguage`
+`data_table`, `document_tree`, the product dialogs built on `Modal`, the chart
+engine, `result_panel`, the Vim layer and the composites that read product
+state (activity rail, rail navigation, shell bar, notification center,
+wizard rail). They read `ColumnMeta`, `Value`, `QueryLanguage`
 and `ContextId` from `dbflux_core`, so moving them means opening a generic seam
 in the core first, one component at a time.

@@ -540,6 +540,7 @@ mod keyboard_tests {
     ) {
         cx.update(|cx| {
             gpui_component::init(cx);
+            crate::modals::modal::install_modal_seams(cx);
             crate::actions::record_last_keystroke(cx);
             crate::vim::set_vim_enabled(cx, true);
             let leader = dbflux_core::keymap_types::ContextId::VimNormal.default_predicate();

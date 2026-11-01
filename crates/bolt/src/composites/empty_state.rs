@@ -1,6 +1,5 @@
 //! `EmptyState` — what a region shows when it has nothing to show: an icon,
-//! one sentence, and the two or three keys that get the user started
-//! (DSAppPlan "Empty state", P1Empty).
+//! one sentence, and the two or three keys that get the user started.
 
 use gpui::prelude::*;
 use gpui::{App, FontWeight, Hsla, SharedString, Window, div};
@@ -43,7 +42,7 @@ enum EmptyStateTone {
 ///
 /// By default it renders inline: tint icon, optional bold title, a muted
 /// sentence and the actions. [`EmptyState::card`] wraps the same content in
-/// the 460 px cut-14 card of the DSAppPlan board, for large empty regions
+/// a 460 px cut-14 card, for large empty regions
 /// such as the workspace with no tab open. [`EmptyState::danger`] turns the
 /// icon and sentence red for a failed load.
 #[derive(IntoElement)]

@@ -50,6 +50,7 @@ pub fn init(cx: &mut App) {
     crate::highlighting::register_languages();
     load_bundled_fonts(cx);
     crate::controls::install_dropdown_seams(cx);
+    crate::modals::modal::install_modal_seams(cx);
     apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx);
 }
 

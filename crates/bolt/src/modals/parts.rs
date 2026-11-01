@@ -1,4 +1,4 @@
-//! Body blocks shared by the dialogs of P1Modals and P1Flows: the lead
+//! Body blocks shared by dialogs and wizards: the lead
 //! sentence, the statement block, labelled fields and the framed list.
 
 use std::ops::Range;
@@ -144,7 +144,7 @@ pub fn modal_field(label: impl IntoElement, control: impl IntoElement, cx: &App)
         .child(control)
 }
 
-/// A wizard form row (P1Flows): the label in a 120 px column, the control and
+/// A wizard form row: the label in a 120 px column, the control and
 /// its optional hint beside it.
 pub fn modal_form_row(
     label: impl Into<SharedString>,

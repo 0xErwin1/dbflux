@@ -227,8 +227,7 @@ impl MenuItem {
 }
 
 /// Visual row of a menu, without handlers: icon, label, then the shortcut as
-/// plain muted mono text or the submenu chevron (IslMenu, DSApp "Context
-/// menu"). The hint stays plain on the highlighted row too.
+/// plain muted mono text or the submenu chevron. The hint stays plain on the highlighted row too.
 ///
 /// Hand-rolled menus that need their own listeners or a flyout child start
 /// from this and chain `on_click` / `on_mouse_move` / `child` onto it, so

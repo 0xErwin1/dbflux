@@ -1,5 +1,5 @@
 //! `ListRow` — the selected, hovered and focused states of a list row in one
-//! place (DSApp "Tree", DSAppPlan "ListRow").
+//! place.
 
 use gpui::prelude::*;
 use gpui::{App, Div, ElementId, Stateful, div};

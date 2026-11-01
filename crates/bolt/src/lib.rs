@@ -19,10 +19,12 @@ pub mod brand;
 #[cfg(any(test, feature = "test-support"))]
 pub mod accessibility;
 
+pub mod composites;
 pub mod controls;
 pub mod density;
 pub mod fonts;
 pub mod icon;
+pub mod modals;
 pub mod palette;
 pub mod primitives;
 pub mod semantic;
