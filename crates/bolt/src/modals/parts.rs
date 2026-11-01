@@ -12,63 +12,6 @@ use gpui_component::ActiveTheme;
 use crate::primitives::Chamfer;
 use crate::tokens::{ChamferCut, ChromeColors, Fields, ModalMetrics};
 
-/// Words drawn as keywords in a [`modal_code`] statement.
-const SQL_KEYWORDS: &[&str] = &[
-    "ADD", "ALTER", "AND", "AS", "BY", "CASCADE", "COLUMN", "CREATE", "DATABASE", "DELETE", "DROP",
-    "EXISTS", "FROM", "GROUP", "IF", "IN", "INDEX", "INSERT", "INTO", "IS", "JOIN", "LIMIT", "NOT",
-    "NULL", "ON", "OR", "ORDER", "RENAME", "SELECT", "SET", "TABLE", "TO", "TRUNCATE", "UPDATE",
-    "VALUES", "VIEW", "WHERE",
-];
-
-/// Byte ranges of the SQL keywords in `text`, outside quoted strings and
-/// identifiers.
-pub fn sql_keyword_ranges(text: &str) -> Vec<Range<usize>> {
-    let mut ranges = Vec::new();
-    let mut quote: Option<char> = None;
-    let mut word_start: Option<usize> = None;
-
-    let close_word = |start: Option<usize>, end: usize, ranges: &mut Vec<Range<usize>>| {
-        if let Some(start) = start {
-            let word = &text[start..end];
-
-            if SQL_KEYWORDS
-                .iter()
-                .any(|keyword| keyword.eq_ignore_ascii_case(word))
-            {
-                ranges.push(start..end);
-            }
-        }
-    };
-
-    for (index, character) in text.char_indices() {
-        if let Some(open) = quote {
-            if character == open {
-                quote = None;
-            }
-            continue;
-        }
-
-        if character.is_alphanumeric() || character == '_' {
-            if word_start.is_none() {
-                word_start = Some(index);
-            }
-            continue;
-        }
-
-        close_word(word_start.take(), index, &mut ranges);
-
-        if matches!(character, '\'' | '"' | '`') {
-            quote = Some(character);
-        }
-    }
-
-    if quote.is_none() {
-        close_word(word_start, text.len(), &mut ranges);
-    }
-
-    ranges
-}
-
 /// The lead sentence of a dialog body: 13.5 px body text on a 1.6 line
 /// height. Pass a [`StyledText`] or a row of spans for inline emphasis.
 pub fn modal_lead(content: impl IntoElement, cx: &App) -> Div {
@@ -80,14 +23,19 @@ pub fn modal_lead(content: impl IntoElement, cx: &App) -> Div {
 }
 
 /// A statement block: 12.5 px strong mono on the ground behind a cut-8 line
-/// frame, SQL keywords in bold tint.
-pub fn modal_code(code: impl Into<SharedString>, cx: &App) -> Div {
+/// frame, with `highlights` drawn in bold tint.
+///
+/// Which ranges are highlighted is the caller's knowledge: a product that
+/// previews SQL passes its keywords, one that previews JSON passes its keys. The
+/// style those ranges take is a design-system decision and stays here.
+pub fn modal_code(code: impl Into<SharedString>, highlights: &[Range<usize>], cx: &App) -> Div {
     let theme = cx.theme();
     let code: SharedString = code.into();
     let tint = ChromeColors::tint(theme);
 
-    let highlights: Vec<(Range<usize>, HighlightStyle)> = sql_keyword_ranges(&code)
-        .into_iter()
+    let highlights: Vec<(Range<usize>, HighlightStyle)> = highlights
+        .iter()
+        .cloned()
         .map(|range| {
             (
                 range,
@@ -236,38 +184,4 @@ pub fn inline_code(text: impl Into<SharedString>, cx: &App) -> AnyElement {
         .text_color(ChromeColors::strong(cx.theme()))
         .child(text.into())
         .into_any_element()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::sql_keyword_ranges;
-
-    fn keywords(text: &str) -> Vec<&str> {
-        sql_keyword_ranges(text)
-            .into_iter()
-            .map(|range| &text[range])
-            .collect()
-    }
-
-    #[test]
-    fn keywords_are_found_in_any_case() {
-        assert_eq!(keywords("DELETE FROM sessions;"), vec!["DELETE", "FROM"]);
-        assert_eq!(
-            keywords("drop table public.orders cascade;"),
-            vec!["drop", "table", "cascade"]
-        );
-    }
-
-    #[test]
-    fn quoted_text_and_identifiers_are_skipped() {
-        assert_eq!(
-            keywords("UPDATE t SET note = 'delete from' WHERE \"table\" = 1"),
-            vec!["UPDATE", "SET", "WHERE"]
-        );
-    }
-
-    #[test]
-    fn words_containing_a_keyword_are_not_keywords() {
-        assert!(keywords("deleted_at fromage").is_empty());
-    }
 }
