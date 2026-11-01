@@ -1,17 +1,13 @@
 //! Shared popup-menu helpers for floating context/kebab menus.
 //!
-//! This module hosts the two pieces every floating menu in the app needs:
+//! This module hosts the two pieces every floating menu needs:
 //!
 //! 1. A full-screen transparent overlay that dismisses the menu on any outside
 //!    click (`render_menu_overlay`).
 //! 2. A higher-level container that takes a slice of [`MenuItem`]s and wires
 //!    per-item click/hover callbacks (`render_menu_items`).
 //!
-//! Previously these wrappers lived in `dbflux_ui::ui::components::context_menu`,
-//! which made them unreachable from the document/sidebar crates that need the
-//! same style (sidebar's `⋯` menu, dashboard panel kebab, tab context menu).
-//! Moving them down to `dbflux_components` lets every UI crate reuse the exact
-//! same chrome — see AGENTS.md "Generic Deduplication Patterns".
+//! Context menus, kebab menus and tab menus all share this chrome.
 
 use crate::composites::menu_item::{
     MenuItem, render_menu_container, render_menu_header, render_menu_item, render_separator,
@@ -29,8 +25,10 @@ pub fn render_menu_overlay(
 ) -> Stateful<Div> {
     let on_dismiss = std::rc::Rc::new(on_dismiss);
     let on_dismiss_right = on_dismiss.clone();
+    let id = id.into();
 
     div()
+        .debug_selector(crate::selector::id_selector(&id))
         .id(id)
         .absolute()
         .top_0()

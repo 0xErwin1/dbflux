@@ -1,5 +1,6 @@
 use crate::icon::IconSource;
 use crate::primitives::Icon;
+use crate::selector::id_selector;
 use crate::tokens::{FontSizes, Heights, Radii, ui};
 use gpui::prelude::*;
 use gpui::*;
@@ -90,6 +91,7 @@ impl RenderOnce for FilePicker {
         let on_browse = self.on_browse.clone();
         let picker_button = div()
             .id(self.id.clone())
+            .debug_selector(id_selector(&self.id))
             .flex()
             .items_center()
             .gap_2()

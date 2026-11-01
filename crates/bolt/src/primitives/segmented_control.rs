@@ -7,12 +7,15 @@
 use std::sync::Arc;
 
 use gpui::prelude::*;
-use gpui::{AccessibleAction, App, Role, SharedString, Toggled, Window, div};
+use gpui::{
+    AccessibleAction, App, ElementId, FontWeight, Role, SharedString, Toggled, Window, div,
+};
 use gpui_component::ActiveTheme;
 
 use crate::icon::IconSource;
-use crate::primitives::{Chamfer, Icon, focus_underline};
-use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes};
+use crate::primitives::{Chamfer, Icon, Text, focus_underline};
+use crate::selector::id_selector;
+use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes, TabMetrics};
 
 /// A single option within a `SegmentedControl`.
 #[derive(Debug, Clone)]
@@ -20,6 +23,10 @@ pub struct SegmentedItem {
     pub id: SharedString,
     pub label: SharedString,
     pub icon: Option<IconSource>,
+    /// Element id of the segment; `None` uses [`segmented_item_id`].
+    pub element_id: Option<SharedString>,
+    /// Count or short trailing label drawn after the label.
+    pub count: Option<SharedString>,
 }
 
 impl SegmentedItem {
@@ -28,7 +35,23 @@ impl SegmentedItem {
             id: id.into(),
             label: label.into(),
             icon: None,
+            element_id: None,
+            count: None,
         }
+    }
+
+    /// Sets the element (and accessibility) id of the segment, replacing the
+    /// default `segmented-<group>-<id>`. It must be unique in the window.
+    pub fn element_id(mut self, id: impl Into<SharedString>) -> Self {
+        self.element_id = Some(id.into());
+        self
+    }
+
+    /// Draws `count` after the label, as a document or result tab draws its
+    /// row count: small mono, muted. For counts and short trailing labels.
+    pub fn count(mut self, count: impl Into<SharedString>) -> Self {
+        self.count = Some(count.into());
+        self
     }
 
     /// Draws `icon` before the label.
@@ -74,8 +97,10 @@ pub fn stepped_segment<'a>(ids: &[&'a str], active: &str, step: isize) -> Option
 ///
 /// - Track: `ChamferCut::CONTROL`, `theme.background` fill, 1 px `theme.border`
 ///   line, `Fields::SEGMENT_TRACK_PADDING` inside.
-/// - Segment: `Fields::SEGMENT_HEIGHT` tall, icon and label 6 px apart,
-///   `FontSizes::XS` in the interface face.
+/// - Segment: `Fields::SEGMENT_HEIGHT` tall, icon, label and optional count
+///   6 px apart, `FontSizes::XS` in the interface face. The count is drawn
+///   like a result tab's row count (`TabMetrics::RESULT_META_SIZE` mono,
+///   muted).
 /// - Active segment: raised thumb (`theme.secondary`, `ChamferCut::KEYCAP`),
 ///   strong text.
 /// - Inactive segment: muted text; hover lays the hover wash under it.
@@ -84,11 +109,15 @@ pub fn stepped_segment<'a>(ids: &[&'a str], active: &str, step: isize) -> Option
 ///   shown only by the raised thumb.
 /// - Semantics: a control named with [`Self::group`] is a radio group
 ///   `segmented-<group>` whose segments are radio buttons
-///   `segmented-<group>-<id>` (element id and accessibility id), named by
+///   `segmented-<group>-<id>` (element id and accessibility id, unless the
+///   item sets its own with [`SegmentedItem::element_id`]), named by
 ///   their label and toggled when active, so automation and assistive
 ///   technology can target one option of one control. An unnamed control
 ///   stays out of the accessibility tree: its segment ids repeat across
 ///   controls, and duplicate accessible nodes are dropped.
+/// - Tab list: a named control marked with [`Self::tabs`] is a tab list
+///   whose segments are tabs, selected when active, for a segmented control
+///   that switches views. The look and ids are the same.
 #[derive(IntoElement)]
 pub struct SegmentedControl {
     items: Vec<SegmentedItem>,
@@ -96,6 +125,7 @@ pub struct SegmentedControl {
     focused: bool,
     focused_id: Option<SharedString>,
     group: Option<SharedString>,
+    tabs: bool,
     on_select: Arc<dyn Fn(&SharedString, &mut Window, &mut App)>,
 }
 
@@ -125,8 +155,17 @@ impl SegmentedControl {
             focused: false,
             focused_id: None,
             group: None,
+            tabs: false,
             on_select: Arc::new(on_select),
         }
+    }
+
+    /// Gives a named control the tab list role and its segments the tab role
+    /// (selected rather than toggled), for a control used as a tab list.
+    /// Off by default: the control is a radio group.
+    pub fn tabs(mut self, tabs: bool) -> Self {
+        self.tabs = tabs;
+        self
     }
 
     /// Marks the control as holding the keyboard cursor. The focused segment
@@ -167,11 +206,15 @@ impl RenderOnce for SegmentedControl {
         let on_select = self.on_select;
         let group = self.group;
         let is_named = group.is_some();
+        let is_tab_list = self.tabs;
 
         let segments = self.items.into_iter().map(|item| {
             let is_active = item.id == active_id;
             let is_focused = focused_id.as_ref() == Some(&item.id);
-            let segment_id = segmented_item_id(group.as_deref(), item.id.as_ref());
+            let segment_id = item
+                .element_id
+                .clone()
+                .unwrap_or_else(|| segmented_item_id(group.as_deref(), item.id.as_ref()));
 
             let thumb = if is_active {
                 Chamfer::new(ChamferCut::KEYCAP).fill(theme.secondary)
@@ -192,19 +235,27 @@ impl RenderOnce for SegmentedControl {
             let accessible_id = item.id.clone();
             let on_accessible_select = on_select.clone();
             let accessible_label = item.label.clone();
+            let count_owner = segment_id.clone();
+
+            let segment_element_id = ElementId::from(segment_id.clone());
 
             div()
-                .id(segment_id.clone())
+                .debug_selector(id_selector(&segment_element_id))
+                .id(segment_element_id)
                 .when(is_named, |segment| {
-                    segment
-                        .role(Role::RadioButton)
-                        .accessibility_id(segment_id)
-                        .aria_label(accessible_label)
-                        .aria_toggled(if is_active {
+                    let segment = if is_tab_list {
+                        segment.role(Role::Tab).aria_selected(is_active)
+                    } else {
+                        segment.role(Role::RadioButton).aria_toggled(if is_active {
                             Toggled::True
                         } else {
                             Toggled::False
                         })
+                    };
+
+                    segment
+                        .accessibility_id(segment_id)
+                        .aria_label(accessible_label)
                         .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
                             on_accessible_select(&accessible_id, window, cx);
                         })
@@ -223,6 +274,18 @@ impl RenderOnce for SegmentedControl {
                     this.child(Icon::new(icon).size(Fields::SEGMENT_ICON).color(text_color))
                 })
                 .child(item.label)
+                .when_some(item.count, |this, count| {
+                    this.child(
+                        div()
+                            .debug_selector(move || format!("{count_owner}-count"))
+                            .child(
+                                Text::code(count)
+                                    .font_size(TabMetrics::RESULT_META_SIZE)
+                                    .font_weight(FontWeight::NORMAL)
+                                    .muted_foreground(),
+                            ),
+                    )
+                })
                 .when(is_focused, |this| this.child(focus_underline(tint)))
                 .on_click(move |_, window, cx| {
                     on_select(&clicked_id, window, cx);
@@ -235,10 +298,19 @@ impl RenderOnce for SegmentedControl {
             .map(segmented_group_id)
             .unwrap_or_else(|| SharedString::from("seg-ctl-track"));
 
+        let track_element_id = ElementId::from(track_id.clone());
+
         div()
-            .id(track_id.clone())
+            .debug_selector(id_selector(&track_element_id))
+            .id(track_element_id)
             .when(is_named, |track| {
-                track.role(Role::RadioGroup).accessibility_id(track_id)
+                track
+                    .role(if is_tab_list {
+                        Role::TabList
+                    } else {
+                        Role::RadioGroup
+                    })
+                    .accessibility_id(track_id)
             })
             .relative()
             .flex()
@@ -472,6 +544,177 @@ mod tests {
 
         let light = node_named("segmented-theme-light");
         assert_eq!(light.toggled(), Some(Toggled::False));
+    }
+
+    struct TabSegments;
+
+    impl Render for TabSegments {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                SegmentedControl::new(
+                    vec![
+                        SegmentedItem::new("body", "Body"),
+                        SegmentedItem::new("headers", "Headers"),
+                    ],
+                    "body",
+                    |_, _, _| {},
+                )
+                .group("response")
+                .tabs(true),
+            )
+        }
+    }
+
+    fn capture_frame<V: Render>(
+        build: impl FnOnce() -> V + 'static,
+        cx: &mut TestAppContext,
+    ) -> gpui::AccessibilityFrame {
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::install(
+                crate::brand::Brand::neutral(),
+                crate::palette::PaletteMode::Dark,
+                crate::density::Density::Default,
+                cx,
+            );
+        });
+
+        let capture = std::sync::Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (_view, window) = cx.add_window_view(move |window, _cx| {
+            window.observe_frames(&capture_for_window);
+            window.refresh();
+            build()
+        });
+        window.run_until_parked();
+
+        capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame")
+    }
+
+    fn accessible_node(frame: &gpui::AccessibilityFrame, id: &str) -> gpui::accesskit::Node {
+        let (_, node) = frame
+            .nodes()
+            .find(|(_, node)| node.id() == id)
+            .unwrap_or_else(|| panic!("{id} is in the frame"));
+        frame
+            .accessibility_node(node)
+            .unwrap_or_else(|| panic!("{id} is an accessible node"))
+            .clone()
+    }
+
+    #[gpui::test]
+    fn a_tab_control_is_a_tab_list_of_selected_tabs(cx: &mut TestAppContext) {
+        let frame = capture_frame(|| TabSegments, cx);
+
+        assert_eq!(
+            accessible_node(&frame, "segmented-response").role(),
+            Role::TabList
+        );
+
+        let body = accessible_node(&frame, "segmented-response-body");
+        assert_eq!(body.role(), Role::Tab);
+        assert_eq!(body.label(), Some("Body"));
+        assert_eq!(body.is_selected(), Some(true));
+        assert_eq!(body.toggled(), None, "a tab is selected, not toggled");
+        assert!(body.supports_action(AccessibleAction::Click));
+
+        let headers = accessible_node(&frame, "segmented-response-headers");
+        assert_eq!(headers.role(), Role::Tab);
+        assert_eq!(headers.is_selected(), Some(false));
+    }
+
+    #[gpui::test]
+    fn a_named_control_stays_a_radio_group_by_default(cx: &mut TestAppContext) {
+        let frame = capture_frame(|| NamedSegments, cx);
+
+        assert_eq!(
+            accessible_node(&frame, "segmented-theme").role(),
+            Role::RadioGroup
+        );
+        assert_eq!(
+            accessible_node(&frame, "segmented-theme-dark").is_selected(),
+            None
+        );
+    }
+
+    struct CountedSegments;
+
+    impl Render for CountedSegments {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                SegmentedControl::new(
+                    vec![
+                        SegmentedItem::new("form", "Form data")
+                            .element_id("request-body-form")
+                            .count("4"),
+                        SegmentedItem::new("headers", "Headers").count("2"),
+                        SegmentedItem::new("raw", "Raw"),
+                    ],
+                    "form",
+                    |_, _, _| {},
+                )
+                .group("body"),
+            )
+        }
+    }
+
+    fn open_counted(cx: &mut TestAppContext) -> &mut VisualTestContext {
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::install(
+                crate::brand::Brand::neutral(),
+                crate::palette::PaletteMode::Dark,
+                crate::density::Density::Default,
+                cx,
+            );
+        });
+
+        let (_view, window) = cx.add_window_view(|_, _| CountedSegments);
+        window.run_until_parked();
+        window
+    }
+
+    #[gpui::test]
+    fn a_segment_takes_the_element_id_its_caller_sets(cx: &mut TestAppContext) {
+        let window = open_counted(cx);
+
+        assert!(window.debug_bounds("request-body-form").is_some());
+        assert!(
+            window.debug_bounds("segmented-body-form").is_none(),
+            "the caller's id replaces the default"
+        );
+        assert!(
+            window.debug_bounds("segmented-body-headers").is_some(),
+            "segments without one keep the default id"
+        );
+    }
+
+    #[gpui::test]
+    fn a_count_follows_the_label_inside_its_segment(cx: &mut TestAppContext) {
+        let window = open_counted(cx);
+
+        let segment = window
+            .debug_bounds("segmented-body-headers")
+            .expect("the segment is laid out");
+        let count = window
+            .debug_bounds("segmented-body-headers-count")
+            .expect("the count is drawn");
+
+        assert!(segment.contains(&count.center()));
+        assert!(
+            count.center().x > segment.center().x,
+            "the count trails the label"
+        );
+        assert!(window.debug_bounds("request-body-form-count").is_some());
+        assert!(
+            window.debug_bounds("segmented-body-raw-count").is_none(),
+            "a segment without a count draws none"
+        );
     }
 
     #[test]

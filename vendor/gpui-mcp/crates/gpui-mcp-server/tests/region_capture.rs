@@ -16,6 +16,8 @@
 //! in both capture orders. One channel level of native capture color jitter is
 //! ignored; a shifted crop or a stale visual state still fails.
 
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -175,20 +177,24 @@ impl Server {
 /// The instrumented GPUI application the workspace ships as its bridge demo.
 struct Fixture {
     child: Child,
+    log: PathBuf,
 }
 
 impl Fixture {
     fn start(endpoints: &Path) -> Result<Self, String> {
+        let log = endpoints.with_extension("fixture.stderr.log");
+        let stderr = std::fs::File::create(&log)
+            .map_err(|error| format!("could not create fixture log: {error}"))?;
         let child = Command::new(fixture_executable()?)
             .arg("--endpoint-dir")
             .arg(endpoints)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::from(stderr))
             .kill_on_drop(true)
             .spawn()
             .map_err(|error| format!("could not spawn the fixture application: {error}"))?;
-        Ok(Self { child })
+        Ok(Self { child, log })
     }
 
     async fn stop(mut self) {
@@ -296,24 +302,13 @@ fn colors_match(left: Rgba<u8>, right: Rgba<u8>) -> bool {
 /// Wait until exactly the fixture is discoverable through the private endpoint
 /// directory, so the measurement is against one application and one target.
 async fn wait_for_the_fixture(server: &mut Server) -> Result<(), String> {
-    let started = Instant::now();
-    let mut last = String::new();
-    while started.elapsed() < DISCOVERY_DEADLINE {
-        match server.call_json("list_apps", json!({})).await {
-            Ok(apps) => {
-                let count = apps.get("count").and_then(JsonValue::as_u64).unwrap_or(0);
-                if count == 1 {
-                    return Ok(());
-                }
-                last = format!("the endpoint directory published {count} applications");
-            }
-            Err(error) => last = error,
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+    support::wait_for_fixture(server, &["search"], DISCOVERY_DEADLINE).await
+}
+
+impl support::FixtureClient for Server {
+    async fn call_json(&mut self, tool: &str, arguments: JsonValue) -> Result<JsonValue, String> {
+        Server::call_json(self, tool, arguments).await
     }
-    Err(format!(
-        "the fixture did not become discoverable within {DISCOVERY_DEADLINE:?}: {last}"
-    ))
 }
 
 #[tokio::test]
@@ -333,6 +328,7 @@ async fn a_region_crop_carries_the_focus_ring_the_full_window_capture_carries() 
 
     let outcome = measure(&mut server).await;
 
+    let outcome = outcome.map_err(|error| support::fixture_failure(&fixture.log, &error));
     server.stop().await;
     fixture.stop().await;
     outcome

@@ -129,6 +129,8 @@ mysql = "28"
 petgraph = "0.7"
 
 gpui = { package = "gpui-pre", version = "=0.3.9" }
+# The same crate under the name gpui-mcp's `gpui-pre` backend expects; keep both in step.
+gpui_pre = { package = "gpui-pre", version = "=0.3.9" }
 gpui-component = { version = "=0.7.3", features = ["tree-sitter"] }
 gpui-pre-platform = { version = "=0.3.9", default-features = false, features = ["font-kit", "wayland", "x11"] }
 gpui-mcp = { path = "vendor/gpui-mcp/crates/gpui-mcp" }

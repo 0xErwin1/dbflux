@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, FontWeight, Hsla, SharedString, Window, div};
+use gpui::{App, ElementId, FontWeight, Hsla, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 
 use crate::icon::IconSource;
@@ -58,6 +58,7 @@ pub struct Badge {
     tone: BadgeTone,
     label: SharedString,
     icon: Option<IconSource>,
+    id: Option<ElementId>,
 }
 
 impl Badge {
@@ -66,7 +67,15 @@ impl Badge {
             tone,
             label: label.into(),
             icon: None,
+            id: None,
         }
+    }
+
+    /// Sets the element id (and debug selector), so tests and automation
+    /// find the badge by name.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = Some(id.into());
+        self
     }
 
     /// Draws `icon` in the label color before the label.
@@ -82,7 +91,7 @@ impl RenderOnce for Badge {
         let fill = self.tone.fill(theme, Feedback::BADGE_FILL_ALPHA);
         let text_color = self.tone.text_color(theme);
 
-        div()
+        let badge = div()
             .relative()
             .flex()
             .flex_shrink_0()
@@ -101,7 +110,9 @@ impl RenderOnce for Badge {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(text_color)
                     .child(self.label),
-            )
+            );
+
+        crate::selector::with_optional_id(badge, self.id)
     }
 }
 

@@ -1,13 +1,13 @@
-//! The three tab kinds of the design system (DSAppPlan "Tabs").
+//! The three tab kinds of the design system.
 //!
-//! - Document tabs (Isl* boards): a 46 px row at the top of the document
+//! - Document tabs: a 46 px row at the top of the document
 //!   island. The active tab is a 30 px chip on the raised fill with a cut of
 //!   6 and strong text; inactive tabs are muted text on no fill.
-//! - Result tabs (AppByzEditor results): 34 px tabs at the bottom of a 40 px
+//! - Result tabs: 34 px tabs at the bottom of a 40 px
 //!   bar, with a row count and statement range after the label. The active
 //!   tab is drawn like an active document tab.
-//! - Inline tabs (P1ConnForm): 42 px tabs over a line, the active one in
-//!   strong text with a 2 px byzantine edge along its bottom.
+//! - Inline tabs: 42 px tabs over a line, the active one in strong text
+//!   with a 2 px accent edge along its bottom.
 //!
 //! Each builder returns the styled, identified shell; the caller adds click
 //! handlers and children, so the tab keeps whatever behavior its owner needs.
@@ -17,6 +17,7 @@ use gpui::{App, ElementId, FontWeight, SharedString, Stateful, div};
 use gpui_component::ActiveTheme;
 
 use crate::primitives::{Chamfer, ChamferCorners, Text};
+use crate::selector::id_selector;
 use crate::tokens::{ChamferCut, ChromeColors, TabMetrics};
 
 /// The document tab row: 46 px at the top of the document island, 10 px side
@@ -35,7 +36,10 @@ pub fn document_tab_bar(_cx: &App) -> gpui::Div {
 /// One document tab: a 30 px chip. Add the icon, `document_tab_title`, the
 /// dirty diamond and the close button as children.
 pub fn document_tab(id: impl Into<ElementId>, active: bool, cx: &App) -> Stateful<gpui::Div> {
+    let id = id.into();
+
     div()
+        .debug_selector(id_selector(&id))
         .id(id)
         .relative()
         .flex()
@@ -90,7 +94,10 @@ pub fn result_tab(
     active: bool,
     cx: &App,
 ) -> Stateful<gpui::Div> {
+    let id = id.into();
+
     div()
+        .debug_selector(id_selector(&id))
         .id(id)
         .relative()
         .flex()
@@ -112,7 +119,7 @@ pub fn result_tab(
         })
 }
 
-/// The inline tab bar: tabs over a line, as in the connection manager.
+/// The inline tab bar: tabs over a line, as in a tabbed form.
 pub fn inline_tab_bar(cx: &App) -> gpui::Div {
     div()
         .flex()
@@ -123,13 +130,15 @@ pub fn inline_tab_bar(cx: &App) -> gpui::Div {
         .border_color(cx.theme().border)
 }
 
-/// One inline tab. Strong text with a byzantine bottom edge when active,
+/// One inline tab. Strong text with an accent bottom edge when active,
 /// muted otherwise; add the icon, label and any badge as children.
 pub fn inline_tab(id: impl Into<ElementId>, active: bool, cx: &App) -> Stateful<gpui::Div> {
     let theme = cx.theme();
     let hover = ChromeColors::strong(theme);
+    let id = id.into();
 
     div()
+        .debug_selector(id_selector(&id))
         .id(id)
         .relative()
         .flex()
@@ -172,7 +181,7 @@ fn document_tab_shape(active: bool, cx: &App) -> Chamfer {
     }
 }
 
-/// Shape behind a result tab: panel fill, top-left cut and byzantine top
+/// Shape behind a result tab: panel fill, top-left cut and accent top
 /// edge when active; a raised hover fill otherwise.
 fn tab_shape(active: bool, cx: &App) -> Chamfer {
     let theme = cx.theme();

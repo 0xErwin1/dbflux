@@ -2,14 +2,15 @@ use std::panic::Location;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Bounds, DefiniteLength, ElementId, Entity, Focusable as _, FontWeight,
-    GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, SharedString,
-    StyleRefinement, Window, actions, div,
+    AbsoluteLength, AnyElement, App, Bounds, DefiniteLength, ElementId, Entity, Focusable as _,
+    FontWeight, GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, Pixels,
+    SharedString, StyleRefinement, Window, actions, div,
 };
 use gpui_component::input::{Editor as GpuiEditor, EditorState};
 use gpui_component::{ActiveTheme, Sizable};
 
 use crate::primitives::{Chamfer, ChamferRing};
+use crate::selector::id_selector;
 use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes};
 
 pub use gpui_component::RopeExt;
@@ -59,6 +60,9 @@ pub struct Input {
     secret: bool,
     prefix: Option<AnyElement>,
     suffix: Option<AnyElement>,
+    padding: Option<(Pixels, Pixels)>,
+    text_size: Option<AbsoluteLength>,
+    line_height: Option<DefiniteLength>,
 }
 
 impl Input {
@@ -76,7 +80,32 @@ impl Input {
             secret: false,
             prefix: None,
             suffix: None,
+            padding: None,
+            text_size: None,
+            line_height: None,
         }
+    }
+
+    /// Replaces the inner padding: `x` on the sides, `y` above and below, and
+    /// lets the height follow the line instead of the field height. With
+    /// `appearance(false)`, set it with [`Self::text_size`] and
+    /// [`Self::line_height`] to the values of the text the input replaces, so
+    /// nothing moves when the text turns into a field.
+    pub fn padding(mut self, x: Pixels, y: Pixels) -> Self {
+        self.padding = Some((x, y));
+        self
+    }
+
+    /// Replaces the text size of the input.
+    pub fn text_size(mut self, size: impl Into<AbsoluteLength>) -> Self {
+        self.text_size = Some(size.into());
+        self
+    }
+
+    /// Replaces the line height of the input.
+    pub fn line_height(mut self, height: impl Into<DefiniteLength>) -> Self {
+        self.line_height = Some(height.into());
+        self
     }
 
     /// Sets the element id of the input frame.
@@ -185,6 +214,18 @@ impl RenderOnce for Input {
             input = input.small();
         }
 
+        if let Some((x, y)) = self.padding {
+            input = input.px(x).py(y).h_auto();
+        }
+
+        if let Some(size) = self.text_size {
+            input = input.text_size(size);
+        }
+
+        if let Some(height) = self.line_height {
+            input = input.line_height(height);
+        }
+
         if self.w_full {
             input = input.w_full();
         }
@@ -196,6 +237,8 @@ impl RenderOnce for Input {
         if self.secret {
             input = input.content_type(InputContentType::Password);
         }
+
+        let selector_id = self.id.clone();
 
         if let Some(id) = self.id {
             input = input.id(id);
@@ -223,7 +266,13 @@ impl RenderOnce for Input {
             .focus_handle(cx)
             .contains_focused(window, cx);
 
+        // The frame records the selector: the inner gpui_component input has
+        // no hook for one, and a bare input (`appearance(false)`) gets no
+        // wrapper so its layout stays the host's.
         div()
+            .when_some(selector_id, |frame, id| {
+                frame.debug_selector(id_selector(&id))
+            })
             .relative()
             .w_full()
             .child(field_shape(
@@ -584,8 +633,12 @@ mod tests {
         );
     }
 
+    /// Focusing the input by its id runs the node's accessibility Focus
+    /// action first, which moves focus into the inner editor, so the window
+    /// then holds the editor's text input handler and text typed through it
+    /// lands in the field.
     #[gpui::test]
-    fn input_focused_by_id_has_no_text_input_handler(cx: &mut TestAppContext) {
+    fn input_focused_by_id_reaches_the_editor(cx: &mut TestAppContext) {
         let (_capture, view, visual) = open_field(true, cx);
 
         let focused =
@@ -594,26 +647,15 @@ mod tests {
         settle_frame(visual);
 
         let has_handler = visual.update(|window, _| window.has_input_handler());
-        assert!(!has_handler, "no input handler is installed for the frame");
+        assert!(
+            has_handler,
+            "focusing by id installs the editor's input handler"
+        );
 
         let replaced = visual.update(|window, cx| window.replace_input_text("db.example", cx));
-        assert!(
-            !replaced,
-            "the input frame's focus handle unexpectedly owns a text input handler"
-        );
+        assert!(replaced, "the editor reached by id takes the replaced text");
 
         let state = visual.update(|_, cx| view.read(cx).state.clone());
-        visual.update(|window, cx| {
-            let handle = state.focus_handle(cx);
-            window.focus(&handle, cx);
-        });
-        settle_frame(visual);
-
-        let replaced = visual.update(|window, cx| window.replace_input_text("db.example", cx));
-        assert!(
-            replaced,
-            "the editor's own focus handle owns the input handler"
-        );
         assert_eq!(
             visual.update(|_, cx| state.read(cx).value()).as_ref(),
             "db.example"
@@ -785,6 +827,74 @@ mod tests {
             "the click reached the editor, not the leading icon"
         );
         assert_eq!(value.len(), 4, "one character was typed into {value:?}");
+    }
+
+    struct BareFields {
+        padded: gpui::Entity<InputState>,
+        plain: gpui::Entity<InputState>,
+        reference: gpui::Entity<InputState>,
+    }
+
+    impl Render for BareFields {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_start()
+                .child(
+                    div().debug_selector(|| "bare-padded".into()).child(
+                        Input::new(&self.padded)
+                            .appearance(false)
+                            .padding(px(0.0), px(2.0))
+                            .text_size(crate::tokens::FontSizes::BASE)
+                            .line_height(px(18.0)),
+                    ),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "bare-plain".into())
+                        .child(Input::new(&self.plain).appearance(false)),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "bare-reference".into())
+                        .child(GpuiInput::new(&self.reference).appearance(false)),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn a_bare_input_takes_the_padding_and_text_size_of_the_text_it_replaces(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let (_view, visual) = cx.add_window_view(|window, cx| BareFields {
+            padded: cx.new(|cx| InputState::new(window, cx).default_value("users")),
+            plain: cx.new(|cx| InputState::new(window, cx).default_value("users")),
+            reference: cx.new(|cx| InputState::new(window, cx).default_value("users")),
+        });
+        visual.run_until_parked();
+
+        let padded = visual
+            .debug_bounds("bare-padded")
+            .expect("the padded input is laid out");
+        assert_eq!(
+            padded.size.height,
+            px(22.0),
+            "18 px line plus 2 px above and below"
+        );
+
+        let plain = visual
+            .debug_bounds("bare-plain")
+            .expect("the plain input is laid out");
+        let reference = visual
+            .debug_bounds("bare-reference")
+            .expect("the reference input is laid out");
+        assert_eq!(
+            plain.size.height, reference.size.height,
+            "without the options a bare input keeps gpui-component's height"
+        );
     }
 
     /// The builder chains the read-only editors a host's views use.

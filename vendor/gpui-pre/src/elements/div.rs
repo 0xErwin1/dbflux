@@ -1473,6 +1473,7 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     }
 
     /// Mark this element's value for redaction by rendered-frame observers.
+    /// Text inside it is also withheld from ancestors' inferred labels and text.
     /// The canonical AccessKit tree still exposes values to assistive technology.
     fn frame_redacted(mut self, redacted: bool) -> Self {
         self.interactivity().frame_redacted = redacted;
@@ -2373,6 +2374,12 @@ impl Interactivity {
         f: impl FnOnce(&Style, Point<Pixels>, Option<Hitbox>, &mut Window, &mut App) -> R,
     ) -> R {
         self.content_size = content_size;
+        if window.next_frame.observed.is_enabled() {
+            window
+                .next_frame
+                .observed
+                .refine_interactivity(global_id, self.frame_node());
+        }
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         window.with_inspector_state(

@@ -22,16 +22,26 @@ pub mod data;
 #[cfg(any(test, feature = "test-support"))]
 pub mod accessibility;
 
+pub mod colors;
 pub mod controls;
 pub mod density;
 pub mod fonts;
 pub mod icon;
 pub mod keymap;
+pub mod modals;
 pub mod palette;
 pub mod primitives;
+pub mod selector;
 pub mod semantic;
 pub mod shell;
 pub mod theme;
 pub mod tokens;
 pub mod typography;
 pub mod vim;
+
+pub use colors::Colors;
+
+/// The neutral and semantic color roles of the installed palette.
+pub fn colors(cx: &gpui::App) -> Colors {
+    Colors::for_current(cx)
+}

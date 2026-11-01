@@ -4,14 +4,15 @@ use gpui_component::ActiveTheme;
 
 use crate::controls::{Button, ButtonVariant, button_colors};
 use crate::primitives::{Chamfer, ChamferCorners, ChamferRing};
+use crate::selector::id_selector;
 use crate::tokens::ButtonMetrics;
 
-/// A main action and its menu, joined by a 1 px seam (DSApp "Split").
+/// A main action and its menu, joined by a 1 px seam.
 ///
 /// The main action is a regular [`Button`] with only its top-left corner cut;
 /// the menu segment takes the same variant fill with only its bottom-right
 /// corner cut, and hosts the element that opens the menu (for example a
-/// compact `Dropdown` trigger). Used for Refresh, Export and Run.
+/// compact `Dropdown` trigger), for actions such as Refresh, Export and Run.
 #[derive(IntoElement)]
 pub struct SplitButton {
     id: ElementId,
@@ -91,6 +92,7 @@ impl RenderOnce for SplitButton {
             });
 
         div()
+            .debug_selector(id_selector(&self.id))
             .id(self.id)
             .flex()
             .flex_shrink_0()

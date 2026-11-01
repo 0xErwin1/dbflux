@@ -196,6 +196,10 @@ const COLOR_FILES: &[(&str, &str)] = &[
         "the palette engine: maps tokens, brand washes and the palette mode into the theme's colors",
     ),
     (
+        "src/colors/mod.rs",
+        "the neutral and semantic role tables a product reads instead of theme fields",
+    ),
+    (
         "src/brand.rs",
         "the neutral Brand and wash math: the default accent data a product overrides with its own",
     ),

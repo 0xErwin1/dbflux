@@ -1,11 +1,11 @@
 //! `EmptyState` — what a region shows when it has nothing to show: an icon,
-//! one sentence, and the two or three keys that get the user started
-//! (DSAppPlan "Empty state", P1Empty).
+//! one sentence, and the two or three keys that get the user started.
 
 use gpui::prelude::*;
-use gpui::{App, FontWeight, Hsla, SharedString, Window, div};
+use gpui::{App, ElementId, FontWeight, Hsla, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 
+use crate::controls::Button;
 use crate::icon::IconSource;
 use crate::primitives::{Chamfer, Icon, Kbd};
 use crate::tokens::{ChamferCut, ChromeColors, NavigationMetrics};
@@ -43,17 +43,23 @@ enum EmptyStateTone {
 ///
 /// By default it renders inline: tint icon, optional bold title, a muted
 /// sentence and the actions. [`EmptyState::card`] wraps the same content in
-/// the 460 px cut-14 card of the DSAppPlan board, for large empty regions
+/// a 460 px cut-14 card, for large empty regions
 /// such as the workspace with no tab open. [`EmptyState::danger`] turns the
 /// icon and sentence red for a failed load.
+///
+/// [`EmptyState::primary_action`] adds a real button under the sentence, for
+/// the one thing the region asks for (Create, Retry); the key-hint actions
+/// stay below it.
 #[derive(IntoElement)]
 pub struct EmptyState {
     icon: IconSource,
     title: Option<SharedString>,
     message: SharedString,
     actions: Vec<EmptyStateAction>,
+    primary_action: Option<Button>,
     card: bool,
     tone: EmptyStateTone,
+    id: Option<ElementId>,
 }
 
 impl EmptyState {
@@ -63,9 +69,25 @@ impl EmptyState {
             title: None,
             message: message.into(),
             actions: Vec::new(),
+            primary_action: None,
             card: false,
             tone: EmptyStateTone::Default,
+            id: None,
         }
+    }
+
+    /// Sets the element id (and debug selector) of the placeholder, so tests
+    /// and automation find it by name.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// A button under the sentence, drawn as the caller built it (its id,
+    /// variant and click handler are the caller's).
+    pub fn primary_action(mut self, button: Button) -> Self {
+        self.primary_action = Some(button);
+        self
     }
 
     pub fn title(mut self, title: impl Into<SharedString>) -> Self {
@@ -164,6 +186,7 @@ impl RenderOnce for EmptyState {
                     .text_color(message_color)
                     .child(self.message),
             )
+            .when_some(self.primary_action, |content, button| content.child(button))
             .when(has_actions, |content| {
                 content.child(
                     div()
@@ -176,12 +199,105 @@ impl RenderOnce for EmptyState {
                 )
             });
 
-        div()
+        let placeholder = div()
             .flex()
             .flex_1()
             .size_full()
             .items_center()
             .justify_center()
-            .child(content)
+            .child(content);
+
+        crate::selector::with_optional_id(placeholder, self.id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use gpui::{
+        Context, IntoElement, Modifiers, ParentElement as _, Render, Styled as _, TestAppContext,
+        VisualTestContext, Window, div,
+    };
+
+    use super::{EmptyState, EmptyStateAction};
+    use crate::controls::Button;
+    use crate::icon::IconSource;
+
+    struct Host {
+        clicks: Rc<Cell<usize>>,
+        with_primary: bool,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let folder = IconSource::Svg("icons/folder.svg".into());
+            let clicks = self.clicks.clone();
+            let state = EmptyState::new(folder.clone(), "No requests yet")
+                .id("empty")
+                .action(EmptyStateAction::new(folder, "New request", ["Ctrl N"]));
+
+            let state = if self.with_primary {
+                state.primary_action(Button::new("empty-create", "Create").on_click(
+                    move |_, _, _| {
+                        clicks.set(clicks.get() + 1);
+                    },
+                ))
+            } else {
+                state
+            };
+
+            div().size_full().child(state)
+        }
+    }
+
+    fn open(
+        with_primary: bool,
+        cx: &mut TestAppContext,
+    ) -> (Rc<Cell<usize>>, &mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::install(
+                crate::brand::Brand::neutral(),
+                crate::palette::PaletteMode::Dark,
+                crate::density::Density::Default,
+                cx,
+            );
+        });
+
+        let clicks = Rc::new(Cell::new(0));
+        let (_view, window) = cx.add_window_view({
+            let clicks = clicks.clone();
+            move |_, _| Host {
+                clicks,
+                with_primary,
+            }
+        });
+        window.run_until_parked();
+        (clicks, window)
+    }
+
+    #[gpui::test]
+    fn the_primary_action_is_a_button_that_runs_its_handler(cx: &mut TestAppContext) {
+        let (clicks, window) = open(true, cx);
+
+        let state = window.debug_bounds("empty").expect("the state is laid out");
+        let button = window
+            .debug_bounds("empty-create")
+            .expect("the primary action is drawn");
+        assert!(state.contains(&button.center()));
+
+        window.simulate_click(button.center(), Modifiers::default());
+        window.run_until_parked();
+        assert_eq!(clicks.get(), 1);
+    }
+
+    #[gpui::test]
+    fn without_a_primary_action_the_state_draws_no_button(cx: &mut TestAppContext) {
+        let (_clicks, window) = open(false, cx);
+
+        assert!(window.debug_bounds("empty").is_some());
+        assert!(window.debug_bounds("empty-create").is_none());
     }
 }

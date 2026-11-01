@@ -1,11 +1,12 @@
 //! `ListRow` — the selected, hovered and focused states of a list row in one
-//! place (DSApp "Tree", DSAppPlan "ListRow").
+//! place.
 
 use gpui::prelude::*;
 use gpui::{App, Div, ElementId, Stateful, div};
 use gpui_component::ActiveTheme;
 
 use crate::primitives::{FOCUS_MARKER_SELECTOR, WhenFocusVisible};
+use crate::selector::id_selector;
 use crate::tokens::{ChromeColors, TreeMetrics};
 
 /// Selector of the selection bar, so surface tests can find it.
@@ -72,6 +73,7 @@ impl ListRow {
         let show_bar = self.selected && self.selection_bar;
 
         div()
+            .debug_selector(id_selector(&self.id))
             .id(self.id)
             .relative()
             .when(self.selected, |row| row.bg(theme.list_active))

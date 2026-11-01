@@ -302,6 +302,7 @@ mod keyboard_tests {
     fn typing_right_after_opening_reaches_the_editor(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
+            crate::modals::modal::install_modal_seams(cx);
             cx.bind_keys([gpui::KeyBinding::new(
                 "escape",
                 crate::actions::Cancel,
@@ -340,6 +341,7 @@ mod keyboard_tests {
     fn vim_mode_escape_leaves_insert_before_closing(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
+            crate::modals::modal::install_modal_seams(cx);
             crate::actions::record_last_keystroke(cx);
             crate::vim::set_vim_enabled(cx, true);
             let context =
@@ -382,6 +384,7 @@ mod keyboard_tests {
     fn leader_s_saves_the_document(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
+            crate::modals::modal::install_modal_seams(cx);
             crate::actions::record_last_keystroke(cx);
             crate::vim::set_vim_enabled(cx, true);
             let leader = dbflux_core::keymap_types::ContextId::VimNormal.default_predicate();
