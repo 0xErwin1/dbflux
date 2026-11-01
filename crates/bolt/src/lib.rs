@@ -19,6 +19,7 @@ pub mod brand;
 #[cfg(any(test, feature = "test-support"))]
 pub mod accessibility;
 
+pub mod colors;
 pub mod composites;
 pub mod controls;
 pub mod density;
@@ -31,3 +32,10 @@ pub mod semantic;
 pub mod theme;
 pub mod tokens;
 pub mod typography;
+
+pub use colors::Colors;
+
+/// The neutral and semantic color roles of the installed palette.
+pub fn colors(cx: &gpui::App) -> Colors {
+    Colors::for_current(cx)
+}

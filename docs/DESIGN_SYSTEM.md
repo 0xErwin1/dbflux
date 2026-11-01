@@ -21,6 +21,7 @@ to its own repository without touching a screen: see
 | `bolt::density` | `Density::{Default, Compact}` and the runtime font and radius accessors |
 | `bolt::fonts` | `FontSettings`, `FontChoices`, the size bounds and the resolvers |
 | `bolt::typography` | The bundled families and their files |
+| `bolt::colors` | `Colors`: the neutral and semantic color roles per palette, read through `bolt::colors(cx)` |
 | `bolt::semantic` | Banner, row-state and chart-chrome colors per palette |
 | `bolt::icon` | `IconSource`: a named icon or an SVG path |
 | `bolt::primitives` | Badge, banner, chamfer, divider, file picker, focus ring, keycap, label, loading state, segmented control, status, surface, text, type-to-confirm |
@@ -54,6 +55,41 @@ a database or a design board: a source-scanning guardrail in
   with `on_modal_key`, says which command a deferring modal runs, and supplies
   the Escape keycap label, the close icon and its translated name. A modal
   rendered before the seam is installed answers no keys.
+
+## Reading colors
+
+A screen reads color roles from Bolt, never from a `gpui_component::Theme`
+field:
+
+- **Accent roles** come from `bolt::brand::brand(cx)` and the washes from
+  `bolt::brand::colors(cx)`.
+- **Neutral and semantic roles** come from `bolt::colors(cx)`, which returns a
+  `Colors` for the palette the product published (dark until it publishes one,
+  and for an unresolved `System`).
+- **Banner, row-state and chart colors** come from `bolt::semantic`.
+
+| Role | What it paints | Theme field it equals |
+|---|---|---|
+| `desk` | The window ground the islands sit on | `ChromeColors::desk` |
+| `background` | Inset fills: title bar, sidebar, tab bar, editor | `background` |
+| `panel` | Island, popover and table fill | `popover`, `table` |
+| `raised` | Raised controls and secondary fills | `secondary` |
+| `line` | Default border | `border` |
+| `line_2` | Input and control edges | `input` |
+| `row_divider` | Divider between data rows | `table_row_border` |
+| `strong` | Titles, selected items, data values | `accent_foreground` |
+| `foreground` | Body text | `foreground` |
+| `muted` | Metadata, labels, counts | `muted_foreground` |
+| `hover` | Hover wash | `list_hover`, `table_hover` |
+| `alternating_row` | Every other data row | `table_even` |
+| `island_edge` | Hairline along an island outline | `ChromeColors::island_edge` |
+| `scrim` | Dimmed desk behind a modal | `overlay` |
+| `success`, `info`, `warning`, `danger` | Semantic states | the field of the same name |
+| `on_semantic` | Text on a solid semantic fill | `success_foreground` and its siblings |
+
+Each role holds the value `bolt::theme::apply_theme` installs for that field,
+and a test checks every pair in both palettes, so moving a screen from a theme
+field to its role changes nothing on screen.
 
 ## Sizes
 
