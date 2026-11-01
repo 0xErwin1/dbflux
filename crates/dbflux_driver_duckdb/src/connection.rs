@@ -776,7 +776,10 @@ impl Connection for DuckDbConnection {
         // profile, without codecs or ranges.
         let segments = match self.run(
             &format!(
-                "SELECT row_group_id, column_id, column_path, compression, stats, count \
+                "SELECT row_group_id, column_id, column_path, compression, count, \
+                 variant_extract(stats, 'min')::VARCHAR, \
+                 variant_extract(stats, 'max')::VARCHAR, \
+                 variant_extract(stats, 'has_null')::BOOLEAN \
                  FROM pragma_storage_info({})",
                 Self::literal(&qualified)
             ),
