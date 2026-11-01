@@ -46,6 +46,11 @@ rendering in Bolt, the domain knowledge behind a seam the product fills.
 | `bolt::keymap` | The semantic command vocabulary, the installed `CommandSet` and the attach hook |
 | `bolt::strings` | The text seam: a key and a key with named arguments, answered by the product |
 | `bolt::vim` | The modal-editing engine and its binding layer |
+| `bolt::toast` | The toast model, its bounded stack, auto-dismiss timers, the presentation shell and a generic `TokenBucket` throttle |
+| `bolt::keyboard_coverage` | The rule that every clickable element needs a keyboard path, as a registry a product fills |
+| `bolt::forms` | The form-navigation contract: edit state, field, navigation result and the command trait |
+| `bolt::controls::multi_select` | The multi-select control: state machine, menu, trigger, keyboard and pointer semantics |
+| `bolt_keys` | The keyboard engine: chords and their storage format, layer resolution, override merging, conflict detection, the recorder. Re-exported as `bolt::keys` |
 
 Bolt depends on `gpui`, `gpui-component`, `gpui-base`, `fuzzy-matcher`, `log`,
 `chrono`, `serde` and `serde_json`, and on no product crate.
@@ -95,6 +100,11 @@ a database or a design board: a source-scanning guardrail in
 - **Its palette items.** `PaletteEntry` describes one palette row and
   `PaletteHost` supplies the key context, the footer key labels, the attach hook
   and the closed event.
+- **Its toast icons and its coverage registry.** `ToastIcons` mirrors `ShellIcons`
+  for the severity glyphs, and `bolt::keyboard_coverage` takes the product's
+  surfaces, element ids and bound commands as data — the live "is this bound in
+  this context" answer comes from the product, which is where the user's
+  overrides live.
 - **Its chart chrome.** `ChartColumn { name, kind }` is what detection reads;
   `AxisBarChrome` and `PointInspectorText` carry the icons and translated labels
   those two surfaces need, since they translate at build time with no `cx`.
@@ -359,6 +369,11 @@ Two things follow from this that are easy to get wrong later:
   (`quick_action_slug`) instead of keeping a name only a database tree explains.
   When the modal grew a SQL keyword list, it went back to the product and Bolt
   kept a statement block that highlights whatever ranges it is given.
+- **When the type is the product's, the seam is data or a product-owned
+  adapter — never a trait over the foreign type.** The orphan rule has forced
+  this boundary four times now: the environment badge, the keymap vocabulary, the
+  keyboard-coverage vocabulary and the form-navigation mapping. Expect it, and
+  design the seam in that shape from the start.
 - **A contract that cannot carry a rendering decision gets the missing fact, not
   a winner.** The grid's `dirty` flag exists because one `CellTone` could not say
   both what a value is and whether it holds an uncommitted edit, and picking one
