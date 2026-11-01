@@ -170,12 +170,14 @@ window), call `list_apps` and then `select_app`.
 - **Screenshots**: `screenshot`, `screenshot_region`, `screenshot_element`,
   `capture_screenshot_snapshot`, `compare_screenshots`, `diff_screenshots`.
 - **Visual aids and video**: `highlight_elements`, `clear_highlights`,
+  `annotate_elements`, `remove_annotations`, `list_annotations`,
   `start_video_recording`, `stop_video_recording` (H.264 in MP4).
-- **Diagnostics**: `get_frame_stats`, `get_performance_report`,
-  `record_performance`, `get_logs`, `clear_logs`.
+- **Diagnostics**: `get_frame_stats`, `mark_frames`, `get_frame_report`,
+  `get_performance_report`, `record_performance`, `get_logs`, `clear_logs`.
 - **Not used by DBFlux**: `list_app_commands`, `execute_app_command`,
-  `get_live_document` and `preview_live_document` depend on application opt-ins
-  that DBFlux does not provide, and DBFlux publishes no application logs to the
+  `get_live_document`, `preview_live_document`, `read_messages`,
+  `wait_for_messages` and `send_message` depend on application opt-ins that
+  DBFlux does not provide, and DBFlux publishes no application logs to the
   bridge, so `get_logs` returns nothing.
 
 Text inputs are addressed by the id of the input element (for example
@@ -191,7 +193,9 @@ there. Send `keyboard` with `end` first to append. On any other element
 
 Read-only inputs, such as the audit viewer's event details, the object
 browser's decoded preview and the query builder's SQL preview, report
-`read_only: true` in `get_element_state` and in the element tree. `set_text` and
+`read_only: true` in `get_element_state` and in the element tree. An editable
+input reports `read_only: false`, and an element without accessibility state
+leaves the field out. `set_text` and
 `set_value` refuse them with an error that says the element is read-only, and
 DBFlux itself ignores a value sent to them, so their text does not change. They
 can still be clicked, focused and selected.

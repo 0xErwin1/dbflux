@@ -584,8 +584,12 @@ mod tests {
         );
     }
 
+    /// Focusing the input by its id runs the node's accessibility Focus
+    /// action first, which moves focus into the inner editor, so the window
+    /// then holds the editor's text input handler and text typed through it
+    /// lands in the field.
     #[gpui::test]
-    fn input_focused_by_id_has_no_text_input_handler(cx: &mut TestAppContext) {
+    fn input_focused_by_id_reaches_the_editor(cx: &mut TestAppContext) {
         let (_capture, view, visual) = open_field(true, cx);
 
         let focused =
@@ -594,26 +598,15 @@ mod tests {
         settle_frame(visual);
 
         let has_handler = visual.update(|window, _| window.has_input_handler());
-        assert!(!has_handler, "no input handler is installed for the frame");
+        assert!(
+            has_handler,
+            "focusing by id installs the editor's input handler"
+        );
 
         let replaced = visual.update(|window, cx| window.replace_input_text("db.example", cx));
-        assert!(
-            !replaced,
-            "the input frame's focus handle unexpectedly owns a text input handler"
-        );
+        assert!(replaced, "the editor reached by id takes the replaced text");
 
         let state = visual.update(|_, cx| view.read(cx).state.clone());
-        visual.update(|window, cx| {
-            let handle = state.focus_handle(cx);
-            window.focus(&handle, cx);
-        });
-        settle_frame(visual);
-
-        let replaced = visual.update(|window, cx| window.replace_input_text("db.example", cx));
-        assert!(
-            replaced,
-            "the editor's own focus handle owns the input handler"
-        );
         assert_eq!(
             visual.update(|_, cx| state.read(cx).value()).as_ref(),
             "db.example"

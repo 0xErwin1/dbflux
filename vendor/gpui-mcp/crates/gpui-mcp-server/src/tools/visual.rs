@@ -6,11 +6,10 @@ use tokio::time::timeout;
 use crate::recording::{FrameTiming, LiveRecorder, MAX_RECORDING_FRAMES, validate_artifact_name};
 
 use super::{
-    CallToolResult, Capability, CaptureNamedArgs, CompareImagesArgs, ElementArgs, GpuiMcp,
-    Highlight, HighlightArgs, Json, MAX_IMAGE_SNAPSHOTS, Operation, Parameters, Point, Rect,
-    RegionArgs, ScreenshotTarget, StartVideoRecordingArgs, ToolRouter, Value, ack_json,
-    compare_images, get_node, image_result, object_output, require_bounds, tool, tool_router,
-    validate_name,
+    CallToolResult, Capability, CaptureNamedArgs, CompareImagesArgs, ElementArgs, GpuiMcp, Json,
+    MAX_IMAGE_SNAPSHOTS, Parameters, Point, Rect, RegionArgs, ScreenshotTarget,
+    StartVideoRecordingArgs, ToolRouter, Value, compare_images, get_node, image_result,
+    object_output, require_bounds, tool, tool_router, validate_name,
 };
 
 const RECORDING_STOP_DEADLINE: Duration = Duration::from_secs(15);
@@ -77,38 +76,6 @@ impl GpuiMcp {
         self.capture(ScreenshotTarget::Region { rect })
             .await
             .map(image_result)
-    }
-
-    #[tool(description = "Outline one or more semantic elements inside the GPUI window")]
-    async fn highlight_elements(
-        &self,
-        Parameters(args): Parameters<HighlightArgs>,
-    ) -> Result<Json<Value>, String> {
-        if args.ids.is_empty() || args.ids.len() > 64 {
-            return Err("ids must contain between 1 and 64 elements".to_owned());
-        }
-        let tree = self.tree().await?;
-        let highlights = args
-            .ids
-            .iter()
-            .map(|id| {
-                let node = get_node(&tree, id)?;
-                Ok(Highlight {
-                    rect: require_bounds(node)?,
-                    color: args.color.clone(),
-                    label: node.label.clone().or_else(|| Some(id.clone())),
-                })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        self.ack_after_frame(Operation::SetHighlights { highlights })
-            .await?;
-        Ok(ack_json("highlighted"))
-    }
-
-    #[tool(description = "Clear all MCP visual outlines from the GPUI window")]
-    async fn clear_highlights(&self) -> Result<Json<Value>, String> {
-        self.ack_after_frame(Operation::ClearHighlights).await?;
-        Ok(ack_json("highlights_cleared"))
     }
 
     #[tool(description = "Capture and save a full-window PNG under a bounded in-memory name")]
