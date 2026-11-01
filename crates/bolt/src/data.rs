@@ -10,6 +10,9 @@
 //! The contract carries display facts only. No formatting rules live here:
 //! the data owner formats its values before it hands a [`CellView`] over,
 //! so a renderer never re-derives precision, timezone or locale rules.
+//! What a cell draws beyond one text — a two-tone foreign-key label, a
+//! staged edit shown against the value it replaced, a nested-value
+//! marker — the [`CellView`] fields name explicitly.
 
 use gpui::{Pixels, SharedString};
 
@@ -120,11 +123,15 @@ pub struct ColumnView {
     pub align: CellAlignment,
     /// A fixed width. `None` lets the renderer size the column itself.
     pub width: Option<Pixels>,
+    /// Whether the column is a child of an expanded object group in a
+    /// document grid; a renderer washes the column's header and cells to
+    /// mark them as belonging to the group.
+    pub group_child: bool,
 }
 
 impl ColumnView {
     /// A column of `name` and `kind`, aligned by [`CellAlignment::for_kind`],
-    /// with no type name and no fixed width.
+    /// with no type name, no fixed width and no group.
     pub fn new(name: impl Into<SharedString>, kind: ColumnKind) -> Self {
         Self {
             name: name.into(),
@@ -132,6 +139,7 @@ impl ColumnView {
             type_name: SharedString::default(),
             align: CellAlignment::for_kind(kind),
             width: None,
+            group_child: false,
         }
     }
 
@@ -146,28 +154,118 @@ impl ColumnView {
         self.width = Some(width);
         self
     }
+
+    /// Mark whether the column is a child of an expanded object group in a
+    /// document grid.
+    pub fn with_group_child(mut self, group_child: bool) -> Self {
+        self.group_child = group_child;
+        self
+    }
 }
 
-/// A single cell as a renderer draws it: display text already formatted by
-/// the owner, the emphasis it is drawn with, and its alignment.
+/// What a cell draws as its content.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CellContent {
+    /// A single text drawn as the cell's whole content.
+    Plain(SharedString),
+    /// A staged edit drawn against the value it replaced: `from` first,
+    /// then `to`, with an arrow between them. A document grid shows a
+    /// staged edit this way instead of the plain dirty mark, so a renderer
+    /// tells the two treatments apart by which variant the cell carries.
+    ///
+    /// The transition takes the color precedence: the content is drawn in
+    /// the transition treatment whatever the [`CellTone`] says, and the
+    /// tone still carries the cell's null-ness and marks (italic,
+    /// strikethrough) on top of it.
+    Transition {
+        /// The text the cell drew before the edit was staged.
+        from: SharedString,
+        /// The staged text the cell draws now.
+        to: SharedString,
+    },
+}
+
+/// A second text a cell draws after its content, with its own emphasis.
+/// A resolved foreign key draws its label with the raw id muted after it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CellSpan {
+    /// The trailing text (` · #8` after a foreign-key label).
+    pub text: SharedString,
+    /// The emphasis the trailing text is drawn with.
+    pub tone: CellTone,
+}
+
+/// Marks a cell whose content summarizes a value the grid can step into
+/// rather than edit in place (`{4 fields}`, `[3]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NestedMarker {
+    /// Whether the summary stands for an array rather than a document; a
+    /// renderer draws stepping into an array differently from stepping
+    /// into a document.
+    pub is_array: bool,
+}
+
+/// A single cell as a renderer draws it: what it draws as its content,
+/// the emphasis that content is drawn with, and its alignment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CellView {
-    /// The text the renderer draws. Already truncated and formatted; the
-    /// renderer never reformats it.
-    pub text: SharedString,
-    /// The emphasis the text is drawn with.
+    /// What the cell draws as its content. Already composed and formatted;
+    /// the renderer never reformats it.
+    pub content: CellContent,
+    /// The emphasis the content is drawn with.
     pub tone: CellTone,
-    /// How the text aligns in its column.
+    /// How the content aligns in its column.
     pub align: CellAlignment,
+    /// A second text drawn after the content with its own tone, if the
+    /// cell draws one. When present it replaces the content as the text
+    /// the cell leads with.
+    pub secondary: Option<CellSpan>,
+    /// The nested-value marker, if the content summarizes a value the
+    /// grid can step into.
+    pub nested: Option<NestedMarker>,
 }
 
 impl CellView {
+    /// A plain cell of `text`, `tone` and `align`.
     pub fn new(text: impl Into<SharedString>, tone: CellTone, align: CellAlignment) -> Self {
         Self {
-            text: text.into(),
+            content: CellContent::Plain(text.into()),
             tone,
             align,
+            secondary: None,
+            nested: None,
         }
+    }
+
+    /// A cell showing a staged edit against the value it replaced.
+    pub fn transition(
+        from: impl Into<SharedString>,
+        to: impl Into<SharedString>,
+        tone: CellTone,
+        align: CellAlignment,
+    ) -> Self {
+        Self {
+            content: CellContent::Transition {
+                from: from.into(),
+                to: to.into(),
+            },
+            tone,
+            align,
+            secondary: None,
+            nested: None,
+        }
+    }
+
+    /// Draw a second text after the content with its own tone.
+    pub fn with_secondary(mut self, span: CellSpan) -> Self {
+        self.secondary = Some(span);
+        self
+    }
+
+    /// Mark the content as a summary of a value the grid can step into.
+    pub fn with_nested(mut self, marker: NestedMarker) -> Self {
+        self.nested = Some(marker);
+        self
     }
 }
 
@@ -278,6 +376,14 @@ mod tests {
         }
     }
 
+    /// The text a plain cell draws, failing the test on any other content.
+    fn plain(cell: CellView) -> SharedString {
+        match cell.content {
+            CellContent::Plain(text) => text,
+            other => panic!("expected a plain cell, got {other:?}"),
+        }
+    }
+
     #[test]
     fn column_view_derives_alignment_from_kind_and_defaults_the_rest() {
         let column = ColumnView::new("amount", ColumnKind::Float);
@@ -287,6 +393,7 @@ mod tests {
         assert_eq!(column.align, CellAlignment::Right);
         assert_eq!(column.type_name, "");
         assert_eq!(column.width, None);
+        assert!(!column.group_child, "a column defaults to no group");
 
         let decorated = ColumnView::new("created", ColumnKind::Timestamp)
             .with_type_name("timestamptz")
@@ -301,9 +408,33 @@ mod tests {
     fn cell_view_keeps_what_it_is_given() {
         let cell = CellView::new("42", CellTone::Dirty, CellAlignment::Right);
 
-        assert_eq!(cell.text, "42");
+        assert_eq!(plain(cell.clone()), "42");
         assert_eq!(cell.tone, CellTone::Dirty);
         assert_eq!(cell.align, CellAlignment::Right);
+        assert_eq!(cell.secondary, None);
+        assert_eq!(cell.nested, None);
+    }
+
+    #[test]
+    fn cell_view_carries_its_extras() {
+        let cell = CellView::transition("old", "new", CellTone::Dirty, CellAlignment::Left)
+            .with_secondary(CellSpan {
+                text: " · #8".into(),
+                tone: CellTone::Muted,
+            })
+            .with_nested(NestedMarker { is_array: true });
+
+        assert_eq!(
+            cell.content,
+            CellContent::Transition {
+                from: "old".into(),
+                to: "new".into()
+            }
+        );
+        let secondary = cell.secondary.expect("the span is attached");
+        assert_eq!(secondary.text, " · #8");
+        assert_eq!(secondary.tone, CellTone::Muted);
+        assert_eq!(cell.nested, Some(NestedMarker { is_array: true }));
     }
 
     #[test]
@@ -326,7 +457,7 @@ mod tests {
         assert_eq!(rows.row_count(), 2);
         assert_eq!(rows.column_count(), 2);
         assert_eq!(rows.column(0).map(|c| c.name), Some("n".into()));
-        assert_eq!(rows.cell(0, 1).map(|c| c.text), Some("one".into()));
+        assert_eq!(rows.cell(0, 1).map(plain), Some("one".into()));
         assert_eq!(rows.row_state(0), RowVisualState::Dirty);
         assert_eq!(rows.row_state(1), RowVisualState::PendingInsert);
     }

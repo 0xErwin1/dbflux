@@ -2,16 +2,21 @@
 //!
 //! Nothing here reformats a value: every cell text is the display string the
 //! model's `CellValue` already computed, and every tone follows the same
-//! precedence the grid's cell painter applies today. The renderer slice that
-//! moves onto `bolt::data` reads through this adapter and keeps today's
-//! pixels.
+//! precedence the grid's cell painter applies today. The facts a cell draws
+//! beyond one text — the two-tone foreign-key label, the document grid's
+//! `old → new` transition, the nested marker, the group wash on a column —
+//! are filled exactly as the painter derives them, from the model's own
+//! methods. The renderer slice that moves onto `bolt::data` reads through
+//! this adapter and keeps today's pixels.
 
 use bolt::data::{
-    CellAlignment, CellTone, CellView, ColumnKind, ColumnView, RowSource, RowVisualState,
+    CellAlignment, CellContent, CellSpan, CellTone, CellView, ColumnKind, ColumnView, NestedMarker,
+    RowSource, RowVisualState,
 };
 use dbflux_core::RowState;
 
-use super::model::{CellValue, EditBuffer, TableModel, VisualRowSource};
+use super::document::DocumentPresentation;
+use super::model::{CellKind, CellValue, EditBuffer, TableModel, VisualRowSource};
 
 /// The grid's rows and columns as a renderer asks for them.
 ///
@@ -22,11 +27,27 @@ use super::model::{CellValue, EditBuffer, TableModel, VisualRowSource};
 pub struct GridRowSource<'a> {
     model: &'a TableModel,
     edits: &'a EditBuffer,
+    /// The document extras, when the grid shows documents. The painter
+    /// derives the `old → new` transition and the group wash from whether
+    /// a presentation is present, so the adapter does too.
+    document: Option<&'a DocumentPresentation>,
     visual_order: Vec<VisualRowSource>,
 }
 
 impl<'a> GridRowSource<'a> {
+    /// The grid as a relational table draws it: no document transitions,
+    /// no group wash.
     pub fn new(model: &'a TableModel, edits: &'a EditBuffer) -> Self {
+        Self::with_document(model, edits, None)
+    }
+
+    /// The grid as a document presentation draws it: staged edits show as
+    /// `old → new` transitions and grouped columns wash their cells.
+    pub fn with_document(
+        model: &'a TableModel,
+        edits: &'a EditBuffer,
+        document: Option<&'a DocumentPresentation>,
+    ) -> Self {
         // `compute_visual_order` interleaves pending inserts around the base
         // row count the buffer was rebased onto. A buffer that addresses a
         // different model would map visual rows onto unrelated rows, so such
@@ -40,6 +61,7 @@ impl<'a> GridRowSource<'a> {
         Self {
             model,
             edits,
+            document,
             visual_order,
         }
     }
@@ -49,8 +71,12 @@ impl<'a> GridRowSource<'a> {
 /// tone precedence the grid painter applies — a missing field and a nested
 /// summary come first, a pending delete mutes the row's cells, then a column
 /// default or a placeholder legend, then null, then a staged edit.
+///
+/// `replaced` is the value a document grid draws the staged edit against;
+/// `None` draws the cell's own text plain.
 fn cell_view(
     cell: &CellValue,
+    replaced: Option<&CellValue>,
     row_state: &RowState,
     is_dirty: bool,
     align: CellAlignment,
@@ -71,7 +97,44 @@ fn cell_view(
         CellTone::Normal
     };
 
-    CellView::new(cell.display_text(), tone, align)
+    // A resolved foreign key draws its label with the raw id muted after
+    // it, and that pair replaces whatever text the cell would otherwise
+    // draw — including a transition's `old → new`, which the painter only
+    // composes when no spans are present.
+    let (content, secondary) = match cell.fk_spans() {
+        Some((label, id_suffix)) => (
+            CellContent::Plain(label.into()),
+            Some(CellSpan {
+                text: id_suffix.into(),
+                tone: CellTone::Muted,
+            }),
+        ),
+        None => (
+            match replaced {
+                Some(base) => CellContent::Transition {
+                    from: base.display_text().into(),
+                    to: cell.display_text().into(),
+                },
+                None => CellContent::Plain(cell.display_text().into()),
+            },
+            None,
+        ),
+    };
+
+    // The marker the painter derives from the kind: a nested summary draws
+    // a step-in affordance, an array's different from a document's.
+    let nested = match cell.kind {
+        CellKind::Nested { is_array, .. } => Some(NestedMarker { is_array }),
+        _ => None,
+    };
+
+    CellView {
+        content,
+        tone,
+        align,
+        secondary,
+        nested,
+    }
 }
 
 /// The visual state of one base row. The save-failure message stays with the
@@ -112,10 +175,16 @@ impl RowSource for GridRowSource<'_> {
 
     fn column(&self, index: usize) -> Option<ColumnView> {
         let spec = self.model.columns.get(index)?;
+        // Same derivation as the painter: the wash follows from a document
+        // presentation being present and the column belonging to a group.
+        let group_child = self
+            .document
+            .is_some_and(|document| document.is_group_child(index));
 
         Some(
             ColumnView::new(spec.title.clone(), bolt_kind(spec.kind))
-                .with_type_name(spec.type_name.clone()),
+                .with_type_name(spec.type_name.clone())
+                .with_group_child(group_child),
         )
     }
 
@@ -138,11 +207,17 @@ impl RowSource for GridRowSource<'_> {
                 let null_cell = CellValue::null();
                 let base = self.model.cell(*base_row, column).unwrap_or(&null_cell);
                 let display = self.edits.get_cell(*base_row, column, base);
+                let is_dirty = self.edits.is_cell_dirty(*base_row, column);
+                // Only a document grid shows the staged edit against the
+                // value it replaced; a relational grid marks the cell dirty
+                // instead (`shows_transition = is_document && is_cell_dirty`).
+                let replaced = (self.document.is_some() && is_dirty).then_some(base);
 
                 Some(cell_view(
                     display,
+                    replaced,
                     self.edits.row_state(*base_row),
-                    self.edits.is_cell_dirty(*base_row, column),
+                    is_dirty,
                     align,
                 ))
             }
@@ -156,7 +231,13 @@ impl RowSource for GridRowSource<'_> {
 
                 // A pending insert has no cell-level dirty tracking; its whole
                 // row is new, matching the grid's rules.
-                Some(cell_view(cell, &RowState::PendingInsert, false, align))
+                Some(cell_view(
+                    cell,
+                    None,
+                    &RowState::PendingInsert,
+                    false,
+                    align,
+                ))
             }
         }
     }
@@ -172,11 +253,20 @@ impl RowSource for GridRowSource<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::document::{ColumnGroupHeader, DocumentColumnHeader, DocumentPresentation};
     use super::super::model::{ColumnKind as GridColumnKind, ColumnSpec, RowData};
     use super::*;
     use chrono::{NaiveTime, TimeZone, Utc};
     use dbflux_core::Value;
     use gpui::TextAlign;
+
+    /// The text a plain cell draws, failing the test on any other content.
+    fn drawn_text(cell: &CellView) -> &str {
+        match &cell.content {
+            CellContent::Plain(text) => text,
+            other => panic!("expected a plain cell, got {other:?}"),
+        }
+    }
 
     fn spec(title: &str, kind: GridColumnKind) -> ColumnSpec {
         let align = match kind {
@@ -216,16 +306,18 @@ mod tests {
         let expected = CellValue::from(&value).display_text();
 
         assert_eq!(
-            cell.text.as_ref(),
+            drawn_text(&cell),
             expected.as_ref(),
             "the adapter must draw {value:?} exactly as the model's formatting path does"
         );
+
         assert_eq!(cell.tone, tone, "{value:?} draws with tone {tone:?}");
         assert_eq!(
             cell.align,
             CellAlignment::Left,
             "the single text column aligns left"
         );
+        assert_eq!(cell.secondary, None, "{value:?} draws no second span");
     }
 
     // One test per `Value` variant the grid can display: the adapter's text
@@ -314,7 +406,7 @@ mod tests {
         let source = GridRowSource::new(&model, &edits);
 
         assert_eq!(
-            source.cell(0, 0).expect("cell").text,
+            drawn_text(&source.cell(0, 0).expect("cell")),
             "2024-03-01 14:30:05",
             "timestamps draw as UTC `%Y-%m-%d %H:%M:%S`, no timezone suffix, no fractional part"
         );
@@ -330,7 +422,7 @@ mod tests {
         let edits = EditBuffer::new();
         let source = GridRowSource::new(&model, &edits);
 
-        assert_eq!(source.cell(0, 0).expect("cell").text, "2024-03-01");
+        assert_eq!(drawn_text(&source.cell(0, 0).expect("cell")), "2024-03-01");
     }
 
     #[test]
@@ -344,7 +436,7 @@ mod tests {
         let edits = EditBuffer::new();
         let source = GridRowSource::new(&model, &edits);
 
-        assert_eq!(source.cell(0, 0).expect("cell").text, "09:05:03");
+        assert_eq!(drawn_text(&source.cell(0, 0).expect("cell")), "09:05:03");
     }
 
     #[test]
@@ -357,7 +449,7 @@ mod tests {
         let source = GridRowSource::new(&model, &edits);
 
         assert_eq!(
-            source.cell(0, 0).expect("cell").text,
+            drawn_text(&source.cell(0, 0).expect("cell")),
             "2.0",
             "a whole float draws with one fraction digit so it never reads as an integer"
         );
@@ -372,7 +464,7 @@ mod tests {
         let edits = EditBuffer::new();
         let source = GridRowSource::new(&model, &edits);
 
-        assert_eq!(source.cell(0, 0).expect("cell").text, "1234.5678");
+        assert_eq!(drawn_text(&source.cell(0, 0).expect("cell")), "1234.5678");
     }
 
     #[test]
@@ -419,10 +511,186 @@ mod tests {
         assert_eq!(source.cell(0, 0).expect("cell").tone, CellTone::Normal);
         assert_eq!(source.cell(0, 1).expect("cell").tone, CellTone::Dirty);
         assert_eq!(
-            source.cell(0, 1).expect("cell").text,
+            drawn_text(&source.cell(0, 1).expect("cell")),
             "B",
             "the staged override is what the renderer draws"
         );
+    }
+
+    #[test]
+    fn a_resolved_foreign_key_draws_two_tones() {
+        let labeled = CellValue::int(8).with_fk_label("María López");
+        let model = model_with(vec![text_spec("author")], vec![vec![labeled.clone()]]);
+        let edits = EditBuffer::new();
+        let source = GridRowSource::new(&model, &edits);
+
+        // The painter draws the pair `CellValue::fk_spans` returns: the
+        // label as the cell's text, the id suffix muted after it.
+        let (label, id_suffix) = labeled
+            .fk_spans()
+            .expect("the model carries the foreign-key label");
+
+        let cell = source.cell(0, 0).expect("cell");
+        assert_eq!(
+            drawn_text(&cell),
+            label.as_ref(),
+            "the label is what the cell leads with, not the combined display text"
+        );
+        let secondary = cell.secondary.expect("the id suffix follows the label");
+        assert_eq!(secondary.text.as_ref(), id_suffix.as_ref());
+        assert_eq!(secondary.tone, CellTone::Muted);
+    }
+
+    #[test]
+    fn a_cell_without_a_foreign_key_label_draws_one_span() {
+        let model = model_with(vec![text_spec("v")], vec![vec![CellValue::int(8)]]);
+        let edits = EditBuffer::new();
+        let source = GridRowSource::new(&model, &edits);
+
+        let cell = source.cell(0, 0).expect("cell");
+        assert_eq!(cell.secondary, None);
+        assert_eq!(
+            drawn_text(&cell),
+            model.cell(0, 0).unwrap().display_text().as_ref(),
+            "without spans the cell draws its own display text"
+        );
+    }
+
+    #[test]
+    fn a_document_grid_shows_a_staged_edit_against_the_value_it_replaced() {
+        let model = model_with(vec![text_spec("v")], vec![vec![CellValue::text("old")]]);
+        let mut edits = EditBuffer::new();
+        edits.set_base_row_count(model.row_count());
+        edits.set_cell(0, 0, CellValue::text("new"));
+
+        let document = DocumentPresentation::default();
+        let source = GridRowSource::with_document(&model, &edits, Some(&document));
+
+        // The painter composes `old → new` from the base cell and the
+        // edit-buffer override; the contract carries both ends.
+        let base = model.cell(0, 0).unwrap().display_text();
+        let staged = edits
+            .get_cell(0, 0, model.cell(0, 0).unwrap())
+            .display_text();
+
+        let cell = source.cell(0, 0).expect("cell");
+        assert_eq!(
+            cell.content,
+            CellContent::Transition {
+                from: base.into(),
+                to: staged.into(),
+            }
+        );
+        assert_eq!(cell.tone, CellTone::Dirty);
+    }
+
+    #[test]
+    fn a_relational_grid_draws_a_staged_edit_plain() {
+        let model = model_with(vec![text_spec("v")], vec![vec![CellValue::text("old")]]);
+        let mut edits = EditBuffer::new();
+        edits.set_base_row_count(model.row_count());
+        edits.set_cell(0, 0, CellValue::text("new"));
+
+        let source = GridRowSource::new(&model, &edits);
+
+        // Without a document presentation the painter marks the cell dirty
+        // and draws the staged text alone; no transition is composed.
+        let cell = source.cell(0, 0).expect("cell");
+        assert_eq!(cell.tone, CellTone::Dirty);
+        assert_eq!(
+            drawn_text(&cell),
+            CellValue::text("new").display_text().as_ref(),
+        );
+    }
+
+    #[test]
+    fn a_transition_reads_the_replaced_text_from_the_base_cell() {
+        let model = model_with(
+            vec![text_spec("v")],
+            vec![vec![CellValue::nested(false, 3)]],
+        );
+        let mut edits = EditBuffer::new();
+        edits.set_base_row_count(model.row_count());
+        edits.set_cell(0, 0, CellValue::text("stepped"));
+
+        let document = DocumentPresentation::default();
+        let source = GridRowSource::with_document(&model, &edits, Some(&document));
+
+        // The painter composes the transition from the base cell's display
+        // text whatever its kind (`base_value.display_text()`), while every
+        // mark — the tone included — follows the value the cell draws now.
+        let cell = source.cell(0, 0).expect("cell");
+        assert_eq!(cell.tone, CellTone::Dirty);
+        assert_eq!(
+            cell.content,
+            CellContent::Transition {
+                from: CellValue::nested(false, 3).display_text().into(),
+                to: CellValue::text("stepped").display_text().into(),
+            }
+        );
+    }
+
+    #[test]
+    fn nested_cells_carry_their_array_marker() {
+        let model = model_with(
+            vec![text_spec("doc"), text_spec("arr"), text_spec("plain")],
+            vec![vec![
+                CellValue::nested(false, 3),
+                CellValue::nested(true, 4),
+                CellValue::text("x"),
+            ]],
+        );
+        let edits = EditBuffer::new();
+        let source = GridRowSource::new(&model, &edits);
+
+        for col in 0..3 {
+            // The painter derives the marker with the same match on the
+            // model's kind.
+            let expected = match model.cell(0, col).unwrap().kind {
+                CellKind::Nested { is_array, .. } => Some(NestedMarker { is_array }),
+                _ => None,
+            };
+            assert_eq!(
+                source.cell(0, col).expect("cell").nested,
+                expected,
+                "column {col} carries the marker the painter derives"
+            );
+        }
+    }
+
+    #[test]
+    fn a_grouped_document_column_washes_its_cells() {
+        let model = model_with(
+            vec![text_spec("a"), text_spec("b")],
+            vec![vec![CellValue::text("x"), CellValue::text("y")]],
+        );
+        let document = DocumentPresentation {
+            headers: vec![
+                DocumentColumnHeader::default(),
+                DocumentColumnHeader {
+                    group: Some(ColumnGroupHeader {
+                        key: "price".into(),
+                        label: "price".into(),
+                        type_label: "obj".into(),
+                    }),
+                    presence: None,
+                },
+            ],
+        };
+        let edits = EditBuffer::new();
+
+        let source = GridRowSource::with_document(&model, &edits, Some(&document));
+        assert_eq!(
+            source.column(1).expect("column").group_child,
+            document.is_group_child(1),
+        );
+        assert_eq!(
+            source.column(0).expect("column").group_child,
+            document.is_group_child(0),
+        );
+
+        let plain = GridRowSource::new(&model, &edits);
+        assert!(!plain.column(1).expect("column").group_child);
     }
 
     #[test]
@@ -478,7 +746,7 @@ mod tests {
         assert_eq!(source.row_count(), 2);
         assert_eq!(source.row_state(0), RowVisualState::Clean);
         assert_eq!(source.row_state(1), RowVisualState::PendingInsert);
-        assert_eq!(source.cell(1, 0).expect("cell").text, "new");
+        assert_eq!(drawn_text(&source.cell(1, 0).expect("cell")), "new");
     }
 
     #[test]
