@@ -866,6 +866,16 @@ impl GeneralSection {
         self.gen_settings.object_preview_size_limit_mib = object_preview_limit;
         self.gen_settings.key_value_size_limit_mib = key_value_size_limit;
 
+        // The inspector width is set by dragging, not by this form, so take the
+        // live value: saving another setting must not write back the width this
+        // window captured when it opened.
+        let inspector_width = self
+            .app_state
+            .read(cx)
+            .general_settings()
+            .workspace_inspector_width_px;
+        self.gen_settings.workspace_inspector_width_px = inspector_width;
+
         // Open code editors pick up settings such as Vim mode from this event.
         self.app_state.update(cx, |state, cx| {
             state.update_general_settings(self.gen_settings.clone());
