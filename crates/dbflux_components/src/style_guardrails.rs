@@ -1,7 +1,18 @@
-/// Source-scanning guardrails for `dbflux_components`.
+/// Source-scanning guardrails for `dbflux_components` and the UI crates.
 ///
-/// These tests walk all `.rs` files under `crates/dbflux_components/src/` and
-/// reject bare magic literals that must be replaced by design tokens.
+/// These tests walk all `.rs` files under `crates/dbflux_components/src/`
+/// (bare spacing and raw colors) and under the UI crates plus `bolt`
+/// (interface font sizes and families), and reject bare magic literals that
+/// must be replaced by design tokens.
+///
+/// The design-system core moved to `crates/bolt`. Token discipline for those
+/// sources — raw colors, bare spacing and the product-independence names — is
+/// policed there by `bolt`'s own guardrail test
+/// (`crates/bolt/tests/guardrail.rs`), which carries no product knowledge.
+/// What stays here is the policy that still targets product code: the domain
+/// components that remain in this crate (`composites`, `chart`, `modals`,
+/// `data_table`, …) and the interface-font rules that span every crate that
+/// draws product UI, `bolt` included.
 ///
 /// Exemptions are opt-in at two levels:
 /// - **File-level**: files whose path contains one of the exempt path fragments
@@ -26,11 +37,14 @@ mod style_guardrails {
     const SRC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
 
     /// Directory holding every workspace crate, for checks that span the UI
-    /// crates.
+    /// crates. `bolt` is in the list because it renders the same interface
+    /// text: its sizes must follow the interface font size and its surfaces
+    /// must read the chosen families like any product crate.
     const CRATES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
 
     /// UI crates whose interface text must follow the interface font size.
     const UI_CRATES: &[&str] = &[
+        "bolt",
         "dbflux_components",
         "dbflux_ui_base",
         "dbflux_ui_document",
@@ -54,15 +68,16 @@ mod style_guardrails {
         "font(AppFonts::",
     ];
 
-    /// Files that define or resolve the bundled families.
+    /// Files that define or resolve the bundled families. `bolt`'s
+    /// `fonts.rs`/`typography.rs` match the same fragments.
     const FONT_FAMILY_EXEMPT: &[&str] = &["/fonts.rs", "/typography.rs"];
 
     /// Fragments that, when found in a file's path, exempt it from ALL checks
     /// (both spacing and color). These are canonical token/semantic/theme
     /// definition files where bare literals and color constructors are
     /// legitimately defined, plus `chart/engine.rs` for canvas paint geometry.
+    /// The token tables themselves moved to `bolt` and are exempted there.
     const FILE_EXEMPT_FRAGMENTS: &[&str] = &[
-        "tokens.rs",
         "semantic.rs",
         "density.rs",
         "theme.rs",

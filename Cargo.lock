@@ -2016,6 +2016,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "bolt"
+version = "0.10.0-dev.0"
+dependencies = [
+ "bolt_keys",
+ "chrono",
+ "fuzzy-matcher",
+ "gpui-base",
+ "gpui-component",
+ "gpui-pre",
+ "log",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "bolt_keys"
+version = "0.10.0-dev.0"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "borsh"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3148,6 +3170,7 @@ name = "dbflux_app"
 version = "0.10.0-dev.0"
 dependencies = [
  "async-trait",
+ "bolt_keys",
  "chrono",
  "dbflux_approval",
  "dbflux_audit",
@@ -3249,6 +3272,7 @@ version = "0.10.0-dev.0"
 name = "dbflux_components"
 version = "0.10.0-dev.0"
 dependencies = [
+ "bolt",
  "chrono",
  "dbflux_core",
  "dbflux_i18n",
@@ -3913,6 +3937,7 @@ name = "dbflux_ui_base"
 version = "0.10.0-dev.0"
 dependencies = [
  "anyhow",
+ "bolt",
  "chrono",
  "dbflux_app",
  "dbflux_aws",

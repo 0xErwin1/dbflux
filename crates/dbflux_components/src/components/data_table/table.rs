@@ -1,28 +1,30 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
-use crate::controls::{GpuiInput as Input, InputState};
+use crate::controls::GpuiInput as Input;
 use crate::fonts;
 use crate::icons::AppIcon;
-use crate::primitives::{Chamfer, ChamferRing, Icon};
-use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, RowColors, Spacing};
+use crate::primitives::Icon;
+use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, Spacing};
 use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Action, AnyElement, App, ClickEvent, Context, Entity, FontWeight, Hsla, InteractiveElement,
-    IntoElement, Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Pixels,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, px,
-    uniform_list,
+    Action, App, ClickEvent, Context, Entity, FontWeight, InteractiveElement, IntoElement,
+    Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, ScrollWheelEvent,
+    SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, px, uniform_list,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::{ActiveTheme, Sizable};
 
 use super::document::DocumentPresentation;
 use super::events::{ContextMenuAction, DataTableEvent, Direction, Edge};
-use super::model::TableModel;
-use super::selection::{CellCoord, SelectionState};
+use super::selection::CellCoord;
+use super::source::GridRowSource;
 use super::state::DataTableState;
 use super::theme::{CELL_PADDING_X, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
+// The row list and cell painter moved to `bolt::components::grid`; the old
+// in-file names are the re-exported Bolt API.
+use bolt::components::grid::{GridCellCoord, GridHost, render_rows};
 use dbflux_core::SortDirection;
 
 /// Cached scroll state to prevent unnecessary syncs
@@ -1242,24 +1244,98 @@ impl DataTable {
                 let theme = cx.theme();
                 // Read state INSIDE closure - only when actually rendering
                 let state = state_entity.read(cx);
+                let selection = state.selection();
 
-                let editing_cell = state.editing_cell();
-                let cell_input = state.cell_input().cloned();
-                let enum_dropdown = state.enum_dropdown().cloned();
-                let edit_buffer = state.edit_buffer();
+                let source = GridRowSource::with_document(
+                    &model,
+                    state.edit_buffer(),
+                    state.document_presentation(),
+                );
+
+                // The host state the Bolt row renderer reads: the grid's
+                // selection and editing facts, its interaction policy and
+                // its icons, all as plain values the renderer cannot
+                // misread. The selection test stays a borrow; the click
+                // callbacks are Arcs because gpui handlers are 'static.
+                let is_selected = |coord: GridCellCoord| {
+                    selection.is_selected(CellCoord::new(coord.row, coord.col))
+                };
+                let host = GridHost {
+                    column_widths: state.column_widths(),
+                    active: selection.active.map(|c| GridCellCoord::new(c.row, c.col)),
+                    editing: state
+                        .editing_cell()
+                        .map(|c| GridCellCoord::new(c.row, c.col)),
+                    is_selected: &is_selected,
+                    reference_row: state.has_reference_row(),
+                    on_cell_click: {
+                        let state = state_entity.clone();
+                        Arc::new(
+                            move |coord: GridCellCoord,
+                                  event: &ClickEvent,
+                                  window: &mut Window,
+                                  cx: &mut App| {
+                                let coord = CellCoord::new(coord.row, coord.col);
+                                state.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                });
+
+                                if event.click_count() == 2 {
+                                    state.update(cx, |state, cx| {
+                                        state.start_editing(coord, window, cx);
+                                    });
+                                    return;
+                                }
+
+                                let modifiers = event.modifiers();
+                                state.update(cx, |state, cx| {
+                                    state.click_cell(coord, modifiers, cx);
+                                });
+                            },
+                        )
+                    },
+                    on_cell_context: {
+                        let state = state_entity.clone();
+                        Arc::new(
+                            move |coord: GridCellCoord,
+                                  event: &MouseDownEvent,
+                                  window: &mut Window,
+                                  cx: &mut App| {
+                                let coord = CellCoord::new(coord.row, coord.col);
+                                cx.stop_propagation();
+                                state.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                    state.select_cell(coord, cx);
+                                    cx.emit(DataTableEvent::ContextMenuRequested {
+                                        row: coord.row,
+                                        col: coord.col,
+                                        position: event.position,
+                                        is_column_header: false,
+                                    });
+                                });
+                            },
+                        )
+                    },
+                    braces_icon: AppIcon::Braces.into(),
+                    chevron_icon: AppIcon::ChevronRight.into(),
+                    reference_icon: AppIcon::Crosshair.into(),
+                };
+                // The inline editor the editing cell draws: a dropdown when
+                // the cell enumerates values, the text input otherwise.
+                let editor = state
+                    .enum_dropdown()
+                    .map(|dropdown| dropdown.clone().into_any_element())
+                    .or_else(|| {
+                        state
+                            .cell_input()
+                            .map(|input| Input::new(input).small().into_any_element())
+                    });
 
                 render_rows(
-                    &state_entity,
                     visible_range,
-                    &model,
-                    state.column_widths(),
-                    state.selection(),
-                    editing_cell,
-                    cell_input.as_ref(),
-                    enum_dropdown.as_ref(),
-                    edit_buffer,
-                    state.document_presentation(),
-                    state.has_reference_row(),
+                    &source,
+                    &host,
+                    editor,
                     total_width,
                     font_size,
                     row_height,
@@ -1293,367 +1369,9 @@ impl DataTable {
     }
 }
 
-/// Renders the visible rows for the uniform_list.
-#[allow(clippy::too_many_arguments)]
-fn render_rows(
-    state_entity: &Entity<DataTableState>,
-    visible_range: Range<usize>,
-    model: &TableModel,
-    column_widths: &[f32],
-    selection: &SelectionState,
-    editing_cell: Option<CellCoord>,
-    cell_input: Option<&Entity<InputState>>,
-    enum_dropdown: Option<&Entity<crate::controls::Dropdown>>,
-    edit_buffer: &super::model::EditBuffer,
-    document: Option<&DocumentPresentation>,
-    reference_row: bool,
-    total_width: f32,
-    font_size: Pixels,
-    row_height: Pixels,
-    nested_icon: Pixels,
-    null_color: Hsla,
-    theme: &gpui_component::theme::Theme,
-) -> Vec<AnyElement> {
-    use super::model::VisualRowSource;
-
-    // Compute visual ordering once for this render pass
-    let visual_order = edit_buffer.compute_visual_order();
-
-    visible_range
-        .map(|visual_ix| {
-            // Map visual index to actual data source
-            let source = visual_order.get(visual_ix).copied();
-
-            // Get row data and state based on source type
-            let (row_data, pending_insert_data, row_state, data_row_ix) = match source {
-                Some(VisualRowSource::Base(base_idx)) => {
-                    let row = model.rows.get(base_idx);
-                    let state = edit_buffer.row_state(base_idx);
-                    (row, None, state.clone(), base_idx)
-                }
-                Some(VisualRowSource::Insert(insert_idx)) => {
-                    let data = edit_buffer.get_pending_insert_by_idx(insert_idx);
-                    (None, data, dbflux_core::RowState::PendingInsert, visual_ix)
-                }
-                None => {
-                    // Should not happen, but handle gracefully
-                    (None, None, dbflux_core::RowState::Clean, visual_ix)
-                }
-            };
-
-            let is_pending_insert_row = matches!(source, Some(VisualRowSource::Insert(_)));
-
-            // Use visual_ix for selection/display, but data_row_ix for edit buffer access
-            let row_ix = visual_ix;
-
-            // Row background based on state
-            // - Dirty: cell-level only (no row bg)
-            // - Saving: warning background
-            // - Error: danger background
-            // - PendingInsert: green-ish to indicate new row
-            // - PendingDelete: red-ish with visual indication of deletion
-            let row_bg = match row_state {
-                dbflux_core::RowState::Dirty => None, // Cell-level only — see dirty cell highlight below
-                dbflux_core::RowState::Saving => Some(RowColors::saving(theme)),
-                dbflux_core::RowState::Error(_) => Some(RowColors::error(theme)),
-                dbflux_core::RowState::Clean => None,
-                dbflux_core::RowState::PendingInsert => Some(RowColors::insert(theme)),
-                dbflux_core::RowState::PendingDelete => Some(RowColors::delete(theme)),
-            };
-
-            let is_pending_delete = row_state.is_pending_delete();
-            let is_active_row = selection.active.is_some_and(|active| active.row == row_ix);
-            let tint = ChromeColors::tint(theme);
-            let cell_wash = tint.opacity(GridMetrics::CELL_SELECTED_ALPHA);
-            let is_reference_row = reference_row && row_ix == 0;
-            // Under a reference row the others are numbered from 1, so the
-            // number reads as their rank.
-            let row_number = if reference_row { row_ix } else { row_ix + 1 };
-
-            let cells: Vec<AnyElement> = (0..model.col_count())
-                .map(|col_ix| {
-                    // Get cell either from model or from pending insert
-                    let cell = if let Some(insert_data) = pending_insert_data {
-                        insert_data.get(col_ix)
-                    } else {
-                        row_data.and_then(|r| r.cells.get(col_ix))
-                    };
-                    let width = column_widths.get(col_ix).copied().unwrap_or(120.0);
-                    let coord = CellCoord::new(row_ix, col_ix);
-                    let is_selected = selection.is_selected(coord);
-                    let is_active = selection.active == Some(coord);
-                    let is_editing = editing_cell == Some(coord);
-
-                    if is_editing {
-                        if let Some(dropdown) = enum_dropdown {
-                            return div()
-                                .id(("cell", row_ix * 10000 + col_ix))
-                                .flex()
-                                .flex_shrink_0()
-                                .items_center()
-                                .h_full()
-                                .w(px(width))
-                                .overflow_hidden()
-                                .border_1()
-                                .border_color(theme.ring)
-                                .bg(theme.background)
-                                .child(dropdown.clone())
-                                .into_any_element();
-                        }
-
-                        if let Some(input_state) = cell_input {
-                            return div()
-                                .id(("cell", row_ix * 10000 + col_ix))
-                                .flex()
-                                .flex_shrink_0()
-                                .items_center()
-                                .h_full()
-                                .w(px(width))
-                                .overflow_hidden()
-                                .border_1()
-                                .border_color(theme.ring)
-                                .bg(theme.background)
-                                .child(Input::new(input_state).small())
-                                .into_any_element();
-                        }
-                    }
-
-                    // For edit buffer access, use the data row index (model index for base rows)
-                    let is_cell_dirty = if is_pending_insert_row {
-                        false // Pending inserts don't have cell-level dirty tracking
-                    } else {
-                        edit_buffer.is_cell_dirty(data_row_ix, col_ix)
-                    };
-                    let null_value = super::model::CellValue::null();
-                    let base_value = cell.unwrap_or(&null_value);
-                    let display_value = if is_pending_insert_row {
-                        base_value // For pending inserts, just use the cell value directly
-                    } else {
-                        edit_buffer.get_cell(data_row_ix, col_ix, base_value)
-                    };
-                    let is_document = document.is_some();
-                    let shows_transition = is_document && is_cell_dirty;
-                    let display_text: Arc<str> = if shows_transition {
-                        format!(
-                            "{} \u{2192} {}",
-                            base_value.display_text(),
-                            display_value.display_text()
-                        )
-                        .into()
-                    } else {
-                        display_value.display_text()
-                    };
-                    let is_null = display_value.is_null();
-                    let is_auto_generated = display_value.is_auto_generated();
-                    let is_placeholder = display_value.is_placeholder();
-                    let is_missing = display_value.is_missing();
-                    let nested_kind = match display_value.kind {
-                        super::model::CellKind::Nested { is_array, .. } => Some(is_array),
-                        _ => None,
-                    };
-                    let fk_spans = display_value.fk_spans();
-                    let has_fk_spans = fk_spans.is_some();
-                    let is_group_child =
-                        document.is_some_and(|document| document.is_group_child(col_ix));
-
-                    let state_for_click = state_entity.clone();
-                    let state_for_context = state_entity.clone();
-
-                    let text_color = if shows_transition {
-                        theme.warning
-                    } else if is_missing {
-                        theme.input
-                    } else if nested_kind.is_some() {
-                        theme.info
-                    } else if is_pending_delete || is_auto_generated || is_placeholder {
-                        theme.muted_foreground
-                    } else if is_null {
-                        null_color
-                    } else if is_active {
-                        ChromeColors::strong(theme)
-                    } else {
-                        theme.foreground
-                    };
-
-                    div()
-                        .id(("cell", row_ix * 10000 + col_ix))
-                        .relative()
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .h_full()
-                        .w(px(width))
-                        .px(CELL_PADDING_X)
-                        .overflow_hidden()
-                        .cursor_pointer()
-                        // Highlight individual dirty cells (like DBeaver).
-                        // Uses RowColors::dirty for the background and the
-                        // theme warning for the 2px left accent stroke.
-                        .when(is_group_child, |d| {
-                            d.bg(tint.opacity(CollectionMetrics::GROUP_CHILD_CELL_ALPHA))
-                        })
-                        .when(is_cell_dirty && !is_document, |d| {
-                            d.bg(RowColors::dirty(theme))
-                                .border_l_2()
-                                .border_color(theme.warning)
-                        })
-                        .when(is_selected || is_active, |d| d.bg(cell_wash))
-                        .when(shows_transition, |d| {
-                            d.bg(theme.warning.opacity(CollectionMetrics::EDITED_CELL_ALPHA))
-                                .child(
-                                    Chamfer::new(Pixels::ZERO)
-                                        .ring(ChamferRing::focus(theme.warning)),
-                                )
-                        })
-                        // Focused cell: 1.5 px tint ring inside the cell. No
-                        // cut: cells hold data.
-                        .when(is_active, |d| {
-                            d.child(Chamfer::new(Pixels::ZERO).ring(ChamferRing::focus(tint)))
-                        })
-                        .when(
-                            is_null || is_auto_generated || is_placeholder || is_missing,
-                            |d| d.italic(),
-                        )
-                        .when(is_pending_delete, |d| d.line_through())
-                        .on_click(move |event: &ClickEvent, window, cx| {
-                            state_for_click.update(cx, |state, cx| {
-                                state.focus(window, cx);
-                            });
-
-                            if event.click_count() == 2 {
-                                state_for_click.update(cx, |state, cx| {
-                                    state.start_editing(coord, window, cx);
-                                });
-                                return;
-                            }
-
-                            let modifiers = event.modifiers();
-                            state_for_click.update(cx, |state, cx| {
-                                state.click_cell(coord, modifiers, cx);
-                            });
-                        })
-                        .on_mouse_down(
-                            MouseButton::Right,
-                            move |event: &MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                state_for_context.update(cx, |state, cx| {
-                                    state.focus(window, cx);
-                                    state.select_cell(coord, cx);
-                                    cx.emit(DataTableEvent::ContextMenuRequested {
-                                        row: coord.row,
-                                        col: coord.col,
-                                        position: event.position,
-                                        is_column_header: false,
-                                    });
-                                });
-                            },
-                        )
-                        .when_some(nested_kind, |d, _| {
-                            d.gap(GridMetrics::HEADER_GAP).child(
-                                Icon::new(AppIcon::Braces)
-                                    .size(nested_icon)
-                                    .color(text_color),
-                            )
-                        })
-                        // A resolved foreign key draws its label in the
-                        // cell's text color with the raw id muted after it.
-                        .when_some(fk_spans, |d, (label, id_suffix)| {
-                            d.child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(font_size)
-                                    .text_color(text_color)
-                                    .child(label.to_string()),
-                            )
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .whitespace_nowrap()
-                                    .text_size(font_size)
-                                    .text_color(theme.muted_foreground)
-                                    .child(id_suffix.to_string()),
-                            )
-                        })
-                        .when(!has_fk_spans, |d| {
-                            d.child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(font_size)
-                                    .text_color(text_color)
-                                    .child(display_text.to_string()),
-                            )
-                        })
-                        .when(nested_kind == Some(true), |d| {
-                            d.child(
-                                Icon::new(AppIcon::ChevronRight)
-                                    .size(nested_icon)
-                                    .color(text_color),
-                            )
-                        })
-                        .into_any_element()
-                })
-                .collect();
-
-            div()
-                .id(("row", row_ix))
-                .flex()
-                .flex_shrink_0()
-                .w(px(total_width))
-                .h(row_height)
-                .overflow_hidden()
-                .border_b_1()
-                .border_color(theme.table_row_border)
-                // Row state background (dirty=yellow, error=red)
-                .when_some(row_bg, |d, bg| d.bg(bg))
-                // The row holding the focused cell gets the selected-row
-                // wash; clean rows otherwise alternate.
-                .when(row_bg.is_none() && is_reference_row, |d| {
-                    d.bg(tint.opacity(GridMetrics::REFERENCE_ROW_ALPHA))
-                        .border_color(tint.opacity(GridMetrics::REFERENCE_ROW_BORDER_ALPHA))
-                })
-                .when(
-                    row_bg.is_none() && !is_reference_row && is_active_row,
-                    |d| d.bg(theme.table_active),
-                )
-                .when(
-                    row_bg.is_none() && !is_reference_row && !is_active_row && row_ix % 2 == 1,
-                    |d| d.bg(theme.table_even),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .justify_end()
-                        .w(ROW_NUMBER_WIDTH)
-                        .h_full()
-                        .pr(CELL_PADDING_X)
-                        .text_size(font_size)
-                        .text_color(if is_active_row || is_reference_row {
-                            tint
-                        } else {
-                            theme.input
-                        })
-                        .map(|gutter| {
-                            if is_reference_row {
-                                gutter.child(
-                                    Icon::new(AppIcon::Crosshair).size(nested_icon).color(tint),
-                                )
-                            } else {
-                                gutter.child(row_number.to_string())
-                            }
-                        }),
-                )
-                .children(cells)
-                .into_any_element()
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::model::TableModel;
     use super::*;
     use gpui::{AppContext as _, Render, TestAppContext, VisualTestContext, div};
     use gpui_base::ScrollbarHandle as _;
@@ -1890,6 +1608,92 @@ mod tests {
         visual.run_until_parked();
 
         visual
+    }
+
+    /// A one-column, one-row grid whose single cell holds `cell`, so the
+    /// debug selectors below name exactly one element.
+    fn single_cell_harness(
+        cx: &mut TestAppContext,
+        cell: super::super::model::CellValue,
+    ) -> &mut VisualTestContext {
+        use super::super::model::{ColumnKind, ColumnSpec, RowData};
+        use gpui::TextAlign;
+
+        cx.update(crate::theme::init);
+
+        let model = Arc::new(TableModel::new(
+            vec![ColumnSpec {
+                id: "v".into(),
+                title: "v".into(),
+                kind: ColumnKind::Text,
+                align: TextAlign::Left,
+                type_name: "text".into(),
+            }],
+            vec![RowData { cells: vec![cell] }],
+        ));
+
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(model.clone(), cx));
+            let table = cx.new(|cx| DataTable::new("cell-test-table", state, cx));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+
+        visual
+    }
+
+    #[gpui::test]
+    fn an_array_cell_draws_the_braces_and_the_chevron(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::nested(true, 4));
+
+        assert!(
+            visual.debug_bounds("table-cell-braces").is_some(),
+            "a nested summary draws the braces marker"
+        );
+        assert!(
+            visual.debug_bounds("table-cell-chevron").is_some(),
+            "an array draws the step-in chevron"
+        );
+    }
+
+    #[gpui::test]
+    fn a_document_cell_draws_the_braces_but_not_the_chevron(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::nested(false, 3));
+
+        assert!(visual.debug_bounds("table-cell-braces").is_some());
+        assert!(
+            visual.debug_bounds("table-cell-chevron").is_none(),
+            "only an array steps in; a document draws no chevron"
+        );
+    }
+
+    #[gpui::test]
+    fn a_plain_cell_draws_one_text_span(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::text("value"));
+
+        assert!(visual.debug_bounds("table-cell-text").is_some());
+        assert!(visual.debug_bounds("table-cell-secondary").is_none());
+        assert!(visual.debug_bounds("table-cell-label").is_none());
+    }
+
+    #[gpui::test]
+    fn a_foreign_key_cell_draws_two_spans_and_suppresses_the_main_text(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::int(8).with_fk_label("Alice"));
+
+        assert!(
+            visual.debug_bounds("table-cell-text").is_none(),
+            "the two-tone pair replaces the cell's own display text"
+        );
+        assert!(visual.debug_bounds("table-cell-label").is_some());
+        assert!(visual.debug_bounds("table-cell-secondary").is_some());
     }
 
     #[gpui::test]

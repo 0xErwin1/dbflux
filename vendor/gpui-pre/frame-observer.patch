@@ -1,5 +1,5 @@
 diff --git a/crates/gpui/src/element.rs b/crates/gpui/src/element.rs
-index cedf304..892ed38 100644
+index cedf304..3bdb01e 100644
 --- a/crates/gpui/src/element.rs
 +++ b/crates/gpui/src/element.rs
 @@ -35,7 +35,7 @@
@@ -11,7 +11,7 @@ index cedf304..892ed38 100644
      util::FluentBuilder, window::with_element_arena,
  };
  use std::{
-@@ -120,6 +120,20 @@ pub trait Element: 'static + IntoElement {
+@@ -120,6 +120,25 @@ pub trait Element: 'static + IntoElement {
      /// See the [accessibility guide](crate::_accessibility) for an overview.
      fn write_a11y_info(&self, _node: &mut accesskit::Node) {}
  
@@ -21,7 +21,12 @@ index cedf304..892ed38 100644
 +    /// and [`Element::write_a11y_info`]. This hook only supplies interaction
 +    /// provenance that AccessKit does not model.
 +    fn frame_node(&self) -> Option<FrameNodeData> {
-+        None
++        // Third-party elements and transparent wrappers already implement the
++        // standard accessibility hooks, even when they predate frame observers.
++        self.a11y_role().map(|role| FrameNodeData {
++            fallback_role: role,
++            ..FrameNodeData::default()
++        })
 +    }
 +
 +    /// Return text that contributes to the nearest observed rendered element.
@@ -32,7 +37,7 @@ index cedf304..892ed38 100644
      /// Add synthetic child nodes to an [`Element`] that has an
      /// [`.id()`][Element::id] and a [`.role()`][Element::a11y_role].
      ///
-@@ -424,6 +438,14 @@ impl<E: Element> Drawable<E> {
+@@ -424,6 +443,14 @@ impl<E: Element> Drawable<E> {
                  }
  
                  let bounds = window.layout_bounds(layout_id);
@@ -47,7 +52,7 @@ index cedf304..892ed38 100644
                  let mut pushed_a11y_node = false;
                  if window.a11y.is_active() {
                      if let Some(global_id) = global_id.as_ref() {
-@@ -471,6 +493,7 @@ impl<E: Element> Drawable<E> {
+@@ -471,6 +498,7 @@ impl<E: Element> Drawable<E> {
                      window,
                      cx,
                  );
@@ -56,7 +61,7 @@ index cedf304..892ed38 100644
  
                  if pushed_a11y_node {
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index afaf5be..db480f3 100644
+index afaf5be..01ddca0 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -18,13 +18,14 @@
@@ -89,7 +94,7 @@ index afaf5be..db480f3 100644
      fmt::Debug,
      marker::PhantomData,
      mem,
-@@ -1435,6 +1437,48 @@ pub trait StatefulInteractiveElement: InteractiveElement {
+@@ -1435,6 +1437,49 @@ pub trait StatefulInteractiveElement: InteractiveElement {
          self
      }
  
@@ -129,6 +134,7 @@ index afaf5be..db480f3 100644
 +    }
 +
 +    /// Mark this element's value for redaction by rendered-frame observers.
++    /// Text inside it is also withheld from ancestors' inferred labels and text.
 +    /// The canonical AccessKit tree still exposes values to assistive technology.
 +    fn frame_redacted(mut self, redacted: bool) -> Self {
 +        self.interactivity().frame_redacted = redacted;
@@ -138,7 +144,7 @@ index afaf5be..db480f3 100644
      /// Set the minimum numeric value for this element.
      fn aria_min_numeric_value(mut self, value: f64) -> Self {
          self.interactivity().aria.min_numeric_value = Some(value);
-@@ -1908,12 +1952,25 @@ impl Element for Div {
+@@ -1908,12 +1953,25 @@ impl Element for Div {
          self.interactivity
              .override_role
              .filter(|role| *role != accesskit::Role::GenericContainer)
@@ -164,7 +170,7 @@ index afaf5be..db480f3 100644
      fn a11y_synthetic_children(
          &mut self,
          _prepaint: &mut Self::PrepaintState,
-@@ -2125,6 +2182,9 @@ pub(crate) struct AriaProperties {
+@@ -2125,6 +2183,9 @@ pub(crate) struct AriaProperties {
      pub(crate) column_index: Option<usize>,
      pub(crate) row_count: Option<usize>,
      pub(crate) column_count: Option<usize>,
@@ -174,7 +180,7 @@ index afaf5be..db480f3 100644
  }
  
  /// The interactivity struct. Powers all of the general-purpose
-@@ -2196,6 +2256,9 @@ pub struct Interactivity {
+@@ -2196,6 +2257,9 @@ pub struct Interactivity {
      pub(crate) report_active_descendant_focus: bool,
      pub(crate) override_role: Option<accesskit::Role>,
      pub(crate) aria: AriaProperties,
@@ -184,7 +190,20 @@ index afaf5be..db480f3 100644
  
      #[cfg(any(feature = "inspector", debug_assertions))]
      pub(crate) source_location: Option<&'static core::panic::Location<'static>>,
-@@ -3602,6 +3665,15 @@ impl Interactivity {
+@@ -2310,6 +2374,12 @@ impl Interactivity {
+         f: impl FnOnce(&Style, Point<Pixels>, Option<Hitbox>, &mut Window, &mut App) -> R,
+     ) -> R {
+         self.content_size = content_size;
++        if window.next_frame.observed.is_enabled() {
++            window
++                .next_frame
++                .observed
++                .refine_interactivity(global_id, self.frame_node());
++        }
+ 
+         #[cfg(any(feature = "inspector", debug_assertions))]
+         window.with_inspector_state(
+@@ -3602,6 +3672,15 @@ impl Interactivity {
          if let Some(count) = self.aria.column_count {
              node.set_column_count(count);
          }
@@ -200,7 +219,7 @@ index afaf5be..db480f3 100644
          if !self.click_listeners.is_empty() {
              node.add_action(accesskit::Action::Click);
          }
-@@ -3612,6 +3684,43 @@ impl Interactivity {
+@@ -3612,6 +3691,43 @@ impl Interactivity {
              node.add_action(*action);
          }
      }
@@ -244,7 +263,7 @@ index afaf5be..db480f3 100644
  }
  
  /// The per-frame state of an interactive element. Used for tracking stateful interactions like clicks
-@@ -4127,6 +4236,14 @@ where
+@@ -4127,6 +4243,14 @@ where
          self.element.write_a11y_info(node);
      }
  
@@ -334,20 +353,27 @@ index d1896ad..0e73d03 100644
          _id: Option<&GlobalElementId>,
 diff --git a/crates/gpui/src/frame_observer.rs b/crates/gpui/src/frame_observer.rs
 new file mode 100644
-index 0000000..78448c4
+index 0000000..62e6626
 --- /dev/null
 +++ b/crates/gpui/src/frame_observer.rs
-@@ -0,0 +1,466 @@
+@@ -0,0 +1,753 @@
 +//! Read-only rendered-frame observation for developer tooling and automation.
 +//!
 +//! GPUI's accessibility tree is the canonical description of a rendered UI.
 +//! This module exposes completed copies of that tree without activating an OS
 +//! accessibility adapter, and provides a final overlay pass for visual tools.
++//! Each observed draw also reports what it cost and which views rendered or
++//! replayed their previous output from cache.
 +
-+use crate::{App, Bounds, GlobalElementId, Pixels, Window};
++use crate::{App, Bounds, EntityId, GlobalElementId, Pixels, Window};
 +use accesskit::{Node, NodeId, Role, TreeUpdate};
 +use collections::{FxHashMap, FxHashSet};
-+use std::{collections::BTreeMap, fmt::Write as _, sync::Arc};
++use std::{
++    collections::BTreeMap,
++    fmt::Write as _,
++    sync::{Arc, OnceLock},
++    time::Duration,
++};
 +
 +/// Interaction details that are meaningful to visual tooling but are not
 +/// represented by an AccessKit action.
@@ -466,11 +492,18 @@ index 0000000..78448c4
 +pub struct AccessibilityFrame {
 +    tree: TreeUpdate,
 +    nodes: FxHashMap<NodeId, FrameNode>,
++    /// Position of each node in `tree.nodes`, built on the first lookup rather
++    /// than during the draw, so an observer that never looks pays nothing.
++    positions: OnceLock<FxHashMap<NodeId, usize>>,
 +}
 +
 +impl AccessibilityFrame {
 +    pub(crate) fn new(tree: TreeUpdate, nodes: FxHashMap<NodeId, FrameNode>) -> Self {
-+        Self { tree, nodes }
++        Self {
++            tree,
++            nodes,
++            positions: OnceLock::new(),
++        }
 +    }
 +
 +    /// Return the canonical AccessKit update for this frame.
@@ -491,10 +524,108 @@ index 0000000..78448c4
 +    /// Return the canonical AccessKit node for a rendered GPUI node, when one
 +    /// was explicitly included in the accessibility tree.
 +    pub fn accessibility_node(&self, node: &FrameNode) -> Option<&Node> {
-+        self.tree
-+            .nodes
-+            .iter()
-+            .find_map(|(id, value)| (*id == node.accessibility_id).then_some(value))
++        let positions = self.positions.get_or_init(|| {
++            let mut positions = FxHashMap::default();
++            for (position, (id, _)) in self.tree.nodes.iter().enumerate() {
++                positions.entry(*id).or_insert(position);
++            }
++            positions
++        });
++        positions
++            .get(&node.accessibility_id)
++            .map(|position| &self.tree.nodes[*position].1)
++    }
++}
++
++/// Why a view called `render` in a frame instead of replaying its previous
++/// output.
++#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
++pub enum ViewRenderCause {
++    /// The view is not embedded with `cached`, so it renders whenever the
++    /// element tree containing it is built.
++    Uncached,
++    /// Inspector picking disables view caching.
++    CachingDisabled,
++    /// [`Window::refresh`] was pending, which renders every cached view.
++    Refresh,
++    /// The view had no output from the previous frame to replay.
++    FirstDraw,
++    /// The view, or a view drawn inside it, was notified.
++    Notified,
++    /// A containing cached view rendered. GPUI renders every cached view
++    /// inside a cached view that renders.
++    AncestorRendered,
++    /// The view's bounds, content mask, or text style changed.
++    LayoutChanged,
++    /// The containing element's observation redaction boundary changed.
++    ObservationChanged,
++}
++
++/// How a view produced its output for one frame.
++#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
++pub enum ViewDrawOutcome {
++    /// The previous frame's prepaint and paint were replayed without calling
++    /// `render`.
++    Reused,
++    /// The view called `render`.
++    Rendered(ViewRenderCause),
++}
++
++/// One view drawn in an observed frame.
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub struct ViewDraw {
++    entity_id: EntityId,
++    type_name: &'static str,
++    outcome: ViewDrawOutcome,
++}
++
++impl ViewDraw {
++    /// Return the entity that backs the view.
++    pub fn entity_id(&self) -> EntityId {
++        self.entity_id
++    }
++
++    /// Return the view's `Render` type name, or an empty string when the view
++    /// has not rendered since observation began.
++    pub fn type_name(&self) -> &'static str {
++        self.type_name
++    }
++
++    /// Return whether the view rendered or replayed its previous output.
++    pub fn outcome(&self) -> ViewDrawOutcome {
++        self.outcome
++    }
++}
++
++/// Cost and view-cache activity of one completed observed draw.
++#[derive(Debug)]
++pub struct DrawnFrame<'a> {
++    draw: Duration,
++    observation: Duration,
++    views: &'a [ViewDraw],
++}
++
++impl DrawnFrame<'_> {
++    /// Return the wall time of the whole `Window::draw`: rendering, layout,
++    /// prepaint, and paint. This is the interval GPUI's profiler records as
++    /// `FrameTiming::draw_duration` when that feature is enabled.
++    pub fn draw_duration(&self) -> Duration {
++        self.draw
++    }
++
++    /// Return the part of [`Self::draw_duration`] spent only because the frame
++    /// was observed: finishing the accessibility tree when no platform adapter
++    /// wanted it, building the [`AccessibilityFrame`], and running observer
++    /// callbacks. Recording each element's accessibility node during prepaint
++    /// is interleaved with the application's own work and is not included.
++    pub fn observation_duration(&self) -> Duration {
++        self.observation
++    }
++
++    /// Return every view drawn in the frame, in draw order, with whether it
++    /// rendered or replayed its previous output.
++    pub fn views(&self) -> &[ViewDraw] {
++        self.views
 +    }
 +}
 +
@@ -509,6 +640,17 @@ index 0000000..78448c4
 +    /// Called after prepaint has completed with the canonical accessibility tree.
 +    fn accessibility_updated(&self, _frame: &AccessibilityFrame) {}
 +
++    /// Called after prepaint has completed with a shared handle to the
++    /// canonical accessibility tree.
++    ///
++    /// An observer that keeps the frame, for example to convert it later off
++    /// the UI thread, overrides this instead of [`Self::accessibility_updated`]
++    /// and retains the handle rather than copying the tree during the draw. The
++    /// default forwards to [`Self::accessibility_updated`].
++    fn accessibility_frame(&self, frame: &Arc<AccessibilityFrame>) {
++        self.accessibility_updated(frame);
++    }
++
 +    /// Called immediately before the normal paint pass.
 +    fn paint_started(&self) {}
 +
@@ -517,6 +659,10 @@ index 0000000..78448c4
 +
 +    /// Called after normal paint and observer overlays have completed.
 +    fn frame_finished(&self) {}
++
++    /// Called when `Window::draw` returns with what the draw cost and which
++    /// views rendered or replayed from cache.
++    fn frame_drawn(&self, _frame: &DrawnFrame<'_>) {}
 +}
 +
 +#[doc(hidden)]
@@ -561,17 +707,35 @@ index 0000000..78448c4
 +    nodes: Vec<FrameNode>,
 +    parents: Vec<FrameParent>,
 +    enabled: bool,
++    /// Whether [`Window::refresh`] was pending when this frame began.
++    window_refresh: bool,
++    views: Vec<ViewDraw>,
++    /// `Render` type name of every view drawn in this frame. A view that
++    /// replays its previous output does not render, so its name is carried
++    /// forward from the frame it was last rendered in.
++    view_types: FxHashMap<EntityId, &'static str>,
++    observation: Duration,
 +}
 +
 +#[derive(Clone, Debug)]
 +pub(crate) struct FrameParent {
 +    path: String,
++    /// Position of the parent's node in the builder that entered it. A
++    /// rolled-back transaction can truncate that node, so every use checks the
++    /// path before trusting it.
++    index: usize,
 +}
 +
++/// The builder's state at one point in prepaint.
++///
++/// Only a node that is open can collect text, so the open nodes are the only
++/// ones that existed at the checkpoint and can change after it. Recording just
++/// those keeps a checkpoint proportional to the element depth rather than to
++/// every node drawn so far, which matters because each cached view takes two.
 +#[derive(Clone, Debug, Default)]
 +pub(crate) struct FrameCheckpoint {
 +    node_count: usize,
-+    content: Vec<(String, String)>,
++    open: Vec<(usize, String, String)>,
 +}
 +
 +impl FrameBuilder {
@@ -579,10 +743,74 @@ index 0000000..78448c4
 +        self.nodes.clear();
 +        self.parents.clear();
 +        self.enabled = enabled;
++        self.window_refresh = false;
++        self.views.clear();
++        self.view_types.clear();
++        self.observation = Duration::ZERO;
 +    }
 +
 +    pub(crate) fn enable(&mut self) {
 +        self.enabled = true;
++    }
++
++    pub(crate) fn is_enabled(&self) -> bool {
++        self.enabled
++    }
++
++    pub(crate) fn set_window_refresh(&mut self, window_refresh: bool) {
++        self.window_refresh = window_refresh;
++    }
++
++    pub(crate) fn window_refresh(&self) -> bool {
++        self.window_refresh
++    }
++
++    /// Record the `Render` type of a view that is rendering.
++    pub(crate) fn note_view_type(&mut self, entity_id: EntityId, type_name: &'static str) {
++        if self.enabled {
++            self.view_types.insert(entity_id, type_name);
++        }
++    }
++
++    /// Record how a view produced its output. `previous` is the last rendered
++    /// frame, which names a view that replays without rendering.
++    pub(crate) fn view_drawn(
++        &mut self,
++        entity_id: EntityId,
++        outcome: ViewDrawOutcome,
++        previous: &FrameBuilder,
++    ) {
++        if !self.enabled {
++            return;
++        }
++        if outcome == ViewDrawOutcome::Reused
++            && let Some(type_name) = previous.view_types.get(&entity_id)
++        {
++            self.view_types.entry(entity_id).or_insert(type_name);
++        }
++        self.views.push(ViewDraw {
++            entity_id,
++            type_name: "",
++            outcome,
++        });
++    }
++
++    pub(crate) fn add_observation(&mut self, duration: Duration) {
++        self.observation += duration;
++    }
++
++    /// Name every view drawn in the finished frame and describe its cost.
++    pub(crate) fn drawn(&mut self, draw: Duration) -> DrawnFrame<'_> {
++        for view in &mut self.views {
++            if let Some(type_name) = self.view_types.get(&view.entity_id) {
++                view.type_name = type_name;
++            }
++        }
++        DrawnFrame {
++            draw,
++            observation: self.observation,
++            views: &self.views,
++        }
 +    }
 +
 +    pub(crate) fn enter(
@@ -621,10 +849,59 @@ index 0000000..78448c4
 +        };
 +        let parent = FrameParent {
 +            path: node.path.clone(),
++            index: self.nodes.len(),
 +        };
 +        self.nodes.push(node);
 +        self.parents.push(parent);
 +        true
++    }
++
++    /// Keep interaction provenance when an external wrapper forwards a Div's
++    /// prepaint but does not know about Element::frame_node. Its accessibility
++    /// hooks registered the node; the inner Interactivity supplies these facts
++    /// before children contribute text. Only the same open node may be refined.
++    pub(crate) fn refine_interactivity(
++        &mut self,
++        global_id: Option<&GlobalElementId>,
++        data: FrameNodeData,
++    ) {
++        if !self.enabled {
++            return;
++        }
++        let Some(id) = global_id.map(GlobalElementId::accesskit_node_id) else {
++            return;
++        };
++        let Some(node) = self
++            .parents
++            .last()
++            .and_then(|parent| self.nodes.get_mut(parent.index))
++        else {
++            return;
++        };
++        if node.accessibility_id != id {
++            return;
++        }
++        node.redacted |= data.redacted;
++        for action in data.actions {
++            if !node.actions.contains(&action) {
++                node.actions.push(action);
++            }
++        }
++        for (key, value) in data.metadata {
++            node.metadata.entry(key).or_insert(value);
++        }
++    }
++
++    /// Return the index of `parent`'s node in this builder, when it is still
++    /// there.
++    fn parent_index(nodes: &[FrameNode], parent: &FrameParent) -> Option<usize> {
++        if nodes
++            .get(parent.index)
++            .is_some_and(|node| node.path == parent.path)
++        {
++            return Some(parent.index);
++        }
++        nodes.iter().rposition(|node| node.path == parent.path)
 +    }
 +
 +    pub(crate) fn exit(&mut self, entered: bool) {
@@ -633,8 +910,16 @@ index 0000000..78448c4
 +        }
 +    }
 +
++    /// Text inside a redacted element must not contribute to any ancestor.
++    pub(crate) fn text_is_redacted(&self) -> bool {
++        self.parents.iter().any(|parent| {
++            Self::parent_index(&self.nodes, parent)
++                .is_some_and(|index| self.nodes[index].redacted)
++        })
++    }
++
 +    pub(crate) fn add_text(&mut self, text: &str) {
-+        if !self.enabled {
++        if !self.enabled || self.text_is_redacted() {
 +            return;
 +        }
 +        let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -642,12 +927,8 @@ index 0000000..78448c4
 +            return;
 +        }
 +        for parent in &self.parents {
-+            if let Some(node) = self
-+                .nodes
-+                .iter_mut()
-+                .rev()
-+                .find(|node| node.path == parent.path)
-+            {
++            if let Some(index) = Self::parent_index(&self.nodes, parent) {
++                let node = &mut self.nodes[index];
 +                if node.redacted {
 +                    continue;
 +                }
@@ -672,20 +953,34 @@ index 0000000..78448c4
 +    }
 +
 +    pub(crate) fn checkpoint(&self) -> FrameCheckpoint {
++        if !self.enabled {
++            return FrameCheckpoint {
++                node_count: self.nodes.len(),
++                open: Vec::new(),
++            };
++        }
 +        FrameCheckpoint {
 +            node_count: self.nodes.len(),
-+            content: self
-+                .nodes
++            open: self
++                .parents
 +                .iter()
-+                .map(|node| (node.path.clone(), node.content_text.clone()))
++                .filter_map(|parent| {
++                    let index = Self::parent_index(&self.nodes, parent)?;
++                    let node = &self.nodes[index];
++                    Some((index, node.path.clone(), node.content_text.clone()))
++                })
 +                .collect(),
 +        }
 +    }
 +
 +    pub(crate) fn restore(&mut self, checkpoint: &FrameCheckpoint) {
 +        self.nodes.truncate(checkpoint.node_count);
-+        for (node, (_, content)) in self.nodes.iter_mut().zip(&checkpoint.content) {
-+            node.content_text.clone_from(content);
++        for (index, path, content) in &checkpoint.open {
++            if let Some(node) = self.nodes.get_mut(*index)
++                && node.path == *path
++            {
++                node.content_text.clone_from(content);
++            }
 +        }
 +    }
 +
@@ -695,12 +990,23 @@ index 0000000..78448c4
 +        start: &FrameCheckpoint,
 +        end: &FrameCheckpoint,
 +    ) {
-+        for (path, before) in &start.content {
-+            if let Some((_, after)) = end.content.iter().find(|(candidate, _)| candidate == path)
-+                && let Some(delta) = after.strip_prefix(before)
++        // The replayed range added text to the nodes open around it. Those
++        // nodes are open around the replay too, found by the same path.
++        let text_is_redacted = self.text_is_redacted();
++        for (_, path, before) in &start.open {
++            if !text_is_redacted
++                && let Some((_, _, after)) = end.open.iter().find(|(_, candidate, _)| candidate == path)
++                && let Some(delta) = after.strip_prefix(before.as_str())
 +                && !delta.is_empty()
-+                && let Some(node) = self.nodes.iter_mut().find(|node| node.path == *path)
++                && let Some(index) = self
++                    .parents
++                    .iter()
++                    .rev()
++                    .find(|parent| parent.path == *path)
++                    .and_then(|parent| Self::parent_index(&self.nodes, parent))
++                    .or_else(|| self.nodes.iter().position(|node| node.path == *path))
 +            {
++                let node = &mut self.nodes[index];
 +                if !node.content_text.is_empty() {
 +                    node.content_text.push(' ');
 +                }
@@ -857,8 +1163,163 @@ index c08d964..0e67b0d 100644
      pub fn compute_ime_candidate_bounds(
          marked_range: Option<Range<usize>>,
          selection: &UTF16Selection,
+diff --git a/crates/gpui/src/view.rs b/crates/gpui/src/view.rs
+index 84853e1..1ebf3df 100644
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -2,7 +2,7 @@ use crate::{
+     AnyElement, AnyEntity, AnyWeakEntity, App, AvailableSpace, Bounds, ContentMask, Context,
+     Element, ElementId, Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement,
+     LayoutId, PaintIndex, Pixels, PrepaintStateIndex, Render, RenderOnce, Size, Style,
+-    StyleRefinement, TextStyle, TransformationMatrix, WeakEntity,
++    StyleRefinement, TextStyle, TransformationMatrix, ViewDrawOutcome, ViewRenderCause, WeakEntity,
+ };
+ use crate::{Empty, Window};
+ use anyhow::Result;
+@@ -234,6 +234,10 @@ mod any_view {
+             .a11y
+             .view_type_names
+             .insert(view.entity_id(), std::any::type_name::<V>());
++        window
++            .next_frame
++            .observed
++            .note_view_type(view.entity_id(), std::any::type_name::<V>());
+         view.update(cx, |view, cx| view.render(window, cx).into_any_element())
+     }
+ }
+@@ -284,6 +288,10 @@ impl<T: Render> View for Entity<T> {
+ 
+     #[inline]
+     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
++        window
++            .next_frame
++            .observed
++            .note_view_type(Entity::entity_id(&self), type_name::<T>());
+         self.update(cx, |this, cx| {
+             Render::render(this, window, cx).into_any_element()
+         })
+@@ -377,6 +385,7 @@ struct ViewElementCacheKey {
+     content_mask: ContentMask<Pixels>,
+     text_style: TextStyle,
+     transform: TransformationMatrix,
++    text_redacted: bool,
+ }
+ 
+ impl<V: View> Element for ViewElement<V> {
+@@ -536,6 +545,16 @@ fn request_layout_view(
+                 (layout_id, None)
+             }
+             _ => {
++                let cause = if cached_style.is_some() {
++                    ViewRenderCause::CachingDisabled
++                } else {
++                    ViewRenderCause::Uncached
++                };
++                window.next_frame.observed.view_drawn(
++                    entity_id,
++                    ViewDrawOutcome::Rendered(cause),
++                    &window.rendered_frame.observed,
++                );
+                 let mut element = render(window, cx);
+                 let layout_id = element.request_layout(window, cx);
+                 (layout_id, Some(element))
+@@ -544,6 +563,44 @@ fn request_layout_view(
+     })
+ }
+ 
++/// Return why a cached view cannot replay its previous output, or `None` when
++/// it can.
++fn view_cache_miss(
++    entity_id: EntityId,
++    element_state: Option<&ViewElementState>,
++    bounds: Bounds<Pixels>,
++    content_mask: &ContentMask<Pixels>,
++    text_style: &TextStyle,
++    transform: &TransformationMatrix,
++    window: &Window,
++) -> Option<ViewRenderCause> {
++    if window.refreshing && window.next_frame.observed.window_refresh() {
++        return Some(ViewRenderCause::Refresh);
++    }
++    let Some(element_state) = element_state else {
++        return Some(ViewRenderCause::FirstDraw);
++    };
++    if window.dirty_views.contains(&entity_id) {
++        return Some(ViewRenderCause::Notified);
++    }
++    if window.refreshing {
++        return Some(ViewRenderCause::AncestorRendered);
++    }
++    // Rebuild observation checkpoints when the surrounding redaction boundary
++    // changes: replaying withheld text cannot restore it after unredaction.
++    if element_state.cache_key.text_redacted != window.next_frame.observed.text_is_redacted() {
++        return Some(ViewRenderCause::ObservationChanged);
++    }
++    if element_state.cache_key.bounds != bounds
++        || element_state.cache_key.content_mask != *content_mask
++        || element_state.cache_key.text_style != *text_style
++        || element_state.cache_key.transform != *transform
++    {
++        return Some(ViewRenderCause::LayoutChanged);
++    }
++    None
++}
++
+ #[inline(never)]
+ fn request_layout_component(
+     name: &'static str,
+@@ -582,14 +639,21 @@ fn prepaint_view(
+                 let text_style = window.text_style();
+                 let transform = window.current_transform();
+ 
+-                if let Some(mut element_state) = element_state
+-                    && element_state.cache_key.bounds == bounds
+-                    && element_state.cache_key.content_mask == content_mask
+-                    && element_state.cache_key.text_style == text_style
+-                    && element_state.cache_key.transform == transform
+-                    && !window.dirty_views.contains(&entity_id)
+-                    && !window.refreshing
+-                {
++                let miss = view_cache_miss(
++                    entity_id,
++                    element_state.as_ref(),
++                    bounds,
++                    &content_mask,
++                    &text_style,
++                    &transform,
++                    window,
++                );
++                if let (None, Some(mut element_state)) = (miss, element_state) {
++                    window.next_frame.observed.view_drawn(
++                        entity_id,
++                        ViewDrawOutcome::Reused,
++                        &window.rendered_frame.observed,
++                    );
+                     let prepaint_start = window.prepaint_index();
+                     window.reuse_prepaint(element_state.prepaint_range.clone());
+                     cx.entities
+@@ -600,6 +664,11 @@ fn prepaint_view(
+                     return (None, element_state);
+                 }
+ 
++                window.next_frame.observed.view_drawn(
++                    entity_id,
++                    ViewDrawOutcome::Rendered(miss.unwrap_or(ViewRenderCause::FirstDraw)),
++                    &window.rendered_frame.observed,
++                );
+                 let refreshing = mem::replace(&mut window.refreshing, true);
+                 let prepaint_start = window.prepaint_index();
+                 let (element, accessed_entities) = cx.detect_accessed_entities(|cx| {
+@@ -623,6 +692,7 @@ fn prepaint_view(
+                             content_mask,
+                             text_style,
+                             transform,
++                            text_redacted: window.next_frame.observed.text_is_redacted(),
+                         },
+                     },
+                 )
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 3b07284..8e5a8dc 100644
+index 3b07284..ac8f689 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -9,8 +9,8 @@ use crate::{
@@ -1062,10 +1523,27 @@ index 3b07284..8e5a8dc 100644
              mouse_hit_test: HitTest::default(),
              modifiers,
              capslock,
-@@ -2501,6 +2603,76 @@ impl Window {
+@@ -2501,6 +2603,118 @@ impl Window {
          }
      }
  
++    /// Schedule a frame without discarding cached views.
++    ///
++    /// [`Self::refresh`] renders every cached view again. This only marks the
++    /// window dirty, so the frame costs what the pending notifications cost:
++    /// a cached view that was not notified replays its previous output.
++    pub fn request_frame(&mut self) {
++        if self.invalidator.not_drawing() {
++            self.invalidator.set_dirty(true);
++        }
++    }
++
++    /// Whether the window has been invalidated since it last drew, so that GPUI
++    /// will draw another frame without any further invalidation.
++    pub fn frame_pending(&self) -> bool {
++        self.invalidator.is_dirty()
++    }
++
 +    /// Observe completed rendered frames and paint a final tooling overlay.
 +    ///
 +    /// The window stores a weak reference. Retain `observer` for as long as it
@@ -1102,6 +1580,31 @@ index 3b07284..8e5a8dc 100644
 +        let Some(node_id) = self.rendered_frame.observed.accessibility_id(id) else {
 +            return false;
 +        };
++        // Composite controls may redirect semantic focus to an inner editor.
++        // Honor their standard AccessKit Focus handler before using the frame's
++        // own focus handle, just as a screen reader does.
++        #[cfg(not(target_family = "wasm"))]
++        if self
++            .a11y
++            .action_listeners
++            .get(&node_id)
++            .is_some_and(|listeners| {
++                listeners
++                    .iter()
++                    .any(|(action, _)| *action == accesskit::Action::Focus)
++            })
++        {
++            self.handle_a11y_action(
++                accesskit::ActionRequest {
++                    action: accesskit::Action::Focus,
++                    target_tree: accesskit::TreeId::ROOT,
++                    target_node: node_id,
++                    data: None,
++                },
++                cx,
++            );
++            return true;
++        }
 +        let Some(focus_id) = self.a11y.focus_ids.get(&node_id).copied() else {
 +            return false;
 +        };
@@ -1139,7 +1642,7 @@ index 3b07284..8e5a8dc 100644
      /// Close this window.
      pub fn remove_window(&mut self) {
          self.removed = true;
-@@ -2912,7 +3084,8 @@ impl Window {
+@@ -2912,7 +3126,8 @@ impl Window {
      pub fn bounds_changed(&mut self, cx: &mut App) {
          self.scale_factor = self.platform_window.scale_factor();
          self.viewport_size = self.platform_window.content_size();
@@ -1149,7 +1652,7 @@ index 3b07284..8e5a8dc 100644
  
          self.refresh();
  
-@@ -3481,7 +3654,7 @@ impl Window {
+@@ -3481,7 +3696,7 @@ impl Window {
  
      /// The position of the mouse relative to the window.
      pub fn mouse_position(&self) -> Point<Pixels> {
@@ -1158,23 +1661,60 @@ index 3b07284..8e5a8dc 100644
      }
  
      /// Captures the pointer for the given hitbox. While captured, all mouse move and mouse up
-@@ -3791,7 +3964,14 @@ impl Window {
+@@ -3542,6 +3757,7 @@ impl Window {
+     /// the contents of the new [`Scene`], use [`Self::present`].
+     #[profiling::function]
+     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
++        let draw_started = Instant::now();
+         // Drain every draw in profiler builds so a previous frame's
+         // first-invalidation timestamp can't be attributed to this one.
+         #[cfg(feature = "profiler")]
+@@ -3684,6 +3900,7 @@ impl Window {
+         }
+         self.needs_present.set(true);
+ 
++        let draw_duration = draw_started.elapsed();
+         #[cfg(feature = "profiler")]
+         {
+             self.window_profiler
+@@ -3693,6 +3910,15 @@ impl Window {
+                 .end_draw(frame_dirty.dirty_at, frame_dirty.invalidations);
+             self.debug_frame_overlay.record_frame(draw_duration);
+         }
++        if self.rendered_frame.observed.is_enabled() {
++            let frame_observers = crate::frame_observer::live_observers(&mut self.frame_observers);
++            if !frame_observers.is_empty() {
++                let frame = self.rendered_frame.observed.drawn(draw_duration);
++                for observer in &frame_observers {
++                    observer.frame_drawn(&frame);
++                }
++            }
++        }
+ 
+         // Exit the scope to obtain the arena-clear token this draw owes; the
+         // scope's teardown itself happens in `ElementArenaScope::drop`.
+@@ -3791,7 +4017,19 @@ impl Window {
          self.invalidator.set_phase(DrawPhase::Prepaint);
          self.tooltip_bounds.take();
  
 -        self.a11y.sync_active_flag();
 +        let mut frame_observers = crate::frame_observer::live_observers(&mut self.frame_observers);
 +        self.next_frame.observed.begin(!frame_observers.is_empty());
++        self.next_frame.observed.set_window_refresh(self.refreshing);
++        let observation_started = Instant::now();
 +        for observer in &frame_observers {
 +            observer.frame_started(self);
 +        }
++        self.next_frame
++            .observed
++            .add_observation(observation_started.elapsed());
 +
 +        self.a11y.sync_active_flag(!frame_observers.is_empty());
 +        let platform_a11y_active_at_start = self.a11y.platform_is_active();
          if self.a11y.is_active() {
              self.a11y.begin_frame();
          }
-@@ -3858,7 +4038,31 @@ impl Window {
+@@ -3858,7 +4096,43 @@ impl Window {
              tooltip_element = self.prepaint_tooltip(cx);
          }
  
@@ -1189,25 +1729,37 @@ index 3b07284..8e5a8dc 100644
 +                scale_factor: self.scale_factor,
 +                tab_stop_count: self.next_frame.tab_stops.tab_stop_count(),
 +            };
-+            Some(self.a11y.end_frame(frame_info))
++            let finish_started = Instant::now();
++            let tree_update = self.a11y.end_frame(frame_info);
++            // Without a platform adapter the tree is finished only for observers.
++            if !platform_a11y_active_at_start {
++                self.next_frame
++                    .observed
++                    .add_observation(finish_started.elapsed());
++            }
++            Some(tree_update)
 +        } else {
 +            None
 +        };
++        let observation_started = Instant::now();
 +        if let Some(tree_update) = tree_update.as_ref()
 +            && !frame_observers.is_empty()
 +        {
-+            let frame = self.next_frame.observed.finish(tree_update.clone());
++            let frame = Arc::new(self.next_frame.observed.finish(tree_update.clone()));
 +            for observer in &frame_observers {
-+                observer.accessibility_updated(&frame);
++                observer.accessibility_frame(&frame);
 +            }
 +        }
 +        for observer in &frame_observers {
 +            observer.paint_started();
 +        }
++        self.next_frame
++            .observed
++            .add_observation(observation_started.elapsed());
  
          // Now actually paint the elements.
          #[cfg(feature = "profiler")]
-@@ -3890,31 +4094,22 @@ impl Window {
+@@ -3890,31 +4164,26 @@ impl Window {
                  paint: Instant::now().duration_since(paint_start),
              });
  
@@ -1228,12 +1780,16 @@ index 3b07284..8e5a8dc 100644
 -            };
 -            // clear the builder state regardless
 -            let tree_update = self.a11y.end_frame(frame_info);
++        let observation_started = Instant::now();
 +        for observer in &frame_observers {
 +            observer.paint_overlay(self, cx);
 +        }
 +        for observer in &frame_observers {
 +            observer.frame_finished();
 +        }
++        self.next_frame
++            .observed
++            .add_observation(observation_started.elapsed());
  
 -            if should_send_a11y_update {
 -                log::debug!(
@@ -1254,7 +1810,7 @@ index 3b07284..8e5a8dc 100644
          }
      }
  
-@@ -4019,6 +4214,7 @@ impl Window {
+@@ -4019,6 +4288,7 @@ impl Window {
                  let (
                      element,
                      parent_node,
@@ -1262,7 +1818,7 @@ index 3b07284..8e5a8dc 100644
                      current_view,
                      rem_size,
                      absolute_offset,
-@@ -4034,6 +4230,7 @@ impl Window {
+@@ -4034,6 +4304,7 @@ impl Window {
                      (
                          deferred_draw.element.take(),
                          deferred_draw.parent_node,
@@ -1270,7 +1826,7 @@ index 3b07284..8e5a8dc 100644
                          deferred_draw.current_view,
                          deferred_draw.rem_size,
                          deferred_draw.absolute_offset,
-@@ -4043,6 +4240,7 @@ impl Window {
+@@ -4043,6 +4314,7 @@ impl Window {
                      )
                  };
                  self.next_frame.dispatch_tree.set_active_node(parent_node);
@@ -1278,7 +1834,7 @@ index 3b07284..8e5a8dc 100644
  
                  let prepaint_start = self.prepaint_index();
                  if let Some(mut element) = element {
-@@ -4065,6 +4263,7 @@ impl Window {
+@@ -4065,6 +4337,7 @@ impl Window {
                      self.reuse_prepaint(prepaint_range);
                  }
                  let prepaint_end = self.prepaint_index();
@@ -1286,7 +1842,7 @@ index 3b07284..8e5a8dc 100644
                  self.next_frame.deferred_draws[deferred_draw_ix].prepaint_range =
                      prepaint_start..prepaint_end;
              }
-@@ -4133,10 +4332,16 @@ impl Window {
+@@ -4133,10 +4406,16 @@ impl Window {
              dispatch_tree_index: self.next_frame.dispatch_tree.len(),
              accessed_element_states_index: self.next_frame.accessed_element_states.len(),
              line_layout_index: self.text_system.layout_index(),
@@ -1303,7 +1859,7 @@ index 3b07284..8e5a8dc 100644
          self.next_frame.hitboxes.extend(
              self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
                  .iter()
-@@ -4182,6 +4387,7 @@ impl Window {
+@@ -4182,6 +4461,7 @@ impl Window {
                  .map(|deferred_draw| DeferredDraw {
                      current_view: deferred_draw.current_view,
                      parent_node: reused_subtree.refresh_node_id(deferred_draw.parent_node),
@@ -1311,7 +1867,7 @@ index 3b07284..8e5a8dc 100644
                      element_id_stack: deferred_draw.element_id_stack.clone(),
                      text_style_stack: deferred_draw.text_style_stack.clone(),
                      content_mask: deferred_draw.content_mask,
-@@ -4470,6 +4676,7 @@ impl Window {
+@@ -4470,6 +4750,7 @@ impl Window {
              self.next_frame
                  .accessed_element_states
                  .truncate(index.accessed_element_states_index);
@@ -1319,7 +1875,7 @@ index 3b07284..8e5a8dc 100644
              self.text_system.truncate_layouts(index.line_layout_index);
          }
          result
-@@ -4733,6 +4940,7 @@ impl Window {
+@@ -4733,6 +5014,7 @@ impl Window {
          self.next_frame.deferred_draws.push(DeferredDraw {
              current_view: self.current_view(),
              parent_node,
@@ -1327,7 +1883,7 @@ index 3b07284..8e5a8dc 100644
              element_id_stack: self.element_id_stack.clone(),
              text_style_stack: self.text_style_stack.clone(),
              content_mask,
-@@ -5848,6 +6056,31 @@ impl Window {
+@@ -5848,6 +6130,31 @@ impl Window {
      /// Dispatch a mouse, keyboard, or touch event on the window.
      #[profiling::function]
      pub fn dispatch_event(&mut self, event: PlatformInput, cx: &mut App) -> DispatchEventResult {
@@ -1359,7 +1915,7 @@ index 3b07284..8e5a8dc 100644
          #[cfg(feature = "profiler")]
          self.window_profiler.begin_input(event.kind_name());
          let update_count_before = self.invalidator.update_count();
-@@ -5874,17 +6107,16 @@ impl Window {
+@@ -5874,17 +6181,16 @@ impl Window {
              // Track the mouse position with our own state, since accessing the platform
              // API for the mouse position can only occur on the main thread.
              PlatformInput::MouseMove(mouse_move) => {
@@ -1379,7 +1935,7 @@ index 3b07284..8e5a8dc 100644
                  self.modifiers = mouse_up.modifiers;
                  PlatformInput::MouseUp(mouse_up)
              }
-@@ -5892,6 +6124,9 @@ impl Window {
+@@ -5892,6 +6198,9 @@ impl Window {
                  PlatformInput::MousePressure(mouse_pressure)
              }
              PlatformInput::MouseExited(mouse_exited) => {
@@ -1389,7 +1945,7 @@ index 3b07284..8e5a8dc 100644
                  self.modifiers = mouse_exited.modifiers;
                  PlatformInput::MouseExited(mouse_exited)
              }
-@@ -5901,12 +6136,12 @@ impl Window {
+@@ -5901,12 +6210,12 @@ impl Window {
                  PlatformInput::ModifiersChanged(modifiers_changed)
              }
              PlatformInput::ScrollWheel(scroll_wheel) => {
@@ -1404,7 +1960,7 @@ index 3b07284..8e5a8dc 100644
                  self.modifiers = pinch.modifiers;
                  PlatformInput::Pinch(pinch)
              }
-@@ -5914,7 +6149,7 @@ impl Window {
+@@ -5914,7 +6223,7 @@ impl Window {
              // to internal drag and drop events.
              PlatformInput::FileDrop(file_drop) => match file_drop {
                  FileDropEvent::Entered { position, paths } => {
@@ -1413,7 +1969,7 @@ index 3b07284..8e5a8dc 100644
                      let source_window = self.handle.window_id();
                      if !cx.restore_platform_drag(source_window) && cx.active_drag.is_none() {
                          cx.active_drag = Some(AnyDrag {
-@@ -5932,7 +6167,7 @@ impl Window {
+@@ -5932,7 +6241,7 @@ impl Window {
                      })
                  }
                  FileDropEvent::Pending { position } => {
@@ -1422,7 +1978,7 @@ index 3b07284..8e5a8dc 100644
                      PlatformInput::MouseMove(MouseMoveEvent {
                          position,
                          pressed_button: Some(MouseButton::Left),
-@@ -5941,7 +6176,7 @@ impl Window {
+@@ -5941,7 +6250,7 @@ impl Window {
                  }
                  FileDropEvent::Submit { position } => {
                      cx.activate(true);
@@ -1431,7 +1987,7 @@ index 3b07284..8e5a8dc 100644
                      PlatformInput::MouseUp(MouseUpEvent {
                          button: MouseButton::Left,
                          position,
-@@ -5964,18 +6199,21 @@ impl Window {
+@@ -5964,18 +6273,21 @@ impl Window {
              },
              PlatformInput::Touch(touch) => PlatformInput::Touch(touch),
              PlatformInput::LongPress(long_press) => {
@@ -1459,7 +2015,7 @@ index 3b07284..8e5a8dc 100644
                  PlatformInput::TouchDrag(touch_drag)
              }
              PlatformInput::KeyDown(_) | PlatformInput::KeyUp(_) => event,
-@@ -5986,7 +6224,7 @@ impl Window {
+@@ -5986,7 +6298,7 @@ impl Window {
          } else if let Some(any_key_event) = event.keyboard_event() {
              self.dispatch_key_event(any_key_event, cx);
          } else if let Some(touch_event) = event.touch_event() {
@@ -1468,7 +2024,7 @@ index 3b07284..8e5a8dc 100644
          }
          if let PlatformInput::LongPress(long_press) = &event {
              match long_press.phase {
-@@ -6064,7 +6302,7 @@ impl Window {
+@@ -6064,7 +6376,7 @@ impl Window {
      /// Runs the portable gesture recognizer over a raw touch event and
      /// dispatches whatever it resolves (scroll steps, synthesized taps)
      /// through the ordinary mouse-event path.
@@ -1477,7 +2033,7 @@ index 3b07284..8e5a8dc 100644
          let mut event = event.clone();
          if !self.touch_prediction_enabled {
              event.predicted_position = None;
-@@ -6073,7 +6311,7 @@ impl Window {
+@@ -6073,7 +6385,7 @@ impl Window {
          if event.phase == crate::TouchPhase::Started
              && let Some(touch_drag) = self.touch_gestures.offer_touch_drag(event.id)
          {
@@ -1486,7 +2042,7 @@ index 3b07284..8e5a8dc 100644
          }
          if event.phase == crate::TouchPhase::Started
              && self.touch_gestures.pending_long_press().is_some()
-@@ -6083,7 +6321,7 @@ impl Window {
+@@ -6083,7 +6395,7 @@ impl Window {
          let mut tapped = false;
          for gesture in recognized_gestures {
              tapped |= matches!(gesture, RecognizedTouchGesture::Tap { .. });
@@ -1495,7 +2051,7 @@ index 3b07284..8e5a8dc 100644
          }
          if event.phase == crate::TouchPhase::Started {
              self.schedule_long_press_timer(cx);
-@@ -6103,22 +6341,27 @@ impl Window {
+@@ -6103,22 +6415,27 @@ impl Window {
          }
      }
  
@@ -1527,7 +2083,7 @@ index 3b07284..8e5a8dc 100644
                  cx.propagate_event = true;
                  self.default_prevented = false;
                  let started = touch_drag.phase == crate::TouchPhase::Started;
-@@ -6129,11 +6372,14 @@ impl Window {
+@@ -6129,11 +6446,14 @@ impl Window {
                  }
              }
              RecognizedTouchGesture::LongPress(long_press) => {
@@ -1547,7 +2103,7 @@ index 3b07284..8e5a8dc 100644
                  cx.propagate_event = true;
                  self.default_prevented = false;
                  let started = long_press.phase == crate::TouchPhase::Started;
-@@ -6166,7 +6412,7 @@ impl Window {
+@@ -6166,7 +6486,7 @@ impl Window {
              cx.update(move |window, cx| {
                  window.long_press_timer.take();
                  if let Some(gesture) = window.touch_gestures.offer_long_press(touch_id) {
@@ -1556,7 +2112,7 @@ index 3b07284..8e5a8dc 100644
                  }
              })
              .log_err();
-@@ -6176,7 +6422,7 @@ impl Window {
+@@ -6176,7 +6496,7 @@ impl Window {
      fn schedule_touch_momentum_tick(&mut self) {
          self.on_next_frame(|window, cx| {
              if let Some(gesture) = window.touch_gestures.tick_momentum() {

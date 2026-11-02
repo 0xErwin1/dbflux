@@ -8,6 +8,8 @@ members = [
     "crates/dbflux_ui_windows",
     "crates/dbflux_ui_sidebar",
     "crates/dbflux_components",
+    "crates/bolt",
+    "crates/bolt_keys",
     "crates/dbflux_core",
     "crates/dbflux_lua",
     "crates/dbflux_js",
@@ -115,6 +117,8 @@ dbflux_driver_s3 = { path = "crates/dbflux_driver_s3" }
 dbflux_driver_aws_secrets = { path = "crates/dbflux_driver_aws_secrets" }
 dbflux_app = { path = "crates/dbflux_app" }
 dbflux_components = { path = "crates/dbflux_components" }
+bolt = { path = "crates/bolt" }
+bolt_keys = { path = "crates/bolt_keys" }
 dbflux_ui_base = { path = "crates/dbflux_ui_base" }
 dbflux_ui_document = { path = "crates/dbflux_ui_document" }
 dbflux_ui_windows = { path = "crates/dbflux_ui_windows" }
@@ -127,6 +131,8 @@ mysql = "28"
 petgraph = "0.7"
 
 gpui = { package = "gpui-pre", version = "=0.3.9" }
+# The same crate under the name gpui-mcp's `gpui-pre` backend expects; keep both in step.
+gpui_pre = { package = "gpui-pre", version = "=0.3.9" }
 gpui-component = { version = "=0.7.3", features = ["tree-sitter"] }
 gpui-pre-platform = { version = "=0.3.9", default-features = false, features = ["font-kit", "wayland", "x11"] }
 gpui-mcp = { path = "vendor/gpui-mcp/crates/gpui-mcp" }

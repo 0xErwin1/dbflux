@@ -1,0 +1,40 @@
+[package]
+name = "bolt"
+description = "Bolt, the product-agnostic design system: tokens, theme and generic GPUI components."
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+
+[features]
+default = []
+# Enables the `test-support` feature of gpui, which the accessibility checks a
+# rendered-surface test runs against a captured frame require.
+test-support = ["gpui/test-support"]
+
+[dependencies]
+bolt_keys.workspace = true
+gpui.workspace = true
+gpui-component.workspace = true
+gpui-base = { path = "../../vendor/gpui-base" }
+fuzzy-matcher.workspace = true
+log.workspace = true
+# The chart module's time-axis tick generation and label formatting work in
+# wall-clock time; chrono is the shared time vocabulary, not a product fact.
+chrono.workspace = true
+# The chart specification types are persisted by the products as JSON; the
+# serde contracts (field names, defaults) are part of the component's surface.
+serde = { workspace = true, features = ["derive"] }
+# The syntax-recoloring helpers restyle gpui-component's private style fields
+# through their serde representation.
+serde_json.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

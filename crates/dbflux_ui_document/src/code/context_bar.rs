@@ -1,7 +1,7 @@
 use super::*;
 use crate::result_view::ResultViewMode;
 use dbflux_components::composites::control_shell;
-use dbflux_components::controls::Button;
+use dbflux_components::controls::{Button, DropdownEnvironment};
 use dbflux_components::icons::DriverIconTone;
 use dbflux_components::primitives::{FocusShape, Icon, Text, focus_ring};
 use dbflux_components::tokens::{ChamferCut, EditorMetrics, Fields};

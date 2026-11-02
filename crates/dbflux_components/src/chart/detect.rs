@@ -1,27 +1,12 @@
-//! Chart column auto-detection.
+//! Chart column auto-detection, adapted from a `QueryResult`.
 //!
-//! This module is the boundary between the query result model and the chart engine.
-//! It inspects `ColumnKind` values — never `type_name` strings or driver identifiers.
+//! The detection rules live in `bolt::chart::detect` over the product-neutral
+//! column contract; this wrapper converts the result's metadata and forwards,
+//! so call sites keep passing a `&QueryResult`.
 
-use dbflux_core::{ColumnKind, QueryResult};
+use dbflux_core::QueryResult;
 
-/// Outcome of attempting to auto-detect chart-suitable columns from a `QueryResult`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ChartDetection {
-    /// Detection succeeded.
-    Ok {
-        /// Index of the leftmost `Timestamp` column (X axis).
-        time_col: usize,
-        /// Indices of all `Float` and `Integer` columns, in column order, excluding `time_col`.
-        numeric_cols: Vec<usize>,
-    },
-    /// The result has no column with `kind == Timestamp`.
-    NoTimeColumn,
-    /// A `Timestamp` column was found but no `Float` or `Integer` columns remain.
-    NoNumericSeries,
-    /// The result has zero data rows; chart cannot be rendered.
-    EmptyResult,
-}
+pub use bolt::chart::detect::ChartDetection;
 
 /// Auto-detect the columns suitable for charting in `result`.
 ///
@@ -34,48 +19,16 @@ pub enum ChartDetection {
 ///
 /// The function never inspects `column.type_name`, `column.name`, or any driver identifier.
 pub fn detect_chart_columns(result: &QueryResult) -> ChartDetection {
-    if result.rows.is_empty() {
-        return ChartDetection::EmptyResult;
-    }
-
-    let time_col = result
-        .columns
-        .iter()
-        .position(|c| c.kind == ColumnKind::Timestamp);
-
-    let time_col = match time_col {
-        Some(idx) => idx,
-        None => return ChartDetection::NoTimeColumn,
-    };
-
-    let numeric_cols: Vec<usize> = result
-        .columns
-        .iter()
-        .enumerate()
-        .filter(|(i, c)| {
-            *i != time_col && (c.kind == ColumnKind::Float || c.kind == ColumnKind::Integer)
-        })
-        .map(|(i, _)| i)
-        .collect();
-
-    if numeric_cols.is_empty() {
-        return ChartDetection::NoNumericSeries;
-    }
-
-    ChartDetection::Ok {
-        time_col,
-        numeric_cols,
-    }
+    bolt::chart::detect::detect_chart_columns(
+        result.rows.len(),
+        &super::compat::chart_columns(&result.columns),
+    )
 }
-
-// ---------------------------------------------------------------------------
-// Unit tests (strict TDD: tests were written before the implementation above)
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
+    use dbflux_core::{ColumnKind, ColumnMeta, Value};
     use std::time::Duration;
 
     fn make_col(kind: ColumnKind) -> ColumnMeta {
@@ -122,20 +75,6 @@ mod tests {
             Duration::ZERO,
         );
         assert_eq!(detect_chart_columns(&result), ChartDetection::NoTimeColumn);
-    }
-
-    #[test]
-    fn returns_no_numeric_series_when_only_timestamp_and_text() {
-        let result = QueryResult::table(
-            vec![make_col(ColumnKind::Timestamp), make_col(ColumnKind::Text)],
-            one_row(),
-            None,
-            Duration::ZERO,
-        );
-        assert_eq!(
-            detect_chart_columns(&result),
-            ChartDetection::NoNumericSeries
-        );
     }
 
     #[test]

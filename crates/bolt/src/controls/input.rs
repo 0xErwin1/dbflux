@@ -1,0 +1,1123 @@
+use std::panic::Location;
+
+use gpui::prelude::*;
+use gpui::{
+    AbsoluteLength, AnyElement, App, Bounds, DefiniteLength, ElementId, Entity, Focusable as _,
+    FontWeight, GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, Pixels,
+    SharedString, StyleRefinement, Window, actions, div,
+};
+use gpui_component::input::{Editor as GpuiEditor, EditorState};
+use gpui_component::{ActiveTheme, Sizable};
+
+use crate::primitives::{Chamfer, ChamferRing};
+use crate::selector::id_selector;
+use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes};
+
+pub use gpui_component::RopeExt;
+pub use gpui_component::input::{
+    CodeActionProvider, CompletionProvider, Enter as InputEnter, Escape as InputEscape,
+    IndentInline as InputIndentInline, Input as GpuiInput, InputContentType, InputEvent,
+    InputState, MoveDown as InputMoveDown, MoveUp as InputMoveUp,
+    OutdentInline as InputOutdentInline, Position as InputPosition, Rope, Search as InputSearch,
+};
+
+actions!(
+    bolt_input,
+    [
+        /// Manually open the completion popover for the focused single-line
+        /// input. Bound to `ctrl-space` by default.
+        TriggerCompletion
+    ]
+);
+
+/// Key context of `gpui-component`'s input element. The host keymap binds
+/// [`InputMoveDown`], [`InputMoveUp`] and [`TriggerCompletion`] in it.
+pub const INPUT_CONTEXT: &str = "Input";
+
+/// Text field built on `gpui_component::input::Input`.
+///
+/// With `appearance` on (the default) the field draws the chamfered shape
+/// itself: the ground fill, a 1 px line on the straight edges and, while the
+/// field holds keyboard focus, an inset tint ring that follows the cut. The
+/// inner `gpui_component` input is borderless and transparent. With
+/// `appearance` off only the bare editable text is drawn, for hosts that
+/// already provide the frame (grid cells, filter fields, shells).
+///
+/// The font family is inherited from the container: forms render in the
+/// interface face, while data surfaces that set the data face on their rows
+/// keep inline edits in that face.
+#[derive(IntoElement)]
+pub struct Input {
+    state: Entity<InputState>,
+    id: Option<ElementId>,
+    aria_label: Option<SharedString>,
+    small: bool,
+    placeholder: Option<gpui::SharedString>,
+    disabled: bool,
+    w_full: bool,
+    appearance: bool,
+    cleanable: bool,
+    secret: bool,
+    prefix: Option<AnyElement>,
+    suffix: Option<AnyElement>,
+    padding: Option<(Pixels, Pixels)>,
+    text_size: Option<AbsoluteLength>,
+    line_height: Option<DefiniteLength>,
+    font_weight: Option<FontWeight>,
+}
+
+impl Input {
+    pub fn new(state: &Entity<InputState>) -> Self {
+        Self {
+            state: state.clone(),
+            id: None,
+            aria_label: None,
+            small: false,
+            placeholder: None,
+            disabled: false,
+            w_full: false,
+            appearance: true,
+            cleanable: false,
+            secret: false,
+            prefix: None,
+            suffix: None,
+            padding: None,
+            text_size: None,
+            line_height: None,
+            font_weight: None,
+        }
+    }
+
+    /// Replaces the inner padding: `x` on the sides, `y` above and below, and
+    /// lets the height follow the line instead of the field height. With
+    /// `appearance(false)`, set it with [`Self::text_size`] and
+    /// [`Self::line_height`] to the values of the text the input replaces, so
+    /// nothing moves when the text turns into a field.
+    pub fn padding(mut self, x: Pixels, y: Pixels) -> Self {
+        self.padding = Some((x, y));
+        self
+    }
+
+    /// Replaces the text size of the input.
+    pub fn text_size(mut self, size: impl Into<AbsoluteLength>) -> Self {
+        self.text_size = Some(size.into());
+        self
+    }
+
+    /// Replaces the line height of the input.
+    pub fn line_height(mut self, height: impl Into<DefiniteLength>) -> Self {
+        self.line_height = Some(height.into());
+        self
+    }
+
+    /// Replaces the text weight: normal in a framed field and medium in a
+    /// bare one by default. A bare field set to normal matches text drawn at
+    /// the regular weight.
+    pub fn font_weight(mut self, weight: FontWeight) -> Self {
+        self.font_weight = Some(weight);
+        self
+    }
+
+    /// Sets the element id of the input frame.
+    ///
+    /// Without it the id is derived from the state entity, so it changes
+    /// between runs. Give an input that UI automation must find a stable id,
+    /// unique within its window.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// Sets the accessible name of the input, normally the visible label of
+    /// the field it edits. Without it the name falls back to the placeholder.
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.aria_label = Some(label.into());
+        self
+    }
+
+    pub fn small(mut self) -> Self {
+        self.small = true;
+        self
+    }
+
+    pub fn placeholder(mut self, text: impl Into<gpui::SharedString>) -> Self {
+        self.placeholder = Some(text.into());
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    pub fn w_full(mut self) -> Self {
+        self.w_full = true;
+        self
+    }
+
+    pub fn appearance(mut self, appearance: bool) -> Self {
+        self.appearance = appearance;
+        self
+    }
+
+    pub fn cleanable(mut self, cleanable: bool) -> Self {
+        self.cleanable = cleanable;
+        self
+    }
+
+    /// Draws `prefix` inside the field, before the text (a leading icon).
+    pub fn prefix(mut self, prefix: impl IntoElement) -> Self {
+        self.prefix = Some(prefix.into_any_element());
+        self
+    }
+
+    /// Draws `suffix` inside the field, after the text (a unit such as `ms`,
+    /// or a show-password toggle).
+    pub fn suffix(mut self, suffix: impl IntoElement) -> Self {
+        self.suffix = Some(suffix.into_any_element());
+        self
+    }
+
+    /// Marks the input as holding a secret.
+    ///
+    /// The input gets the password content type, so its value never reaches
+    /// the accessibility tree or rendered-frame observers (UI automation), even
+    /// while a show-password toggle draws it in plain text. What is drawn on
+    /// screen still follows the state's `masked` flag.
+    pub fn secret(mut self, secret: bool) -> Self {
+        self.secret = secret;
+        self
+    }
+}
+
+impl RenderOnce for Input {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let chamfered = self.appearance;
+
+        let mut input = GpuiInput::new(&self.state)
+            .appearance(false)
+            .disabled(self.disabled);
+
+        input = if chamfered {
+            input
+                .h(if self.small {
+                    Fields::HEIGHT_SMALL
+                } else {
+                    Fields::HEIGHT
+                })
+                .px(Fields::PADDING_X)
+                .gap(Fields::GAP)
+                .font_weight(text_weight(true, self.font_weight))
+                .text_size(Fields::TEXT)
+                .text_color(cx.theme().accent_foreground)
+        } else {
+            input
+                .font_weight(text_weight(false, self.font_weight))
+                .text_size(if self.small {
+                    FontSizes::SM
+                } else {
+                    FontSizes::BASE
+                })
+        };
+
+        if self.small {
+            input = input.small();
+        }
+
+        if let Some((x, y)) = self.padding {
+            input = input.px(x).py(y).h_auto();
+        }
+
+        if let Some(size) = self.text_size {
+            input = input.text_size(size);
+        }
+
+        if let Some(height) = self.line_height {
+            input = input.line_height(height);
+        }
+
+        if self.w_full {
+            input = input.w_full();
+        }
+
+        if self.cleanable {
+            input = input.cleanable(true);
+        }
+
+        if self.secret {
+            input = input.content_type(InputContentType::Password);
+        }
+
+        let selector_id = self.id.clone();
+
+        if let Some(id) = self.id {
+            input = input.id(id);
+        }
+
+        if let Some(label) = self.aria_label {
+            input = input.aria_label(label);
+        }
+
+        if let Some(prefix) = self.prefix {
+            input = input.prefix(prefix);
+        }
+
+        if let Some(suffix) = self.suffix {
+            input = input.suffix(suffix);
+        }
+
+        if !chamfered {
+            return input.into_any_element();
+        }
+
+        let focused = self
+            .state
+            .read(cx)
+            .focus_handle(cx)
+            .contains_focused(window, cx);
+
+        // The frame records the selector: the inner gpui_component input has
+        // no hook for one, and a bare input (`appearance(false)`) gets no
+        // wrapper so its layout stays the host's.
+        div()
+            .when_some(selector_id, |frame, id| {
+                frame.debug_selector(id_selector(&id))
+            })
+            .relative()
+            .w_full()
+            .child(field_shape(
+                cx.theme().background,
+                focused && !self.disabled,
+                self.disabled,
+                cx,
+            ))
+            .child(input)
+            .into_any_element()
+    }
+}
+
+/// Weight of the text of an input: `weight` when the caller set one,
+/// otherwise normal in a framed field and medium in a bare one.
+fn text_weight(chamfered: bool, weight: Option<FontWeight>) -> FontWeight {
+    weight.unwrap_or(if chamfered {
+        FontWeight::NORMAL
+    } else {
+        FontWeight::MEDIUM
+    })
+}
+
+/// The chamfered shape behind a text field: `fill` with a 1 px line on the
+/// straight edges, the inset tint focus ring when `focused`, and the rest
+/// fill at `Fields::DISABLED_OPACITY` when `disabled`.
+pub(crate) fn field_shape(fill: Hsla, focused: bool, disabled: bool, cx: &App) -> Chamfer {
+    let theme = cx.theme();
+    let opacity = if disabled {
+        Fields::DISABLED_OPACITY
+    } else {
+        1.0
+    };
+
+    let shape = Chamfer::new(ChamferCut::CONTROL)
+        .fill(fill.opacity(opacity))
+        .border(theme.border.opacity(opacity));
+
+    if focused {
+        shape.ring(ChamferRing::focus(ChromeColors::tint(theme)))
+    } else {
+        shape
+    }
+}
+
+/// A code editor that shows text the user cannot change.
+///
+/// It is `gpui_component`'s `Editor` with `readonly(true)`, which rejects typing and
+/// pasting but keeps focus, selection and copy. The wrapper also reports the editor as
+/// read-only to assistive technology and to UI automation, which then refuses to replace
+/// its value; `Editor::readonly` alone does neither. Layout is exactly that of the
+/// editor: the wrapper adds no layout node of its own.
+pub struct ReadOnlyEditor {
+    editor: GpuiEditor,
+}
+
+impl ReadOnlyEditor {
+    pub fn new(state: &Entity<EditorState>) -> Self {
+        Self {
+            editor: GpuiEditor::new(state).readonly(true),
+        }
+    }
+
+    pub fn appearance(mut self, appearance: bool) -> Self {
+        self.editor = self.editor.appearance(appearance);
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.editor = self.editor.disabled(disabled);
+        self
+    }
+
+    /// Sets the editor height, like `Editor::h`.
+    pub fn h(mut self, height: impl Into<DefiniteLength>) -> Self {
+        self.editor = self.editor.h(height);
+        self
+    }
+}
+
+impl Styled for ReadOnlyEditor {
+    fn style(&mut self) -> &mut StyleRefinement {
+        self.editor.style()
+    }
+}
+
+impl IntoElement for ReadOnlyEditor {
+    type Element = ReadOnlyAccessibility;
+
+    fn into_element(self) -> Self::Element {
+        ReadOnlyAccessibility {
+            child: self.editor.into_any_element(),
+        }
+    }
+}
+
+/// Marks the first accessibility node its child builds as read-only.
+///
+/// It delegates layout, prepaint and paint to the child, so it has no bounds, id or
+/// style of its own.
+pub struct ReadOnlyAccessibility {
+    child: AnyElement,
+}
+
+impl IntoElement for ReadOnlyAccessibility {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for ReadOnlyAccessibility {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        (self.child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        window.with_accessibility_read_only(|window| {
+            self.child.prepaint(window, cx);
+        });
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.paint(window, cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use gpui::{
+        AccessibilityFrame, AppContext as _, Bounds, Context, Focusable as _, FrameObserver,
+        InteractiveElement as _, IntoElement, Modifiers, ParentElement as _, Pixels, Point, Render,
+        Role, Styled as _, TestAppContext, VisualTestContext, Window, div, point,
+        prelude::FluentBuilder as _, px,
+    };
+
+    use super::{EditorState, GpuiEditor, GpuiInput, Input, InputState, ReadOnlyEditor};
+    use crate::tokens::Heights;
+
+    /// Keeps the latest rendered accessibility frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(Mutex<Option<AccessibilityFrame>>);
+
+    impl FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    /// Node id, role and accessible name of every node in a frame.
+    type ObservedNode = (String, Role, Option<String>);
+
+    struct Field {
+        state: gpui::Entity<InputState>,
+        named: bool,
+    }
+
+    impl Render for Field {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let input = Input::new(&self.state);
+            let input = if self.named {
+                input.id("cm-field-host").aria_label("Host")
+            } else {
+                input
+            };
+
+            div().size_full().child(input)
+        }
+    }
+
+    struct FieldPair {
+        first: gpui::Entity<InputState>,
+        second: gpui::Entity<InputState>,
+    }
+
+    impl Render for FieldPair {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .debug_selector(|| "first-field".to_string())
+                        .child(Input::new(&self.first)),
+                )
+                .child(Input::new(&self.second))
+        }
+    }
+
+    #[gpui::test]
+    fn input_rings_after_tab_but_not_after_a_click(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::install(
+                crate::brand::Brand::neutral(),
+                crate::palette::PaletteMode::Dark,
+                crate::density::Density::Default,
+                cx,
+            );
+        });
+
+        let pair_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let (_, visual) = cx.add_window_view({
+            let pair_slot = pair_slot.clone();
+            move |window, cx| {
+                let first = cx.new(|cx| InputState::new(window, cx));
+                let second = cx.new(|cx| InputState::new(window, cx));
+                let pair = cx.new(|_| FieldPair { first, second });
+                pair_slot.replace(Some(pair.clone()));
+                gpui_component::Root::new(pair, window, cx)
+            }
+        });
+        visual.run_until_parked();
+
+        let pair = pair_slot.borrow().clone().expect("the fields are built");
+        let ring = crate::primitives::FOCUS_RING_SELECTOR;
+
+        let first = visual
+            .debug_bounds("first-field")
+            .expect("the first field is laid out")
+            .center();
+        visual.simulate_click(first, Modifiers::default());
+        settle_frame(visual);
+
+        let first_focused = visual.update(|window, cx| {
+            let state = pair.read(cx).first.clone();
+            state.read(cx).focus_handle(cx).is_focused(window)
+        });
+        assert!(first_focused, "the click focuses the field");
+        assert!(
+            visual.debug_bounds(ring).is_none(),
+            "a clicked field shows no ring"
+        );
+
+        visual.simulate_keystrokes("tab");
+        settle_frame(visual);
+
+        let second_focused = visual.update(|window, cx| {
+            let state = pair.read(cx).second.clone();
+            state.read(cx).focus_handle(cx).is_focused(window)
+        });
+        assert!(second_focused, "Tab moves to the next field");
+        assert!(
+            visual.debug_bounds(ring).is_some(),
+            "a field reached with Tab shows its ring"
+        );
+    }
+
+    /// Open a window holding one input and observe its frames.
+    fn open_field(
+        named: bool,
+        cx: &mut TestAppContext,
+    ) -> (
+        Arc<FrameCapture>,
+        gpui::Entity<Field>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(gpui_component::init);
+
+        let capture = Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (view, visual) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_window);
+            window.refresh();
+            let state = cx.new(|cx| InputState::new(window, cx).placeholder("localhost"));
+            Field { state, named }
+        });
+        visual.run_until_parked();
+
+        (capture, view, visual)
+    }
+
+    /// Redraw the window so the next frame reflects the latest focus and state.
+    fn settle_frame(visual: &mut VisualTestContext) {
+        visual.update(|window, _| window.refresh());
+        visual.run_until_parked();
+    }
+
+    fn render_field(named: bool, cx: &mut TestAppContext) -> Vec<ObservedNode> {
+        let (capture, _view, _visual) = open_field(named, cx);
+
+        let frame = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame");
+
+        frame
+            .nodes()
+            .map(|(_, node)| {
+                let accessible = frame.accessibility_node(node);
+                let role = accessible.map_or_else(|| node.fallback_role(), |node| node.role());
+                let label = accessible
+                    .and_then(|node| node.label())
+                    .map(ToOwned::to_owned);
+                (node.id().to_owned(), role, label)
+            })
+            .collect()
+    }
+
+    #[gpui::test]
+    fn id_and_label_reach_the_rendered_input(cx: &mut TestAppContext) {
+        let nodes = render_field(true, cx);
+
+        let (_, role, label) = nodes
+            .iter()
+            .find(|(id, _, _)| id == "cm-field-host")
+            .expect("the input is found by the id it was given");
+
+        assert_eq!(*role, Role::TextInput);
+        assert_eq!(label.as_deref(), Some("Host"));
+    }
+
+    #[gpui::test]
+    fn input_without_id_keeps_the_entity_id_and_placeholder_name(cx: &mut TestAppContext) {
+        let nodes = render_field(false, cx);
+
+        let (id, _, _) = nodes
+            .iter()
+            .find(|(_, role, _)| *role == Role::TextInput)
+            .expect("the input is rendered");
+
+        assert!(id.starts_with("input-"), "unexpected default id {id}");
+        assert!(
+            nodes
+                .iter()
+                .any(|(_, _, label)| label.as_deref() == Some("localhost")),
+            "the placeholder is no longer the fallback name: {nodes:?}"
+        );
+    }
+
+    /// Focusing the input by its id runs the node's accessibility Focus
+    /// action first, which moves focus into the inner editor, so the window
+    /// then holds the editor's text input handler and text typed through it
+    /// lands in the field.
+    #[gpui::test]
+    fn input_focused_by_id_reaches_the_editor(cx: &mut TestAppContext) {
+        let (_capture, view, visual) = open_field(true, cx);
+
+        let focused =
+            visual.update(|window, cx| window.focus_observed_element("cm-field-host", cx));
+        assert!(focused, "the input frame is focusable by its id");
+        settle_frame(visual);
+
+        let has_handler = visual.update(|window, _| window.has_input_handler());
+        assert!(
+            has_handler,
+            "focusing by id installs the editor's input handler"
+        );
+
+        let replaced = visual.update(|window, cx| window.replace_input_text("db.example", cx));
+        assert!(replaced, "the editor reached by id takes the replaced text");
+
+        let state = visual.update(|_, cx| view.read(cx).state.clone());
+        assert_eq!(
+            visual.update(|_, cx| state.read(cx).value()).as_ref(),
+            "db.example"
+        );
+    }
+
+    #[gpui::test]
+    fn input_value_is_set_by_id_through_the_accessibility_action(cx: &mut TestAppContext) {
+        let (_capture, view, visual) = open_field(true, cx);
+
+        let applied = visual.update(|window, cx| {
+            window.set_observed_element_value("cm-field-host", "db.example", cx)
+        });
+        assert!(applied, "the input frame handles the SetValue action");
+        settle_frame(visual);
+
+        let state = visual.update(|_, cx| view.read(cx).state.clone());
+        assert_eq!(
+            visual.update(|_, cx| state.read(cx).value()).as_ref(),
+            "db.example"
+        );
+
+        let applied =
+            visual.update(|window, cx| window.set_observed_element_value("missing", "value", cx));
+        assert!(!applied, "an unknown id has no SetValue listener");
+    }
+
+    #[gpui::test]
+    fn clicking_the_input_center_gives_its_editor_the_input_handler(cx: &mut TestAppContext) {
+        let (capture, view, visual) = open_field(true, cx);
+
+        let center = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .as_ref()
+            .and_then(|frame| {
+                frame
+                    .nodes()
+                    .find(|(_, node)| node.id() == "cm-field-host")
+                    .map(|(_, node)| node.bounds().center())
+            })
+            .expect("the input is found by the id it was given");
+
+        visual.simulate_click(center, Modifiers::none());
+        settle_frame(visual);
+
+        let inserted = visual.update(|window, cx| window.insert_input_text("db.example", cx));
+        assert!(inserted, "a click at the input center focuses its editor");
+
+        let state = visual.update(|_, cx| view.read(cx).state.clone());
+        assert_eq!(
+            visual.update(|_, cx| state.read(cx).value()).as_ref(),
+            "db.example"
+        );
+    }
+
+    /// Where the automation server clicks a text input to focus its editor: vertically
+    /// centered, a third of the width from the left edge and at most 40 px from it.
+    fn text_area_point(bounds: Bounds<Pixels>) -> Point<Pixels> {
+        point(
+            bounds.origin.x + (bounds.size.width / 3.0).min(px(40.0)),
+            bounds.center().y,
+        )
+    }
+
+    /// An input with a trailing clear button, and optionally a leading icon.
+    struct DecoratedField {
+        state: gpui::Entity<InputState>,
+        width: Pixels,
+        leading_icon: bool,
+    }
+
+    impl Render for DecoratedField {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let input = GpuiInput::new(&self.state)
+                .id("decorated-field")
+                .cleanable(true)
+                .when(self.leading_icon, |input| {
+                    input.prefix(div().size(Heights::ICON_SM))
+                });
+
+            div().size_full().child(div().w(self.width).child(input))
+        }
+    }
+
+    /// Open a window holding one decorated input with text, so its clear button is drawn,
+    /// and return the point the automation server clicks.
+    fn open_decorated_field(
+        width: Pixels,
+        leading_icon: bool,
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui::Entity<DecoratedField>,
+        Point<Pixels>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(gpui_component::init);
+
+        let capture = Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (view, visual) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_window);
+            window.refresh();
+            let state = cx.new(|cx| InputState::new(window, cx).default_value("abc"));
+            DecoratedField {
+                state,
+                width,
+                leading_icon,
+            }
+        });
+        visual.run_until_parked();
+
+        let bounds = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .as_ref()
+            .and_then(|frame| {
+                frame
+                    .nodes()
+                    .find(|(_, node)| node.id() == "decorated-field")
+                    .map(|(_, node)| node.bounds())
+            })
+            .expect("the input is found by the id it was given");
+
+        (view, text_area_point(bounds), visual)
+    }
+
+    /// Click `target` and type after it, as `focus_element` then `type_text` do.
+    fn click_and_type(
+        view: &gpui::Entity<DecoratedField>,
+        target: Point<Pixels>,
+        visual: &mut VisualTestContext,
+    ) -> (bool, String) {
+        visual.simulate_click(target, Modifiers::none());
+        settle_frame(visual);
+
+        let inserted = visual.update(|window, cx| window.insert_input_text("!", cx));
+        let state = visual.update(|_, cx| view.read(cx).state.clone());
+        let value = visual.update(|_, cx| state.read(cx).value().to_string());
+        (inserted, value)
+    }
+
+    #[gpui::test]
+    fn the_text_area_of_a_narrow_input_with_a_clear_button_focuses_its_editor(
+        cx: &mut TestAppContext,
+    ) {
+        // At this width the bounds center lands on the clear button.
+        let (view, target, visual) = open_decorated_field(px(56.0), false, cx);
+
+        let (inserted, value) = click_and_type(&view, target, visual);
+
+        assert!(
+            inserted,
+            "the click reached the editor, not the clear button"
+        );
+        assert_eq!(value.len(), 4, "one character was typed into {value:?}");
+    }
+
+    #[gpui::test]
+    fn the_text_area_of_an_input_with_a_leading_icon_focuses_its_editor(cx: &mut TestAppContext) {
+        let (view, target, visual) = open_decorated_field(px(320.0), true, cx);
+
+        let (inserted, value) = click_and_type(&view, target, visual);
+
+        assert!(
+            inserted,
+            "the click reached the editor, not the leading icon"
+        );
+        assert_eq!(value.len(), 4, "one character was typed into {value:?}");
+    }
+
+    struct BareFields {
+        padded: gpui::Entity<InputState>,
+        plain: gpui::Entity<InputState>,
+        reference: gpui::Entity<InputState>,
+    }
+
+    impl Render for BareFields {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_start()
+                .child(
+                    div().debug_selector(|| "bare-padded".into()).child(
+                        Input::new(&self.padded)
+                            .appearance(false)
+                            .padding(px(0.0), px(2.0))
+                            .text_size(crate::tokens::FontSizes::BASE)
+                            .line_height(px(18.0)),
+                    ),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "bare-plain".into())
+                        .child(Input::new(&self.plain).appearance(false)),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "bare-reference".into())
+                        .child(GpuiInput::new(&self.reference).appearance(false)),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn a_bare_input_takes_the_padding_and_text_size_of_the_text_it_replaces(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let (_view, visual) = cx.add_window_view(|window, cx| BareFields {
+            padded: cx.new(|cx| InputState::new(window, cx).default_value("users")),
+            plain: cx.new(|cx| InputState::new(window, cx).default_value("users")),
+            reference: cx.new(|cx| InputState::new(window, cx).default_value("users")),
+        });
+        visual.run_until_parked();
+
+        let padded = visual
+            .debug_bounds("bare-padded")
+            .expect("the padded input is laid out");
+        assert_eq!(
+            padded.size.height,
+            px(22.0),
+            "18 px line plus 2 px above and below"
+        );
+
+        let plain = visual
+            .debug_bounds("bare-plain")
+            .expect("the plain input is laid out");
+        let reference = visual
+            .debug_bounds("bare-reference")
+            .expect("the reference input is laid out");
+        assert_eq!(
+            plain.size.height, reference.size.height,
+            "without the options a bare input keeps gpui-component's height"
+        );
+    }
+
+    /// The builder chains the read-only editors a host's views use.
+    #[derive(Clone, Copy, Debug)]
+    enum ReadOnlyLayout {
+        /// The audit viewer's event details.
+        AuditDetails,
+        /// The object browser's decoded preview.
+        ObjectPreview,
+        /// The query builder's SQL preview.
+        QueryPreview,
+    }
+
+    const LAYOUTS: [ReadOnlyLayout; 3] = [
+        ReadOnlyLayout::AuditDetails,
+        ReadOnlyLayout::ObjectPreview,
+        ReadOnlyLayout::QueryPreview,
+    ];
+
+    /// One code editor, either wrapped in `ReadOnlyEditor` or built as a plain
+    /// `Editor::readonly(true)`, or as a plain editable `Editor`.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum EditorKind {
+        Wrapped,
+        PlainReadOnly,
+        Editable,
+    }
+
+    struct EditorField {
+        state: gpui::Entity<EditorState>,
+        layout: ReadOnlyLayout,
+        kind: EditorKind,
+    }
+
+    impl Render for EditorField {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let state = &self.state;
+            let editor = match (self.layout, self.kind) {
+                (ReadOnlyLayout::AuditDetails, EditorKind::Wrapped) => ReadOnlyEditor::new(state)
+                    .appearance(false)
+                    .w_full()
+                    .h(px(96.0))
+                    .into_any_element(),
+                (ReadOnlyLayout::AuditDetails, kind) => GpuiEditor::new(state)
+                    .readonly(kind == EditorKind::PlainReadOnly)
+                    .appearance(false)
+                    .w_full()
+                    .h(px(96.0))
+                    .into_any_element(),
+                (ReadOnlyLayout::ObjectPreview, EditorKind::Wrapped) => ReadOnlyEditor::new(state)
+                    .appearance(false)
+                    .disabled(false)
+                    .w_full()
+                    .h_full()
+                    .into_any_element(),
+                (ReadOnlyLayout::ObjectPreview, kind) => GpuiEditor::new(state)
+                    .appearance(false)
+                    .readonly(kind == EditorKind::PlainReadOnly)
+                    .disabled(false)
+                    .w_full()
+                    .h_full()
+                    .into_any_element(),
+                (ReadOnlyLayout::QueryPreview, EditorKind::Wrapped) => ReadOnlyEditor::new(state)
+                    .appearance(false)
+                    .w_full()
+                    .h(px(140.0))
+                    .into_any_element(),
+                (ReadOnlyLayout::QueryPreview, kind) => GpuiEditor::new(state)
+                    .readonly(kind == EditorKind::PlainReadOnly)
+                    .appearance(false)
+                    .w_full()
+                    .h(px(140.0))
+                    .into_any_element(),
+            };
+
+            div().size_full().flex().flex_col().child(editor)
+        }
+    }
+
+    /// What a test learns about the editor node of one rendered frame.
+    struct ObservedEditor {
+        id: String,
+        bounds: Bounds<Pixels>,
+        read_only: bool,
+    }
+
+    /// Open a window holding one code editor and observe its frames.
+    fn open_editor(
+        layout: ReadOnlyLayout,
+        kind: EditorKind,
+        cx: &mut TestAppContext,
+    ) -> (
+        Arc<FrameCapture>,
+        gpui::Entity<EditorField>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(gpui_component::init);
+
+        let capture = Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (view, visual) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_window);
+            window.refresh();
+            let state = cx.new(|cx| EditorState::new(window, cx).default_value("SELECT 1"));
+            EditorField {
+                state,
+                layout,
+                kind,
+            }
+        });
+        visual.run_until_parked();
+
+        (capture, view, visual)
+    }
+
+    fn observed_editor(capture: &FrameCapture) -> ObservedEditor {
+        let guard = capture.0.lock().expect("frame capture lock");
+        let frame = guard.as_ref().expect("the window rendered a frame");
+        frame
+            .nodes()
+            .find_map(|(_, node)| {
+                let accessible = frame.accessibility_node(node)?;
+                (accessible.role() == Role::MultilineTextInput).then(|| ObservedEditor {
+                    id: node.id().to_owned(),
+                    bounds: node.bounds(),
+                    read_only: accessible.is_read_only(),
+                })
+            })
+            .expect("the editor is rendered as a multi-line text input")
+    }
+
+    fn editor_value(view: &gpui::Entity<EditorField>, visual: &mut VisualTestContext) -> String {
+        let state = visual.update(|_, cx| view.read(cx).state.clone());
+        visual.update(|_, cx| state.read(cx).value().to_string())
+    }
+
+    #[gpui::test]
+    fn read_only_editors_are_reported_read_only_and_refuse_a_new_value(cx: &mut TestAppContext) {
+        for layout in LAYOUTS {
+            let (capture, view, visual) = open_editor(layout, EditorKind::Wrapped, cx);
+            let editor = observed_editor(&capture);
+            assert!(editor.read_only, "{layout:?} is not reported read-only");
+
+            let applied = visual.update(|window, cx| {
+                window.set_observed_element_value(&editor.id, "DROP TABLE users", cx)
+            });
+            settle_frame(visual);
+
+            assert!(!applied, "{layout:?} accepted a new value");
+            assert_eq!(editor_value(&view, visual), "SELECT 1", "{layout:?}");
+            assert!(
+                observed_editor(&capture).read_only,
+                "{layout:?} after a redraw"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn read_only_editors_keep_the_layout_of_the_plain_editor(cx: &mut TestAppContext) {
+        for layout in LAYOUTS {
+            let (wrapped, _, _) = open_editor(layout, EditorKind::Wrapped, cx);
+            let (plain, _, _) = open_editor(layout, EditorKind::PlainReadOnly, cx);
+
+            let wrapped = observed_editor(&wrapped);
+            let plain = observed_editor(&plain);
+
+            assert!(!plain.read_only, "Editor::readonly alone reports nothing");
+            assert_eq!(wrapped.bounds, plain.bounds, "{layout:?}");
+            assert!(
+                wrapped.bounds.size.height > px(0.0),
+                "{layout:?} has no height"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn an_editable_editor_still_accepts_a_new_value(cx: &mut TestAppContext) {
+        let (capture, view, visual) =
+            open_editor(ReadOnlyLayout::QueryPreview, EditorKind::Editable, cx);
+        let editor = observed_editor(&capture);
+        assert!(!editor.read_only);
+
+        let applied = visual
+            .update(|window, cx| window.set_observed_element_value(&editor.id, "SELECT 2", cx));
+        settle_frame(visual);
+
+        assert!(applied, "the editable editor handles the SetValue action");
+        assert_eq!(editor_value(&view, visual), "SELECT 2");
+    }
+
+    #[test]
+    fn the_text_weight_defaults_by_frame_and_takes_the_callers_weight() {
+        use gpui::FontWeight;
+
+        assert_eq!(super::text_weight(true, None), FontWeight::NORMAL);
+        assert_eq!(super::text_weight(false, None), FontWeight::MEDIUM);
+        assert_eq!(
+            super::text_weight(false, Some(FontWeight::NORMAL)),
+            FontWeight::NORMAL
+        );
+        assert_eq!(
+            super::text_weight(true, Some(FontWeight::BOLD)),
+            FontWeight::BOLD
+        );
+    }
+}
