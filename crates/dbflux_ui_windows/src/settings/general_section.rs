@@ -2432,6 +2432,36 @@ mod tests {
     }
 
     #[gpui::test]
+    fn saving_keeps_an_inspector_width_the_window_never_saw(cx: &mut TestAppContext) {
+        let (section, _toasts, window) = open_general_section(cx);
+
+        // The inspector is resized while this settings window stays open.
+        window.update(|_, cx| {
+            let app_state = section.read(cx).app_state.clone();
+            let mut settings = app_state.read(cx).general_settings().clone();
+            settings.workspace_inspector_width_px = Some(480.0);
+            app_state.update(cx, |state, _cx| {
+                state.update_general_settings(settings.clone());
+            });
+        });
+
+        save(&section, window);
+
+        window.update(|_, cx| {
+            assert_eq!(
+                section
+                    .read(cx)
+                    .app_state
+                    .read(cx)
+                    .general_settings()
+                    .workspace_inspector_width_px,
+                Some(480.0),
+                "saving another setting must not write back a stale width"
+            );
+        });
+    }
+
+    #[gpui::test]
     fn the_object_preview_hint_sits_under_its_field(cx: &mut TestAppContext) {
         let (_section, _toasts, window) = open_general_section(cx);
 

@@ -139,6 +139,7 @@ fn save_general_settings_to(
         grid_fk_labels: if settings.grid_fk_labels { 1 } else { 0 },
         scrollbar_visibility: scrollbar_visibility_to_storage(settings.scrollbar_visibility)
             .to_string(),
+        workspace_inspector_width_px: settings.workspace_inspector_width_px.map(f64::from),
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1141,7 +1142,9 @@ fn load_general_settings(
         confirm_dangerous_queries: dto.confirm_dangerous_queries != 0,
         dangerous_requires_where: dto.dangerous_requires_where != 0,
         dangerous_requires_preview: dto.dangerous_requires_preview != 0,
-        workspace_inspector_width_px: None,
+        workspace_inspector_width_px: inspector_width_from_storage(
+            dto.workspace_inspector_width_px,
+        ),
         schema_snapshot_retention: dto.schema_snapshot_retention as usize,
         object_preview_size_limit_mib: dto.object_preview_size_limit_mib as u64,
         language: language_setting_from_storage(&dto.language),
@@ -1174,6 +1177,14 @@ fn load_general_settings(
         grid_fk_labels: dto.grid_fk_labels != 0,
         scrollbar_visibility: scrollbar_visibility_from_storage(&dto.scrollbar_visibility),
     }
+}
+
+/// Converts a stored inspector width to the `f32` the settings carry. A
+/// width that is not a positive finite `f32` falls back to the default.
+fn inspector_width_from_storage(width: Option<f64>) -> Option<f32> {
+    width
+        .map(|width| width as f32)
+        .filter(|width| width.is_finite() && *width > 0.0)
 }
 
 /// Converts a stored font size to the clamped `f32` the settings carry.
@@ -2789,6 +2800,7 @@ mod tests {
             table_alias_use_as: 0,
             grid_fk_labels: 0,
             scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
             updated_at: String::new(),
         };
 
@@ -2888,6 +2900,7 @@ mod tests {
             table_alias_use_as: 0,
             grid_fk_labels: 0,
             scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
             updated_at: String::new(),
         };
         runtime
@@ -3009,6 +3022,47 @@ mod tests {
         assert_eq!(dto.theme, "system");
         assert_eq!(dto.max_history_entries, 77);
         assert_eq!(dto.auto_save_interval_ms, 1234);
+    }
+
+    #[test]
+    fn inspector_width_round_trips_through_save_and_load() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let loaded = load_config(&runtime).expect("load default configuration");
+        assert_eq!(loaded.general_settings.workspace_inspector_width_px, None);
+
+        let settings = GeneralSettings {
+            workspace_inspector_width_px: Some(420.5),
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("save inspector width");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(
+            loaded.general_settings.workspace_inspector_width_px,
+            Some(420.5)
+        );
+
+        let settings = GeneralSettings {
+            workspace_inspector_width_px: None,
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("clear inspector width");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.general_settings.workspace_inspector_width_px, None);
+    }
+
+    #[test]
+    fn inspector_width_from_storage_rejects_unusable_widths() {
+        assert_eq!(super::inspector_width_from_storage(None), None);
+        assert_eq!(super::inspector_width_from_storage(Some(0.0)), None);
+        assert_eq!(super::inspector_width_from_storage(Some(-5.0)), None);
+        assert_eq!(super::inspector_width_from_storage(Some(f64::NAN)), None);
+        assert_eq!(super::inspector_width_from_storage(Some(f64::MAX)), None);
+        assert_eq!(
+            super::inspector_width_from_storage(Some(420.5)),
+            Some(420.5)
+        );
     }
 
     #[test]
@@ -3277,6 +3331,7 @@ mod tests {
             table_alias_use_as: 0,
             grid_fk_labels: 0,
             scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
             updated_at: String::new(),
         };
         runtime
