@@ -397,19 +397,27 @@ impl Render for Workspace {
                             .flex()
                             .flex_col()
                             .size_full()
+                            // Record that the document area owns the input
+                            // without moving the keyboard: the click's own
+                            // target already took it. `set_focus` here would
+                            // steal it back from the field the click just
+                            // focused — the query bar of a document collection
+                            // on the first click after the sidebar held the
+                            // keyboard — and leave the grid's single-key
+                            // shortcuts claiming every typed letter (#1234).
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
+                                cx.listener(|this, _, _, cx| {
                                     if this.focus_target != FocusTarget::Document {
-                                        this.set_focus(FocusTarget::Document, window, cx);
+                                        this.mark_focus_target(FocusTarget::Document, cx);
                                     }
                                 }),
                             )
                             .on_mouse_down(
                                 MouseButton::Right,
-                                cx.listener(|this, _, window, cx| {
+                                cx.listener(|this, _, _, cx| {
                                     if this.focus_target != FocusTarget::Document {
-                                        this.set_focus(FocusTarget::Document, window, cx);
+                                        this.mark_focus_target(FocusTarget::Document, cx);
                                     }
                                 }),
                             )
