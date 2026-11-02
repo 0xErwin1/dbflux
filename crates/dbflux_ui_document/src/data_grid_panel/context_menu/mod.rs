@@ -729,6 +729,12 @@ impl DataGridPanel {
             return ContextId::TextInput;
         }
 
+        // A focused query bar field takes the letters typed into it, even
+        // when a side panel last held the keyboard.
+        if self.focus.focused_query_input.is_some() {
+            return ContextId::TextInput;
+        }
+
         if let Some(context) = self.builder_rail_context(cx) {
             return context;
         }
