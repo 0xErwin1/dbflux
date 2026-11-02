@@ -371,6 +371,15 @@ enum EditState {
     Editing,
 }
 
+/// A text field of the query bar above the grid.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum QueryInput {
+    Filter,
+    Limit,
+    Projection,
+    Sort,
+}
+
 /// Sort state for in-memory sorting (QueryResult source only).
 #[derive(Clone, Copy)]
 struct LocalSortState {
@@ -714,6 +723,10 @@ struct FocusState {
     focus_mode: GridFocusMode,
     toolbar_focus: ToolbarFocus,
     edit_state: EditState,
+    /// The query bar field holding the keyboard, tracked from its focus
+    /// events so every way into the field (click, Tab, a command) turns the
+    /// grid's single-key shortcuts off while the user types.
+    focused_query_input: Option<QueryInput>,
     switching_input: bool,
     context_menu_focus: FocusHandle,
     /// Holds the keyboard while the export menu is open, so the menu keys
@@ -1166,7 +1179,11 @@ impl DataGridPanel {
                     this.refresh(window, cx);
                     this.focus_table(window, cx);
                 }
+                InputEvent::Focus => {
+                    this.query_input_focused(QueryInput::Filter, cx);
+                }
                 InputEvent::Blur => {
+                    this.query_input_blurred(QueryInput::Filter, cx);
                     this.exit_edit_mode(window, cx);
                 }
                 InputEvent::Change => {
@@ -1201,7 +1218,11 @@ impl DataGridPanel {
                     this.refresh(window, cx);
                     this.focus_table(window, cx);
                 }
+                InputEvent::Focus => {
+                    this.query_input_focused(QueryInput::Limit, cx);
+                }
                 InputEvent::Blur => {
+                    this.query_input_blurred(QueryInput::Limit, cx);
                     this.exit_edit_mode(window, cx);
                 }
                 _ => {}
@@ -1417,6 +1438,7 @@ impl DataGridPanel {
                 focus_mode: GridFocusMode::default(),
                 toolbar_focus: ToolbarFocus::default(),
                 edit_state: EditState::default(),
+                focused_query_input: None,
                 switching_input: false,
                 context_menu_focus,
                 export_menu_focus: cx.focus_handle(),

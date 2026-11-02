@@ -46,7 +46,7 @@ use gpui::*;
 use gpui_component::input::EditorState;
 
 use self::columns::{FlatCell, FlatView, StepTarget};
-use super::{DataGridPanel, DataSource};
+use super::{DataGridPanel, DataSource, QueryInput};
 use crate::data_view::DataViewMode;
 
 /// Documents a fresh schema sample reads.
@@ -318,14 +318,18 @@ impl CollectionViewState {
 
         let mut subscriptions = Vec::new();
 
-        for slot in [projection_input.clone(), sort_input.clone()] {
+        for (slot, query_input) in [
+            (projection_input.clone(), QueryInput::Projection),
+            (sort_input.clone(), QueryInput::Sort),
+        ] {
             subscriptions.push(cx.subscribe_in(
                 &slot,
                 window,
-                |this, _, event: &InputEvent, window, cx| {
-                    if let InputEvent::PressEnter { .. } = event {
-                        this.find_documents(window, cx);
-                    }
+                move |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::PressEnter { .. } => this.find_documents(window, cx),
+                    InputEvent::Focus => this.query_input_focused(query_input, cx),
+                    InputEvent::Blur => this.query_input_blurred(query_input, cx),
+                    InputEvent::Change => {}
                 },
             ));
         }
