@@ -984,6 +984,18 @@ impl TreeMetrics {
     pub const SELECTION_BAR: Pixels = px(2.0);
 }
 
+/// Geometry of a timeline strip (`primitives::TimelineStrip`): a 10 px
+/// track on the inset fill, with bars never narrower than 2 px so a phase
+/// too short for the axis still shows.
+pub struct TimelineMetrics;
+
+impl TimelineMetrics {
+    /// Track height. (10 px)
+    pub const STRIP_HEIGHT: Pixels = px(10.0);
+    /// Narrowest bar. (2 px)
+    pub const MIN_BAR: Pixels = px(2.0);
+}
+
 /// Geometry of the document tree's rows (`components::document_tree`).
 ///
 /// The document tree is the grid surface of document collections, so its
