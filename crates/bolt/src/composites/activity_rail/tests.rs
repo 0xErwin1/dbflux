@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    Context, IntoElement, Modifiers, ParentElement as _, Render, SharedString, Styled as _,
-    TestAppContext, VisualTestContext, Window, div,
+    Context, IntoElement, Modifiers, Render, SharedString, TestAppContext, VisualTestContext,
+    Window, div,
 };
 
 use super::*;

@@ -1455,7 +1455,7 @@ mod auto_dismiss_tests {
         assert_eq!(hidden(&host, cx), 0);
         assert_eq!(
             host.read_with(cx, |host, _| host.toasts.first().unwrap().title.to_string()),
-            format!("toast 3"),
+            "toast 3".to_string(),
             "the oldest toasts are the ones dismissed"
         );
     }

@@ -1,10 +1,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use gpui::{
-    Context, IntoElement, Modifiers, ParentElement as _, Render, Styled as _, TestAppContext,
-    Window, div,
-};
+use gpui::{Context, IntoElement, Modifiers, Render, TestAppContext, Window, div};
 
 use super::*;
 
