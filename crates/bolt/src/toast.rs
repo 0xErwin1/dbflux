@@ -191,6 +191,10 @@ pub struct ToastAction {
     pub callback: Option<ToastActionCallback>,
     /// Close the toast after the callback runs.
     pub dismisses: bool,
+    /// Key chord that runs the same action, in the syntax `KeyBinding` and
+    /// `Keystroke::parse` take (`ctrl-z`), shown as a keycap next to the
+    /// label. Set it through [`Self::key_hint`].
+    key_hint: Option<SharedString>,
 }
 
 impl ToastAction {
@@ -201,6 +205,7 @@ impl ToastAction {
             primary: false,
             callback: None,
             dismisses: false,
+            key_hint: None,
         }
     }
 
@@ -221,6 +226,17 @@ impl ToastAction {
     /// the toast was about (for example "Skip").
     pub fn dismisses(mut self) -> Self {
         self.dismisses = true;
+        self
+    }
+
+    /// Shows the chord that runs the same action (`ctrl-z`, the syntax
+    /// `KeyBinding` takes) as a keycap next to the label, inside the
+    /// action's button. The button itself keeps the action's label as its
+    /// accessible name, so activating it is announced as "Undo" and not as
+    /// a chord it cannot press; the keycap is a node of its own and names
+    /// the chord it shows.
+    pub fn key_hint(mut self, hint: impl Into<SharedString>) -> Self {
+        self.key_hint = Some(hint.into());
         self
     }
 }
@@ -983,6 +999,12 @@ impl ToastHost {
                 if action.primary {
                     button = button.primary();
                 }
+                if let Some(hint) = action.key_hint.as_ref() {
+                    let keys = crate::command_palette::palette_shortcut_parts(hint).join(" ");
+                    // The keycap is for the eye: the label alone stays the
+                    // button's accessible name (see `ToastAction::key_hint`).
+                    button = button.kbd(keys).aria_label(action.label.clone());
+                }
                 match action.callback.as_ref() {
                     Some(_) => {
                         let host = cx.entity();
@@ -1479,3 +1501,7 @@ mod auto_dismiss_tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "toast_action_hint_tests.rs"]
+mod action_hint_tests;

@@ -32,7 +32,7 @@ rendering in Bolt, the domain knowledge behind a seam the product fills.
 | `bolt::semantic` | Banner, row-state and chart-chrome colors per palette |
 | `bolt::icon` | `IconSource`: a named icon or an SVG path |
 | `bolt::primitives` | Badge, banner, chamfer, divider, file picker, focus ring, keycap, label, loading state, segmented control, status, surface, text, type-to-confirm |
-| `bolt::controls` | Button, checkbox, dropdown, select trigger, input, read-only text view |
+| `bolt::controls` | Button, checkbox, dropdown, select trigger, input, read-only text view, key capture |
 | `bolt::composites` | Tabs (document, result, inline), menu item and popup menu, list row, empty state, split button, splitter, field row, island |
 | `bolt::selector` | `id_selector`: the gpui debug selector every id-bearing component records for its element id |
 | `bolt::modals` | The modal dialog, its focus helper and the shared body blocks (lead, statement, field, form row, value field) |

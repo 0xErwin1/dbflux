@@ -874,6 +874,12 @@ impl Feedback {
     pub const SPINNER_BOLT_HEIGHT: Pixels = px(14.0);
     /// Opacity of the unfilled part of the bolt.
     pub const SPINNER_TRACK_ALPHA: f32 = 0.25;
+
+    /// Determinate progress bar track height (4 px), matching the toast,
+    /// task and modal progress tracks.
+    pub const PROGRESS_TRACK_HEIGHT: Pixels = px(4.0);
+    /// Opacity of the unfilled track of the determinate progress bar.
+    pub const PROGRESS_TRACK_ALPHA: f32 = 0.25;
 }
 
 /// Geometry of context menus (`composites::menu_item`), from the cell menu in

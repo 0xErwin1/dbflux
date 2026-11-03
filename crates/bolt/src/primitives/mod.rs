@@ -32,7 +32,7 @@ pub use focus_ring::{
 pub use icon::Icon;
 pub use kbd::{Kbd, KbdTone, key_label};
 pub use label::Label;
-pub use loading_state::{LoadingState, Spinner};
+pub use loading_state::{LoadingState, Progress, Spinner, progress_fill_id};
 pub use segmented_control::{
     SegmentedControl, SegmentedItem, new_active_id, segmented_group_id, segmented_item_id,
     stepped_segment,
