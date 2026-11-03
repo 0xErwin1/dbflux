@@ -231,9 +231,10 @@ impl ToastAction {
 
     /// Shows the chord that runs the same action (`ctrl-z`, the syntax
     /// `KeyBinding` takes) as a keycap next to the label, inside the
-    /// action's button. The keycap is drawn for the eye only: the button
-    /// keeps the label as its accessible name, so assistive technology
-    /// does not read a chord the button itself cannot press.
+    /// action's button. The button itself keeps the action's label as its
+    /// accessible name, so activating it is announced as "Undo" and not as
+    /// a chord it cannot press; the keycap is a node of its own and names
+    /// the chord it shows.
     pub fn key_hint(mut self, hint: impl Into<SharedString>) -> Self {
         self.key_hint = Some(hint.into());
         self
