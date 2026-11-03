@@ -39,7 +39,7 @@ rendering in Bolt, the domain knowledge behind a seam the product fills.
 | `bolt::shell` | The activity rail: view buttons with one active entry, top or bottom pinned |
 | `bolt::data` | The row-and-cell contract: `ColumnView`, `CellView`, `CellTone`, `CellContent`, `RowSource`, `RowVisualState`, `ColumnKind` |
 | `bolt::components::grid` | The data-grid row list and cell painter over `RowSource`, plus the `GridHost` carrying the host facts |
-| `bolt::components::tree_nav` | Tree navigation: flattening, cursor, expansion, the gutter |
+| `bolt::components::tree_nav` | Tree navigation: flattening, cursor, expansion, the gutter, the navigation row with its chevron, count and trailing slot |
 | `bolt::components::document_tree` | The document-tree row painter, its value-type colors and its row host |
 | `bolt::chart` | Decimation, axis ticks, series stats, legend, axis bar, point inspector, the spec's value types and the readout formatters |
 | `bolt::command_palette` | The palette engine: fuzzy query, scopes, grouping, cursor, highlighting, card and footer |
