@@ -4,7 +4,7 @@ use std::{
     ptr::NonNull,
     rc::Rc,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use calloop::ping::Ping;
@@ -31,6 +31,7 @@ use wayland_protocols::{
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
+use crate::linux::wayland::client::FRAME_RETRY_INTERVAL;
 use crate::linux::wayland::{display::WaylandDisplay, serial::SerialKind};
 use crate::linux::{Globals, Output, WaylandClientStatePtr, get_window};
 use gpui::{
@@ -549,6 +550,9 @@ pub struct WaylandWindowStatePtr {
     frame_loop: Rc<Cell<FrameLoop>>,
     frame_ping: Ping,
     scheduled_frame_at: Rc<Cell<Option<Instant>>>,
+    /// Bumped by every tick. A frame timer armed before the latest tick is stale: the
+    /// request it served has been drawn, and firing it would add an unpaced draw.
+    frame_timer_generation: Rc<Cell<u64>>,
 }
 
 impl WaylandWindowState {
@@ -754,9 +758,226 @@ enum FrameLoop {
     RescheduleRequested,
     PresentationFailed,
     AwaitingCallback,
+    /// A frame was requested while a callback is outstanding. A stall timer bounds the wait,
+    /// for compositors that withhold callbacks without suspending the toplevel.
+    AwaitingCallbackRequested,
     Scheduled,
     RetryScheduled,
     Parked,
+}
+
+/// How long a requested frame waits for an outstanding frame callback before drawing anyway.
+const FRAME_CALLBACK_STALL_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// The wakeup `schedule_frame` arms for the next tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameWake {
+    None,
+    Ping,
+    Timer(Duration),
+}
+
+/// How a tick ends once GPUI's frame callback has returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameCompletion {
+    AwaitCallback,
+    CommitForCallback,
+    Retry,
+    Park,
+}
+
+impl FrameLoop {
+    fn schedule(self, hidden: bool) -> (Self, FrameWake) {
+        match self {
+            Self::Parked => (Self::Scheduled, FrameWake::Ping),
+            Self::Ticking => (Self::RescheduleRequested, FrameWake::None),
+            // A compositor sends no frame callback to a suspended surface, Hyprland for one
+            // on a hidden workspace, so the callback this state waits for may never arrive.
+            Self::AwaitingCallback | Self::AwaitingCallbackRequested if hidden => {
+                (Self::RetryScheduled, FrameWake::Timer(FRAME_RETRY_INTERVAL))
+            }
+            Self::AwaitingCallback => (
+                Self::AwaitingCallbackRequested,
+                FrameWake::Timer(FRAME_CALLBACK_STALL_TIMEOUT),
+            ),
+            // A wake is already armed: a ping or retry timer is in flight, or a
+            // presented buffer guarantees a compositor frame callback.
+            other => (other, FrameWake::None),
+        }
+    }
+
+    fn accepts_frame_callback(self) -> bool {
+        matches!(
+            self,
+            Self::AwaitingCallback | Self::AwaitingCallbackRequested
+        )
+    }
+
+    fn accepts_timer(self) -> bool {
+        matches!(self, Self::RetryScheduled | Self::AwaitingCallbackRequested)
+    }
+
+    fn complete(
+        self,
+        hidden: bool,
+        presentation: PresentationState,
+        redraw_requested: bool,
+    ) -> (Self, FrameCompletion) {
+        if self.accepts_frame_callback() {
+            return (self, FrameCompletion::AwaitCallback);
+        }
+        // A hidden window skips the present, so a failed one is retried once it is shown.
+        if presentation.requires_presentation() && !hidden {
+            // Before the first present, or when throttling skipped draw, a
+            // callback may never arrive. Otherwise let the compositor pace
+            // retries so an occluded window does not keep polling.
+            if self == Self::PresentationFailed
+                && presentation == PresentationState::RetryAfterPresent
+            {
+                return (Self::AwaitingCallback, FrameCompletion::CommitForCallback);
+            }
+            return (Self::RetryScheduled, FrameCompletion::Retry);
+        }
+        if self == Self::RescheduleRequested || redraw_requested {
+            return (Self::RetryScheduled, FrameCompletion::Retry);
+        }
+        (Self::Parked, FrameCompletion::Park)
+    }
+}
+
+#[cfg(test)]
+mod frame_loop_tests {
+    use super::{
+        FRAME_CALLBACK_STALL_TIMEOUT, FrameCompletion, FrameLoop, FrameWake, PresentationState,
+    };
+    use crate::linux::wayland::client::FRAME_RETRY_INTERVAL;
+
+    #[test]
+    fn a_frame_requested_while_hidden_draws_on_the_retry_timer() {
+        let (state, wake) = FrameLoop::AwaitingCallback.schedule(true);
+        assert_eq!(state, FrameLoop::RetryScheduled);
+        assert_eq!(wake, FrameWake::Timer(FRAME_RETRY_INTERVAL));
+        assert!(state.accepts_timer());
+    }
+
+    #[test]
+    fn a_hidden_window_with_nothing_requested_arms_no_wakeup() {
+        // The tick that drew while hidden skipped the present, so nothing awaits a callback.
+        let (state, completion) =
+            FrameLoop::Ticking.complete(true, PresentationState::Presented, false);
+        assert_eq!(
+            (state, completion),
+            (FrameLoop::Parked, FrameCompletion::Park)
+        );
+
+        // A surface hidden while it awaited a callback waits silently until asked to draw.
+        let (state, completion) =
+            FrameLoop::AwaitingCallback.complete(true, PresentationState::Presented, false);
+        assert_eq!(
+            (state, completion),
+            (FrameLoop::AwaitingCallback, FrameCompletion::AwaitCallback)
+        );
+    }
+
+    #[test]
+    fn a_hidden_window_does_not_retry_a_failed_present() {
+        for presentation in [
+            PresentationState::RetryBeforeFirstPresent,
+            PresentationState::RetryAfterPresent,
+        ] {
+            let (state, completion) = FrameLoop::Ticking.complete(true, presentation, false);
+            assert_eq!(
+                (state, completion),
+                (FrameLoop::Parked, FrameCompletion::Park)
+            );
+        }
+    }
+
+    #[test]
+    fn a_late_callback_after_a_hidden_timer_draw_is_ignored() {
+        let (state, _) = FrameLoop::AwaitingCallback.schedule(true);
+        assert!(state.accepts_timer());
+        let (state, _) = FrameLoop::Ticking.complete(true, PresentationState::Presented, false);
+        assert!(!state.accepts_frame_callback());
+        assert!(!state.accepts_timer());
+        assert_eq!(
+            state.schedule(true),
+            (FrameLoop::Scheduled, FrameWake::Ping)
+        );
+    }
+
+    #[test]
+    fn a_frame_requested_while_a_visible_callback_is_late_draws_after_a_bound() {
+        let (state, wake) = FrameLoop::AwaitingCallback.schedule(false);
+        assert_eq!(state, FrameLoop::AwaitingCallbackRequested);
+        assert_eq!(wake, FrameWake::Timer(FRAME_CALLBACK_STALL_TIMEOUT));
+        assert!(state.accepts_timer());
+        assert!(state.accepts_frame_callback());
+        // Further requests reuse the armed timer.
+        assert_eq!(state.schedule(false), (state, FrameWake::None));
+    }
+
+    #[test]
+    fn a_request_made_during_the_presenting_tick_keeps_waiting_for_the_callback() {
+        assert_eq!(
+            FrameLoop::AwaitingCallbackRequested.complete(
+                false,
+                PresentationState::Presented,
+                false
+            ),
+            (
+                FrameLoop::AwaitingCallbackRequested,
+                FrameCompletion::AwaitCallback
+            )
+        );
+    }
+
+    #[test]
+    fn hiding_while_a_stalled_request_waits_shortens_it_to_the_retry_timer() {
+        let (state, wake) = FrameLoop::AwaitingCallbackRequested.schedule(true);
+        assert_eq!(state, FrameLoop::RetryScheduled);
+        assert_eq!(wake, FrameWake::Timer(FRAME_RETRY_INTERVAL));
+    }
+
+    #[test]
+    fn a_visible_window_with_nothing_requested_waits_for_the_callback() {
+        assert_eq!(
+            FrameLoop::AwaitingCallback.complete(false, PresentationState::Presented, false),
+            (FrameLoop::AwaitingCallback, FrameCompletion::AwaitCallback)
+        );
+        assert!(!FrameLoop::AwaitingCallback.accepts_timer());
+    }
+
+    #[test]
+    fn visible_scheduling_is_unchanged() {
+        assert_eq!(
+            FrameLoop::Parked.schedule(false),
+            (FrameLoop::Scheduled, FrameWake::Ping)
+        );
+        assert_eq!(
+            FrameLoop::Ticking.schedule(false),
+            (FrameLoop::RescheduleRequested, FrameWake::None)
+        );
+        assert_eq!(
+            FrameLoop::RetryScheduled.schedule(false),
+            (FrameLoop::RetryScheduled, FrameWake::None)
+        );
+        assert_eq!(
+            FrameLoop::Ticking.complete(false, PresentationState::RetryBeforeFirstPresent, false),
+            (FrameLoop::RetryScheduled, FrameCompletion::Retry)
+        );
+        assert_eq!(
+            FrameLoop::PresentationFailed.complete(
+                false,
+                PresentationState::RetryAfterPresent,
+                false
+            ),
+            (
+                FrameLoop::AwaitingCallback,
+                FrameCompletion::CommitForCallback
+            )
+        );
+    }
 }
 
 pub(crate) struct WaylandWindow(pub WaylandWindowStatePtr);
@@ -878,6 +1099,7 @@ impl WaylandWindow {
             frame_loop: Rc::new(Cell::new(FrameLoop::Unconfigured)),
             frame_ping,
             scheduled_frame_at: Rc::new(Cell::new(None)),
+            frame_timer_generation: Rc::new(Cell::new(0)),
         });
 
         // Kick things off
@@ -937,12 +1159,15 @@ impl WaylandWindowStatePtr {
 
     pub fn frame(&self, signal_at: Option<Instant>, signal_source: FrameRequestSource) {
         self.frame_loop.set(FrameLoop::Ticking);
+        self.frame_timer_generation
+            .set(self.frame_timer_generation.get().wrapping_add(1));
         let mut state = self.state.borrow_mut();
         state.resize_throttle = false;
         // GPUI may throttle this tick without calling draw, so leave the request
         // latched until a draw actually reaches the renderer.
         let force_render = state.redraw_requested;
-        let require_presentation = state.presentation.requires_presentation();
+        let require_presentation = state.presentation.requires_presentation()
+            && state.visibility != WindowVisibility::Hidden;
         drop(state);
 
         let mut callbacks = self.callbacks.borrow_mut();
@@ -965,52 +1190,39 @@ impl WaylandWindowStatePtr {
     fn complete_frame(&self) {
         let mut state = self.state.borrow_mut();
 
-        let frame_loop = self.frame_loop.get();
-        if frame_loop == FrameLoop::AwaitingCallback {
-            return;
-        }
-
-        if state.presentation.requires_presentation() {
-            // Before the first present, or when throttling skipped draw, a
-            // callback may never arrive. Otherwise let the compositor pace
-            // retries so an occluded window does not keep polling.
-            if frame_loop == FrameLoop::PresentationFailed
-                && state.presentation == PresentationState::RetryAfterPresent
-            {
+        let (frame_loop, completion) = self.frame_loop.get().complete(
+            state.visibility == WindowVisibility::Hidden,
+            state.presentation,
+            state.redraw_requested,
+        );
+        self.frame_loop.set(frame_loop);
+        match completion {
+            FrameCompletion::AwaitCallback | FrameCompletion::Park => {}
+            FrameCompletion::CommitForCallback => {
                 if state.pending_frame_callback.is_none() {
                     let callback = state.surface.frame(&state.globals.qh, state.surface.id());
                     state.pending_frame_callback = Some(callback);
                 }
                 state.surface.commit();
-                self.frame_loop.set(FrameLoop::AwaitingCallback);
-                return;
             }
-
-            self.frame_loop.set(FrameLoop::RetryScheduled);
-            let surface_id = state.surface.id();
-            let client = state.client.clone();
-            drop(state);
-            client.schedule_frame_retry(&surface_id);
-            return;
+            FrameCompletion::Retry => {
+                let surface_id = state.surface.id();
+                let client = state.client.clone();
+                drop(state);
+                client.schedule_frame_timer(
+                    &surface_id,
+                    FRAME_RETRY_INTERVAL,
+                    self.frame_timer_generation.get(),
+                );
+            }
         }
-
-        if frame_loop == FrameLoop::RescheduleRequested || state.redraw_requested {
-            self.frame_loop.set(FrameLoop::RetryScheduled);
-            let surface_id = state.surface.id();
-            let client = state.client.clone();
-            drop(state);
-            client.schedule_frame_retry(&surface_id);
-            return;
-        }
-
-        self.frame_loop.set(FrameLoop::Parked);
     }
 
     pub fn frame_callback_fired(&self, signal_at: Option<Instant>) {
         // Another wl_surface commit may have carried this callback while a retry
         // timer owned the render-loop wakeup.
         self.state.borrow_mut().pending_frame_callback = None;
-        if self.frame_loop.get() == FrameLoop::AwaitingCallback {
+        if self.frame_loop.get().accepts_frame_callback() {
             self.frame(signal_at, FrameRequestSource::NativeCallback);
         }
     }
@@ -1024,8 +1236,9 @@ impl WaylandWindowStatePtr {
         }
     }
 
-    pub fn retry_timer_fired(&self, signal_at: Instant) {
-        if self.frame_loop.get() == FrameLoop::RetryScheduled {
+    pub fn frame_timer_fired(&self, signal_at: Instant, generation: u64) {
+        if generation == self.frame_timer_generation.get() && self.frame_loop.get().accepts_timer()
+        {
             self.frame(
                 PlatformFrameSignal::capture(|| signal_at),
                 FrameRequestSource::LocalSchedule,
@@ -1038,19 +1251,23 @@ impl WaylandWindowStatePtr {
     }
 
     pub fn schedule_frame(&self) {
-        match self.frame_loop.get() {
-            FrameLoop::Parked => {
-                self.frame_loop.set(FrameLoop::Scheduled);
+        let hidden = self.state.borrow().visibility == WindowVisibility::Hidden;
+        let (frame_loop, wake) = self.frame_loop.get().schedule(hidden);
+        self.frame_loop.set(frame_loop);
+        match wake {
+            FrameWake::None => {}
+            FrameWake::Ping => {
                 self.scheduled_frame_at
                     .set(PlatformFrameSignal::capture(Instant::now));
                 self.frame_ping.ping();
             }
-            FrameLoop::Ticking => {
-                self.frame_loop.set(FrameLoop::RescheduleRequested);
+            FrameWake::Timer(delay) => {
+                let state = self.state.borrow();
+                let surface_id = state.surface.id();
+                let client = state.client.clone();
+                drop(state);
+                client.schedule_frame_timer(&surface_id, delay, self.frame_timer_generation.get());
             }
-            // A wake is already armed: a ping or retry timer is in flight, or a
-            // presented buffer guarantees a compositor frame callback.
-            _ => {}
         }
     }
 
@@ -1134,6 +1351,10 @@ impl WaylandWindowStatePtr {
                     drop(state);
                     if visibility_changed {
                         self.report_visibility(configure.visibility);
+                        if configure.visibility == WindowVisibility::Visible {
+                            // Frames drawn while hidden were not presented.
+                            self.request_redraw();
+                        }
                     }
                     if throttled {
                         return;
@@ -2039,6 +2260,12 @@ impl PlatformWindow for WaylandWindow {
 
         // Surface state changed during this GPUI tick is included in this presentation.
         state.redraw_requested = false;
+        if state.visibility == WindowVisibility::Hidden {
+            // GPUI has already laid out and painted this frame. Presenting to a surface the
+            // compositor does not show gets no frame callback and, with FIFO, may block in
+            // the swapchain acquire, so the pixels wait until the window is shown again.
+            return;
+        }
         if state.pending_frame_callback.is_none() {
             let callback = state.surface.frame(&state.globals.qh, state.surface.id());
             state.pending_frame_callback = Some(callback);
