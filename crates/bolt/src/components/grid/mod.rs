@@ -29,7 +29,7 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement,
-    MouseDownEvent, ParentElement, Pixels, SharedString, StatefulInteractiveElement, Styled,
+    MouseDownEvent, ParentElement, Pixels, Role, SharedString, StatefulInteractiveElement, Styled,
     Window, div, px,
 };
 use gpui_component::Theme;
@@ -590,12 +590,25 @@ pub fn header_cells(
         .collect()
 }
 
+/// The accessible name of a header cell: the column name, then its type
+/// label after a comma when the column has one (`"status, text"`), the two
+/// texts the cell draws.
+pub(crate) fn header_cell_name(name: &str, type_name: &str) -> SharedString {
+    if type_name.is_empty() {
+        SharedString::from(name.to_string())
+    } else {
+        SharedString::from(format!("{name}, {type_name}"))
+    }
+}
+
 /// Renders the header row the host puts above the rows [`render_rows`]
 /// draws: one cell per column of `source`, drawn after the data table's
 /// own header — the strip background and 1 px bottom edge, the row-number
 /// gutter the rows align with, and per cell the semibold name in the
 /// strong color beside a muted type label, with the group wash on a
-/// grouped column's cell.
+/// grouped column's cell. Each cell is a column-header node under its id,
+/// named by its column name and type label, so automation and assistive
+/// technology read the columns.
 ///
 /// The header is static: the host owns sorting, resizing and menus. It
 /// names the cells through `id_base` and applies the grid font family by
@@ -617,8 +630,13 @@ pub fn render_header(
     let header_cells: Vec<AnyElement> = header_cells(id_base, source, column_widths)
         .into_iter()
         .map(|cell| {
+            let name = header_cell_name(&cell.name, &cell.type_name);
+
             div()
+                .debug_selector(crate::selector::id_selector(&cell.id))
                 .id(cell.id)
+                .role(Role::ColumnHeader)
+                .aria_label(name)
                 .flex()
                 .flex_shrink_0()
                 .items_center()
