@@ -654,6 +654,9 @@ pub struct SyntaxColors {
     pub namespace: Hsla,
     /// Column names and column aliases.
     pub field: Hsla,
+    /// Object keys (JSON keys, JavaScript object keys) and markup attribute
+    /// names.
+    pub property: Hsla,
 }
 
 impl SyntaxColors {
@@ -669,6 +672,7 @@ impl SyntaxColors {
             plain: rgb(0xF7F4F7).into(),
             namespace: rgb(0xE5A86E).into(),
             field: rgb(0x5CCFC9).into(),
+            property: rgb(0xA9A4B2).into(),
         }
     }
 
@@ -684,6 +688,7 @@ impl SyntaxColors {
             plain: rgb(0x141118).into(),
             namespace: rgb(0x9A5418).into(),
             field: rgb(0x0B7A80).into(),
+            property: rgb(0x5C5766).into(),
         }
     }
 

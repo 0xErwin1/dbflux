@@ -267,6 +267,31 @@ Each role holds the value `bolt::theme::apply_theme` installs for that field,
 and a test checks every pair in both palettes, so moving a screen from a theme
 field to its role changes nothing on screen.
 
+## Syntax roles
+
+`bolt::tokens::SyntaxColors` holds the code colors of each palette variant, and
+`bolt::theme` maps every tree-sitter capture onto one of its roles:
+
+| Captures | Role |
+|---|---|
+| `keyword` (bold) | `keyword`, the brand accent |
+| `string`, `string.escape`, `string.regex`, `string.special`, `string.special.symbol` | `string` |
+| `number`, `boolean`, `constant` | `number` |
+| `comment`, `comment.doc` | `comment` |
+| `type`, `constructor`, `enum`, `variable.special`, `tag` | `type_name` |
+| `function` (bold) | `function` |
+| `operator`, `punctuation` and its variants | `operator` |
+| `variable`, `primary` | `plain` |
+| `namespace` | `namespace` |
+| `field` | `field` |
+| `property`, `attribute` | `property` (`#A9A4B2` dark, `#5C5766` light) |
+
+A dotted capture without a style of its own takes its prefix's
+(`tag.doctype` reads as `tag`). The highlighter keeps no `string.special.key`
+slot, so a grammar whose query captures object keys that way paints them as
+strings; register it with keys captured as `property` instead (the bundled
+`json` grammar does).
+
 ## Sizes
 
 Every interface length goes through `tokens::ui(px)`, which expresses design
