@@ -147,6 +147,11 @@ impl ModalMetrics {
     pub const CODE_PADDING_Y: Pixels = px(10.0);
     pub const CODE_PADDING_X: Pixels = px(12.0);
     pub const CODE_FONT: Rems = ui(12.5);
+    /// Numbered statement block: 20 px lines, a 46 px right-aligned gutter
+    /// with 14 px between the number and the code.
+    pub const CODE_LINE_HEIGHT: Rems = ui(20.0);
+    pub const CODE_GUTTER_WIDTH: Rems = ui(46.0);
+    pub const CODE_GUTTER_PADDING_RIGHT: Pixels = px(14.0);
     /// A labelled field: 12 px muted label, 6 px above its control.
     pub const FIELD_LABEL_FONT: Rems = ui(12.0);
     pub const FIELD_GAP: Pixels = px(6.0);
@@ -380,6 +385,12 @@ impl Fields {
     pub const CHEVRON: Rems = ui(12.0);
     /// Icon before the label of a select trigger. (14 px)
     pub const LEADING_ICON: Rems = ui(14.0);
+    /// Match count at the end of a search field, mono. (11.5 px)
+    pub const COUNT_TEXT: Rems = ui(11.5);
+    /// Widest a search field's match count draws before it truncates. (96 px)
+    pub const COUNT_MAX_WIDTH: Rems = ui(96.0);
+    /// Narrowest the input of a search field shrinks to. (64 px)
+    pub const SEARCH_INPUT_MIN_WIDTH: Rems = ui(64.0);
 
     /// Filter field height (WHERE ... LIMIT). (34 px)
     pub const FILTER_HEIGHT: Rems = ui(34.0);
@@ -977,6 +988,18 @@ impl TreeMetrics {
     pub const META_FONT: Rems = ui(11.0);
     /// Width of the tint bar on the left of the selected row. (2 px)
     pub const SELECTION_BAR: Pixels = px(2.0);
+}
+
+/// Geometry of a timeline strip (`primitives::TimelineStrip`): a 10 px
+/// track on the inset fill, with bars never narrower than 2 px so a phase
+/// too short for the axis still shows.
+pub struct TimelineMetrics;
+
+impl TimelineMetrics {
+    /// Track height. (10 px)
+    pub const STRIP_HEIGHT: Pixels = px(10.0);
+    /// Narrowest bar. (2 px)
+    pub const MIN_BAR: Pixels = px(2.0);
 }
 
 /// Geometry of the document tree's rows (`components::document_tree`).

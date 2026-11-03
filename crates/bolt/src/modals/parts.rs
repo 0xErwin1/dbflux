@@ -31,22 +31,7 @@ pub fn modal_lead(content: impl IntoElement, cx: &App) -> Div {
 pub fn modal_code(code: impl Into<SharedString>, highlights: &[Range<usize>], cx: &App) -> Div {
     let theme = cx.theme();
     let code: SharedString = code.into();
-    let tint = ChromeColors::tint(theme);
-
-    let highlights: Vec<(Range<usize>, HighlightStyle)> = highlights
-        .iter()
-        .cloned()
-        .map(|range| {
-            (
-                range,
-                HighlightStyle {
-                    color: Some(tint),
-                    font_weight: Some(FontWeight::BOLD),
-                    ..Default::default()
-                },
-            )
-        })
-        .collect();
+    let highlights = highlight_styles(highlights.iter().cloned(), cx);
 
     div()
         .relative()
@@ -62,6 +47,20 @@ pub fn modal_code(code: impl Into<SharedString>, highlights: &[Range<usize>], cx
                 .border(theme.border),
         )
         .child(StyledText::new(code).with_highlights(highlights))
+}
+
+/// `ranges` paired with the statement highlight: bold tint.
+pub(crate) fn highlight_styles(
+    ranges: impl IntoIterator<Item = Range<usize>>,
+    cx: &App,
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    let style = HighlightStyle {
+        color: Some(ChromeColors::tint(cx.theme())),
+        font_weight: Some(FontWeight::BOLD),
+        ..Default::default()
+    };
+
+    ranges.into_iter().map(|range| (range, style)).collect()
 }
 
 /// A cut-8 line frame that clips its rows, for framed lists and tables.

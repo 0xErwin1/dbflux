@@ -416,3 +416,71 @@ fn ordinary_cells_take_the_foreground_and_the_active_cell_the_strong_tint(cx: &m
         "null outranks the active tint, as the painter draws it today"
     );
 }
+
+/// Each header cell is a column header under its id, named by the column
+/// name and, when the column has one, its type label.
+#[gpui::test]
+fn the_header_cells_are_named_column_headers(cx: &mut TestAppContext) {
+    use crate::accessibility::{FrameCapture, accessibility_node, accessible_name};
+
+    struct Header;
+
+    impl gpui::Render for Header {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::{ParentElement as _, Styled as _};
+
+            let mut rows = StaticRows::new();
+            rows.push_column(ColumnView::new("status", ColumnKind::Text).with_type_name("text"));
+            rows.push_column(ColumnView::new("rows", ColumnKind::Integer));
+            let colors = GridColors::of(cx.theme());
+
+            gpui::div().size_full().child(super::render_header(
+                "run-header",
+                &rows,
+                &[140.0, 120.0],
+                gpui::px(40.0),
+                260.0,
+                gpui::px(12.5),
+                gpui::px(10.5),
+                &colors,
+            ))
+        }
+    }
+
+    install_test_theme(cx);
+    let (_, window) = cx.add_window_view(|_, _| Header);
+    let capture = FrameCapture::observe(window);
+    let frame = capture.frame(window);
+
+    assert_eq!(
+        gpui::ElementId::named_usize("run-header", 0).to_string(),
+        "run-header-0",
+        "the cell's node id is the header id the caller's base names"
+    );
+    assert_eq!(
+        accessible_name(&frame, "run-header-0").as_deref(),
+        Some("status, text")
+    );
+    assert_eq!(
+        accessible_name(&frame, "run-header-1").as_deref(),
+        Some("rows")
+    );
+    assert_eq!(
+        accessibility_node(&frame, "run-header-0").map(|node| node.role()),
+        Some(gpui::Role::ColumnHeader)
+    );
+    assert!(
+        window.debug_bounds("run-header-0").is_some(),
+        "the cell records its id as its selector"
+    );
+}
+
+#[test]
+fn a_header_cell_without_a_type_label_is_named_by_its_column_alone() {
+    assert_eq!(super::header_cell_name("rows", ""), "rows");
+    assert_eq!(super::header_cell_name("status", "text"), "status, text");
+}

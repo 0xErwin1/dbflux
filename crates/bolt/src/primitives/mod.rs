@@ -14,6 +14,7 @@ mod segmented_control;
 mod status;
 mod surface;
 mod text;
+mod timeline_strip;
 
 pub use badge::{Badge, BadgeTone};
 pub use banner::{BannerBlock, BannerVariant};
@@ -42,3 +43,4 @@ pub use surface::{SurfaceInspection, SurfaceRole, inspect_surface_role, overlay_
 pub use text::{
     Text, TextColorSelection, TextDefaultColor, TextInspection, TextRoleContract, TextVariant,
 };
+pub use timeline_strip::{TimelineBar, TimelineStrip};

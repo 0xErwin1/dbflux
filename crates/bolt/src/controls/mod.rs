@@ -7,6 +7,7 @@ mod input;
 mod key_capture;
 mod multi_select;
 mod readonly_text_view;
+mod search_field;
 mod select_trigger;
 mod type_to_confirm;
 
@@ -26,5 +27,6 @@ pub use input::{
 pub use key_capture::{KeyCapture, KeyCaptureHandler};
 pub use multi_select::{MultiSelect, MultiSelectChanged};
 pub use readonly_text_view::ReadonlyTextView;
+pub use search_field::{SearchCount, SearchField};
 pub use select_trigger::SelectTrigger;
 pub use type_to_confirm::{TypeToConfirm, TypeToConfirmEvent};

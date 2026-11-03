@@ -1,6 +1,8 @@
 mod gutter;
+mod row;
 
 pub use gutter::{GutterInfo, render_gutter, tree_line_color};
+pub use row::{TreeNavChevron, TreeNavRow};
 
 use crate::icon::IconSource;
 use gpui::SharedString;
