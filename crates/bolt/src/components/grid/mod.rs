@@ -1,4 +1,4 @@
-//! The grid's row list and cell painter, over [`crate::data`].
+//! The grid's header row, row list and cell painter, over [`crate::data`].
 //!
 //! A row-and-cell renderer that reads only the data contract: it asks a
 //! [`RowSource`] for columns, cells and row states and paints them with the
@@ -8,6 +8,10 @@
 //! supplies through [`GridHost`], and the host's answers to clicks arrive
 //! as callbacks, so this module owns no interaction policy and no data
 //! ownership of its own.
+//!
+//! The colors the rows and the header paint with are resolved once by the
+//! host into a [`GridColors`], so the renderers below never demand the
+//! host's theme type.
 //!
 //! The rendering decisions this module pins, asserted in `tests.rs`: the
 //! background order per cell (group wash, dirty mark, selection, transition
@@ -24,8 +28,9 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, ClickEvent, Hsla, InteractiveElement, IntoElement, MouseDownEvent,
-    ParentElement, Pixels, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    AnyElement, App, ClickEvent, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement,
+    MouseDownEvent, ParentElement, Pixels, SharedString, StatefulInteractiveElement, Styled,
+    Window, div, px,
 };
 use gpui_component::Theme;
 
@@ -48,6 +53,88 @@ pub struct GridCellCoord {
 impl GridCellCoord {
     pub fn new(row: usize, col: usize) -> Self {
         Self { row, col }
+    }
+}
+
+/// The colors the grid's rows and header paint with, resolved once by the
+/// host from the active theme. [`cell_paint`], [`render_rows`] and
+/// [`render_header`] read these instead of the theme, so the grid's
+/// signatures never demand the host's theme type.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GridColors {
+    /// Ordinary text.
+    pub foreground: Hsla,
+    /// Secondary text: a pending-delete row's cells, a header's type label.
+    pub muted_foreground: Hsla,
+    /// Quiet text on the surface: the missing-field tone, the row-number
+    /// gutter, the header's bottom edge.
+    pub input: Hsla,
+    /// The nested-summary tone.
+    pub info: Hsla,
+    /// The palette's warning color: a transition's text, the dirty accent,
+    /// the `Warning` tone.
+    pub warning: Hsla,
+    /// The palette's success color: the `Success` tone.
+    pub success: Hsla,
+    /// The palette's danger color: the `Danger` tone.
+    pub danger: Hsla,
+    /// The focus-ring tint: the inline editor's border.
+    pub ring: Hsla,
+    /// The surface the inline editor draws over.
+    pub background: Hsla,
+    /// The separator between header cells.
+    pub border: Hsla,
+    /// A data row's 1 px bottom edge.
+    pub table_row_border: Hsla,
+    /// The row holding the active cell.
+    pub table_active: Hsla,
+    /// Every second row's alternating wash.
+    pub table_even: Hsla,
+    /// The header strip's background.
+    pub table_head: Hsla,
+    /// Strong text: the active cell and the header names, as
+    /// [`ChromeColors::strong`] resolves it.
+    pub strong: Hsla,
+    /// The accent tint: the selection and focus washes, the reference row,
+    /// a grouped column's header and cells, as [`ChromeColors::tint`]
+    /// resolves it.
+    pub tint: Hsla,
+    /// The row washes, as [`RowColors`] derives them from the theme.
+    pub row_saving: Hsla,
+    pub row_error: Hsla,
+    pub row_insert: Hsla,
+    pub row_delete: Hsla,
+    /// The unsaved-edit cell wash, as [`RowColors::dirty`] derives it.
+    pub cell_dirty: Hsla,
+}
+
+impl GridColors {
+    /// Resolve the grid's colors from the active theme, through the same
+    /// token helpers the grid drew with before they took a theme.
+    pub fn of(theme: &Theme) -> Self {
+        Self {
+            foreground: theme.foreground,
+            muted_foreground: theme.muted_foreground,
+            input: theme.input,
+            info: theme.info,
+            warning: theme.warning,
+            success: theme.success,
+            danger: theme.danger,
+            ring: theme.ring,
+            background: theme.background,
+            border: theme.border,
+            table_row_border: theme.table_row_border,
+            table_active: theme.table_active,
+            table_even: theme.table_even,
+            table_head: theme.table_head,
+            strong: ChromeColors::strong(theme),
+            tint: ChromeColors::tint(theme),
+            row_saving: RowColors::saving(theme),
+            row_error: RowColors::error(theme),
+            row_insert: RowColors::insert(theme),
+            row_delete: RowColors::delete(theme),
+            cell_dirty: RowColors::dirty(theme),
+        }
     }
 }
 
@@ -112,26 +199,29 @@ pub fn cell_paint(
     group_child: bool,
     row_pending_delete: bool,
     is_active: bool,
-    theme: &Theme,
+    colors: &GridColors,
     null_color: Hsla,
 ) -> CellPaint {
     let transition = matches!(view.content, CellContent::Transition { .. });
     let text_color = if transition {
         // The transition takes the color precedence over the tone.
-        theme.warning
+        colors.warning
     } else if row_pending_delete && !matches!(view.tone, CellTone::Missing | CellTone::Nested) {
-        theme.muted_foreground
+        colors.muted_foreground
     } else {
         match view.tone {
-            CellTone::Missing => theme.input,
-            CellTone::Nested => theme.info,
-            CellTone::PendingDelete | CellTone::Muted => theme.muted_foreground,
+            CellTone::Missing => colors.input,
+            CellTone::Nested => colors.info,
+            CellTone::PendingDelete | CellTone::Muted => colors.muted_foreground,
             CellTone::Null => null_color,
+            CellTone::Success => colors.success,
+            CellTone::Warning => colors.warning,
+            CellTone::Danger => colors.danger,
             CellTone::Normal | CellTone::PendingInsert | CellTone::Error => {
                 if is_active {
-                    ChromeColors::strong(theme)
+                    colors.strong
                 } else {
-                    theme.foreground
+                    colors.foreground
                 }
             }
         }
@@ -171,7 +261,7 @@ pub fn render_rows(
     row_height: Pixels,
     nested_icon: Pixels,
     null_color: Hsla,
-    theme: &Theme,
+    colors: &GridColors,
 ) -> Vec<AnyElement> {
     let mut editor = editor;
 
@@ -187,16 +277,16 @@ pub fn render_rows(
             // - PendingDelete: red-ish with visual indication of deletion
             let row_bg = match row_state {
                 RowVisualState::Dirty => None, // Cell-level only — see dirty cell highlight below
-                RowVisualState::Saving => Some(RowColors::saving(theme)),
-                RowVisualState::Error => Some(RowColors::error(theme)),
+                RowVisualState::Saving => Some(colors.row_saving),
+                RowVisualState::Error => Some(colors.row_error),
                 RowVisualState::Clean => None,
-                RowVisualState::PendingInsert => Some(RowColors::insert(theme)),
-                RowVisualState::PendingDelete => Some(RowColors::delete(theme)),
+                RowVisualState::PendingInsert => Some(colors.row_insert),
+                RowVisualState::PendingDelete => Some(colors.row_delete),
             };
 
             let is_pending_delete = row_state == RowVisualState::PendingDelete;
             let is_active_row = host.active.is_some_and(|active| active.row == visual_ix);
-            let tint = ChromeColors::tint(theme);
+            let tint = colors.tint;
             let cell_wash = tint.opacity(GridMetrics::CELL_SELECTED_ALPHA);
             let is_reference_row = host.reference_row && visual_ix == 0;
             // Under a reference row the others are numbered from 1, so the
@@ -241,8 +331,8 @@ pub fn render_rows(
                             .w(px(width))
                             .overflow_hidden()
                             .border_1()
-                            .border_color(theme.ring)
-                            .bg(theme.background)
+                            .border_color(colors.ring)
+                            .bg(colors.background)
                             .child(editor_element)
                             .into_any_element();
                     }
@@ -252,7 +342,7 @@ pub fn render_rows(
                         group_children.get(col_ix).copied().unwrap_or(false),
                         is_pending_delete,
                         is_active,
-                        theme,
+                        colors,
                         null_color,
                     );
 
@@ -285,16 +375,16 @@ pub fn render_rows(
                             d.bg(tint.opacity(CollectionMetrics::GROUP_CHILD_CELL_ALPHA))
                         })
                         .when(paint.dirty_mark, |d| {
-                            d.bg(RowColors::dirty(theme))
+                            d.bg(colors.cell_dirty)
                                 .border_l_2()
-                                .border_color(theme.warning)
+                                .border_color(colors.warning)
                         })
                         .when(is_selected || is_active, |d| d.bg(cell_wash))
                         .when(paint.transition, |d| {
-                            d.bg(theme.warning.opacity(CollectionMetrics::EDITED_CELL_ALPHA))
+                            d.bg(colors.warning.opacity(CollectionMetrics::EDITED_CELL_ALPHA))
                                 .child(
                                     Chamfer::new(Pixels::ZERO)
-                                        .ring(ChamferRing::focus(theme.warning)),
+                                        .ring(ChamferRing::focus(colors.warning)),
                                 )
                         })
                         // Focused cell: 1.5 px tint ring inside the cell. No
@@ -347,15 +437,18 @@ pub fn render_rows(
                                     .whitespace_nowrap()
                                     .text_size(font_size)
                                     .text_color(match span.tone {
-                                        CellTone::Missing => theme.input,
-                                        CellTone::Nested => theme.info,
+                                        CellTone::Missing => colors.input,
+                                        CellTone::Nested => colors.info,
                                         CellTone::PendingDelete | CellTone::Muted => {
-                                            theme.muted_foreground
+                                            colors.muted_foreground
                                         }
                                         CellTone::Null => null_color,
+                                        CellTone::Success => colors.success,
+                                        CellTone::Warning => colors.warning,
+                                        CellTone::Danger => colors.danger,
                                         CellTone::Normal
                                         | CellTone::PendingInsert
-                                        | CellTone::Error => theme.foreground,
+                                        | CellTone::Error => colors.foreground,
                                     })
                                     .child(span.text.to_string()),
                             )
@@ -394,7 +487,7 @@ pub fn render_rows(
                 .h(row_height)
                 .overflow_hidden()
                 .border_b_1()
-                .border_color(theme.table_row_border)
+                .border_color(colors.table_row_border)
                 // Row state background (dirty=yellow, error=red)
                 .when_some(row_bg, |d, bg| d.bg(bg))
                 // The row holding the focused cell gets the selected-row
@@ -405,11 +498,11 @@ pub fn render_rows(
                 })
                 .when(
                     row_bg.is_none() && !is_reference_row && is_active_row,
-                    |d| d.bg(theme.table_active),
+                    |d| d.bg(colors.table_active),
                 )
                 .when(
                     row_bg.is_none() && !is_reference_row && !is_active_row && visual_ix % 2 == 1,
-                    |d| d.bg(theme.table_even),
+                    |d| d.bg(colors.table_even),
                 )
                 .child(
                     div()
@@ -424,7 +517,7 @@ pub fn render_rows(
                         .text_color(if is_active_row || is_reference_row {
                             tint
                         } else {
-                            theme.input
+                            colors.input
                         })
                         .map(|gutter| {
                             if is_reference_row {
@@ -451,4 +544,143 @@ fn column_width_or(column_widths: &[f32], col_ix: usize) -> f32 {
         .get(col_ix)
         .copied()
         .unwrap_or(f32::from(GridMetrics::DEFAULT_COLUMN_WIDTH))
+}
+
+/// One column's header cell as the header paints it, derived from the
+/// column descriptor. Split from the element builder so the facts the
+/// header paints are assertable without pixels, as [`CellPaint`] is for a
+/// data cell.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeaderCell {
+    /// The cell's element id: the caller's base name plus the column index,
+    /// so the host's interactions and its UI automation can target cells by
+    /// name.
+    pub id: ElementId,
+    /// The column's display name.
+    pub name: SharedString,
+    /// The engine-side type label, empty when the column has none.
+    pub type_name: SharedString,
+    /// The width the cell draws at: the host's laid-out width, or the
+    /// grid's default, exactly as the rows draw the column.
+    pub width: f32,
+    /// Whether the column is a child of an expanded object group; its
+    /// header cell draws the group wash.
+    pub group_child: bool,
+}
+
+/// Derive the header's cells from the columns `source` answers with.
+pub fn header_cells(
+    id_base: impl Into<SharedString>,
+    source: &dyn RowSource,
+    column_widths: &[f32],
+) -> Vec<HeaderCell> {
+    let id_base = id_base.into();
+
+    (0..source.column_count())
+        .filter_map(|col_ix| {
+            let column = source.column(col_ix)?;
+            Some(HeaderCell {
+                id: ElementId::named_usize(id_base.clone(), col_ix),
+                name: column.name,
+                type_name: column.type_name,
+                width: column_width_or(column_widths, col_ix),
+                group_child: column.group_child,
+            })
+        })
+        .collect()
+}
+
+/// Renders the header row the host puts above the rows [`render_rows`]
+/// draws: one cell per column of `source`, drawn after the data table's
+/// own header — the strip background and 1 px bottom edge, the row-number
+/// gutter the rows align with, and per cell the semibold name in the
+/// strong color beside a muted type label, with the group wash on a
+/// grouped column's cell.
+///
+/// The header is static: the host owns sorting, resizing and menus. It
+/// names the cells through `id_base` and applies the grid font family by
+/// wrapping the returned element (`.font_family(fonts::grid_family(cx))`),
+/// the same way it covers the rows. `header_height` is the scaled header
+/// height, which the host derives from [`GridMetrics::HEADER_HEIGHT`] (see
+/// `fonts::grid_header_height`).
+#[allow(clippy::too_many_arguments)]
+pub fn render_header(
+    id_base: impl Into<SharedString>,
+    source: &dyn RowSource,
+    column_widths: &[f32],
+    header_height: Pixels,
+    total_width: f32,
+    font_size: Pixels,
+    type_font_size: Pixels,
+    colors: &GridColors,
+) -> AnyElement {
+    let header_cells: Vec<AnyElement> = header_cells(id_base, source, column_widths)
+        .into_iter()
+        .map(|cell| {
+            div()
+                .id(cell.id)
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(GridMetrics::HEADER_GAP)
+                .h_full()
+                .w(px(cell.width))
+                .px(GridMetrics::CELL_PADDING_X)
+                .overflow_hidden()
+                .border_r_1()
+                .border_color(colors.border)
+                .when(cell.group_child, |cell| {
+                    cell.bg(colors
+                        .tint
+                        .opacity(CollectionMetrics::GROUP_CHILD_HEADER_ALPHA))
+                })
+                // Column name — primary affordance, never shrinks, as the
+                // data table draws it.
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .whitespace_nowrap()
+                        .text_size(font_size)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(colors.strong)
+                        .child(cell.name),
+                )
+                // Type label — muted metadata. Shrinks and truncates first
+                // when the cell runs out of horizontal space.
+                .when_some(
+                    (!cell.type_name.is_empty()).then_some(cell.type_name),
+                    |cell, label| {
+                        cell.child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_size(type_font_size)
+                                .text_color(colors.muted_foreground)
+                                .child(label),
+                        )
+                    },
+                )
+                .into_any_element()
+        })
+        .collect();
+
+    div()
+        .flex_shrink_0()
+        .h(header_height)
+        .overflow_hidden()
+        .bg(colors.table_head)
+        .border_b_1()
+        .border_color(colors.input)
+        .child(
+            div()
+                .flex()
+                .h_full()
+                .min_w(px(total_width))
+                .child(div().flex_shrink_0().w(GridMetrics::ROW_NUMBER_WIDTH))
+                .children(header_cells),
+        )
+        .into_any_element()
 }

@@ -24,7 +24,7 @@ use super::state::DataTableState;
 use super::theme::{CELL_PADDING_X, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
 // The row list and cell painter moved to `bolt::components::grid`; the old
 // in-file names are the re-exported Bolt API.
-use bolt::components::grid::{GridCellCoord, GridHost, render_rows};
+use bolt::components::grid::{GridCellCoord, GridColors, GridHost, render_rows};
 use dbflux_core::SortDirection;
 
 /// Cached scroll state to prevent unnecessary syncs
@@ -1241,7 +1241,7 @@ impl DataTable {
                 let font_size = fonts::grid_font_size(cx);
                 let row_height = fonts::grid_row_height(cx);
                 let nested_icon = fonts::grid_px(cx, CollectionMetrics::NESTED_ICON);
-                let theme = cx.theme();
+                let grid_colors = GridColors::of(cx.theme());
                 // Read state INSIDE closure - only when actually rendering
                 let state = state_entity.read(cx);
                 let selection = state.selection();
@@ -1341,7 +1341,7 @@ impl DataTable {
                     row_height,
                     nested_icon,
                     null_color,
-                    theme,
+                    &grid_colors,
                 )
             },
         )

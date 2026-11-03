@@ -90,6 +90,13 @@ pub enum CellTone {
     PendingDelete,
     /// The cell sits in a row whose last save failed.
     Error,
+    /// A value that stands for a passing result (a passed check, a
+    /// successful run); drawn in the palette's success color.
+    Success,
+    /// A value that flags a warning; drawn in the palette's warning color.
+    Warning,
+    /// A value that flags a failure; drawn in the palette's danger color.
+    Danger,
 }
 
 /// How a row stands relative to its data source, as a grid paints it.
