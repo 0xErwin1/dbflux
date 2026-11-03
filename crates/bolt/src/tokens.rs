@@ -385,6 +385,8 @@ impl Fields {
     pub const CHEVRON: Rems = ui(12.0);
     /// Icon before the label of a select trigger. (14 px)
     pub const LEADING_ICON: Rems = ui(14.0);
+    /// Match count at the end of a search field, mono. (11.5 px)
+    pub const COUNT_TEXT: Rems = ui(11.5);
 
     /// Filter field height (WHERE ... LIMIT). (34 px)
     pub const FILTER_HEIGHT: Rems = ui(34.0);
