@@ -35,7 +35,7 @@ rendering in Bolt, the domain knowledge behind a seam the product fills.
 | `bolt::controls` | Button, checkbox, dropdown, select trigger, input, read-only text view, key capture |
 | `bolt::composites` | Tabs (document, result, inline), menu item and popup menu, list row, empty state, split button, splitter, field row, island |
 | `bolt::selector` | `id_selector`: the gpui debug selector every id-bearing component records for its element id |
-| `bolt::modals` | The modal dialog, its focus helper and the shared body blocks (lead, statement, field, form row, value field) |
+| `bolt::modals` | The modal dialog, its focus helper and the shared body blocks (lead, statement, numbered statement, field, form row, value field) |
 | `bolt::shell` | The activity rail: view buttons with one active entry, top or bottom pinned |
 | `bolt::data` | The row-and-cell contract: `ColumnView`, `CellView`, `CellTone`, `CellContent`, `RowSource`, `RowVisualState`, `ColumnKind` |
 | `bolt::components::grid` | The data-grid row list and cell painter over `RowSource`, plus the `GridHost` carrying the host facts |

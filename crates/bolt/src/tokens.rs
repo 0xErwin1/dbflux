@@ -147,6 +147,11 @@ impl ModalMetrics {
     pub const CODE_PADDING_Y: Pixels = px(10.0);
     pub const CODE_PADDING_X: Pixels = px(12.0);
     pub const CODE_FONT: Rems = ui(12.5);
+    /// Numbered statement block: 20 px lines, a 46 px right-aligned gutter
+    /// with 14 px between the number and the code.
+    pub const CODE_LINE_HEIGHT: Rems = ui(20.0);
+    pub const CODE_GUTTER_WIDTH: Rems = ui(46.0);
+    pub const CODE_GUTTER_PADDING_RIGHT: Pixels = px(14.0);
     /// A labelled field: 12 px muted label, 6 px above its control.
     pub const FIELD_LABEL_FONT: Rems = ui(12.0);
     pub const FIELD_GAP: Pixels = px(6.0);
