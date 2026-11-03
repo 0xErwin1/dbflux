@@ -1001,7 +1001,10 @@ mod frame_loop_tests {
         let (_, completion) =
             state.complete(!mode.presents(false), PresentationState::Presented, false);
         assert_eq!(completion, FrameCompletion::Retry);
-        assert_eq!(PresentMode::Stalled.after_timer(FrameLoop::RetryScheduled), mode);
+        assert_eq!(
+            PresentMode::Stalled.after_timer(FrameLoop::RetryScheduled),
+            mode
+        );
     }
 
     #[test]
