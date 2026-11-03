@@ -159,3 +159,147 @@ fn an_unnumbered_block_draws_no_line_rows(cx: &mut TestAppContext) {
         "no line rows without the gutter"
     );
 }
+
+/// The per-line scan `split_lines` replaced, kept as the reference its
+/// single pass must match.
+fn split_lines_by_scan(code: &str, highlights: &[std::ops::Range<usize>]) -> Vec<CodeLine> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+
+    for segment in code.split_inclusive('\n') {
+        let content = segment
+            .strip_suffix('\n')
+            .map(|line| line.strip_suffix('\r').unwrap_or(line))
+            .unwrap_or(segment);
+        let text = start..start + content.len();
+        let line_highlights = highlights
+            .iter()
+            .filter_map(|range| {
+                let clipped_start = range.start.max(text.start);
+                let clipped_end = range.end.min(text.end);
+                (clipped_start < clipped_end)
+                    .then(|| clipped_start - text.start..clipped_end - text.start)
+            })
+            .collect();
+        lines.push(CodeLine {
+            text,
+            highlights: line_highlights,
+        });
+        start += segment.len();
+    }
+
+    if lines.is_empty() {
+        lines.push(CodeLine {
+            text: 0..0,
+            highlights: Vec::new(),
+        });
+    }
+
+    lines
+}
+
+#[test]
+fn the_single_pass_matches_the_per_line_scan_on_mixed_ranges() {
+    let code = "SELECT id\r\nFROM users\n\nWHERE id = 1\n  AND name = 'x'";
+    let cases: Vec<Vec<std::ops::Range<usize>>> = vec![
+        vec![],
+        vec![0..6, 11..15, 24..29],
+        // Unsorted, overlapping, crossing breaks, empty and past the end.
+        vec![
+            24..29,
+            2..14,
+            0..6,
+            7..7,
+            9..11,
+            20..50,
+            13..26,
+            40..44,
+            60..70,
+        ],
+        vec![0..code.len()],
+        vec![10..11, 22..23, 23..24],
+    ];
+
+    for highlights in cases {
+        assert_eq!(
+            split_lines(code, &highlights),
+            split_lines_by_scan(code, &highlights),
+            "highlights {highlights:?}"
+        );
+    }
+}
+
+fn long_numbered(_cx: &mut App) -> gpui::AnyElement {
+    let long = format!("SELECT {} FROM t\nshort\n", "column_name, ".repeat(40));
+    ModalCode::new("long-code", long)
+        .line_numbers(true)
+        .into_any_element()
+}
+
+/// A line wider than the block scrolls the code column sideways; the
+/// gutter stays where it is.
+#[gpui::test]
+fn a_long_line_scrolls_the_code_column(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, point, px};
+
+    let (_frame, window) = code_window(cx, long_numbered);
+
+    let column = window
+        .debug_bounds("long-code-lines")
+        .expect("the code column is laid out");
+    let line = window
+        .debug_bounds("long-code-line-1")
+        .expect("line 1 is laid out");
+    assert!(
+        line.size.width > column.size.width,
+        "the long line keeps its full width inside the column"
+    );
+
+    window.simulate_event(ScrollWheelEvent {
+        position: column.center(),
+        delta: ScrollDelta::Pixels(point(px(-200.0), px(0.0))),
+        modifiers: Modifiers::default(),
+        ..Default::default()
+    });
+    window.run_until_parked();
+
+    let scrolled = window
+        .debug_bounds("long-code-line-1")
+        .expect("line 1 is laid out");
+    let column_after = window
+        .debug_bounds("long-code-lines")
+        .expect("the code column is laid out");
+    assert!(scrolled.left() < line.left(), "the line moved left");
+    assert_eq!(
+        column_after.left(),
+        column.left(),
+        "the gutter did not move"
+    );
+}
+
+/// A vertical wheel over the code column leaves it in place, so it reaches
+/// the scrolling dialog body instead of turning into a sideways scroll.
+#[gpui::test]
+fn a_vertical_wheel_does_not_scroll_the_code_sideways(cx: &mut TestAppContext) {
+    use gpui::{ScrollDelta, ScrollWheelEvent, point, px};
+
+    let (_frame, window) = code_window(cx, long_numbered);
+    let column = window
+        .debug_bounds("long-code-lines")
+        .expect("the code column is laid out");
+    let line = window
+        .debug_bounds("long-code-line-1")
+        .expect("line 1 is laid out");
+
+    window.simulate_event(ScrollWheelEvent {
+        position: column.center(),
+        delta: ScrollDelta::Pixels(point(px(0.0), px(-200.0))),
+        ..Default::default()
+    });
+    window.run_until_parked();
+
+    let after = window
+        .debug_bounds("long-code-line-1")
+        .expect("line 1 is laid out");
+    assert_eq!(after.left(), line.left());
+}
