@@ -192,9 +192,10 @@ fn set_ime_cursor_rectangle_after_done(
     }
 }
 
-/// Pacing for retry ticks: a fixed 60Hz interval. Retries only occur for throttled or
-/// failed-present frames, so matching the output's actual refresh rate wouldn't be observable.
-const FRAME_RETRY_INTERVAL: Duration = Duration::from_micros(16_667);
+/// Pacing for retry ticks: a fixed 60Hz interval. Retries only occur for throttled,
+/// failed-present or hidden-window frames, so matching the output's actual refresh rate
+/// wouldn't be observable.
+pub(crate) const FRAME_RETRY_INTERVAL: Duration = Duration::from_micros(16_667);
 
 pub(crate) fn take_startup_activation_token_from_environment() -> Option<String> {
     let token = std::env::var(XDG_ACTIVATION_TOKEN_ENV_VAR)
@@ -628,28 +629,29 @@ impl WaylandClientStatePtr {
         }
     }
 
-    /// Queue a retry tick for `surface_id` one refresh interval from now. An immediate
-    /// retry would spin against the frame-rate throttle that deferred the draw in the
-    /// first place.
-    pub fn schedule_frame_retry(&self, surface_id: &ObjectId) {
+    /// Queue a frame tick for `surface_id` after `delay`. A retry waits one refresh
+    /// interval, since an immediate one would spin against the frame-rate throttle that
+    /// deferred the draw in the first place.
+    pub fn schedule_frame_timer(&self, surface_id: &ObjectId, delay: Duration, generation: u64) {
         let client = self.get_client();
         let state = client.borrow();
         let surface_id = surface_id.clone();
         let this = self.clone();
-        if let Err(err) = state.loop_handle.insert_source(
-            Timer::from_duration(FRAME_RETRY_INTERVAL),
-            move |deadline, _, _| {
-                let Some(client) = this.0.upgrade() else {
-                    return TimeoutAction::Drop;
-                };
-                let window = get_window(&mut client.borrow_mut(), &surface_id);
-                if let Some(window) = window {
-                    window.retry_timer_fired(deadline);
-                }
-                TimeoutAction::Drop
-            },
-        ) {
-            log::error!("Failed to schedule frame retry: {err}");
+        if let Err(err) =
+            state
+                .loop_handle
+                .insert_source(Timer::from_duration(delay), move |deadline, _, _| {
+                    let Some(client) = this.0.upgrade() else {
+                        return TimeoutAction::Drop;
+                    };
+                    let window = get_window(&mut client.borrow_mut(), &surface_id);
+                    if let Some(window) = window {
+                        window.frame_timer_fired(deadline, generation);
+                    }
+                    TimeoutAction::Drop
+                })
+        {
+            log::error!("Failed to schedule frame timer: {err}");
         }
     }
 
