@@ -3,7 +3,8 @@
 //! A host that lets users rebind a command puts its row into capturing
 //! state: the control shows the host's own hint and the next chord the user
 //! presses is reported to the host instead of reaching the app's keymap.
-//! Escape cancels; a bare modifier keeps the capture listening.
+//! A bare Escape cancels; a modified Escape is a chord like any other, and
+//! a bare modifier keeps the capture listening.
 
 use std::rc::Rc;
 
@@ -28,7 +29,9 @@ pub type KeyCaptureHandler = Rc<dyn Fn(&Keystroke, SharedString, &mut App)>;
 /// capture (from a click on the row around it, for example) and
 /// [`KeyCapture::stop`] cancels it. While capturing, the control shows the
 /// host's hint; the first non-modifier key is reported to the handler and
-/// never dispatched to the app's keymap.
+/// never dispatched to the app's keymap. A bare Escape cancels instead of
+/// being reported; a modified Escape (`ctrl-escape`) is a real chord and is
+/// reported like any other.
 pub struct KeyCapture {
     id: ElementId,
     label: SharedString,
@@ -96,7 +99,9 @@ impl KeyCapture {
                 let Some(this) = this.upgrade() else {
                     return;
                 };
-                if keystroke.key == "escape" {
+                if keystroke.key == "escape" && !keystroke.modifiers.modified() {
+                    // Only a bare Escape cancels: a modified Escape is a
+                    // chord the host can rebind to.
                     cx.stop_propagation();
                     this.update(cx, |capture, cx| capture.stop(cx));
                 } else {
@@ -353,6 +358,31 @@ mod tests {
         assert!(
             reports.borrow().is_empty(),
             "a cancelled capture is really closed"
+        );
+    }
+
+    #[gpui::test]
+    fn a_modified_escape_is_reported_as_a_chord(cx: &mut TestAppContext) {
+        let (capture, _frames, mut window) = open(cx);
+        let reports = Reports::default();
+        start_capturing(&capture, &reports, &mut window);
+
+        window.simulate_keystrokes("ctrl-escape");
+
+        let reported = reports.borrow();
+        let (keystroke, chord) = reported
+            .first()
+            .expect("the modified escape was reported once")
+            .clone();
+        assert_eq!(reported.len(), 1);
+        assert_eq!(chord, "ctrl-escape");
+        assert_eq!(keystroke.key, "escape");
+        assert!(keystroke.modifiers.control);
+        drop(reported);
+
+        assert!(
+            !capture.read_with(cx, |capture, _| capture.is_capturing()),
+            "reporting a chord closes the capture"
         );
     }
 

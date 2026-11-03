@@ -193,11 +193,16 @@ pub struct Progress {
 
 impl Progress {
     /// Create a bar for `value`, clamped into `0.0..=1.0`, under the
-    /// caller's element id.
+    /// caller's element id. A non-finite value (`NaN`, an infinity) has no
+    /// place on a bar and reads as `0.0`.
     pub fn new(id: impl Into<SharedString>, value: f32) -> Self {
         Self {
             id: id.into(),
-            value: value.clamp(0.0, 1.0),
+            value: if value.is_finite() {
+                value.clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
             label: None,
         }
     }
@@ -416,6 +421,24 @@ mod tests {
 
         let node = accessibility_node(&frame, "run").expect("the bar is announced");
         assert_eq!(node.numeric_value(), Some(0.0));
+    }
+
+    /// A non-finite value reads as zero: the bar has nothing to announce
+    /// for a NaN or an infinite progress.
+    #[gpui::test]
+    fn a_non_finite_value_reads_as_zero(cx: &mut TestAppContext) {
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let (frame, _) = progress_window(cx, move |_cx| {
+                super::Progress::new("run", value).into_any_element()
+            });
+
+            let node = accessibility_node(&frame, "run").expect("the bar is announced");
+            assert_eq!(
+                node.numeric_value(),
+                Some(0.0),
+                "a non-finite value ({value}) reads as zero"
+            );
+        }
     }
 
     /// The bar announces itself under the caller's id with the caller's

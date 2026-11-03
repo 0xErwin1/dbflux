@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::row::{
     DocumentTreeRow, DocumentTreeRowHost, DocumentTreeRowView, RowPaint, TreeRowMetrics,
@@ -8,7 +8,10 @@ use super::{NodeId, ValueTypeClass, value_type_color};
 use crate::accessibility::{FrameCapture, accessible_name};
 use crate::primitives::{Badge, BadgeTone};
 use crate::tokens::{ChromeColors, DocumentTreeMetrics, ValueTypeColors};
-use gpui::{AccessibilityFrame, App, IntoElement as _, TestAppContext, VisualTestContext, hsla};
+use gpui::{
+    AccessibilityFrame, App, IntoElement as _, Modifiers, TestAppContext, VisualTestContext, hsla,
+    point, px,
+};
 use gpui_component::ActiveTheme;
 
 /// A neutral brand at the default palette and density, so the tests render
@@ -354,5 +357,85 @@ fn a_row_with_a_trailing_element_carries_it_under_the_callers_id(cx: &mut TestAp
     assert!(
         status.left() > row_bounds.center().x,
         "the slot sits at the row's end, right-aligned"
+    );
+}
+
+/// One trailing row in a themed window whose row clicks are recorded, so a
+/// test can tell whether a click reached the row's handler.
+struct ClickRecordingSurface {
+    row_clicks: Arc<Mutex<Vec<String>>>,
+}
+
+impl gpui::Render for ClickRecordingSurface {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+        let mut host = tree_host();
+        let row_clicks = self.row_clicks.clone();
+        host.on_row_click = Arc::new(move |id, _, _, _| {
+            row_clicks
+                .lock()
+                .expect("row click recorder lock")
+                .push(format!("{id:?}"));
+        });
+        gpui::div().size_full().child(
+            gpui::div()
+                .debug_selector(|| "row-under-test".to_string())
+                .w(gpui::px(400.0))
+                .child(
+                    render_row(
+                        DocumentTreeRow::new(leaf_view()).trailing(
+                            Badge::new("201", BadgeTone::Success).id("saved-example-status-7"),
+                        ),
+                        &host,
+                        cx,
+                    )
+                    .into_any_element(),
+                ),
+        )
+    }
+}
+
+/// A click on the trailing element stops at the slot: the row's handler
+/// never hears it, while a click on the row itself still reaches it.
+#[gpui::test]
+fn a_click_on_the_trailing_element_does_not_reach_the_row(cx: &mut TestAppContext) {
+    install_test_theme(cx);
+    let row_clicks = Arc::new(Mutex::new(Vec::new()));
+    let (_view, window) = cx.add_window_view({
+        let row_clicks = row_clicks.clone();
+        move |_, _| ClickRecordingSurface { row_clicks }
+    });
+    window.run_until_parked();
+
+    let status = window
+        .debug_bounds("saved-example-status-7")
+        .expect("the trailing slot is laid out");
+    window.simulate_click(status.center(), Modifiers::default());
+    assert!(
+        row_clicks
+            .lock()
+            .expect("row click recorder lock")
+            .is_empty(),
+        "a click on the trailing element never reaches the row"
+    );
+
+    // The row's own surface still reports: a click in the leading indent,
+    // clear of the value, the badge and the slot, reaches the row.
+    let row = window
+        .debug_bounds("row-under-test")
+        .expect("the row is laid out");
+    window.simulate_click(
+        point(row.left() + px(2.0), row.center().y),
+        Modifiers::default(),
+    );
+    assert_eq!(
+        row_clicks.lock().expect("row click recorder lock").len(),
+        1,
+        "a click on the row itself reaches the row's handler"
     );
 }

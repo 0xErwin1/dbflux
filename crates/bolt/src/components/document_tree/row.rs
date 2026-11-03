@@ -189,7 +189,9 @@ impl DocumentTreeRow {
 
     /// Draws `element` at the row's end, after the type badge, right-aligned
     /// by the value's flexible width. The element carries its own id, so
-    /// tests and automation find and click it.
+    /// tests and automation find and click it. A click on the slot stops at
+    /// the slot: it never reaches the row's handler, like the value and
+    /// chevron clicks.
     pub fn trailing(mut self, element: impl IntoElement) -> Self {
         self.trailing = Some(element.into_any_element());
         self
@@ -326,8 +328,19 @@ pub fn render_row(
 
     // The value's flexible width pushes the slot to the row's end; the slot
     // itself never shrinks, so a wide element cannot squeeze the preview.
+    // The slot catches its own clicks, so a host's trailing control (a
+    // status badge, a run button) never selects or activates the row.
     if let Some(trailing) = trailing {
-        row = row.child(div().flex_shrink_0().ml(Spacing::XS).child(trailing));
+        row = row.child(
+            div()
+                .id(ElementId::Name(
+                    format!("trailing-{:?}", view.id.path).into(),
+                ))
+                .flex_shrink_0()
+                .ml(Spacing::XS)
+                .on_click(|_, _, cx| cx.stop_propagation())
+                .child(trailing),
+        );
     }
 
     row
