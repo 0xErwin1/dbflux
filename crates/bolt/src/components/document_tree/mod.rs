@@ -8,8 +8,9 @@
 //! display-facts-only contract [`crate::data`] establishes for grids. The
 //! painter owns the row's paint decisions: the background precedence (the
 //! keyboard cursor, then the current search match, then any match), the
-//! hover variants, the chevron, the key, the value in its type color, and
-//! the type badge.
+//! hover variants, the chevron, the key, the value in its type color, the
+//! type badge, and the optional trailing element a host hands over
+//! ([`DocumentTreeRow::trailing`]) — drawn at the row's end, right-aligned.
 
 mod row;
 
@@ -17,7 +18,8 @@ mod row;
 mod tests;
 
 pub use row::{
-    DocumentTreeRowHost, DocumentTreeRowView, RowPaint, TreeRowMetrics, render_row, row_paint,
+    DocumentTreeRow, DocumentTreeRowHost, DocumentTreeRowView, RowPaint, TreeRowMetrics,
+    render_row, row_paint,
 };
 
 use gpui::Hsla;

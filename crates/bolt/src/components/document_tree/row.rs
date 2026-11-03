@@ -10,8 +10,9 @@
 use std::sync::Arc;
 
 use gpui::{
-    App, ClickEvent, Div, ElementId, Entity, Hsla, InteractiveElement, MouseButton, MouseDownEvent,
-    ParentElement, Pixels, SharedString, Stateful, StatefulInteractiveElement, Styled, Window, div,
+    AnyElement, App, ClickEvent, Div, ElementId, Entity, Hsla, InteractiveElement, IntoElement,
+    MouseButton, MouseDownEvent, ParentElement, Pixels, SharedString, Stateful,
+    StatefulInteractiveElement, Styled, Window, div,
 };
 use gpui_component::input::InputState;
 use gpui_component::{ActiveTheme, Sizable, Theme};
@@ -169,12 +170,48 @@ pub struct DocumentTreeRowHost {
     pub on_value_click: Arc<dyn Fn(&NodeId, &ClickEvent, &mut Window, &mut App)>,
 }
 
+/// One row's render input: the display facts ([`DocumentTreeRowView`]) plus
+/// the optional trailing element. The bare view converts into it, so a host
+/// that draws no trailing element keeps building the view alone and its rows
+/// render exactly as they did before the slot existed.
+pub struct DocumentTreeRow {
+    view: DocumentTreeRowView,
+    trailing: Option<AnyElement>,
+}
+
+impl DocumentTreeRow {
+    pub fn new(view: DocumentTreeRowView) -> Self {
+        Self {
+            view,
+            trailing: None,
+        }
+    }
+
+    /// Draws `element` at the row's end, after the type badge, right-aligned
+    /// by the value's flexible width. The element carries its own id, so
+    /// tests and automation find and click it.
+    pub fn trailing(mut self, element: impl IntoElement) -> Self {
+        self.trailing = Some(element.into_any_element());
+        self
+    }
+}
+
+impl From<DocumentTreeRowView> for DocumentTreeRow {
+    fn from(view: DocumentTreeRowView) -> Self {
+        Self {
+            view,
+            trailing: None,
+        }
+    }
+}
+
 /// Draw one document tree row.
 pub fn render_row(
-    view: DocumentTreeRowView,
+    row: impl Into<DocumentTreeRow>,
     host: &DocumentTreeRowHost,
     cx: &App,
 ) -> Stateful<Div> {
+    let DocumentTreeRow { view, trailing } = row.into();
     let theme = cx.theme().clone();
     let metrics = TreeRowMetrics::for_grid(cx);
     let paint = row_paint(
@@ -234,7 +271,7 @@ pub fn render_row(
             })
     };
 
-    div()
+    let mut row = div()
         .id(ElementId::Name(
             format!("tree-row-{:?}", view.id.path).into(),
         ))
@@ -285,7 +322,15 @@ pub fn render_row(
                         .font_size(metrics.label_font)
                         .color(paint.value_color),
                 ),
-        )
+        );
+
+    // The value's flexible width pushes the slot to the row's end; the slot
+    // itself never shrinks, so a wide element cannot squeeze the preview.
+    if let Some(trailing) = trailing {
+        row = row.child(div().flex_shrink_0().ml(Spacing::XS).child(trailing));
+    }
+
+    row
 }
 
 fn render_chevron(

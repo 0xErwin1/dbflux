@@ -1,7 +1,14 @@
-use super::row::{RowPaint, TreeRowMetrics, row_paint};
+use std::sync::Arc;
+
+use super::row::{
+    DocumentTreeRow, DocumentTreeRowHost, DocumentTreeRowView, RowPaint, TreeRowMetrics,
+    render_row, row_paint,
+};
 use super::{NodeId, ValueTypeClass, value_type_color};
+use crate::accessibility::{FrameCapture, accessible_name};
+use crate::primitives::{Badge, BadgeTone};
 use crate::tokens::{ChromeColors, DocumentTreeMetrics, ValueTypeColors};
-use gpui::{TestAppContext, hsla};
+use gpui::{AccessibilityFrame, App, IntoElement as _, TestAppContext, VisualTestContext, hsla};
 use gpui_component::ActiveTheme;
 
 /// A neutral brand at the default palette and density, so the tests render
@@ -208,4 +215,144 @@ fn node_ids_build_paths_down_and_climb_back_up() {
     let address = city.parent().expect("a nested node has a parent");
     assert_eq!(address.path, vec!["2".to_string(), "address".to_string()]);
     assert_eq!(address.parent().expect("the root's parent"), root);
+}
+
+// --- The rendered row -------------------------------------------------------
+
+/// The id the painter gives a row's element: the same format the row builder
+/// uses, so assertions address the drawn row.
+fn row_node_id(id: &NodeId) -> String {
+    format!("tree-row-{:?}", id.path)
+}
+
+fn tree_host() -> DocumentTreeRowHost {
+    DocumentTreeRowHost {
+        chevron_expanded: gpui_component::IconName::ChevronDown.into(),
+        chevron_collapsed: gpui_component::IconName::ChevronRight.into(),
+        on_row_click: Arc::new(|_, _, _, _| {}),
+        on_row_context: Arc::new(|_, _, _, _| {}),
+        on_chevron_click: Arc::new(|_, _, _, _| {}),
+        on_value_click: Arc::new(|_, _, _, _| {}),
+    }
+}
+
+/// A leaf row whose drawn text is the key `status`, the value `created` and
+/// the type label `string`.
+fn leaf_view() -> DocumentTreeRowView {
+    DocumentTreeRowView {
+        id: NodeId::root(7),
+        depth: 1,
+        key: "status".into(),
+        value_text: "created".into(),
+        value_class: ValueTypeClass::Text,
+        type_label: "string",
+        is_expandable: false,
+        is_expanded: false,
+        is_value_expanded: false,
+        is_cursor: false,
+        is_current_match: false,
+        is_search_match: false,
+        is_editing: false,
+        inline_edit_input: None,
+    }
+}
+
+/// Renders one row alone in a themed test window of a fixed width and
+/// returns its accessibility frame and the window, so assertions read both
+/// the announced tree and the laid-out bounds.
+fn row_window(
+    cx: &mut TestAppContext,
+    build: fn(&mut App) -> gpui::AnyElement,
+) -> (AccessibilityFrame, &mut VisualTestContext) {
+    struct Surface(fn(&mut App) -> gpui::AnyElement);
+
+    impl gpui::Render for Surface {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+            gpui::div().size_full().child(
+                gpui::div()
+                    .debug_selector(|| "row-under-test".to_string())
+                    .w(gpui::px(400.0))
+                    .child((self.0)(cx)),
+            )
+        }
+    }
+
+    install_test_theme(cx);
+    let (_, window) = cx.add_window_view(move |_, _| Surface(build));
+    let capture = FrameCapture::observe(window);
+    let frame = capture.frame(window);
+    (frame, window)
+}
+
+fn plain_row(_cx: &mut App) -> gpui::AnyElement {
+    let host = tree_host();
+    render_row(leaf_view(), &host, _cx).into_any_element()
+}
+
+fn trailing_row(_cx: &mut App) -> gpui::AnyElement {
+    let host = tree_host();
+    render_row(
+        DocumentTreeRow::new(leaf_view())
+            .trailing(Badge::new("201", BadgeTone::Success).id("saved-example-status-7")),
+        &host,
+        _cx,
+    )
+    .into_any_element()
+}
+
+/// A row without a trailing element renders exactly its own text — the key,
+/// the value and the type badge — and no status slot.
+#[gpui::test]
+fn a_row_without_a_trailing_element_renders_its_own_text_alone(cx: &mut TestAppContext) {
+    let (frame, _window) = row_window(cx, plain_row);
+    let view = leaf_view();
+
+    let row = accessible_name(&frame, &row_node_id(&view.id)).expect("the row renders");
+    assert!(row.contains("status"), "the key is drawn: {row}");
+    assert!(row.contains("created"), "the value is drawn: {row}");
+    assert!(row.contains("string"), "the type badge is drawn: {row}");
+    assert!(
+        frame
+            .nodes()
+            .all(|(_, node)| node.id() != "saved-example-status-7"),
+        "a row without a trailing element draws no status slot"
+    );
+}
+
+/// A row with a trailing element carries it under the id the caller
+/// supplied, draws its label, and keeps drawing the row's own text; the slot
+/// sits at the row's end, past the middle of the row.
+#[gpui::test]
+fn a_row_with_a_trailing_element_carries_it_under_the_callers_id(cx: &mut TestAppContext) {
+    let (frame, window) = row_window(cx, trailing_row);
+    let view = leaf_view();
+
+    assert_eq!(
+        accessible_name(&frame, "saved-example-status-7").as_deref(),
+        Some("201"),
+        "the trailing slot carries the caller's id and its label"
+    );
+    let row = accessible_name(&frame, &row_node_id(&view.id)).expect("the row renders");
+    assert!(row.contains("201"), "the trailing element draws in the row");
+
+    let row_bounds = window
+        .debug_bounds("row-under-test")
+        .expect("the row is laid out");
+    let status = window
+        .debug_bounds("saved-example-status-7")
+        .expect("the trailing slot is laid out");
+    assert!(
+        status.right() <= row_bounds.right(),
+        "the slot stays inside the row"
+    );
+    assert!(
+        status.left() > row_bounds.center().x,
+        "the slot sits at the row's end, right-aligned"
+    );
 }
