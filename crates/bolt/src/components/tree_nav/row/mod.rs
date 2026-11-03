@@ -3,7 +3,7 @@
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, ClickEvent, Div, ElementId, Role, SharedString, Stateful, Window, div,
+    AnyElement, App, ClickEvent, Div, ElementId, Hsla, Role, SharedString, Stateful, Window, div,
 };
 use gpui_component::ActiveTheme;
 
@@ -165,16 +165,52 @@ impl TreeNavRow {
 
     pub fn build(self, cx: &App) -> Stateful<Div> {
         let theme = cx.theme().clone();
-        let muted = theme.muted_foreground;
+        let id = self.id.clone();
+        let part = |suffix: &str| part(&id, suffix);
+
+        let mut row = self.frame(&theme, cx);
+        if let Some(chevron) = self.chevron {
+            row = row.aria_expanded(chevron.expanded).child(chevron_part(
+                part("chevron"),
+                chevron,
+                theme.muted_foreground,
+            ));
+        } else if self.chevron_spacer {
+            row = row.child(div().w(TreeMetrics::CHEVRON).flex_none());
+        }
+
+        let name_color = if self.selected || self.emphasized {
+            ChromeColors::strong(&theme)
+        } else {
+            theme.foreground
+        };
+        let name = self
+            .name
+            .unwrap_or_else(|| name_part(part("name"), self.label, name_color));
+
+        row.children(
+            self.icon
+                .map(|(icon, tone)| icon_part(part("icon"), icon, tone, &theme)),
+        )
+        .children(self.leading)
+        .child(name)
+        .children(
+            self.count
+                .map(|count| count_part(part("count"), count, theme.muted_foreground, cx)),
+        )
+        .children(
+            self.trailing
+                .map(|trailing| trailing_part(part("trailing"), trailing)),
+        )
+    }
+
+    /// The row itself: the list row, its name and states, the indent and
+    /// one guide per ancestor.
+    fn frame(&self, theme: &gpui_component::Theme, cx: &App) -> Stateful<Div> {
         let indent = crate::fonts::ui_px(cx, TreeMetrics::INDENT);
         let guide = crate::fonts::ui_px(cx, TreeMetrics::GUIDE_OFFSET);
-        let id = self.id;
-        let part = |suffix: &str| {
-            let part_id = ElementId::Name(format!("{id}-{suffix}").into());
-            div().debug_selector(id_selector(&part_id)).id(part_id)
-        };
 
-        let mut row = ListRow::new(ElementId::Name(id.clone()))
+        ListRow::new(ElementId::Name(self.id.clone()))
             .selected(self.selected)
             .focused(self.focused)
             .selection_bar(true)
@@ -199,76 +235,71 @@ impl TreeNavRow {
                     .left(guide + indent * level as f32)
                     .w(Borders::THIN)
                     .bg(theme.border)
-            }));
-
-        if let Some(chevron) = self.chevron {
-            let on_toggle = chevron.on_toggle;
-            row = row.aria_expanded(chevron.expanded).child(
-                part("chevron")
-                    .role(Role::Button)
-                    .aria_label(chevron.label)
-                    .flex_none()
-                    .cursor_pointer()
-                    .on_click(move |event, window, cx| {
-                        cx.stop_propagation();
-                        on_toggle(event, window, cx);
-                    })
-                    .child(
-                        Icon::new(chevron.icon)
-                            .size(TreeMetrics::CHEVRON)
-                            .color(muted),
-                    ),
-            );
-        } else if self.chevron_spacer {
-            row = row.child(div().w(TreeMetrics::CHEVRON).flex_none());
-        }
-
-        if let Some((icon, tone)) = self.icon {
-            row = row.child(
-                part("icon").flex_none().child(
-                    Icon::new(icon)
-                        .size(TreeMetrics::ICON)
-                        .color(tone.text_color(&theme)),
-                ),
-            );
-        }
-
-        let name_color = if self.selected || self.emphasized {
-            ChromeColors::strong(&theme)
-        } else {
-            theme.foreground
-        };
-        let name = match self.name {
-            Some(element) => element,
-            None => part("name")
-                .flex_1()
-                .min_w_0()
-                .overflow_hidden()
-                .text_ellipsis()
-                .text_color(name_color)
-                .child(self.label)
-                .into_any_element(),
-        };
-
-        row.children(self.leading)
-            .child(name)
-            .children(self.count.map(|count| {
-                part("count")
-                    .flex_none()
-                    .font_family(crate::fonts::editor_family(cx))
-                    .text_size(TreeMetrics::META_FONT)
-                    .text_color(muted)
-                    .child(count)
-            }))
-            .children(self.trailing.map(|trailing| {
-                // The slot catches its own clicks, so a trailing control
-                // never selects or opens the row.
-                part("trailing")
-                    .flex_none()
-                    .on_click(|_, _, cx| cx.stop_propagation())
-                    .child(trailing)
             }))
     }
+}
+
+/// A part of the row under `<id>-<suffix>`.
+fn part(id: &SharedString, suffix: &str) -> Stateful<Div> {
+    let part_id = ElementId::Name(format!("{id}-{suffix}").into());
+    div().debug_selector(id_selector(&part_id)).id(part_id)
+}
+
+fn chevron_part(part: Stateful<Div>, chevron: TreeNavChevron, color: Hsla) -> Stateful<Div> {
+    let on_toggle = chevron.on_toggle;
+
+    part.role(Role::Button)
+        .aria_label(chevron.label)
+        .flex_none()
+        .cursor_pointer()
+        .on_click(move |event, window, cx| {
+            cx.stop_propagation();
+            on_toggle(event, window, cx);
+        })
+        .child(
+            Icon::new(chevron.icon)
+                .size(TreeMetrics::CHEVRON)
+                .color(color),
+        )
+}
+
+fn icon_part(
+    part: Stateful<Div>,
+    icon: IconSource,
+    tone: BadgeTone,
+    theme: &gpui_component::Theme,
+) -> Stateful<Div> {
+    part.flex_none().child(
+        Icon::new(icon)
+            .size(TreeMetrics::ICON)
+            .color(tone.text_color(theme)),
+    )
+}
+
+fn name_part(part: Stateful<Div>, label: SharedString, color: Hsla) -> AnyElement {
+    part.flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .text_ellipsis()
+        .text_color(color)
+        .child(label)
+        .into_any_element()
+}
+
+fn count_part(part: Stateful<Div>, count: SharedString, color: Hsla, cx: &App) -> Stateful<Div> {
+    part.flex_none()
+        .font_family(crate::fonts::editor_family(cx))
+        .text_size(TreeMetrics::META_FONT)
+        .text_color(color)
+        .child(count)
+}
+
+fn trailing_part(part: Stateful<Div>, trailing: AnyElement) -> Stateful<Div> {
+    // The slot catches its own clicks, so a trailing control never selects
+    // or opens the row.
+    part.flex_none()
+        .on_click(|_, _, cx| cx.stop_propagation())
+        .child(trailing)
 }
 
 #[cfg(test)]

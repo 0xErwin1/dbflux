@@ -214,3 +214,54 @@ fn chevron_and_trailing_clicks_stop_before_the_row(cx: &mut TestAppContext) {
         vec!["leaf"]
     );
 }
+
+/// A row whose name is replaced by the caller's element (a rename field).
+struct RenameHarness;
+
+impl Render for RenameHarness {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+        let field = div()
+            .debug_selector(|| "tree-rename-field".to_string())
+            .flex_1()
+            .min_w_0()
+            .h(gpui::px(18.0));
+        let row = TreeNavRow::new("tree-row-9", "Users", 0)
+            .icon(icon("folder"), BadgeTone::Neutral)
+            .name(field)
+            .build(cx);
+
+        div()
+            .size_full()
+            .child(div().flex().flex_col().w(gpui::px(300.0)).child(row))
+    }
+}
+
+/// `.name(...)` lays the caller's element out in the name's slot, after the
+/// icon and through the row's end, so no drawn label shares the slot.
+#[gpui::test]
+fn a_replaced_name_takes_the_name_slot(cx: &mut TestAppContext) {
+    install_test_theme(cx);
+    let (_, window) = cx.add_window_view(|_, _| RenameHarness);
+    window.run_until_parked();
+
+    let row = window.debug_bounds("tree-row-9").expect("row laid out");
+    let icon = window
+        .debug_bounds("tree-row-9-icon")
+        .expect("icon laid out");
+    let field = window
+        .debug_bounds("tree-rename-field")
+        .expect("the replacement is laid out");
+
+    assert_eq!(
+        field.left(),
+        icon.right() + TreeMetrics::GAP,
+        "the replacement follows the icon"
+    );
+    assert_eq!(
+        field.right(),
+        row.right() - TreeMetrics::PADDING_X,
+        "the replacement fills the slot the drawn name would take"
+    );
+}
