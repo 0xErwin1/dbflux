@@ -303,3 +303,139 @@ fn a_vertical_wheel_does_not_scroll_the_code_sideways(cx: &mut TestAppContext) {
         .expect("line 1 is laid out");
     assert_eq!(after.left(), line.left());
 }
+
+fn tint_bold(cx: &App) -> gpui::HighlightStyle {
+    gpui::HighlightStyle {
+        color: Some(crate::tokens::ChromeColors::tint(
+            gpui_component::ActiveTheme::theme(cx),
+        )),
+        font_weight: Some(gpui::FontWeight::BOLD),
+        ..Default::default()
+    }
+}
+
+fn color(color: gpui::Hsla) -> gpui::HighlightStyle {
+    gpui::HighlightStyle {
+        color: Some(color),
+        ..Default::default()
+    }
+}
+
+/// With a language the code takes its syntax runs, and a highlight replaces
+/// the syntax style over its own range.
+#[gpui::test]
+fn a_language_colors_the_code_under_the_highlights(cx: &mut TestAppContext) {
+    install_test_theme(cx);
+    crate::syntax::register_bundled();
+    let colors = crate::tokens::SyntaxColors::dark();
+
+    cx.update(|cx| {
+        let runs = ModalCode::new("json-code", r#"{"key": 1}"#)
+            .language("json")
+            .highlights(std::iter::once(1..4))
+            .styled_runs(cx);
+
+        assert_eq!(
+            runs,
+            vec![
+                (0..1, color(colors.operator)),
+                (1..4, tint_bold(cx)),
+                (4..6, color(colors.property)),
+                (6..7, color(colors.operator)),
+                (8..9, color(colors.number)),
+                (9..10, color(colors.operator)),
+            ]
+        );
+    });
+}
+
+#[gpui::test]
+fn an_unknown_language_leaves_only_the_highlights(cx: &mut TestAppContext) {
+    install_test_theme(cx);
+
+    cx.update(|cx| {
+        let runs = ModalCode::new("plain-code", r#"{"key": 1}"#)
+            .language("probe-unknown-language")
+            .highlights(std::iter::once(1..4))
+            .styled_runs(cx);
+
+        assert_eq!(runs, vec![(1..4, tint_bold(cx))]);
+    });
+}
+
+/// Numbered, each line carries its own runs relative to the line start.
+#[test]
+fn styled_runs_split_per_line_relative_to_the_line() {
+    let code = "{\n  \"k\": 1\n}";
+    let runs = vec![(0..1, 'a'), (4..7, 'b'), (9..10, 'c'), (11..12, 'a')];
+
+    let lines = super::split_runs(code, &runs);
+
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0].1, vec![(0..1, 'a')]);
+    assert_eq!(lines[1].1, vec![(2..5, 'b'), (7..8, 'c')]);
+    assert_eq!(lines[2].1, vec![(0..1, 'a')]);
+}
+
+/// A toned highlight draws bold in its tone's color, beside the tint ones,
+/// and over the syntax runs.
+#[gpui::test]
+fn toned_highlights_draw_in_their_tone_over_the_syntax(cx: &mut TestAppContext) {
+    use crate::primitives::BadgeTone;
+
+    install_test_theme(cx);
+    crate::syntax::register_bundled();
+    let colors = crate::tokens::SyntaxColors::dark();
+
+    cx.update(|cx| {
+        let theme = gpui_component::ActiveTheme::theme(cx);
+        let bold = |color: gpui::Hsla| gpui::HighlightStyle {
+            color: Some(color),
+            font_weight: Some(gpui::FontWeight::BOLD),
+            ..Default::default()
+        };
+        let warning = bold(BadgeTone::Warning.text_color(theme));
+
+        let runs = ModalCode::new("toned-code", r#"{"key": 1}"#)
+            .language("json")
+            .highlights(std::iter::once(2..5))
+            .highlights_with_tone(std::iter::once(8..9), BadgeTone::Warning)
+            .styled_runs(cx);
+
+        assert_eq!(
+            runs,
+            vec![
+                (0..1, color(colors.operator)),
+                (1..2, color(colors.property)),
+                (2..5, tint_bold(cx)),
+                (5..6, color(colors.property)),
+                (6..7, color(colors.operator)),
+                (8..9, warning),
+                (9..10, color(colors.operator)),
+            ]
+        );
+    });
+}
+
+/// Without a language the toned and tint highlights are the only runs.
+#[gpui::test]
+fn toned_highlights_without_a_language(cx: &mut TestAppContext) {
+    use crate::primitives::BadgeTone;
+
+    install_test_theme(cx);
+
+    cx.update(|cx| {
+        let warning = gpui::HighlightStyle {
+            color: Some(BadgeTone::Warning.text_color(gpui_component::ActiveTheme::theme(cx))),
+            font_weight: Some(gpui::FontWeight::BOLD),
+            ..Default::default()
+        };
+
+        let runs = ModalCode::new("toned-plain", "{{a}} {{b}}")
+            .highlights(std::iter::once(0..5))
+            .highlights_with_tone(std::iter::once(6..11), BadgeTone::Warning)
+            .styled_runs(cx);
+
+        assert_eq!(runs, vec![(0..5, tint_bold(cx)), (6..11, warning)]);
+    });
+}

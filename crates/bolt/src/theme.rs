@@ -297,6 +297,7 @@ fn apply_syntax_colors(theme: &mut Theme, colors: &SyntaxColors) {
         (&mut syntax.constructor, colors.type_name),
         (&mut syntax.enum_, colors.type_name),
         (&mut syntax.variable_special, colors.type_name),
+        (&mut syntax.tag, colors.type_name),
         (&mut syntax.function, colors.function),
         (&mut syntax.operator, colors.operator),
         (&mut syntax.punctuation, colors.operator),
@@ -304,7 +305,8 @@ fn apply_syntax_colors(theme: &mut Theme, colors: &SyntaxColors) {
         (&mut syntax.punctuation_delimiter, colors.operator),
         (&mut syntax.punctuation_special, colors.operator),
         (&mut syntax.variable, colors.plain),
-        (&mut syntax.property, colors.plain),
+        (&mut syntax.property, colors.property),
+        (&mut syntax.attribute, colors.property),
         (&mut syntax.primary, colors.plain),
     ];
 
@@ -815,6 +817,106 @@ mod tests {
                 }
                 assert_eq!(style("variable.alias").color, Some(colors.type_name));
                 assert_eq!(style("variable.column_alias").color, Some(colors.field));
+            });
+        }
+    }
+
+    /// Every capture the highlighter knows resolves to its syntax role, and a
+    /// capture without a role keeps gpui-component's default style.
+    #[gpui::test]
+    fn every_capture_resolves_to_its_role(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        for (mode, colors, property) in [
+            (
+                PaletteMode::Dark,
+                SyntaxColors::dark().with_keyword(test_brand().accent_tint),
+                Hsla::from(gpui::rgb(0xA9A4B2)),
+            ),
+            (
+                PaletteMode::Light,
+                SyntaxColors::light().with_keyword(test_brand().accent),
+                Hsla::from(gpui::rgb(0x5C5766)),
+            ),
+        ] {
+            let theme_mode = match mode {
+                PaletteMode::Light => ThemeMode::Light,
+                PaletteMode::Dark | PaletteMode::System => ThemeMode::Dark,
+            };
+            let defaults = cx.update(|cx| {
+                Theme::change(theme_mode, None, cx);
+                Theme::global(cx).highlight_theme.clone()
+            });
+            let roles = [
+                ("keyword", colors.keyword),
+                ("string", colors.string),
+                ("string.escape", colors.string),
+                ("string.regex", colors.string),
+                ("string.special", colors.string),
+                ("string.special.symbol", colors.string),
+                ("number", colors.number),
+                ("boolean", colors.number),
+                ("constant", colors.number),
+                ("comment", colors.comment),
+                ("comment.doc", colors.comment),
+                ("type", colors.type_name),
+                ("constructor", colors.type_name),
+                ("enum", colors.type_name),
+                ("variable.special", colors.type_name),
+                ("tag", colors.type_name),
+                // No style of its own: falls back to `tag`.
+                ("tag.doctype", colors.type_name),
+                ("function", colors.function),
+                ("operator", colors.operator),
+                ("punctuation", colors.operator),
+                ("punctuation.bracket", colors.operator),
+                ("punctuation.delimiter", colors.operator),
+                ("punctuation.special", colors.operator),
+                ("punctuation.list_marker", colors.operator),
+                ("variable", colors.plain),
+                ("primary", colors.plain),
+                ("namespace", colors.namespace),
+                ("field", colors.field),
+                ("type.alias", colors.type_name),
+                ("variable.alias", colors.type_name),
+                ("variable.column_alias", colors.field),
+                ("property", property),
+                ("attribute", property),
+            ];
+            let unmapped = [
+                "embedded",
+                "emphasis",
+                "emphasis.strong",
+                "hint",
+                "label",
+                "link_text",
+                "link_uri",
+                "predictive",
+                "preproc",
+                "text.code.span",
+                "text.literal",
+                "title",
+                "variant",
+            ];
+
+            cx.update(|cx| {
+                install(test_brand(), mode, Density::Default, cx);
+                let syntax = &Theme::global(cx).highlight_theme.style.syntax;
+
+                for (name, color) in roles {
+                    assert_eq!(
+                        syntax.style(name).and_then(|style| style.color),
+                        Some(color),
+                        "{mode:?} {name}"
+                    );
+                }
+                for name in unmapped {
+                    assert_eq!(
+                        syntax.style(name),
+                        defaults.style.syntax.style(name),
+                        "{mode:?} {name}"
+                    );
+                }
             });
         }
     }

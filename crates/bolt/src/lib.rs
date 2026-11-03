@@ -57,6 +57,9 @@ pub mod selector;
 pub mod semantic;
 pub mod shell;
 pub mod strings;
+/// The grammar seam: register tree-sitter grammars with the shared highlighter
+/// registry, and the bundled grammars behind the opt-in `syntax-*` features.
+pub mod syntax;
 
 pub mod theme;
 /// The toast stack: the severity model, its throttle and bounded stack, and

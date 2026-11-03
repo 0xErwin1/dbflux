@@ -44,6 +44,7 @@ rendering in Bolt, the domain knowledge behind a seam the product fills.
 | `bolt::chart` | Decimation, axis ticks, series stats, legend, axis bar, point inspector, the spec's value types and the readout formatters |
 | `bolt::command_palette` | The palette engine: fuzzy query, scopes, grouping, cursor, highlighting, card and footer |
 | `bolt::keymap` | The semantic command vocabulary, the installed `CommandSet` and the attach hook |
+| `bolt::syntax` | The grammar seam over the shared highlighter registry, the bundled grammars behind opt-in `syntax-*` features |
 | `bolt::strings` | The text seam: a key and a key with named arguments, answered by the product |
 | `bolt::vim` | The modal-editing engine and its binding layer |
 | `bolt::toast` | The toast model, its bounded stack, auto-dismiss timers, the presentation shell and a generic `TokenBucket` throttle |
@@ -266,6 +267,105 @@ field:
 Each role holds the value `bolt::theme::apply_theme` installs for that field,
 and a test checks every pair in both palettes, so moving a screen from a theme
 field to its role changes nothing on screen.
+
+## Syntax roles
+
+`bolt::tokens::SyntaxColors` holds the code colors of each palette variant, and
+`bolt::theme` maps every tree-sitter capture onto one of its roles:
+
+| Captures | Role |
+|---|---|
+| `keyword` (bold) | `keyword`, the brand accent |
+| `string`, `string.escape`, `string.regex`, `string.special`, `string.special.symbol` | `string` |
+| `number`, `boolean`, `constant` | `number` |
+| `comment`, `comment.doc` | `comment` |
+| `type`, `constructor`, `enum`, `variable.special`, `tag` | `type_name` |
+| `function` (bold) | `function` |
+| `operator`, `punctuation` and its variants | `operator` |
+| `variable`, `primary` | `plain` |
+| `namespace` | `namespace` |
+| `field` | `field` |
+| `property`, `attribute` | `property` (`#A9A4B2` dark, `#5C5766` light) |
+
+A dotted capture without a style of its own takes its prefix's
+(`tag.doctype` reads as `tag`). The highlighter keeps no `string.special.key`
+slot, so a grammar whose query captures object keys that way paints them as
+strings; register it with keys captured as `property` instead (the bundled
+`json` grammar does).
+
+## Grammars
+
+The code editor and every highlighted view look a language name up in one
+shared registry. A product adds a grammar with `bolt::syntax::Grammar`, never
+with gpui-component's highlighter types:
+
+```rust
+use bolt::syntax::Grammar;
+
+Grammar::new("lua", tree_sitter_lua::LANGUAGE, tree_sitter_lua::HIGHLIGHTS_QUERY)
+    .register();
+
+let plaintext = Grammar::new("plaintext", tree_sitter_json::LANGUAGE, "");
+plaintext.register();
+plaintext.register_as("text");
+```
+
+`Grammar::new(name, language, highlights)` takes the grammar's
+`tree_sitter::Language` (or its `LANGUAGE` constant) and its highlights query.
+`.injections(query)` and `.locals(query)` add the other two queries. An
+injection is highlighted with the grammar registered under the language name
+it sets, so HTML's script elements take the `javascript` grammar once it is
+registered; an unregistered injected language stays plain.
+`bolt::syntax::is_registered(name)` answers whether a name resolves. Grammar
+crates must target tree-sitter 0.26 (ABI 13 to 15); bolt re-exports the crate as
+`bolt::syntax::tree_sitter`.
+
+Bolt bundles six grammars, each behind its own feature so a product links only
+what it asks for. `bolt::syntax::register_bundled()` registers every enabled
+one; `bolt::syntax::bundled::json()` and its siblings return one grammar to
+register on its own.
+
+| Feature | Name | Crate |
+|---|---|---|
+| `syntax-json` | `json` (keys captured as `property`) | `tree-sitter-json` 0.24.8 |
+| `syntax-javascript` | `javascript` | `tree-sitter-javascript` 0.23.1 |
+| `syntax-bash` | `bash` | `tree-sitter-bash` 0.23.3 |
+| `syntax-python` | `python` | `tree-sitter-python` 0.23.6 |
+| `syntax-xml` | `xml` | `tree-sitter-xml` 0.7.0 |
+| `syntax-html` | `html`, injecting `javascript` and `css` | `tree-sitter-html` 0.23.2 |
+
+### Highlighting text a host draws
+
+`bolt::syntax::highlight(language, text, cx)` returns the syntax runs of
+read-only text as `Vec<(Range<usize>, HighlightStyle)>`: byte ranges, sorted and
+non-overlapping, styled by the current theme. A language with no registered
+grammar, or whose query does not compile, returns no runs. Recent results are
+kept, so a view rebuilt every frame does not parse again.
+`bolt::syntax::overlay(base, top)` lays a host's own runs over them; a top
+run replaces the syntax style over its range:
+
+```rust
+let runs = bolt::syntax::overlay(
+    bolt::syntax::highlight("json", &body, cx),
+    search_matches.iter().map(|range| (range.clone(), match_style)),
+);
+StyledText::new(body).with_highlights(runs)
+```
+
+`ModalCode::language(name)` colors a modal code block the same way, line
+numbers included, with its `.highlights(..)` drawn over the syntax.
+`ModalCode::highlights_with_tone(ranges, tone)` adds ranges drawn bold in a
+`BadgeTone`'s text color instead of the tint (for example `Warning` for a
+reference that does not resolve); they draw over the tint highlights and the
+syntax where they overlap:
+
+```rust
+ModalCode::new("codegen", code)
+    .language("bash")
+    .highlights_with_tone(resolved, BadgeTone::Accent)
+    .highlights_with_tone(unresolved, BadgeTone::Warning)
+    .line_numbers(true)
+```
 
 ## Sizes
 
