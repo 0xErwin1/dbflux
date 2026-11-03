@@ -4,6 +4,7 @@ mod button;
 mod checkbox;
 mod dropdown;
 mod input;
+mod input_decorations;
 mod key_capture;
 mod multi_select;
 mod readonly_text_view;
@@ -23,6 +24,9 @@ pub use input::{
     InputEnter, InputEscape, InputEvent, InputIndentInline, InputMoveDown, InputMoveUp,
     InputOutdentInline, InputPosition, InputSearch, InputState, ReadOnlyAccessibility,
     ReadOnlyEditor, Rope, RopeExt, TriggerCompletion,
+};
+pub use input_decorations::{
+    TextDecoration, TextDecorationCollection, decorate_input, styled_ranges,
 };
 pub use key_capture::{KeyCapture, KeyCaptureHandler};
 pub use multi_select::{MultiSelect, MultiSelectChanged};
