@@ -45,6 +45,13 @@ The first commit that added this directory carries the published source unchange
   - While visible, a frame requested during `AwaitingCallback` arms a 250 ms stall timer
     (`FRAME_CALLBACK_STALL_TIMEOUT`) and draws when it fires if no callback came first, for
     compositors that withhold callbacks without suspending the toplevel.
+  - Once that stall timer fires with no callback since the last present, the surface is
+    treated as not shown (`PresentMode::Stalled`), as under a lock screen such as hyprlock,
+    which withholds callbacks without sending `suspended`. Requested frames then run on the
+    retry timer with layout, paint and the accessibility tree, but skip the present, for the
+    same swapchain reason as a hidden window. The next frame callback, configure or
+    visibility change ends the stall and requests a redraw. A window that receives its
+    callbacks never stalls and presents every frame as upstream does.
   - A window with nothing requested arms no timer, so an idle hidden window stays idle.
   - Each tick bumps a timer generation, and a timer armed before the latest tick is ignored,
     so a callback that arrives first, or a late callback after a timer draw, adds no draw.
