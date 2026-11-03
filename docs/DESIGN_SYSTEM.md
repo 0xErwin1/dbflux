@@ -44,6 +44,7 @@ rendering in Bolt, the domain knowledge behind a seam the product fills.
 | `bolt::chart` | Decimation, axis ticks, series stats, legend, axis bar, point inspector, the spec's value types and the readout formatters |
 | `bolt::command_palette` | The palette engine: fuzzy query, scopes, grouping, cursor, highlighting, card and footer |
 | `bolt::keymap` | The semantic command vocabulary, the installed `CommandSet` and the attach hook |
+| `bolt::syntax` | The grammar seam over the shared highlighter registry, the bundled grammars behind opt-in `syntax-*` features |
 | `bolt::strings` | The text seam: a key and a key with named arguments, answered by the product |
 | `bolt::vim` | The modal-editing engine and its binding layer |
 | `bolt::toast` | The toast model, its bounded stack, auto-dismiss timers, the presentation shell and a generic `TokenBucket` throttle |
@@ -291,6 +292,47 @@ A dotted capture without a style of its own takes its prefix's
 slot, so a grammar whose query captures object keys that way paints them as
 strings; register it with keys captured as `property` instead (the bundled
 `json` grammar does).
+
+## Grammars
+
+The code editor and every highlighted view look a language name up in one
+shared registry. A product adds a grammar with `bolt::syntax::Grammar`, never
+with gpui-component's highlighter types:
+
+```rust
+use bolt::syntax::Grammar;
+
+Grammar::new("lua", tree_sitter_lua::LANGUAGE, tree_sitter_lua::HIGHLIGHTS_QUERY)
+    .register();
+
+let plaintext = Grammar::new("plaintext", tree_sitter_json::LANGUAGE, "");
+plaintext.register();
+plaintext.register_as("text");
+```
+
+`Grammar::new(name, language, highlights)` takes the grammar's
+`tree_sitter::Language` (or its `LANGUAGE` constant) and its highlights query.
+`.injections(query)` and `.locals(query)` add the other two queries. An
+injection is highlighted with the grammar registered under the language name
+it sets, so HTML's script elements take the `javascript` grammar once it is
+registered; an unregistered injected language stays plain.
+`bolt::syntax::is_registered(name)` answers whether a name resolves. Grammar
+crates must target tree-sitter 0.26 (ABI 13 to 15); bolt re-exports the crate as
+`bolt::syntax::tree_sitter`.
+
+Bolt bundles six grammars, each behind its own feature so a product links only
+what it asks for. `bolt::syntax::register_bundled()` registers every enabled
+one; `bolt::syntax::bundled::json()` and its siblings return one grammar to
+register on its own.
+
+| Feature | Name | Crate |
+|---|---|---|
+| `syntax-json` | `json` (keys captured as `property`) | `tree-sitter-json` 0.24.8 |
+| `syntax-javascript` | `javascript` | `tree-sitter-javascript` 0.23.1 |
+| `syntax-bash` | `bash` | `tree-sitter-bash` 0.23.3 |
+| `syntax-python` | `python` | `tree-sitter-python` 0.23.6 |
+| `syntax-xml` | `xml` | `tree-sitter-xml` 0.7.0 |
+| `syntax-html` | `html`, injecting `javascript` and `css` | `tree-sitter-html` 0.23.2 |
 
 ## Sizes
 

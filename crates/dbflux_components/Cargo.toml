@@ -21,19 +21,19 @@ default = []
 test-support = ["gpui/test-support", "bolt/test-support"]
 
 [dependencies]
-bolt.workspace = true
+bolt = { workspace = true, features = [
+    "syntax-javascript",
+    "syntax-python",
+    "syntax-bash",
+] }
 gpui.workspace = true
 gpui-component.workspace = true
 gpui-base = { path = "../../vendor/gpui-base" }
 dbflux_core.workspace = true
 dbflux_i18n.workspace = true
-tree-sitter.workspace = true
 tree-sitter-sequel.workspace = true
-tree-sitter-javascript.workspace = true
 tree-sitter-cypher.workspace = true
 tree-sitter-lua.workspace = true
-tree-sitter-python.workspace = true
-tree-sitter-bash.workspace = true
 tree-sitter-json.workspace = true
 thiserror.workspace = true
 log.workspace = true
@@ -50,3 +50,7 @@ bolt = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 serde_json.workspace = true
 tempfile = "3"
+# The registration test compares against the grammars bolt now bundles.
+tree-sitter-javascript.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-bash.workspace = true
