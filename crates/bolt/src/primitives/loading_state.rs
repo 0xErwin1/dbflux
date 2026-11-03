@@ -3,13 +3,14 @@
 
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, ContentMask, Hsla, IntoElement, PathBuilder, Pixels, SharedString, Window, canvas,
-    div, point, px, size,
+    App, Bounds, ContentMask, ElementId, Hsla, IntoElement, PathBuilder, Pixels, Role,
+    SharedString, Window, canvas, div, point, px, relative, size,
 };
 
 use gpui_component::ActiveTheme;
 
-use crate::tokens::{Anim, ChromeColors, Feedback};
+use crate::selector::id_selector;
+use crate::tokens::{Anim, ChromeColors, Feedback, Radii};
 
 /// Generic async-fetch state. The caller renders every phase.
 #[derive(Clone, Debug, PartialEq)]
@@ -172,6 +173,81 @@ fn paint_bolt(bounds: Bounds<Pixels>, color: Hsla, window: &mut Window) {
 }
 
 // ---------------------------------------------------------------------------
+// Progress
+// ---------------------------------------------------------------------------
+
+/// Determinate progress bar: a thin track that fills from left to right as a
+/// value moves through `0.0..=1.0`.
+///
+/// The bar clamps the value it is given and announces it to assistive
+/// technology as a progress indicator. It draws the same two tint roles as
+/// the bolt [`Spinner`]: the full tint for the fill and the tint at a faint
+/// alpha for the track. Callers size the bar's surroundings; the bar spans
+/// the width its parent gives it.
+#[derive(IntoElement)]
+pub struct Progress {
+    id: SharedString,
+    value: f32,
+    label: Option<SharedString>,
+}
+
+impl Progress {
+    /// Create a bar for `value`, clamped into `0.0..=1.0`, under the
+    /// caller's element id.
+    pub fn new(id: impl Into<SharedString>, value: f32) -> Self {
+        Self {
+            id: id.into(),
+            value: value.clamp(0.0, 1.0),
+            label: None,
+        }
+    }
+
+    /// Names the bar for assistive technology, e.g. "3 of 12 requests".
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+}
+
+/// Element id of the fill of the bar whose track is `id`.
+pub fn progress_fill_id(id: &str) -> SharedString {
+    SharedString::from(format!("{id}-fill"))
+}
+
+impl RenderOnce for Progress {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let tint = ChromeColors::tint(&theme);
+        let track = tint.opacity(Feedback::PROGRESS_TRACK_ALPHA);
+        let fill_id = progress_fill_id(&self.id);
+        let bar_id = ElementId::from(self.id.clone());
+
+        div()
+            .debug_selector(id_selector(&bar_id))
+            .id(bar_id)
+            .role(Role::ProgressIndicator)
+            .when_some(self.label, |bar, label| bar.aria_label(label))
+            .aria_min_numeric_value(0.0)
+            .aria_max_numeric_value(1.0)
+            .aria_numeric_value(f64::from(self.value))
+            .flex()
+            .w_full()
+            .h(Feedback::PROGRESS_TRACK_HEIGHT)
+            .rounded(Radii::SM)
+            .bg(track)
+            .child(
+                div()
+                    .debug_selector(id_selector(&fill_id.clone().into()))
+                    .id(fill_id)
+                    .h_full()
+                    .w(relative(self.value))
+                    .rounded(Radii::SM)
+                    .bg(tint),
+            )
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -221,5 +297,159 @@ mod tests {
         assert!(fractions[0] > 0.0);
         assert_eq!(fractions[SPINNER_FRAMES - 1], 1.0);
         assert_eq!(Spinner::new(SPINNER_FRAMES + 3).frame, 3);
+    }
+
+    // --- Progress ------------------------------------------------------------
+
+    use gpui::{
+        AccessibilityFrame, AnyElement, App, InteractiveElement as _, IntoElement,
+        ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, accesskit, px,
+    };
+
+    use crate::accessibility::{FrameCapture, accessibility_node, accessible_name};
+
+    /// Renders `build` alone in a themed test window whose surface is a
+    /// fixed 300 px wide, so the fill fraction can be read off the laid-out
+    /// bounds. Returns the announced frame and the window.
+    fn progress_window(
+        cx: &mut TestAppContext,
+        build: impl Fn(&mut App) -> AnyElement + 'static,
+    ) -> (AccessibilityFrame, &mut VisualTestContext) {
+        struct Surface(Box<dyn Fn(&mut App) -> AnyElement>);
+
+        impl Render for Surface {
+            fn render(
+                &mut self,
+                _window: &mut gpui::Window,
+                cx: &mut gpui::Context<Self>,
+            ) -> impl IntoElement {
+                gpui::div()
+                    .debug_selector(|| "progress-under-test".to_string())
+                    .w(px(300.0))
+                    .child((self.0)(cx))
+            }
+        }
+
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::install(
+                crate::brand::Brand::neutral(),
+                crate::palette::PaletteMode::Dark,
+                crate::density::Density::Default,
+                cx,
+            );
+        });
+
+        let (_, window) = cx.add_window_view(move |_, _| Surface(Box::new(build)));
+        let capture = FrameCapture::observe(window);
+        let frame = capture.frame(window);
+        (frame, window)
+    }
+
+    /// The fill width follows the value: half fills half the track, full
+    /// fills all of it, both from the track's left edge.
+    #[gpui::test]
+    fn the_fill_follows_the_value(cx: &mut TestAppContext) {
+        let (_, window) = progress_window(cx, |_cx| {
+            super::Progress::new("run", 0.5).into_any_element()
+        });
+
+        // `debug_bounds` needs a 'static id; the derivation helper is pinned
+        // by `progress_fill_id_derives_the_fill_id` below.
+        let track = window.debug_bounds("run").expect("the track is laid out");
+        let fill = window
+            .debug_bounds("run-fill")
+            .expect("the fill is laid out");
+
+        assert_eq!(
+            fill.left(),
+            track.left(),
+            "the fill starts at the track's left edge"
+        );
+        let half = f32::from(track.size.width) / 2.0;
+        assert!(
+            (f32::from(fill.size.width) - half).abs() < 0.5,
+            "half fills half the track: fill {} of track {}",
+            fill.size.width,
+            track.size.width
+        );
+
+        let (_, window) = progress_window(cx, |_cx| {
+            super::Progress::new("run", 1.0).into_any_element()
+        });
+
+        let track = window.debug_bounds("run").expect("the track is laid out");
+        let fill = window
+            .debug_bounds("run-fill")
+            .expect("the fill is laid out");
+        assert!(
+            (f32::from(fill.size.width) - f32::from(track.size.width)).abs() < 0.5,
+            "full fills the whole track: fill {} of track {}",
+            fill.size.width,
+            track.size.width
+        );
+    }
+
+    /// The id the fill renders under: the track's id with a `-fill` suffix,
+    /// the same derivation the render and the tests read.
+    #[test]
+    fn progress_fill_id_derives_the_fill_id() {
+        assert_eq!(super::progress_fill_id("run").as_ref(), "run-fill");
+    }
+
+    /// A value outside `0.0..=1.0` clamps: the bar announces the clamped
+    /// value between its announced bounds.
+    #[gpui::test]
+    fn the_value_is_clamped_into_the_unit_range(cx: &mut TestAppContext) {
+        let (frame, _) = progress_window(cx, |_cx| {
+            super::Progress::new("run", 1.5).into_any_element()
+        });
+
+        let node = accessibility_node(&frame, "run").expect("the bar is announced");
+        assert_eq!(node.numeric_value(), Some(1.0));
+        assert_eq!(node.min_numeric_value(), Some(0.0));
+        assert_eq!(node.max_numeric_value(), Some(1.0));
+
+        let (frame, _) = progress_window(cx, |_cx| {
+            super::Progress::new("run", -0.25).into_any_element()
+        });
+
+        let node = accessibility_node(&frame, "run").expect("the bar is announced");
+        assert_eq!(node.numeric_value(), Some(0.0));
+    }
+
+    /// The bar announces itself under the caller's id with the caller's
+    /// label, and its fill sits under the bar's own derived id.
+    #[gpui::test]
+    fn the_bar_carries_the_callers_id_and_label(cx: &mut TestAppContext) {
+        let (frame, _) = progress_window(cx, |_cx| {
+            super::Progress::new("run", 0.25)
+                .label("3 of 12 requests")
+                .into_any_element()
+        });
+
+        assert_eq!(
+            accessible_name(&frame, "run").as_deref(),
+            Some("3 of 12 requests"),
+            "the caller's label names the bar"
+        );
+        let node = accessibility_node(&frame, "run").expect("the bar is announced");
+        assert_eq!(node.role(), accesskit::Role::ProgressIndicator);
+        assert_eq!(node.numeric_value(), Some(0.25));
+        let fill_id = super::progress_fill_id("run");
+        assert!(
+            frame.nodes().any(|(_, node)| node.id() == fill_id.as_ref()),
+            "the fill renders under the bar's derived id"
+        );
+
+        let (frame, _) = progress_window(cx, |_cx| {
+            super::Progress::new("run", 0.25).into_any_element()
+        });
+
+        assert_eq!(
+            accessible_name(&frame, "run"),
+            None,
+            "a bar without a label carries no name of its own"
+        );
     }
 }
