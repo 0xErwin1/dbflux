@@ -301,3 +301,24 @@ fn highlight_follows_a_grammar_registered_again(cx: &mut gpui::TestAppContext) {
     assert_eq!(color_at(&after, 1..6), Some(colors.property), "{after:?}");
     assert_eq!(color_at(&after, 8..9), None, "{after:?}");
 }
+
+#[gpui::test]
+fn the_cache_keeps_its_texts_under_its_byte_bound(cx: &mut gpui::TestAppContext) {
+    install_dark_theme(cx);
+    let large = format!("[{}1]", "1, ".repeat(highlight::CACHED_BYTES / 3));
+    let small = r#"{"key": 1}"#;
+
+    cx.update(|cx| highlight("json", small, cx));
+    let runs = cx.update(|cx| highlight("json", &large, cx));
+    assert!(!runs.is_empty(), "a large text is still highlighted");
+    assert!(
+        highlight::cached_bytes() <= highlight::CACHED_BYTES,
+        "the cache holds {} bytes",
+        highlight::cached_bytes()
+    );
+    for _ in 0..12 {
+        let text = format!("[{}2]", "2, ".repeat(highlight::CACHED_BYTES / 12));
+        cx.update(|cx| highlight("json", &text, cx));
+        assert!(highlight::cached_bytes() <= highlight::CACHED_BYTES);
+    }
+}

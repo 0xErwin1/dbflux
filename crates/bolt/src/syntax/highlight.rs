@@ -15,6 +15,11 @@ use gpui_component::highlighter::{
 /// frame does not parse its text again.
 const CACHED_RESULTS: usize = 8;
 
+/// The most text the cache holds across its results. A text larger than this
+/// is highlighted every time it is asked for rather than kept, so a few large
+/// bodies cannot pin megabytes on the UI thread.
+pub(super) const CACHED_BYTES: usize = 1024 * 1024;
+
 struct CachedRuns {
     language: String,
     grammar: GrammarConfig,
@@ -61,9 +66,16 @@ pub fn highlight(language: &str, text: &str, cx: &App) -> Vec<(Range<usize>, Hig
         .filter(|(range, style)| !range.is_empty() && *style != HighlightStyle::default())
         .collect();
 
+    if text.len() > CACHED_BYTES {
+        return runs;
+    }
     RECENT.with_borrow_mut(|recent| {
-        if recent.len() == CACHED_RESULTS {
-            recent.pop_back();
+        let mut held: usize = recent.iter().map(|entry| entry.text.len()).sum();
+        while recent.len() == CACHED_RESULTS || held + text.len() > CACHED_BYTES {
+            let Some(evicted) = recent.pop_back() else {
+                break;
+            };
+            held -= evicted.text.len();
         }
         recent.push_front(CachedRuns {
             language: language.to_string(),
@@ -74,6 +86,12 @@ pub fn highlight(language: &str, text: &str, cx: &App) -> Vec<(Range<usize>, Hig
         });
     });
     runs
+}
+
+/// The text bytes the cache holds now.
+#[cfg(test)]
+pub(super) fn cached_bytes() -> usize {
+    RECENT.with_borrow(|recent| recent.iter().map(|entry| entry.text.len()).sum())
 }
 
 /// `top` drawn over `base`: where a top run covers a byte its style replaces
