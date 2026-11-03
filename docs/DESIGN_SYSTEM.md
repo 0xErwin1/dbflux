@@ -334,6 +334,27 @@ register on its own.
 | `syntax-xml` | `xml` | `tree-sitter-xml` 0.7.0 |
 | `syntax-html` | `html`, injecting `javascript` and `css` | `tree-sitter-html` 0.23.2 |
 
+### Highlighting text a host draws
+
+`bolt::syntax::highlight(language, text, cx)` returns the syntax runs of
+read-only text as `Vec<(Range<usize>, HighlightStyle)>`: byte ranges, sorted and
+non-overlapping, styled by the current theme. A language with no registered
+grammar, or whose query does not compile, returns no runs. Recent results are
+kept, so a view rebuilt every frame does not parse again.
+`bolt::syntax::overlay(base, top)` lays a host's own runs over them; a top
+run replaces the syntax style over its range:
+
+```rust
+let runs = bolt::syntax::overlay(
+    bolt::syntax::highlight("json", &body, cx),
+    search_matches.iter().map(|range| (range.clone(), match_style)),
+);
+StyledText::new(body).with_highlights(runs)
+```
+
+`ModalCode::language(name)` colors a modal code block the same way, line
+numbers included, with its `.highlights(..)` drawn over the syntax.
+
 ## Sizes
 
 Every interface length goes through `tokens::ui(px)`, which expresses design

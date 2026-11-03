@@ -6,6 +6,9 @@
 //! the grammars bolt ships behind its opt-in `syntax-*` features.
 
 pub mod bundled;
+mod highlight;
+
+pub use highlight::{highlight, overlay};
 
 use gpui::SharedString;
 use gpui_component::highlighter::{LanguageConfig, LanguageRegistry};
