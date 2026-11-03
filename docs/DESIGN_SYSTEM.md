@@ -354,6 +354,18 @@ StyledText::new(body).with_highlights(runs)
 
 `ModalCode::language(name)` colors a modal code block the same way, line
 numbers included, with its `.highlights(..)` drawn over the syntax.
+`ModalCode::highlights_with_tone(ranges, tone)` adds ranges drawn bold in a
+`BadgeTone`'s text color instead of the tint (for example `Warning` for a
+reference that does not resolve); they draw over the tint highlights and the
+syntax where they overlap:
+
+```rust
+ModalCode::new("codegen", code)
+    .language("bash")
+    .highlights_with_tone(resolved, BadgeTone::Accent)
+    .highlights_with_tone(unresolved, BadgeTone::Warning)
+    .line_numbers(true)
+```
 
 ## Sizes
 

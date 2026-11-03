@@ -4,11 +4,13 @@
 use std::ops::Range;
 
 use gpui::prelude::*;
-use gpui::{App, ElementId, HighlightStyle, Role, SharedString, StyledText, Window, div};
+use gpui::{
+    App, ElementId, FontWeight, HighlightStyle, Role, SharedString, StyledText, Window, div,
+};
 use gpui_component::ActiveTheme;
 
 use super::parts::highlight_styles;
-use crate::primitives::Chamfer;
+use crate::primitives::{BadgeTone, Chamfer};
 use crate::selector::id_selector;
 use crate::tokens::{ChamferCut, ChromeColors, ModalMetrics};
 
@@ -40,6 +42,7 @@ pub struct ModalCode {
     id: SharedString,
     code: SharedString,
     highlights: Vec<Range<usize>>,
+    toned_highlights: Vec<(Range<usize>, BadgeTone)>,
     language: Option<SharedString>,
     line_numbers: bool,
     aria_label: Option<SharedString>,
@@ -51,6 +54,7 @@ impl ModalCode {
             id: id.into(),
             code: code.into(),
             highlights: Vec::new(),
+            toned_highlights: Vec::new(),
             language: None,
             line_numbers: false,
             aria_label: None,
@@ -63,6 +67,21 @@ impl ModalCode {
     /// line it covers.
     pub fn highlights(mut self, highlights: impl IntoIterator<Item = Range<usize>>) -> Self {
         self.highlights = highlights.into_iter().collect();
+        self
+    }
+
+    /// Byte ranges of the code drawn bold in `tone`'s text color (the tint
+    /// for `Accent`, the warning color for `Warning`), such as references
+    /// that resolve and references that do not. Each call adds to the toned
+    /// ranges; they draw over the [`ModalCode::highlights`] ranges where
+    /// the two overlap.
+    pub fn highlights_with_tone(
+        mut self,
+        highlights: impl IntoIterator<Item = Range<usize>>,
+        tone: BadgeTone,
+    ) -> Self {
+        self.toned_highlights
+            .extend(highlights.into_iter().map(|range| (range, tone)));
         self
     }
 
@@ -91,7 +110,22 @@ impl ModalCode {
     /// The styled runs of the whole code: the syntax runs with the
     /// highlights drawn over them.
     pub(crate) fn styled_runs(&self, cx: &App) -> Vec<(Range<usize>, HighlightStyle)> {
-        let highlights = highlight_styles(self.highlights.iter().cloned(), cx);
+        let theme = cx.theme();
+        let toned = self.toned_highlights.iter().map(|(range, tone)| {
+            let style = HighlightStyle {
+                color: Some(tone.text_color(theme)),
+                font_weight: Some(FontWeight::BOLD),
+                ..Default::default()
+            };
+            (range.clone(), style)
+        });
+        let mut highlights = highlight_styles(self.highlights.iter().cloned(), cx);
+        highlights.extend(toned);
+        // Toned ranges may overlap the tint ones, and text runs may not; the
+        // tint-only list keeps the ranges exactly as the caller gave them.
+        if !self.toned_highlights.is_empty() {
+            highlights = crate::syntax::overlay(Vec::new(), highlights);
+        }
         match &self.language {
             Some(language) => crate::syntax::overlay(
                 crate::syntax::highlight(language, &self.code, cx),

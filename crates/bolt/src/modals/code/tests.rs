@@ -376,3 +376,66 @@ fn styled_runs_split_per_line_relative_to_the_line() {
     assert_eq!(lines[1].1, vec![(2..5, 'b'), (7..8, 'c')]);
     assert_eq!(lines[2].1, vec![(0..1, 'a')]);
 }
+
+/// A toned highlight draws bold in its tone's color, beside the tint ones,
+/// and over the syntax runs.
+#[gpui::test]
+fn toned_highlights_draw_in_their_tone_over_the_syntax(cx: &mut TestAppContext) {
+    use crate::primitives::BadgeTone;
+
+    install_test_theme(cx);
+    crate::syntax::register_bundled();
+    let colors = crate::tokens::SyntaxColors::dark();
+
+    cx.update(|cx| {
+        let theme = gpui_component::ActiveTheme::theme(cx);
+        let bold = |color: gpui::Hsla| gpui::HighlightStyle {
+            color: Some(color),
+            font_weight: Some(gpui::FontWeight::BOLD),
+            ..Default::default()
+        };
+        let warning = bold(BadgeTone::Warning.text_color(theme));
+
+        let runs = ModalCode::new("toned-code", r#"{"key": 1}"#)
+            .language("json")
+            .highlights(std::iter::once(2..5))
+            .highlights_with_tone(std::iter::once(8..9), BadgeTone::Warning)
+            .styled_runs(cx);
+
+        assert_eq!(
+            runs,
+            vec![
+                (0..1, color(colors.operator)),
+                (1..2, color(colors.property)),
+                (2..5, tint_bold(cx)),
+                (5..6, color(colors.property)),
+                (6..7, color(colors.operator)),
+                (8..9, warning),
+                (9..10, color(colors.operator)),
+            ]
+        );
+    });
+}
+
+/// Without a language the toned and tint highlights are the only runs.
+#[gpui::test]
+fn toned_highlights_without_a_language(cx: &mut TestAppContext) {
+    use crate::primitives::BadgeTone;
+
+    install_test_theme(cx);
+
+    cx.update(|cx| {
+        let warning = gpui::HighlightStyle {
+            color: Some(BadgeTone::Warning.text_color(gpui_component::ActiveTheme::theme(cx))),
+            font_weight: Some(gpui::FontWeight::BOLD),
+            ..Default::default()
+        };
+
+        let runs = ModalCode::new("toned-plain", "{{a}} {{b}}")
+            .highlights(std::iter::once(0..5))
+            .highlights_with_tone(std::iter::once(6..11), BadgeTone::Warning)
+            .styled_runs(cx);
+
+        assert_eq!(runs, vec![(0..5, tint_bold(cx)), (6..11, warning)]);
+    });
+}
