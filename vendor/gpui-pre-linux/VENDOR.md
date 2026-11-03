@@ -52,6 +52,12 @@ The first commit that added this directory carries the published source unchange
     same swapchain reason as a hidden window. The next frame callback, configure or
     visibility change ends the stall and requests a redraw. A window that receives its
     callbacks never stalls and presents every frame as upstream does.
+  - Entering the stall, when no callback is outstanding, the window requests a
+    `wl_surface.frame` callback and commits without attaching a buffer, the same
+    commit upstream uses to wait for a callback after a failed present. The surface keeps
+    its current content and the swapchain is not touched, so the commit cannot block. The
+    compositor's next repaint of the surface, as on unlock, fires that callback and ends the
+    stall with a redraw even when no configure follows. Only one such callback is requested.
   - A window with nothing requested arms no timer, so an idle hidden window stays idle.
   - Each tick bumps a timer generation, and a timer armed before the latest tick is ignored,
     so a callback that arrives first, or a late callback after a timer draw, adds no draw.

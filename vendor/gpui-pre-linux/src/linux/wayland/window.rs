@@ -874,6 +874,12 @@ impl PresentMode {
     fn presents(self, hidden: bool) -> bool {
         self == Self::Presenting && !hidden
     }
+
+    /// A stalled surface keeps one frame callback outstanding, so the compositor's next repaint
+    /// of it, such as on unlock, ends the stall even if no configure follows.
+    fn needs_wake_callback(self, callback_outstanding: bool) -> bool {
+        self == Self::Stalled && !callback_outstanding
+    }
 }
 
 #[cfg(test)]
@@ -1029,6 +1035,18 @@ mod frame_loop_tests {
         );
         assert!(PresentMode::Presenting.presents(false));
         assert!(!PresentMode::Presenting.presents(true));
+    }
+
+    #[test]
+    fn entering_a_stall_arms_one_callback_for_when_the_surface_is_shown() {
+        let (state, _) = FrameLoop::AwaitingCallback.schedule(false);
+        let mode = PresentMode::Presenting.after_timer(state);
+        assert!(mode.needs_wake_callback(false));
+        // The armed callback is outstanding, so no second request follows.
+        assert!(!mode.needs_wake_callback(true));
+        // Its `done` ends the stall with a redraw.
+        assert_eq!(mode.resume(), (PresentMode::Presenting, true));
+        assert!(!PresentMode::Presenting.needs_wake_callback(false));
     }
 
     #[test]
@@ -1328,6 +1346,7 @@ impl WaylandWindowStatePtr {
         if generation == self.frame_timer_generation.get() && frame_loop.accepts_timer() {
             self.present_mode
                 .set(self.present_mode.get().after_timer(frame_loop));
+            self.arm_wake_callback();
             self.frame(
                 PlatformFrameSignal::capture(|| signal_at),
                 FrameRequestSource::LocalSchedule,
@@ -1364,6 +1383,22 @@ impl WaylandWindowStatePtr {
         self.present_mode
             .get()
             .presents(state.visibility == WindowVisibility::Hidden)
+    }
+
+    /// Requests a frame callback with a commit that attaches no buffer: the surface keeps its
+    /// current content, and the request does not touch the swapchain, so it cannot block.
+    fn arm_wake_callback(&self) {
+        let mut state = self.state.borrow_mut();
+        if !self
+            .present_mode
+            .get()
+            .needs_wake_callback(state.pending_frame_callback.is_some())
+        {
+            return;
+        }
+        let callback = state.surface.frame(&state.globals.qh, state.surface.id());
+        state.pending_frame_callback = Some(callback);
+        state.surface.commit();
     }
 
     /// Returns whether frames drawn while stalled need a redraw to reach the screen.
