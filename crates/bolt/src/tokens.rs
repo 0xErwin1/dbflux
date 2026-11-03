@@ -387,6 +387,10 @@ impl Fields {
     pub const LEADING_ICON: Rems = ui(14.0);
     /// Match count at the end of a search field, mono. (11.5 px)
     pub const COUNT_TEXT: Rems = ui(11.5);
+    /// Widest a search field's match count draws before it truncates. (96 px)
+    pub const COUNT_MAX_WIDTH: Rems = ui(96.0);
+    /// Narrowest the input of a search field shrinks to. (64 px)
+    pub const SEARCH_INPUT_MIN_WIDTH: Rems = ui(64.0);
 
     /// Filter field height (WHERE ... LIMIT). (34 px)
     pub const FILTER_HEIGHT: Rems = ui(34.0);

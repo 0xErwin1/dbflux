@@ -2,9 +2,9 @@
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, ElementId, Entity, Focusable as _, Rems, Role, SharedString, Window, div,
+    AnyElement, App, ElementId, Entity, Focusable as _, Hsla, Rems, Role, SharedString, Window, div,
 };
-use gpui_component::ActiveTheme;
+use gpui_component::{ActiveTheme, Theme};
 
 use super::{Input, InputState};
 use crate::composites::ShellIcons;
@@ -32,6 +32,8 @@ impl SearchCount {
 
     /// The count's color, the text color of a badge in `tone`. A danger
     /// count also rings the field in danger: the search itself failed.
+    /// While the input holds focus a failed field draws its border in
+    /// danger and keeps the tint focus ring.
     pub fn tone(mut self, tone: BadgeTone) -> Self {
         self.tone = tone;
         self
@@ -41,7 +43,9 @@ impl SearchCount {
 /// A 30 px field, cut 6, on the ground with a line border: the search icon,
 /// the frameless input, then the optional [`SearchCount`] and any trailing
 /// controls (previous and next buttons). While the input holds focus the
-/// field carries the tint focus ring.
+/// field carries the tint focus ring. The count truncates past
+/// `Fields::COUNT_MAX_WIDTH` and the input never shrinks below
+/// `Fields::SEARCH_INPUT_MIN_WIDTH`.
 ///
 /// The field records `id`, the input `<id>-input` and the count
 /// `<id>-count`, a label node named by the count's text so a reader hears
@@ -124,13 +128,12 @@ impl RenderOnce for SearchField {
             .as_ref()
             .is_some_and(|count| count.tone == BadgeTone::Danger);
 
+        let (border, ring) = field_frame(failed, focused, &theme);
         let mut shape = Chamfer::new(ChamferCut::CONTROL)
             .fill(theme.background)
-            .border(theme.border);
-        if failed {
-            shape = shape.ring(ChamferRing::focus(theme.danger));
-        } else if focused {
-            shape = shape.ring(ChamferRing::focus(ChromeColors::tint(&theme)));
+            .border(border);
+        if let Some(ring) = ring {
+            shape = shape.ring(ring);
         }
 
         let icon = self.icon.unwrap_or_else(|| ShellIcons::current(cx).search);
@@ -151,7 +154,10 @@ impl RenderOnce for SearchField {
                 .role(Role::Label)
                 .aria_label(count.label.clone())
                 .flex_none()
+                .max_w(Fields::COUNT_MAX_WIDTH)
+                .overflow_hidden()
                 .whitespace_nowrap()
+                .text_ellipsis()
                 .font_family(crate::fonts::editor_family(cx))
                 .text_size(Fields::COUNT_TEXT)
                 .text_color(count.tone.text_color(&theme))
@@ -181,9 +187,34 @@ impl RenderOnce for SearchField {
                     .size(Fields::LEADING_ICON)
                     .color(theme.muted_foreground),
             )
-            .child(div().flex_1().min_w_0().child(input))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(Fields::SEARCH_INPUT_MIN_WIDTH)
+                    .child(input),
+            )
             .children(count)
             .children(self.trailing)
+    }
+}
+
+/// The field's border and ring for its state.
+fn field_frame(failed: bool, focused: bool, theme: &Theme) -> (Hsla, Option<ChamferRing>) {
+    if failed && focused {
+        // The danger moves to the border so the focus ring stays visible.
+        (
+            theme.danger,
+            Some(ChamferRing::focus(ChromeColors::tint(theme))),
+        )
+    } else if failed {
+        (theme.border, Some(ChamferRing::outline(theme.danger)))
+    } else if focused {
+        (
+            theme.border,
+            Some(ChamferRing::focus(ChromeColors::tint(theme))),
+        )
+    } else {
+        (theme.border, None)
     }
 }
 

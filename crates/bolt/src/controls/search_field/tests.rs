@@ -118,3 +118,72 @@ fn a_field_without_a_count_draws_none(cx: &mut TestAppContext) {
     );
     assert!(window.debug_bounds("body-search-count").is_none());
 }
+
+/// A failed field rings in danger whether or not it holds focus; holding
+/// focus it keeps the tint focus ring and draws its border in danger, so
+/// keyboard focus stays visible on a failed search.
+#[gpui::test]
+fn a_failed_field_still_shows_focus(cx: &mut TestAppContext) {
+    use super::field_frame;
+    use crate::primitives::ChamferRing;
+    use gpui_component::ActiveTheme as _;
+
+    install_test_theme(cx);
+    cx.update(|cx| {
+        let theme = cx.theme().clone();
+        let tint = crate::tokens::ChromeColors::tint(&theme);
+
+        assert_eq!(
+            field_frame(true, false, &theme),
+            (theme.border, Some(ChamferRing::outline(theme.danger))),
+            "an unfocused failed field always shows the danger ring"
+        );
+        assert_eq!(
+            field_frame(true, true, &theme),
+            (theme.danger, Some(ChamferRing::focus(tint))),
+            "a focused failed field shows the focus ring inside a danger border"
+        );
+        assert_eq!(
+            field_frame(false, true, &theme),
+            (theme.border, Some(ChamferRing::focus(tint)))
+        );
+        assert_eq!(field_frame(false, false, &theme), (theme.border, None));
+    });
+}
+
+/// A very long count stops at its maximum width and the input keeps its
+/// minimum width; nothing paints past the field.
+#[gpui::test]
+fn a_long_count_is_bounded_and_the_input_keeps_its_width(cx: &mut TestAppContext) {
+    let (_frame, window) = open(
+        cx,
+        Some("1234567 of 98765432 matches across every loaded response body"),
+    );
+    let rem = gpui::px(crate::tokens::BASE_REM);
+
+    let field = window.debug_bounds("body-search").expect("field laid out");
+    let count = window
+        .debug_bounds("body-search-count")
+        .expect("count laid out");
+    let next = window
+        .debug_bounds("body-search-next")
+        .expect("trailing control laid out");
+
+    // The input sits between the leading icon and the count.
+    let input_start =
+        field.left() + Fields::PADDING_X + Fields::LEADING_ICON.to_pixels(rem) + Fields::GAP;
+    let input_width = count.left() - Fields::GAP - input_start;
+
+    assert!(
+        count.size.width <= Fields::COUNT_MAX_WIDTH.to_pixels(rem),
+        "the count stops at its maximum width"
+    );
+    assert!(
+        input_width >= Fields::SEARCH_INPUT_MIN_WIDTH.to_pixels(rem),
+        "the input keeps its minimum width"
+    );
+    assert!(
+        next.right() <= field.right(),
+        "nothing paints past the field"
+    );
+}
