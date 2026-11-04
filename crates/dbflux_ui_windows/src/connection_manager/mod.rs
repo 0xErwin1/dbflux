@@ -1647,11 +1647,6 @@ impl ConnectionManagerWindow {
         values
     }
 
-    /// Label of the canonical secret input for the selected driver.
-    ///
-    /// Drivers can rename the secret (e.g. "API Token" for InfluxDB v2). The
-    /// override depends on current form values so that toggles like a version
-    /// selector flip the label live. Falls back to the generic "Password".
     /// Placeholder for the password input. An unreadable keyring says so,
     /// because an empty field would otherwise read as "no password saved".
     fn password_placeholder(&self, password_source_is_literal: bool, cx: &Context<Self>) -> String {
@@ -1666,6 +1661,11 @@ impl ConnectionManagerWindow {
             .unwrap_or_else(|| self.secret_field_label(cx))
     }
 
+    /// Label of the canonical secret input for the selected driver.
+    ///
+    /// Drivers can rename the secret (e.g. "API Token" for InfluxDB v2). The
+    /// override depends on current form values so that toggles like a version
+    /// selector flip the label live. Falls back to the generic "Password".
     fn secret_field_label(&self, cx: &Context<Self>) -> String {
         let default_label = || dbflux_i18n::t!("connection_manager.placeholder.password");
 

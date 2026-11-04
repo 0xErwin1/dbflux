@@ -1809,16 +1809,12 @@ impl DbFluxServer {
         profile: &dbflux_core::ConnectionProfile,
     ) -> Result<ResolvedSecrets, String> {
         let password = if profile.save_password {
-            match state
-                .secret_manager
-                .get_password(profile)
-                .map_err(|error| {
-                    format!(
-                        "Could not read the password for profile '{}' from the system keyring \
-                     (it may be locked): {error}",
-                        profile.name
-                    )
-                })? {
+            let stored = dbflux_core::keyring_password_for_connect(
+                profile,
+                state.secret_manager.get_password(profile),
+            )
+            .map_err(|error| format!("Profile '{}': {error}", profile.name))?;
+            match stored {
                 Some(pw) => {
                     log::debug!(
                         "Resolved password from keyring for profile '{}' (id={})",

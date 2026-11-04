@@ -2307,6 +2307,57 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn saving_with_a_value_ref_source_keeps_an_entry_the_keyring_would_not_read() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("locked keyring profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+        fixture.read_fails.store(true, Ordering::SeqCst);
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        fixture.read_fails.store(false, Ordering::SeqCst);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                assert_eq!(manager.form.stored_password, StoredPassword::Unreadable);
+                let env_ref = ValueRef::Env {
+                    key: "DBFLUX_TEST_PASSWORD".to_string(),
+                };
+                manager
+                    .form
+                    .password_value_source_selector
+                    .update(cx, |selector, cx| {
+                        selector.set_value_ref(Some(&env_ref), window, cx);
+                    });
+                assert!(
+                    !manager
+                        .form
+                        .password_value_source_selector
+                        .read(cx)
+                        .is_literal(cx)
+                );
+                manager.save_profile(window, cx)
+            })
+            .expect("save leaves the form window available");
+
+        assert_eq!(
+            fixture.saved(&profile).as_deref(),
+            Some("saved password"),
+            "the entry the form never saw is not deleted"
+        );
+        let persisted = cx.update(|cx| app_state.read(cx).profiles().to_vec());
+        assert_eq!(persisted.len(), 1, "the edit is committed");
+        assert!(
+            window.root(&mut cx).is_err(),
+            "a successful save closes the window"
+        );
+    }
+
+    #[::core::prelude::v1::test]
     fn saving_with_save_password_unchecked_keeps_an_entry_the_keyring_would_not_read() {
         let mut cx = TestAppContext::single();
         let _host = init_form_test_runtime(&mut cx);

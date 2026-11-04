@@ -2,12 +2,21 @@ use crate::*;
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
+/// Why duplicating a profile stopped before committing the copy.
+#[derive(Debug)]
+enum DuplicateProfileError {
+    /// The keyring would not hand over the source password.
+    PasswordRead(dbflux_core::DbError),
+    /// The copied password could not be written to the keyring.
+    PasswordSave(dbflux_core::DbError),
+}
+
 #[allow(clippy::result_large_err)]
 fn duplicate_profile_in_state(
     state: &mut AppStateEntity,
     profile_id: Uuid,
     cx: &mut Context<AppStateEntity>,
-) -> Result<Option<Uuid>, dbflux_core::DbError> {
+) -> Result<Option<Uuid>, DuplicateProfileError> {
     let Some(original) = state
         .profiles()
         .iter()
@@ -21,7 +30,9 @@ fn duplicate_profile_in_state(
         .connection_tree()
         .find_by_profile(profile_id)
         .and_then(|node| node.parent_id);
-    let password = state.get_password(&original)?;
+    let password = state
+        .get_password(&original)
+        .map_err(DuplicateProfileError::PasswordRead)?;
     let ssh_password = state.get_ssh_password(&original);
 
     let mut cloned = original;
@@ -30,7 +41,9 @@ fn duplicate_profile_in_state(
     let new_id = cloned.id;
 
     if let Some(password) = password.as_ref() {
-        state.save_password(&cloned, password)?;
+        state
+            .save_password(&cloned, password)
+            .map_err(DuplicateProfileError::PasswordSave)?;
     }
 
     state.add_profile_in_folder(cloned.clone(), folder_id);
@@ -139,12 +152,19 @@ impl Sidebar {
         let new_id = match clone_result {
             Ok(Some(new_id)) => new_id,
             Ok(None) => return,
-            Err(_) => {
-                report_error(
-                    UserFacingError::new(
-                        ErrorKind::Storage,
-                        "Unable to copy the connection password through the system keyring. Unlock it and try again.",
+            Err(error) => {
+                let (summary, cause) = match error {
+                    DuplicateProfileError::PasswordRead(cause) => (
+                        "Unable to read the connection password from the system keyring. Unlock it and try again.",
+                        cause,
                     ),
+                    DuplicateProfileError::PasswordSave(cause) => (
+                        "Unable to save the copied connection password to the system keyring. Unlock it and try again.",
+                        cause,
+                    ),
+                };
+                report_error(
+                    UserFacingError::new(ErrorKind::Storage, summary).with_cause(cause.to_string()),
                     cx,
                 );
                 return;
