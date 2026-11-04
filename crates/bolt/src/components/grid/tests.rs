@@ -447,6 +447,7 @@ fn the_header_cells_are_named_column_headers(cx: &mut TestAppContext) {
                 gpui::px(12.5),
                 gpui::px(10.5),
                 &colors,
+                None,
             ))
         }
     }
@@ -483,4 +484,117 @@ fn the_header_cells_are_named_column_headers(cx: &mut TestAppContext) {
 fn a_header_cell_without_a_type_label_is_named_by_its_column_alone() {
     assert_eq!(super::header_cell_name("rows", ""), "rows");
     assert_eq!(super::header_cell_name("status", "text"), "status, text");
+}
+
+/// A header with two columns whose resize behaviour the test picks.
+struct ResizableHeader {
+    drag: Option<super::ColumnResizeDrag>,
+}
+
+impl gpui::Render for ResizableHeader {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement as _, Styled as _};
+
+        let mut rows = StaticRows::new();
+        rows.push_column(ColumnView::new("status", ColumnKind::Text));
+        rows.push_column(ColumnView::new("rows", ColumnKind::Integer));
+        let colors = GridColors::of(cx.theme());
+        let resize = self.drag.as_ref().map(|drag| super::HeaderResize {
+            drag,
+            hover: colors.border,
+        });
+
+        gpui::div().size_full().child(super::render_header(
+            "run-header",
+            &rows,
+            &[140.0, 120.0],
+            gpui::px(40.0),
+            260.0,
+            gpui::px(12.5),
+            gpui::px(10.5),
+            &colors,
+            resize,
+        ))
+    }
+}
+
+/// The point on a header cell's trailing edge where its resize handle sits.
+fn handle_point(
+    window: &mut gpui::VisualTestContext,
+    cell: &'static str,
+) -> gpui::Point<gpui::Pixels> {
+    let bounds = window
+        .debug_bounds(cell)
+        .expect("the header cell records its bounds");
+
+    gpui::point(
+        bounds.right() - super::RESIZE_HANDLE_WIDTH / 2.0,
+        bounds.center().y,
+    )
+}
+
+#[gpui::test]
+fn a_header_with_resize_carries_a_handle_that_resizes_only_its_column(cx: &mut TestAppContext) {
+    install_test_theme(cx);
+    let drag = super::ColumnResizeDrag::new();
+    let drag_for_view = drag.clone();
+    let (_, window) = cx.add_window_view(move |_, _| ResizableHeader {
+        drag: Some(drag_for_view),
+    });
+
+    let point = handle_point(window, "run-header-1");
+    window.simulate_mouse_down(point, gpui::MouseButton::Left, gpui::Modifiers::none());
+
+    assert!(drag.is_active(), "pressing the handle starts the drag");
+    let resize = drag
+        .update(point.x + gpui::px(30.0))
+        .expect("an active drag reports a resize");
+    assert_eq!(resize.column, 1, "only the pressed column resizes");
+    assert_eq!(resize.width, 150.0);
+}
+
+#[gpui::test]
+fn the_first_columns_handle_resizes_the_first_column(cx: &mut TestAppContext) {
+    install_test_theme(cx);
+    let drag = super::ColumnResizeDrag::new();
+    let drag_for_view = drag.clone();
+    let (_, window) = cx.add_window_view(move |_, _| ResizableHeader {
+        drag: Some(drag_for_view),
+    });
+
+    let point = handle_point(window, "run-header-0");
+    window.simulate_mouse_down(point, gpui::MouseButton::Left, gpui::Modifiers::none());
+
+    let resize = drag
+        .update(point.x - gpui::px(20.0))
+        .expect("an active drag reports a resize");
+    assert_eq!(resize.column, 0);
+    assert_eq!(resize.width, 120.0);
+}
+
+#[gpui::test]
+fn a_header_without_resize_lays_out_the_cells_as_before(cx: &mut TestAppContext) {
+    install_test_theme(cx);
+    let (_, plain) = cx.add_window_view(|_, _| ResizableHeader { drag: None });
+    let plain_bounds = [
+        plain.debug_bounds("run-header-0"),
+        plain.debug_bounds("run-header-1"),
+    ];
+
+    let drag = super::ColumnResizeDrag::new();
+    let (_, resizable) = cx.add_window_view(move |_, _| ResizableHeader { drag: Some(drag) });
+    let resizable_bounds = [
+        resizable.debug_bounds("run-header-0"),
+        resizable.debug_bounds("run-header-1"),
+    ];
+
+    assert!(plain_bounds.iter().all(Option::is_some));
+    assert_eq!(
+        plain_bounds, resizable_bounds,
+        "handles are overlaid and never move a cell"
+    );
 }

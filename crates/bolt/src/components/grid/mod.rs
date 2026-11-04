@@ -607,6 +607,13 @@ pub(crate) fn header_cell_name(name: &str, type_name: &str) -> SharedString {
     }
 }
 
+/// The column resize handles [`render_header`] lays on its cells: the drag
+/// the handles start and the color a handle takes on hover.
+pub struct HeaderResize<'a> {
+    pub drag: &'a ColumnResizeDrag,
+    pub hover: Hsla,
+}
+
 /// Renders the header row the host puts above the rows [`render_rows`]
 /// draws: one cell per column of `source`, drawn after the data table's
 /// own header — the strip background and 1 px bottom edge, the row-number
@@ -616,8 +623,10 @@ pub(crate) fn header_cell_name(name: &str, type_name: &str) -> SharedString {
 /// named by its column name and type label, so automation and assistive
 /// technology read the columns.
 ///
-/// The header is static: the host owns sorting, resizing and menus. It
-/// names the cells through `id_base` and applies the grid font family by
+/// The header is static: the host owns sorting and menus. With `resize`
+/// set, each cell also carries a [`column_resize_handle`] on its trailing
+/// edge; the host keeps [`track_column_resize`] on its grid root and stores
+/// the widths. It names the cells through `id_base` and applies the grid font family by
 /// wrapping the returned element (`.font_family(fonts::grid_family(cx))`),
 /// the same way it covers the rows. `header_height` is the scaled header
 /// height, which the host derives from [`GridMetrics::HEADER_HEIGHT`] (see
@@ -632,15 +641,21 @@ pub fn render_header(
     font_size: Pixels,
     type_font_size: Pixels,
     colors: &GridColors,
+    resize: Option<HeaderResize<'_>>,
 ) -> AnyElement {
     let header_cells: Vec<AnyElement> = header_cells(id_base, source, column_widths)
         .into_iter()
-        .map(|cell| {
+        .enumerate()
+        .map(|(ix, cell)| {
             let name = header_cell_name(&cell.name, &cell.type_name);
+            let handle = resize
+                .as_ref()
+                .map(|resize| column_resize_handle(ix, cell.width, resize.drag, resize.hover));
 
             div()
                 .debug_selector(crate::selector::id_selector(&cell.id))
                 .id(cell.id)
+                .relative()
                 .role(Role::ColumnHeader)
                 .aria_label(name)
                 .flex()
@@ -687,6 +702,7 @@ pub fn render_header(
                         )
                     },
                 )
+                .children(handle)
                 .into_any_element()
         })
         .collect();
