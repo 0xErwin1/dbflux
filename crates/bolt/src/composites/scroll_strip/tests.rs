@@ -163,20 +163,22 @@ struct SegmentHost {
     handle: ScrollHandle,
     reveal: StripReveal,
     segments: crate::primitives::SegmentBounds,
+    selected: &'static str,
+    pane: Pixels,
 }
 
 impl Render for SegmentHost {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         self.reveal
-            .segment(&self.handle, &self.segments, "last", px(120.0));
+            .segment(&self.handle, &self.segments, self.selected, self.pane);
 
-        div().w(px(120.0)).child(
+        div().w(self.pane).child(
             scroll_strip("segment-strip", &self.handle).child(
                 crate::primitives::SegmentedControl::new(
                     ["first", "second", "third", "last"]
                         .map(|id| crate::primitives::SegmentedItem::new(id, id))
                         .to_vec(),
-                    "last",
+                    self.selected,
                     |_, _, _| {},
                 )
                 .segment_bounds(&self.segments),
@@ -185,8 +187,10 @@ impl Render for SegmentHost {
     }
 }
 
-#[gpui::test]
-fn a_measured_segment_is_revealed_exactly(cx: &mut TestAppContext) {
+fn open_segments<'a>(
+    selected: &'static str,
+    cx: &'a mut TestAppContext,
+) -> (gpui::Entity<SegmentHost>, &'a mut VisualTestContext) {
     cx.update(gpui_component::init);
     cx.update(|cx| {
         crate::theme::install(
@@ -196,14 +200,131 @@ fn a_measured_segment_is_revealed_exactly(cx: &mut TestAppContext) {
             cx,
         );
     });
-    let (host, window) = cx.add_window_view(|_, _| SegmentHost {
+    let (host, window) = cx.add_window_view(move |_, _| SegmentHost {
         handle: ScrollHandle::new(),
         reveal: StripReveal::default(),
         segments: Default::default(),
+        selected,
+        pane: px(120.0),
     });
     window.run_until_parked();
+    redraw(&host, window);
+    (host, window)
+}
+
+fn redraw(host: &gpui::Entity<SegmentHost>, window: &mut VisualTestContext) {
     window.update(|_, cx| host.update(cx, |_, cx| cx.notify()));
     window.run_until_parked();
+}
+
+fn segment_offset(host: &gpui::Entity<SegmentHost>, window: &mut VisualTestContext) -> Pixels {
+    window.update(|_, cx| host.read(cx).handle.offset().x)
+}
+
+fn segment_wheel(host: &gpui::Entity<SegmentHost>, window: &mut VisualTestContext, dx: Pixels) {
+    let position = window.update(|_, cx| host.read(cx).handle.bounds().center());
+    window.simulate_event(ScrollWheelEvent {
+        position,
+        delta: ScrollDelta::Pixels(point(dx, px(0.0))),
+        modifiers: Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+    });
+    window.run_until_parked();
+}
+
+#[gpui::test]
+fn a_segment_reveal_keeps_the_users_scroll(cx: &mut TestAppContext) {
+    let (host, window) = open_segments("last", cx);
+    let revealed = segment_offset(&host, window);
+    assert!(revealed < px(0.0), "the selected segment was revealed");
+
+    for _ in 0..3 {
+        segment_wheel(&host, window, px(40.0));
+        redraw(&host, window);
+    }
+    let scrolled = segment_offset(&host, window);
+    assert!(
+        scrolled > revealed,
+        "the wheel scrolled away from the segment"
+    );
+
+    for _ in 0..3 {
+        redraw(&host, window);
+    }
+    assert_eq!(
+        segment_offset(&host, window),
+        scrolled,
+        "frames with the same selection and width leave the scroll alone"
+    );
+}
+
+#[gpui::test]
+fn a_segment_is_revealed_again_when_the_selection_or_width_changes(cx: &mut TestAppContext) {
+    let (host, window) = open_segments("last", cx);
+    segment_wheel(&host, window, px(500.0));
+    redraw(&host, window);
+    assert_eq!(segment_offset(&host, window), px(0.0));
+
+    window.update(|_, cx| host.update(cx, |host, _| host.selected = "third"));
+    redraw(&host, window);
+    redraw(&host, window);
+    let third = segment_offset(&host, window);
+    assert!(third < px(0.0), "a new selection is revealed");
+
+    segment_wheel(&host, window, px(500.0));
+    redraw(&host, window);
+    assert_eq!(segment_offset(&host, window), px(0.0));
+
+    window.update(|_, cx| host.update(cx, |host, _| host.pane = px(130.0)));
+    redraw(&host, window);
+    redraw(&host, window);
+    assert!(
+        segment_offset(&host, window) < px(0.0),
+        "a new width reveals the selection again"
+    );
+
+    let (strip, third) = window.update(|_, cx| {
+        let host = host.read(cx);
+        (host.handle.bounds(), host.segments.get("third"))
+    });
+    let third = third.expect("the third segment was painted");
+    assert!(third.left() >= strip.left(), "the segment starts in view");
+    if third.size.width <= strip.size.width {
+        assert!(
+            third.right() <= strip.right() + px(0.5),
+            "a segment that fits ends in view"
+        );
+    }
+}
+
+#[gpui::test]
+fn a_range_and_a_segment_share_one_reveal_key(cx: &mut TestAppContext) {
+    let (host, window) = open_segments("last", cx);
+    let (handle, segments) = window.update(|_, cx| {
+        let host = host.read(cx);
+        (host.handle.clone(), host.segments.clone())
+    });
+    handle.set_offset(point(px(0.0), px(0.0)));
+    redraw(&host, window);
+    let reveal = StripReveal::default();
+
+    reveal.range(&handle, px(0.0)..px(50.0), px(120.0));
+    assert_eq!(handle.offset().x, px(0.0));
+
+    reveal.segment(&handle, &segments, "last", px(120.0));
+    let on_segment = handle.offset().x;
+    assert!(on_segment < px(0.0), "the segment is revealed");
+
+    reveal.range(&handle, px(0.0)..px(50.0), px(120.0));
+    assert!(
+        handle.offset().x > on_segment,
+        "the first range is a new target after a segment and reveals again"
+    );
+}
+
+#[gpui::test]
+fn a_measured_segment_is_revealed_exactly(cx: &mut TestAppContext) {
+    let (host, window) = open_segments("last", cx);
 
     let (strip, last) = window.update(|_, cx| {
         let host = host.read(cx);
