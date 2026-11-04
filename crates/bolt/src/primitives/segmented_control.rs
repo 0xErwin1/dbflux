@@ -15,6 +15,7 @@ use gpui::{
     Window, canvas, div,
 };
 use gpui_component::ActiveTheme;
+use gpui_component::tooltip::Tooltip;
 
 use crate::icon::IconSource;
 use crate::primitives::{Chamfer, Icon, Text, focus_underline};
@@ -31,6 +32,10 @@ pub struct SegmentedItem {
     pub element_id: Option<SharedString>,
     /// Count or short trailing label drawn after the label.
     pub count: Option<SharedString>,
+    /// Draws at the disabled look and cannot be selected.
+    pub disabled: bool,
+    /// Tooltip shown while the segment is disabled, and why it is.
+    pub disabled_reason: Option<SharedString>,
 }
 
 impl SegmentedItem {
@@ -41,6 +46,8 @@ impl SegmentedItem {
             icon: None,
             element_id: None,
             count: None,
+            disabled: false,
+            disabled_reason: None,
         }
     }
 
@@ -62,6 +69,29 @@ impl SegmentedItem {
     pub fn icon(mut self, icon: impl Into<IconSource>) -> Self {
         self.icon = Some(icon.into());
         self
+    }
+
+    /// Draws the segment at the disabled look and stops it being selected: a
+    /// click never lands on it, and its accessibility node is disabled with
+    /// no click action. Stepping over it with the arrow keys is
+    /// [`stepped_enabled_segment`]'s job.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    /// Draws the segment disabled and shows `reason` in a tooltip on hover,
+    /// for an option the owner keeps visible but cannot offer. Same as
+    /// [`Self::disabled`] together with the text that explains it.
+    pub fn disabled_reason(mut self, reason: impl Into<SharedString>) -> Self {
+        self.disabled = true;
+        self.disabled_reason = Some(reason.into());
+        self
+    }
+
+    /// The tooltip the segment draws: its reason, while it is disabled.
+    fn resolved_tooltip(&self) -> Option<&SharedString> {
+        self.disabled_reason.as_ref().filter(|_| self.disabled)
     }
 }
 
@@ -97,6 +127,38 @@ pub fn stepped_segment<'a>(ids: &[&'a str], active: &str, step: isize) -> Option
     (target != current).then(|| ids[target])
 }
 
+/// The nearest enabled segment `step` places away from `active` in `items`
+/// (negative steps go left), skipping the disabled ones and stopping at
+/// either end. `None` when `active` is not one of `items`, when `step` is
+/// zero, or when every segment between it and that end is disabled.
+///
+/// This is the arrow-key step of a control that draws a disabled segment:
+/// the one [`stepped_segment`] takes, with the disabled segments removed. A
+/// disabled segment that is active steps off to the next enabled one.
+pub fn stepped_enabled_segment<'a>(
+    items: &'a [SegmentedItem],
+    active: &str,
+    step: isize,
+) -> Option<&'a str> {
+    let current = items.iter().position(|item| item.id.as_ref() == active)?;
+    if step == 0 {
+        return None;
+    }
+
+    let mut index = current;
+
+    loop {
+        let next = index.checked_add_signed(step)?;
+        let item = items.get(next)?;
+
+        if !item.disabled {
+            return Some(item.id.as_ref());
+        }
+
+        index = next;
+    }
+}
+
 /// Where a [`SegmentedControl`] last painted its segments, in window
 /// coordinates. Share one with [`SegmentedControl::segment_bounds`]; a host
 /// scrolling the control into view reads it to reveal a segment exactly.
@@ -130,6 +192,12 @@ impl SegmentBounds {
 /// - Keyboard focus: the track never rings. While focus is visible, the
 ///   focused segment carries a 2 px tint underline inside it; selection is
 ///   shown only by the raised thumb.
+/// - Disabled: a segment marked with [`SegmentedItem::disabled`], or every
+///   segment of a control marked with [`Self::disabled`], draws at
+///   `Fields::DISABLED_OPACITY` (fill and content together, like a disabled
+///   button) with the not-allowed cursor, no hover wash, no click handler and
+///   a disabled accessibility node. The reason set with
+///   [`SegmentedItem::disabled_reason`] shows as its tooltip.
 /// - Semantics: a control named with [`Self::group`] is a radio group
 ///   `segmented-<group>` whose segments are radio buttons
 ///   `segmented-<group>-<id>` (element id and accessibility id, unless the
@@ -151,6 +219,7 @@ pub struct SegmentedControl {
     track_id: Option<SharedString>,
     aria_label: Option<SharedString>,
     tabs: bool,
+    disabled: bool,
     segment_bounds: Option<SegmentBounds>,
     on_select: Arc<dyn Fn(&SharedString, &mut Window, &mut App)>,
 }
@@ -184,6 +253,7 @@ impl SegmentedControl {
             track_id: None,
             aria_label: None,
             tabs: false,
+            disabled: false,
             segment_bounds: None,
             on_select: Arc::new(on_select),
         }
@@ -242,6 +312,15 @@ impl SegmentedControl {
         self.aria_label = Some(label.into());
         self
     }
+
+    /// Draws every segment at the disabled look and ignores every click, for
+    /// a control the owner cannot accept a choice for right now. A segment
+    /// marked with [`SegmentedItem::disabled`] keeps its own state, and its
+    /// reason still shows as its tooltip.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
 }
 
 impl RenderOnce for SegmentedControl {
@@ -260,11 +339,13 @@ impl RenderOnce for SegmentedControl {
         let group = self.group;
         let is_named = group.is_some();
         let is_tab_list = self.tabs;
+        let control_disabled = self.disabled;
         let segment_bounds = self.segment_bounds;
 
         let segments = self.items.into_iter().map(|item| {
             let is_active = item.id == active_id;
             let is_focused = focused_id.as_ref() == Some(&item.id);
+            let disabled = control_disabled || item.disabled;
             let segment_id = item
                 .element_id
                 .clone()
@@ -272,6 +353,8 @@ impl RenderOnce for SegmentedControl {
 
             let thumb = if is_active {
                 Chamfer::new(ChamferCut::KEYCAP).fill(theme.secondary)
+            } else if disabled {
+                Chamfer::new(ChamferCut::KEYCAP)
             } else {
                 Chamfer::new(ChamferCut::KEYCAP)
                     .fill_hover(theme.accent)
@@ -290,6 +373,7 @@ impl RenderOnce for SegmentedControl {
             let on_accessible_select = on_select.clone();
             let accessible_label = item.label.clone();
             let count_owner = segment_id.clone();
+            let tooltip = item.resolved_tooltip().cloned();
 
             let segment_element_id = ElementId::from(segment_id.clone());
             let measured = segment_bounds
@@ -310,12 +394,17 @@ impl RenderOnce for SegmentedControl {
                         })
                     };
 
-                    segment
+                    let segment = segment
                         .accessibility_id(segment_id)
-                        .aria_label(accessible_label)
-                        .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
+                        .aria_label(accessible_label);
+
+                    if disabled {
+                        segment
+                    } else {
+                        segment.on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
                             on_accessible_select(&accessible_id, window, cx);
                         })
+                    }
                 })
                 .relative()
                 .flex()
@@ -324,7 +413,13 @@ impl RenderOnce for SegmentedControl {
                 .gap(Fields::SEGMENT_GAP)
                 .h(Fields::SEGMENT_HEIGHT)
                 .px(Fields::SEGMENT_PADDING_X)
-                .cursor_pointer()
+                .when(disabled, |segment| {
+                    segment
+                        .aria_disabled(true)
+                        .cursor_not_allowed()
+                        .opacity(Fields::DISABLED_OPACITY)
+                })
+                .when(!disabled, |segment| segment.cursor_pointer())
                 .text_color(text_color)
                 .child(thumb)
                 .when_some(measured, |this, (segments, item_id)| {
@@ -361,8 +456,13 @@ impl RenderOnce for SegmentedControl {
                     )
                 })
                 .when(is_focused, |this| this.child(focus_underline(tint)))
-                .on_click(move |_, window, cx| {
-                    on_select(&clicked_id, window, cx);
+                .when_some(tooltip.filter(|_| disabled), |segment, tip| {
+                    segment.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                })
+                .when(!disabled, |segment| {
+                    segment.on_click(move |_, window, cx| {
+                        on_select(&clicked_id, window, cx);
+                    })
                 })
                 .into_any_element()
         });
@@ -421,19 +521,30 @@ mod tests {
         focus_handle: FocusHandle,
         active: SharedString,
         focused_item: Option<SharedString>,
+        disabled_item: Option<SharedString>,
+        control_disabled: bool,
     }
 
     impl Render for SegmentsHost {
         fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let entity = cx.entity();
-            let control = SegmentedControl::new(items(), self.active.clone(), move |id, _, cx| {
+            let disabled_item = self.disabled_item.clone();
+            let items = items()
+                .into_iter()
+                .map(|item| {
+                    let disabled = disabled_item.as_deref() == Some(item.id.as_ref());
+                    item.disabled(disabled)
+                })
+                .collect();
+            let control = SegmentedControl::new(items, self.active.clone(), move |id, _, cx| {
                 let id = id.clone();
                 entity.update(cx, |host, cx| {
                     host.active = id;
                     cx.notify();
                 });
             })
-            .focused(true);
+            .focused(true)
+            .disabled(self.control_disabled);
 
             let control = match self.focused_item.clone() {
                 Some(id) => control.focused_item(id),
@@ -468,11 +579,104 @@ mod tests {
             focus_handle: cx.focus_handle(),
             active: SharedString::from("prefer"),
             focused_item,
+            disabled_item: None,
+            control_disabled: false,
         });
         window.update(|window, cx| host.read(cx).focus_handle.clone().focus(window, cx));
         window.run_until_parked();
 
         (host, window)
+    }
+
+    fn open_segments_disabling<'a>(
+        disabled_item: Option<&str>,
+        control_disabled: bool,
+        cx: &'a mut TestAppContext,
+    ) -> (Entity<SegmentsHost>, &'a mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::install(
+                crate::brand::Brand::neutral(),
+                crate::palette::PaletteMode::Dark,
+                crate::density::Density::Default,
+                cx,
+            );
+        });
+
+        let disabled_item = disabled_item.map(|id| SharedString::from(id.to_string()));
+        let (host, window) = cx.add_window_view(move |_, cx| SegmentsHost {
+            focus_handle: cx.focus_handle(),
+            active: SharedString::from("prefer"),
+            focused_item: None,
+            disabled_item,
+            control_disabled,
+        });
+        window.update(|window, cx| host.read(cx).focus_handle.clone().focus(window, cx));
+        window.run_until_parked();
+
+        (host, window)
+    }
+
+    /// Clicks the middle of the segment `id` and returns the active id after
+    /// the click.
+    fn click_segment(
+        host: &Entity<SegmentsHost>,
+        window: &mut VisualTestContext,
+        id: &'static str,
+    ) -> SharedString {
+        let center = window
+            .debug_bounds(id)
+            .unwrap_or_else(|| panic!("{id} is laid out"))
+            .center();
+        window.simulate_click(center, Modifiers::default());
+        window.run_until_parked();
+
+        window.update(|_, cx| host.read(cx).active.clone())
+    }
+
+    #[gpui::test]
+    fn a_disabled_segment_ignores_clicks(cx: &mut TestAppContext) {
+        let (host, window) = open_segments_disabling(Some("allow"), false, cx);
+
+        let active = click_segment(&host, window, "seg-ctl-item-allow");
+        assert_eq!(
+            active.as_ref(),
+            "prefer",
+            "a disabled segment cannot be selected"
+        );
+
+        let active = click_segment(&host, window, "seg-ctl-item-require");
+        assert_eq!(
+            active.as_ref(),
+            "require",
+            "an enabled segment still takes the click"
+        );
+    }
+
+    #[gpui::test]
+    fn a_disabled_control_ignores_every_click(cx: &mut TestAppContext) {
+        let (host, window) = open_segments_disabling(None, true, cx);
+
+        for id in [
+            "seg-ctl-item-disable",
+            "seg-ctl-item-allow",
+            "seg-ctl-item-require",
+        ] {
+            let active = click_segment(&host, window, id);
+            assert_eq!(
+                active.as_ref(),
+                "prefer",
+                "{id} is dimmed and takes no click"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn a_control_that_disables_nothing_keeps_every_segment_clickable(cx: &mut TestAppContext) {
+        let (host, window) = open_segments_disabling(None, false, cx);
+
+        let active = click_segment(&host, window, "seg-ctl-item-allow");
+        assert_eq!(active.as_ref(), "allow");
     }
 
     #[gpui::test]
@@ -846,6 +1050,103 @@ mod tests {
     fn active_id_not_in_items_returns_id_unchanged() {
         let result = new_active_id(&items(), "unknown", "allow");
         assert_eq!(result.as_ref(), "allow");
+    }
+
+    struct DisabledSegments;
+
+    impl Render for DisabledSegments {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                SegmentedControl::new(
+                    vec![
+                        SegmentedItem::new("pdf", "PDF"),
+                        SegmentedItem::new("csv", "CSV"),
+                        SegmentedItem::new("api", "API docs")
+                            .disabled_reason("Only a whole collection can be exported"),
+                    ],
+                    "pdf",
+                    |_, _, _| {},
+                )
+                .group("format"),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn a_disabled_segment_is_disabled_in_the_accessibility_tree(cx: &mut TestAppContext) {
+        let frame = capture_frame(|| DisabledSegments, cx);
+
+        let api = accessible_node(&frame, "segmented-format-api");
+        assert_eq!(api.role(), Role::RadioButton);
+        assert_eq!(api.label(), Some("API docs"));
+        assert!(api.is_disabled(), "a disabled segment says so");
+        assert!(
+            !api.supports_action(AccessibleAction::Click),
+            "and carries no click action"
+        );
+
+        let pdf = accessible_node(&frame, "segmented-format-pdf");
+        assert!(!pdf.is_disabled());
+        assert!(pdf.supports_action(AccessibleAction::Click));
+    }
+
+    #[test]
+    fn a_segment_carries_its_reason_only_while_disabled() {
+        let reason = SharedString::from("Only a whole collection can be exported");
+        let disabled = SegmentedItem::new("api", "API docs").disabled_reason(reason.clone());
+        assert!(disabled.disabled, "a reason marks the segment disabled");
+        assert_eq!(
+            disabled.resolved_tooltip().map(SharedString::as_ref),
+            Some(reason.as_ref())
+        );
+
+        let muted = SegmentedItem::new("api", "API docs").disabled(true);
+        assert_eq!(muted.resolved_tooltip(), None, "no reason, no tooltip");
+
+        let plain = SegmentedItem::new("pdf", "PDF");
+        assert_eq!(plain.resolved_tooltip(), None);
+
+        let enabled = SegmentedItem::new("api", "API docs")
+            .disabled_reason(reason)
+            .disabled(false);
+        assert_eq!(
+            enabled.resolved_tooltip(),
+            None,
+            "an enabled one shows none"
+        );
+    }
+
+    #[test]
+    fn the_arrow_step_skips_a_disabled_segment() {
+        let stepping = |items: &[SegmentedItem], active: &str, step: isize| {
+            stepped_enabled_segment(items, active, step).map(str::to_owned)
+        };
+        let items = [
+            SegmentedItem::new("json", "JSON"),
+            SegmentedItem::new("csv", "CSV").disabled(true),
+            SegmentedItem::new("api", "API docs"),
+        ];
+
+        assert_eq!(stepping(&items, "json", 1), Some("api".to_owned()));
+        assert_eq!(stepping(&items, "api", -1), Some("json".to_owned()));
+        assert_eq!(stepping(&items, "api", 1), None, "it stops at the end");
+        assert_eq!(
+            stepping(&items, "csv", 1),
+            Some("api".to_owned()),
+            "a disabled active segment steps off"
+        );
+        assert_eq!(stepping(&items, "csv", 0), None);
+        assert_eq!(stepping(&items, "missing", 1), None);
+
+        let all_disabled = [
+            SegmentedItem::new("json", "JSON").disabled(true),
+            SegmentedItem::new("csv", "CSV").disabled(true),
+        ];
+        assert_eq!(
+            stepping(&all_disabled, "json", 1),
+            None,
+            "nothing enabled to step to"
+        );
     }
 
     #[test]

@@ -27,7 +27,7 @@ pub use activity_rail::{
 };
 pub use empty_state::{EmptyState, EmptyStateAction};
 pub use field_row::{
-    field_row, field_row_vertical, field_row_vertical_with_desc, field_row_with_desc,
+    FieldRow, field_row, field_row_vertical, field_row_vertical_with_desc, field_row_with_desc,
     field_row_with_label_width,
 };
 pub use island::{
