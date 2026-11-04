@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -6,7 +7,7 @@ use gpui::{
     Anchor, App, ClickEvent, Context, ElementId, EventEmitter, FocusHandle, FontWeight, Hsla,
     InteractiveElement, IntoElement, ParentElement, Pixels, Render, Role, ScrollHandle,
     ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
-    anchored, deferred, div, point, px,
+    anchored, canvas, deferred, div, point, px,
 };
 use gpui_component::{ActiveTheme, IconName};
 
@@ -231,6 +232,10 @@ pub struct Dropdown {
     leading_icon: Option<IconSource>,
     label_badge: Option<BadgeLabel>,
     menu_scroll_handle: ScrollHandle,
+    /// The trigger's laid-out width, recorded while it paints. The menu is
+    /// anchored and sizes to its content, so it cannot resolve a percentage
+    /// against the trigger and takes this as its minimum width instead.
+    trigger_width: Rc<Cell<Pixels>>,
     on_select: Option<Arc<dyn Fn(usize, &DropdownItem, &mut Context<Self>) + Send + Sync>>,
     /// Created the first time the dropdown is focused from the keyboard
     /// (see [`Dropdown::focus`]); a dropdown only ever driven by its owner
@@ -269,6 +274,7 @@ impl Dropdown {
             leading_icon: None,
             label_badge: None,
             menu_scroll_handle: ScrollHandle::new(),
+            trigger_width: Rc::new(Cell::new(px(0.0))),
             on_select: None,
             focus_handle: None,
             return_focus: None,
@@ -820,7 +826,7 @@ impl Dropdown {
             .id("dropdown-menu")
             .debug_selector(move || menu_debug_selector.clone())
             .relative()
-            .min_w_full()
+            .min_w(self.trigger_width.get())
             .shadow_lg()
             .occlude()
             .on_mouse_down_out(cx.listener(Self::handle_mouse_down_out))
@@ -855,6 +861,7 @@ impl Dropdown {
 
         let mut trigger = div()
             .id("dropdown-trigger")
+            .relative()
             .role(Role::Button)
             // The trigger is named by the text it draws (the selection, or the
             // placeholder), unless the owner names it explicitly: a chevron
@@ -958,7 +965,17 @@ impl Dropdown {
             trigger = trigger.on_click(cx.listener(Self::handle_trigger_click));
         }
 
-        trigger.into_any_element()
+        let trigger_width = self.trigger_width.clone();
+        trigger
+            .child(
+                canvas(
+                    move |bounds, _window, _cx| trigger_width.set(bounds.size.width),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .into_any_element()
     }
 
     fn resolved_placeholder(&self, cx: &App) -> SharedString {
@@ -1476,6 +1493,79 @@ mod tests {
             assert!(setup.is_open(), "the owner drives a dropdown it keeps");
             assert_eq!(setup.highlighted(), Some(0));
             assert_eq!(setup.commands(), vec!["test_next", "test_execute"]);
+        }
+    }
+
+    mod menu_width {
+        use super::super::{Dropdown, DropdownItem};
+        use gpui::{
+            AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+            TestAppContext, Window, div, px,
+        };
+
+        const TRIGGER_WIDTH: f32 = 400.0;
+
+        struct Host {
+            dropdown: Entity<Dropdown>,
+        }
+
+        impl Render for Host {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .child(div().w(px(TRIGGER_WIDTH)).child(self.dropdown.clone()))
+            }
+        }
+
+        fn open_with(cx: &mut TestAppContext, labels: &[&str]) -> (f32, f32) {
+            cx.update(gpui_component::init);
+            let labels: Vec<String> = labels.iter().map(|label| (*label).to_string()).collect();
+            let (host, window) = cx.add_window_view(|_window, cx| {
+                let dropdown = cx.new(|_cx| {
+                    Dropdown::new("width-dropdown")
+                        .items(labels.into_iter().map(DropdownItem::new).collect())
+                });
+                Host { dropdown }
+            });
+            window.run_until_parked();
+
+            let dropdown = host.update(window, |host, _cx| host.dropdown.clone());
+            window.update(|_, cx| dropdown.update(cx, |dropdown, cx| dropdown.open(cx)));
+            window.run_until_parked();
+
+            let trigger = window
+                .debug_bounds("width-dropdown")
+                .expect("the dropdown is laid out");
+            let menu = window
+                .debug_bounds("width-dropdown-menu")
+                .expect("the open menu is laid out");
+            (trigger.size.width.into(), menu.size.width.into())
+        }
+
+        #[gpui::test]
+        fn a_menu_of_short_items_is_as_wide_as_its_trigger(cx: &mut TestAppContext) {
+            let (trigger, menu) = open_with(cx, &["A", "B"]);
+
+            assert_eq!(trigger, TRIGGER_WIDTH);
+            assert!(
+                menu >= trigger,
+                "menu {menu} px under a {trigger} px trigger"
+            );
+        }
+
+        #[gpui::test]
+        fn a_long_item_widens_the_menu_past_its_trigger(cx: &mut TestAppContext) {
+            let long = "a very long item label ".repeat(20);
+            let (trigger, menu) = open_with(cx, &["A", long.as_str()]);
+
+            assert!(
+                menu > trigger,
+                "menu {menu} px not past a {trigger} px trigger"
+            );
         }
     }
 }
