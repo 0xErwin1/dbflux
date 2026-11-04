@@ -1053,6 +1053,9 @@ impl GridMetrics {
     pub const REFERENCE_ROW_ALPHA: f32 = 0.10;
     /// Bottom line under the reference row.
     pub const REFERENCE_ROW_BORDER_ALPHA: f32 = 0.45;
+    /// Thickness of the strip along a viewport edge that a scrollbar
+    /// overlays: the bar's 8 px thumb with its 4 px inset on each side. (12 px)
+    pub const SCROLLBAR_WIDTH: Pixels = px(12.0);
 }
 
 /// Geometry of the result chrome: the footer under a result grid and the
