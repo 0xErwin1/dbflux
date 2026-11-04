@@ -5,7 +5,7 @@
 //! wheel and the trackpad, draws no scrollbar, and [`StripReveal`] scrolls the
 //! selected child into view when the selection or the pane's width changes.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 
 use gpui::prelude::*;
@@ -35,7 +35,10 @@ pub fn scroll_strip(id: impl Into<ElementId>, handle: &ScrollHandle) -> Stateful
 /// Call the reveal from the host's `render`, every frame, with the pane's
 /// current width: the strip's own scroll runs in the same frame.
 #[derive(Default)]
-pub struct StripReveal(Cell<Option<(Target, Pixels)>>);
+pub struct StripReveal {
+    range: Cell<Option<(Target, Pixels)>>,
+    segment: RefCell<Option<(String, Pixels)>>,
+}
 
 #[derive(Clone, Copy, PartialEq)]
 struct Target(Pixels, Pixels);
@@ -45,9 +48,23 @@ impl StripReveal {
     /// once either changes.
     fn due(&self, target: Target, width: Pixels) -> bool {
         let key = Some((target, width));
-        let due = self.0.get() != key;
-        self.0.set(key);
+        let due = self.range.get() != key;
+        self.range.set(key);
         due
+    }
+
+    /// Like [`Self::due`], for a segment known by its id: the measured bounds
+    /// are not part of the key, because they were painted before the current
+    /// scroll offset and shift when the user scrolls.
+    fn segment_due(&self, id: &str, width: Pixels) -> bool {
+        let mut last = self.segment.borrow_mut();
+        let current = last
+            .as_ref()
+            .is_some_and(|(last_id, last_width)| last_id == id && *last_width == width);
+        if !current {
+            *last = Some((id.to_owned(), width));
+        }
+        !current
     }
 
     /// Scrolls the strip `handle` follows so its child `index` shows, by the
@@ -82,7 +99,10 @@ impl StripReveal {
         if !self.due(Target(range.start, range.end), width) {
             return;
         }
+        Self::reveal_range(handle, range, viewport);
+    }
 
+    fn reveal_range(handle: &ScrollHandle, range: Range<Pixels>, viewport: Pixels) {
         let offset = handle.offset();
         let shown_start = -offset.x;
         let shown_end = shown_start + viewport;
@@ -97,8 +117,9 @@ impl StripReveal {
     }
 
     /// Scrolls the strip so the segment `id`, measured by `segments`, shows
-    /// exactly. Waits, without remembering anything, until the segment has
-    /// been painted once.
+    /// exactly, when `id` or `width` differs from the last call and keeps the
+    /// user's scroll otherwise. Waits, without remembering anything, until the
+    /// strip has been laid out and the segment painted once.
     pub fn segment(
         &self,
         handle: &ScrollHandle,
@@ -106,14 +127,21 @@ impl StripReveal {
         id: &str,
         width: Pixels,
     ) {
+        let viewport = handle.bounds().size.width;
+        if viewport <= Pixels::ZERO {
+            return;
+        }
         let Some(bounds) = segments.get(id) else {
             return;
         };
+        if !self.segment_due(id, width) {
+            return;
+        }
         let origin = handle.bounds().left() + handle.offset().x;
-        self.range(
+        Self::reveal_range(
             handle,
             bounds.left() - origin..bounds.right() - origin,
-            width,
+            viewport,
         );
     }
 }
