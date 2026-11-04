@@ -130,8 +130,8 @@ pub fn column_resize_handle(
 }
 
 /// Makes `root` follow the pointer while `drag` is active. `on_resize`
-/// receives each requested width for the host to store; the release ends the
-/// drag.
+/// receives each requested width for the host to store; a release, inside or
+/// outside the root, ends the drag.
 pub fn track_column_resize<E>(
     root: E,
     drag: &ColumnResizeDrag,
@@ -142,14 +142,26 @@ where
 {
     let drag_for_move = drag.clone();
     let drag_for_up = drag.clone();
+    let drag_for_up_out = drag.clone();
 
+    // GPUI skips `on_mouse_up` for a release outside the root, so the
+    // `on_mouse_up_out` handler and the pressed-button check on every move
+    // keep a drag from outliving the button.
     root.on_mouse_move(move |event, window, cx| {
+        if event.pressed_button != Some(MouseButton::Left) {
+            drag_for_move.end();
+            return;
+        }
+
         if let Some(resize) = drag_for_move.update(event.position.x) {
             on_resize(resize, window, cx);
         }
     })
     .on_mouse_up(MouseButton::Left, move |_event, _window, _cx| {
         drag_for_up.end();
+    })
+    .on_mouse_up_out(MouseButton::Left, move |_event, _window, _cx| {
+        drag_for_up_out.end();
     })
 }
 
@@ -245,5 +257,78 @@ mod tests {
         );
         assert!(!applied);
         assert_eq!(widths, vec![MIN_COLUMN_WIDTH, 120.0]);
+    }
+
+    struct Harness {
+        drag: ColumnResizeDrag,
+        requests: std::rc::Rc<std::cell::RefCell<Vec<ColumnResize>>>,
+    }
+
+    impl gpui::Render for Harness {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let requests = self.requests.clone();
+
+            track_column_resize(
+                div().size(px(200.0)), // guardrail-allow: test fixture size
+                &self.drag,
+                move |resize, _window, _cx| requests.borrow_mut().push(resize),
+            )
+        }
+    }
+
+    fn harness(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        ColumnResizeDrag,
+        std::rc::Rc<std::cell::RefCell<Vec<ColumnResize>>>,
+        &mut gpui::VisualTestContext,
+    ) {
+        let drag = ColumnResizeDrag::new();
+        let requests = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (drag_for_view, requests_for_view) = (drag.clone(), requests.clone());
+        let (_, visual) = cx.add_window_view(move |_window, _cx| Harness {
+            drag: drag_for_view,
+            requests: requests_for_view,
+        });
+
+        (drag, requests, visual)
+    }
+
+    #[gpui::test]
+    fn a_release_outside_the_grid_ends_the_drag(cx: &mut gpui::TestAppContext) {
+        let (drag, requests, visual) = harness(cx);
+        let none = gpui::Modifiers::default();
+        let inside = gpui::point(px(100.0), px(100.0)); // guardrail-allow: test pointer position
+        let outside = gpui::point(px(900.0), px(900.0)); // guardrail-allow: test pointer position
+
+        drag.begin(0, inside.x, 120.0);
+        visual.simulate_mouse_move(
+            inside + gpui::point(px(10.0), px(0.0)),
+            MouseButton::Left,
+            none,
+        );
+        assert_eq!(requests.borrow().len(), 1, "a held button resizes");
+
+        visual.simulate_mouse_up(outside, MouseButton::Left, none);
+        assert!(!drag.is_active(), "the release outside ended the drag");
+
+        visual.simulate_mouse_move(inside, None, none);
+        assert_eq!(requests.borrow().len(), 1, "moving back does not resize");
+    }
+
+    #[gpui::test]
+    fn a_move_without_a_pressed_button_ends_the_drag(cx: &mut gpui::TestAppContext) {
+        let (drag, requests, visual) = harness(cx);
+        let none = gpui::Modifiers::default();
+
+        drag.begin(0, px(100.0), 120.0); // guardrail-allow: test pointer position
+        visual.simulate_mouse_move(gpui::point(px(150.0), px(50.0)), None, none); // guardrail-allow: test pointer position
+
+        assert!(requests.borrow().is_empty(), "no button, no resize");
+        assert!(!drag.is_active(), "the stale drag was dropped");
     }
 }
