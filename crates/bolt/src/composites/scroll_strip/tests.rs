@@ -282,6 +282,44 @@ fn a_segment_is_revealed_again_when_the_selection_or_width_changes(cx: &mut Test
         segment_offset(&host, window) < px(0.0),
         "a new width reveals the selection again"
     );
+
+    let (strip, third) = window.update(|_, cx| {
+        let host = host.read(cx);
+        (host.handle.bounds(), host.segments.get("third"))
+    });
+    let third = third.expect("the third segment was painted");
+    assert!(third.left() >= strip.left(), "the segment starts in view");
+    if third.size.width <= strip.size.width {
+        assert!(
+            third.right() <= strip.right() + px(0.5),
+            "a segment that fits ends in view"
+        );
+    }
+}
+
+#[gpui::test]
+fn a_range_and_a_segment_share_one_reveal_key(cx: &mut TestAppContext) {
+    let (host, window) = open_segments("last", cx);
+    let (handle, segments) = window.update(|_, cx| {
+        let host = host.read(cx);
+        (host.handle.clone(), host.segments.clone())
+    });
+    handle.set_offset(point(px(0.0), px(0.0)));
+    redraw(&host, window);
+    let reveal = StripReveal::default();
+
+    reveal.range(&handle, px(0.0)..px(50.0), px(120.0));
+    assert_eq!(handle.offset().x, px(0.0));
+
+    reveal.segment(&handle, &segments, "last", px(120.0));
+    let on_segment = handle.offset().x;
+    assert!(on_segment < px(0.0), "the segment is revealed");
+
+    reveal.range(&handle, px(0.0)..px(50.0), px(120.0));
+    assert!(
+        handle.offset().x > on_segment,
+        "the first range is a new target after a segment and reveals again"
+    );
 }
 
 #[gpui::test]

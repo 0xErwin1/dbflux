@@ -5,7 +5,7 @@
 //! wheel and the trackpad, draws no scrollbar, and [`StripReveal`] scrolls the
 //! selected child into view when the selection or the pane's width changes.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::ops::Range;
 
 use gpui::prelude::*;
@@ -35,34 +35,27 @@ pub fn scroll_strip(id: impl Into<ElementId>, handle: &ScrollHandle) -> Stateful
 /// Call the reveal from the host's `render`, every frame, with the pane's
 /// current width: the strip's own scroll runs in the same frame.
 #[derive(Default)]
-pub struct StripReveal {
-    range: Cell<Option<(Target, Pixels)>>,
-    segment: RefCell<Option<(String, Pixels)>>,
+pub struct StripReveal(RefCell<Option<(RevealKey, Pixels)>>);
+
+/// What a reveal aimed at. A segment is known by its id, not by its measured
+/// bounds: those were painted before the current scroll offset and shift when
+/// the user scrolls.
+#[derive(Clone, PartialEq)]
+enum RevealKey {
+    Range(Pixels, Pixels),
+    Segment(String),
 }
 
-#[derive(Clone, Copy, PartialEq)]
-struct Target(Pixels, Pixels);
-
 impl StripReveal {
-    /// `true` the first time it is asked for `target` at `width`, and again
-    /// once either changes.
-    fn due(&self, target: Target, width: Pixels) -> bool {
-        let key = Some((target, width));
-        let due = self.range.get() != key;
-        self.range.set(key);
-        due
-    }
-
-    /// Like [`Self::due`], for a segment known by its id: the measured bounds
-    /// are not part of the key, because they were painted before the current
-    /// scroll offset and shift when the user scrolls.
-    fn segment_due(&self, id: &str, width: Pixels) -> bool {
-        let mut last = self.segment.borrow_mut();
+    /// `true` the first time it is asked for `key` at `width`, and again once
+    /// either changes, whichever kind of reveal asked last.
+    fn due(&self, key: RevealKey, width: Pixels) -> bool {
+        let mut last = self.0.borrow_mut();
         let current = last
             .as_ref()
-            .is_some_and(|(last_id, last_width)| last_id == id && *last_width == width);
+            .is_some_and(|(last_key, last_width)| *last_key == key && *last_width == width);
         if !current {
-            *last = Some((id.to_owned(), width));
+            *last = Some((key, width));
         }
         !current
     }
@@ -96,7 +89,7 @@ impl StripReveal {
         if viewport <= Pixels::ZERO {
             return;
         }
-        if !self.due(Target(range.start, range.end), width) {
+        if !self.due(RevealKey::Range(range.start, range.end), width) {
             return;
         }
         Self::reveal_range(handle, range, viewport);
@@ -134,7 +127,7 @@ impl StripReveal {
         let Some(bounds) = segments.get(id) else {
             return;
         };
-        if !self.segment_due(id, width) {
+        if !self.due(RevealKey::Segment(id.to_owned()), width) {
             return;
         }
         let origin = handle.bounds().left() + handle.offset().x;
