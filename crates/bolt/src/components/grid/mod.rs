@@ -20,6 +20,7 @@
 //! suppression (a secondary span replaces the cell's own display text), and
 //! the nested braces plus the array-only chevron.
 
+mod resize;
 #[cfg(test)]
 mod tests;
 
@@ -40,6 +41,11 @@ use crate::data::{
 use crate::icon::IconSource;
 use crate::primitives::{Chamfer, ChamferRing, Icon};
 use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, RowColors};
+
+pub use resize::{
+    ColumnResize, ColumnResizeDrag, MIN_COLUMN_WIDTH, RESIZE_HANDLE_WIDTH, apply_column_resize,
+    clamp_column_width, column_resize_handle, track_column_resize,
+};
 
 /// Coordinate of one cell in the grid, as the renderer addresses it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
