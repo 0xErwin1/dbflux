@@ -337,6 +337,7 @@ connection_manager:
     seconds: 초
     connection_name: 연결 이름
     password: 비밀번호
+    password_unreadable: "저장된 비밀번호를 읽을 수 없습니다: 시스템 키링이 잠겨 있을 수 있습니다"
     key_passphrase_optional: 키 패스프레이즈(선택 사항)
     ssh_password: SSH 비밀번호
     ca_cert_path: CA 인증서 경로

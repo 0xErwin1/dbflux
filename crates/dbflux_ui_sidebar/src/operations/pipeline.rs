@@ -235,7 +235,20 @@ impl Sidebar {
 
             match state.prepare_pipeline_input(profile_id, cancel) {
                 Ok((input, profile_name, driver)) => {
-                    let keyring_password = password.or_else(|| state.get_password(&input.profile));
+                    let keyring_password = match password {
+                        Some(password) => Some(password),
+                        None => match keyring_password_for_connect(
+                            &input.profile,
+                            state.get_password(&input.profile),
+                        ) {
+                            Ok(password) => password,
+                            Err(error) => {
+                                state.finish_pending_operation(profile_id, None);
+                                state.record_connect_failure(profile_id, error.clone());
+                                return Err((error, true));
+                            }
+                        },
+                    };
                     let hooks = state.resolve_profile_hooks(&input.profile);
                     let hook_context = HookContext::from_profile(&input.profile);
 
@@ -913,6 +926,102 @@ impl Sidebar {
             }
         })
         .detach();
+    }
+}
+
+/// The keyring password a pipeline connect hands the driver. A read failure
+/// fails the connect only when the keyring is where the password lives: a
+/// profile whose password comes from a value ref resolves it elsewhere, so a
+/// locked keyring must not block it.
+fn keyring_password_for_connect(
+    profile: &dbflux_core::ConnectionProfile,
+    read: Result<Option<dbflux_core::secrecy::SecretString>, dbflux_core::DbError>,
+) -> Result<Option<dbflux_core::secrecy::SecretString>, String> {
+    match read {
+        Ok(password) => Ok(password),
+        Err(error) if profile.save_password && !profile.value_refs.contains_key("password") => {
+            Err(format!(
+                "Could not read the password from the system keyring (it may be locked): {error}"
+            ))
+        }
+        Err(error) => {
+            log::warn!(
+                "Ignoring keyring read failure for profile '{}', whose password is not saved \
+                 in the keyring: {error}",
+                profile.name
+            );
+            Ok(None)
+        }
+    }
+}
+
+#[cfg(test)]
+mod keyring_password_tests {
+    use super::keyring_password_for_connect;
+    use dbflux_core::secrecy::{ExposeSecret, SecretString};
+    use dbflux_core::{ConnectionProfile, DbConfig, DbError, ValueRef};
+
+    #[allow(clippy::result_large_err)]
+    fn locked() -> Result<Option<SecretString>, DbError> {
+        Err(DbError::IoError(std::io::Error::other(
+            "Cannot get secret of a locked object",
+        )))
+    }
+
+    fn profile(save_password: bool) -> ConnectionProfile {
+        let mut profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        profile.save_password = save_password;
+        profile
+    }
+
+    #[test]
+    fn a_locked_keyring_fails_a_profile_that_saves_its_password() {
+        let error = keyring_password_for_connect(&profile(true), locked())
+            .expect_err("a locked keyring is not an absent password");
+
+        assert!(
+            error.starts_with(
+                "Could not read the password from the system keyring (it may be locked): "
+            ),
+            "unexpected error: {error}"
+        );
+        assert!(error.contains("locked object"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn a_locked_keyring_does_not_block_a_profile_that_does_not_save_its_password() {
+        let password = keyring_password_for_connect(&profile(false), locked())
+            .expect("the keyring holds nothing this profile needs");
+
+        assert!(password.is_none());
+    }
+
+    #[test]
+    fn a_locked_keyring_does_not_block_a_password_value_ref() {
+        let mut profile = profile(true);
+        profile.value_refs.insert(
+            "password".to_string(),
+            ValueRef::Env {
+                key: "PGPASSWORD".to_string(),
+            },
+        );
+
+        let password = keyring_password_for_connect(&profile, locked())
+            .expect("the value ref resolves the password elsewhere");
+
+        assert!(password.is_none());
+    }
+
+    #[test]
+    fn a_readable_keyring_returns_the_saved_password() {
+        let password = keyring_password_for_connect(
+            &profile(true),
+            Ok(Some(SecretString::from("saved password"))),
+        )
+        .expect("keyring read succeeds")
+        .expect("a saved password is returned");
+
+        assert_eq!(password.expose_secret(), "saved password");
     }
 }
 

@@ -337,6 +337,7 @@ connection_manager:
     seconds: segundos
     connection_name: Nome da conexão
     password: Senha
+    password_unreadable: "Não foi possível ler a senha salva: o chaveiro do sistema pode estar bloqueado"
     key_passphrase_optional: Senha da chave (opcional)
     ssh_password: Senha SSH
     ca_cert_path: Caminho do certificado da CA

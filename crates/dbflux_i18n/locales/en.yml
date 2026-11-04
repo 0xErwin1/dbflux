@@ -337,6 +337,7 @@ connection_manager:
     seconds: seconds
     connection_name: Connection name
     password: Password
+    password_unreadable: "Saved password could not be read: the system keyring may be locked"
     key_passphrase_optional: Key passphrase (optional)
     ssh_password: SSH password
     ca_cert_path: Path to CA certificate

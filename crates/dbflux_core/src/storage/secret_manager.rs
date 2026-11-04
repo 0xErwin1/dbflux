@@ -178,20 +178,23 @@ impl SecretManager {
         }
     }
 
-    pub fn get_password(&self, profile: &ConnectionProfile) -> Option<SecretString> {
+    /// The password saved for `profile`. `Ok(None)` means no password is
+    /// saved (or no keyring exists to hold one); `Err` means the keyring holds
+    /// an entry it would not hand over, for example because it is locked, so
+    /// callers must not treat it as an absent password.
+    pub fn get_password(
+        &self,
+        profile: &ConnectionProfile,
+    ) -> Result<Option<SecretString>, crate::DbError> {
         let store = self.store_read();
 
         if !store.is_available() {
-            return None;
+            return Ok(None);
         }
 
-        match store.get(&profile.secret_ref()) {
-            Ok(secret) => secret,
-            Err(e) => {
-                error!("Failed to get password: {:?}", e);
-                None
-            }
-        }
+        store.get(&profile.secret_ref()).inspect_err(|e| {
+            error!("Failed to get password: {:?}", e);
+        })
     }
 
     pub fn get_ssh_password(&self, profile: &ConnectionProfile) -> Option<SecretString> {
@@ -355,6 +358,7 @@ mod tests {
 
     struct FakeSecretStore {
         available: bool,
+        fail_get: bool,
         fail_set: bool,
         values: Mutex<HashMap<String, SecretString>>,
     }
@@ -369,6 +373,12 @@ mod tests {
             reason = "test fixture: a poisoned values mutex means an earlier test step already panicked; failing loudly is the poison contract"
         )]
         fn get(&self, secret_ref: &str) -> Result<Option<SecretString>, crate::DbError> {
+            if self.fail_get {
+                return Err(crate::DbError::IoError(std::io::Error::other(
+                    "Cannot get secret of a locked object",
+                )));
+            }
+
             Ok(self
                 .values
                 .lock()
@@ -409,6 +419,7 @@ mod tests {
         let profile = profile();
         let manager = SecretManager::new(Box::new(FakeSecretStore {
             available: true,
+            fail_get: false,
             fail_set: false,
             values: Mutex::new(HashMap::new()),
         }));
@@ -419,6 +430,7 @@ mod tests {
 
         let saved = manager
             .get_password(&profile)
+            .expect("keyring read succeeds")
             .expect("password is available after successful save");
         assert_eq!(saved.expose_secret(), "new password");
     }
@@ -433,6 +445,7 @@ mod tests {
         );
         let manager = SecretManager::new(Box::new(FakeSecretStore {
             available: true,
+            fail_get: false,
             fail_set: true,
             values: Mutex::new(values),
         }));
@@ -445,8 +458,64 @@ mod tests {
 
         let saved = manager
             .get_password(&profile)
+            .expect("keyring read succeeds")
             .expect("failed save preserves the previous password");
         assert_eq!(saved.expose_secret(), "previous password");
+    }
+
+    #[test]
+    fn get_password_reports_a_keyring_read_failure_as_an_error() {
+        let profile = profile();
+        let manager = SecretManager::new(Box::new(FakeSecretStore {
+            available: true,
+            fail_get: true,
+            fail_set: false,
+            values: Mutex::new(HashMap::new()),
+        }));
+
+        let error = manager
+            .get_password(&profile)
+            .expect_err("a locked keyring is not an absent password");
+        assert!(
+            error.to_string().contains("locked object"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn get_password_returns_none_when_no_password_is_saved() {
+        let profile = profile();
+        let manager = SecretManager::new(Box::new(FakeSecretStore {
+            available: true,
+            fail_get: false,
+            fail_set: false,
+            values: Mutex::new(HashMap::new()),
+        }));
+
+        assert!(
+            manager
+                .get_password(&profile)
+                .expect("keyring read succeeds")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn get_password_returns_none_when_the_keyring_is_unavailable() {
+        let profile = profile();
+        let manager = SecretManager::new(Box::new(FakeSecretStore {
+            available: false,
+            fail_get: true,
+            fail_set: false,
+            values: Mutex::new(HashMap::new()),
+        }));
+
+        assert!(
+            manager
+                .get_password(&profile)
+                .expect("an unavailable keyring is not a read failure")
+                .is_none()
+        );
     }
 
     #[test]
@@ -459,6 +528,7 @@ mod tests {
         );
         let manager = SecretManager::new(Box::new(FakeSecretStore {
             available: true,
+            fail_get: false,
             fail_set: false,
             values: Mutex::new(HashMap::new()),
         }));

@@ -2787,7 +2787,7 @@ impl ConnectProfileParams {
             );
         }
 
-        let password = self.get_password();
+        let password = self.get_password()?;
 
         let mut profile = self.profile;
         let mut proxy_tunnel: Option<Box<dyn Any + Send + Sync>> = None;
@@ -2845,31 +2845,23 @@ impl ConnectProfileParams {
         })
     }
 
-    fn get_password(&self) -> Option<SecretString> {
+    /// A keyring read failure fails the connect: handing the driver no
+    /// password would surface as a misleading authentication error, or reach
+    /// the database as another identity through a default credential chain.
+    fn get_password(&self) -> Result<Option<SecretString>, String> {
         if let Some(password) = &self.password_override {
-            return Some(password.clone());
+            return Ok(Some(password.clone()));
         }
 
-        if !self.profile.save_password {
-            return None;
-        }
-
-        let store_arc = self.secret_store.as_ref()?;
-        let store = match store_arc.read() {
-            Ok(guard) => guard,
-            Err(poison_err) => {
-                log::warn!("Secret store RwLock poisoned during password retrieval, recovering...");
-                poison_err.into_inner()
-            }
+        let Some(secret_store) = self.secret_store.as_ref() else {
+            return Ok(None);
         };
 
-        match store.get(&self.profile.secret_ref()) {
-            Ok(pwd) => pwd,
-            Err(e) => {
-                error!("Failed to get password: {:?}", e);
-                None
-            }
-        }
+        get_stored_password(&self.profile, secret_store).map_err(|error| {
+            format!(
+                "Could not read the password from the system keyring (it may be locked): {error}"
+            )
+        })
     }
 }
 
@@ -7668,6 +7660,78 @@ mod tests {
         let calls = recorded_connect_calls(&recorded);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1.as_deref(), Some(KEYRING_PASSWORD_VALUE));
+    }
+
+    #[test]
+    fn connect_fails_with_the_keyring_error_when_the_saved_password_cannot_be_read() {
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let (driver, recorded) = PerDatabaseSwitchDriver::recording();
+
+        let params = ConnectProfileParams {
+            profile,
+            driver,
+            secret_store: Some(failing_secret_store()),
+            ssh_secret: None,
+            proxy: None,
+            password_override: None,
+        };
+        let error = match params.execute(None) {
+            Ok(_) => panic!("a locked keyring must fail the connect"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.starts_with(
+                "Could not read the password from the system keyring (it may be locked): "
+            ),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("keyring is locked"),
+            "unexpected error: {error}"
+        );
+        assert!(recorded_connect_calls(&recorded).is_empty());
+    }
+
+    #[test]
+    fn connect_with_a_provided_password_does_not_read_a_failing_keyring() {
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let (driver, recorded) = PerDatabaseSwitchDriver::recording();
+
+        let params = ConnectProfileParams {
+            profile,
+            driver,
+            secret_store: Some(failing_secret_store()),
+            ssh_secret: None,
+            proxy: None,
+            password_override: Some(SecretString::from(PROMPTED_PASSWORD_VALUE)),
+        };
+        params.execute(None).expect("connect should succeed");
+
+        let calls = recorded_connect_calls(&recorded);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1.as_deref(), Some(PROMPTED_PASSWORD_VALUE));
+    }
+
+    #[test]
+    fn connect_without_a_saved_password_does_not_read_a_failing_keyring() {
+        let mut profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        profile.save_password = false;
+        let (driver, recorded) = PerDatabaseSwitchDriver::recording();
+
+        let params = ConnectProfileParams {
+            profile,
+            driver,
+            secret_store: Some(failing_secret_store()),
+            ssh_secret: None,
+            proxy: None,
+            password_override: None,
+        };
+        params.execute(None).expect("connect should succeed");
+
+        let calls = recorded_connect_calls(&recorded);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, None);
     }
 
     #[test]

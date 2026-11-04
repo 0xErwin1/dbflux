@@ -16,10 +16,29 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use super::mcp_bindings;
-use super::{ConnectionManagerWindow, DismissEvent, TestStatus};
+use super::{ConnectionManagerWindow, DismissEvent, StoredPassword, TestStatus};
 
 const PRIMARY_PASSWORD_SAVE_ERROR: &str =
     "Unable to save the connection password to the system keyring. Unlock it and try again.";
+
+/// Deletes the saved password the form no longer wants, unless the keyring
+/// refused to read it when the form opened. The form then never saw the
+/// entry, so the user cannot have meant to drop it, and a keyring unlocked
+/// since would otherwise lose a password nobody chose to remove.
+fn delete_password_unless_unreadable(
+    state: &mut dbflux_ui_base::AppStateEntity,
+    profile: &ConnectionProfile,
+    stored_password: StoredPassword,
+) {
+    match stored_password {
+        StoredPassword::Known => state.delete_password(profile),
+        StoredPassword::Unreadable => log::warn!(
+            "Keeping the saved password for profile {}: the keyring could not be read when the \
+             form opened",
+            profile.id
+        ),
+    }
+}
 
 #[allow(clippy::result_large_err)]
 fn finish_profile_save_after_primary_password(
@@ -552,18 +571,21 @@ impl ConnectionManagerWindow {
             }
         }
 
+        let stored_password = self.form.stored_password;
+
         #[allow(clippy::result_large_err)]
         let save_result: Result<(), dbflux_core::DbError> =
             self.app_state.update(cx, |state, cx| {
-                let password_save_result = if !password_source_is_literal {
-                    state.delete_password(&profile);
-                    Ok(())
-                } else if profile.save_password && !password.is_empty() {
+                let wants_password_deleted = !password_source_is_literal || !profile.save_password;
+                let password_save_result = if password_source_is_literal
+                    && profile.save_password
+                    && !password.is_empty()
+                {
                     info!("Saving password to keyring for profile {}", profile.id);
                     state.save_password(&profile, &SecretString::from(password.clone()))
                 } else {
-                    if !profile.save_password {
-                        state.delete_password(&profile);
+                    if wants_password_deleted {
+                        delete_password_unless_unreadable(state, &profile, stored_password);
                     }
                     Ok(())
                 };
@@ -1112,6 +1134,7 @@ fn normalize_aws_credentials_error(profile_name: &str, error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connection_manager::KEYRING_PASSWORD_READ_ERROR;
     use crate::connection_manager::{EditState, FormFocus};
     use dbflux_core::LogErr;
     use dbflux_core::secrecy::{ExposeSecret, SecretString};
@@ -1124,6 +1147,7 @@ mod tests {
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
     use gpui::{Entity, TestAppContext, WindowHandle, WindowOptions};
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
     const FORM_KEYS: &[&str] = &[
@@ -1961,6 +1985,7 @@ mod tests {
     #[derive(Clone)]
     struct SecretStoreFixture {
         outcome: Arc<Mutex<PasswordSaveOutcome>>,
+        read_fails: Arc<AtomicBool>,
         values: Arc<Mutex<HashMap<String, SecretString>>>,
     }
 
@@ -1968,8 +1993,24 @@ mod tests {
         fn new(outcome: PasswordSaveOutcome) -> Self {
             Self {
                 outcome: Arc::new(Mutex::new(outcome)),
+                read_fails: Arc::new(AtomicBool::new(false)),
                 values: Arc::new(Mutex::new(HashMap::new())),
             }
+        }
+
+        fn seed(&self, profile: &ConnectionProfile, password: &str) {
+            self.values
+                .lock()
+                .expect("test secret store value lock poisoned")
+                .insert(profile.secret_ref(), SecretString::from(password));
+        }
+
+        fn saved(&self, profile: &ConnectionProfile) -> Option<String> {
+            self.values
+                .lock()
+                .expect("test secret store value lock poisoned")
+                .get(&profile.secret_ref())
+                .map(|secret| secret.expose_secret().to_string())
         }
     }
 
@@ -1985,6 +2026,12 @@ mod tests {
         }
 
         fn get(&self, secret_ref: &str) -> Result<Option<SecretString>, dbflux_core::DbError> {
+            if self.read_fails.load(Ordering::SeqCst) {
+                return Err(dbflux_core::DbError::IoError(std::io::Error::other(
+                    "Cannot get secret of a locked object",
+                )));
+            }
+
             Ok(self
                 .values
                 .lock()
@@ -2197,6 +2244,178 @@ mod tests {
             1,
             "one safe failure is reported"
         );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    /// Opens the edit window without typing into the form, so the password
+    /// input shows only what the keyring handed over.
+    fn open_untouched_edit_window(
+        app_state: Entity<AppStateEntity>,
+        profile: ConnectionProfile,
+        cx: &mut TestAppContext,
+    ) -> WindowHandle<ConnectionManagerWindow> {
+        cx.update(|cx| {
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                cx.new(|cx| ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx))
+            })
+        })
+        .expect("connection manager edit window opens")
+    }
+
+    #[::core::prelude::v1::test]
+    fn editing_with_an_unreadable_keyring_reports_once_and_marks_the_password_unreadable() {
+        let mut cx = TestAppContext::single();
+        let host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("locked keyring profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+        fixture.read_fails.store(true, Ordering::SeqCst);
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+
+        let (stored_password, password_value, placeholder) = window
+            .update(&mut cx, |manager, _window, cx| {
+                (
+                    manager.form.stored_password,
+                    manager.form.input_password.read(cx).value().to_string(),
+                    manager.password_placeholder(true, cx),
+                )
+            })
+            .expect("edit window stays available");
+        assert_eq!(stored_password, StoredPassword::Unreadable);
+        assert_eq!(password_value, "", "the password input stays empty");
+        assert_eq!(
+            placeholder,
+            dbflux_i18n::t!("connection_manager.placeholder.password_unreadable")
+        );
+        assert_eq!(cx.update(|cx| host.read(cx).toast_count()), 1);
+        assert_eq!(
+            cx.update(|cx| host.read(cx).last_toast_title()),
+            Some(KEYRING_PASSWORD_READ_ERROR.to_string())
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn saving_with_save_password_unchecked_keeps_an_entry_the_keyring_would_not_read() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("locked keyring profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+        fixture.read_fails.store(true, Ordering::SeqCst);
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        fixture.read_fails.store(false, Ordering::SeqCst);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                assert_eq!(manager.form.stored_password, StoredPassword::Unreadable);
+                manager.form.form_save_password = false;
+                manager.form.input_name.update(cx, |input, cx| {
+                    input.set_value("renamed profile", window, cx)
+                });
+                manager.save_profile(window, cx)
+            })
+            .expect("save leaves the form window available");
+
+        assert_eq!(
+            fixture.saved(&profile).as_deref(),
+            Some("saved password"),
+            "the entry the form never saw is not deleted"
+        );
+        let persisted = cx.update(|cx| app_state.read(cx).profiles().to_vec());
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(
+            persisted[0].name, "renamed profile",
+            "the edit is committed"
+        );
+        assert!(!persisted[0].save_password);
+
+        assert!(
+            window.root(&mut cx).is_err(),
+            "a successful save closes the window"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn saving_with_save_password_unchecked_deletes_an_entry_the_keyring_read() {
+        let mut cx = TestAppContext::single();
+        let host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("readable keyring profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+
+        let (stored_password, password_value) = window
+            .update(&mut cx, |manager, _window, cx| {
+                (
+                    manager.form.stored_password,
+                    manager.form.input_password.read(cx).value().to_string(),
+                )
+            })
+            .expect("edit window stays available");
+        assert_eq!(stored_password, StoredPassword::Known);
+        assert_eq!(password_value, "saved password");
+        assert_eq!(cx.update(|cx| host.read(cx).toast_count()), 0);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.form.form_save_password = false;
+                manager.save_profile(window, cx)
+            })
+            .expect("save leaves the form window available");
+
+        assert_eq!(fixture.saved(&profile), None, "the entry is deleted");
+        assert_eq!(cx.update(|cx| host.read(cx).toast_count()), 0);
+
+        assert!(
+            window.root(&mut cx).is_err(),
+            "a successful save closes the window"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn editing_with_no_saved_entry_reports_nothing_and_knows_the_password() {
+        let mut cx = TestAppContext::single();
+        let host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("no entry profile");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+
+        let (stored_password, password_value) = window
+            .update(&mut cx, |manager, _window, cx| {
+                (
+                    manager.form.stored_password,
+                    manager.form.input_password.read(cx).value().to_string(),
+                )
+            })
+            .expect("edit window stays available");
+        assert_eq!(stored_password, StoredPassword::Known);
+        assert_eq!(password_value, "");
+        assert_eq!(cx.update(|cx| host.read(cx).toast_count()), 0);
 
         window
             .update(&mut cx, |_, window, _| window.remove_window())
@@ -2929,6 +3148,7 @@ mod tests {
                 app_state
                     .read(cx)
                     .get_password(&profile)
+                    .expect("keyring read succeeds")
                     .expect("primary password is persisted")
                     .expose_secret()
                     .to_string()
