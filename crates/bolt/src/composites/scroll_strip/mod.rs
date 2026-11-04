@@ -47,8 +47,8 @@ enum RevealKey {
 }
 
 impl StripReveal {
-    /// `true` the first time it is asked for `key` at `width`, and again once
-    /// either changes, whichever kind of reveal asked last.
+    // One key for ranges and segments: separate keys would skip a reveal when
+    // the target goes range(A), segment(B), range(A).
     fn due(&self, key: RevealKey, width: Pixels) -> bool {
         let mut last = self.0.borrow_mut();
         let current = last
