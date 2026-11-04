@@ -966,10 +966,19 @@ impl Dropdown {
         }
 
         let trigger_width = self.trigger_width.clone();
+        let entity_id = cx.entity_id();
         trigger
             .child(
                 canvas(
-                    move |bounds, _window, _cx| trigger_width.set(bounds.size.width),
+                    move |bounds, window, cx| {
+                        // The menu read the width before this prepaint, so a
+                        // changed width needs another frame. Notifying is a no-op
+                        // while drawing, hence the defer. An unchanged width must
+                        // not ask for one, or the window redraws forever.
+                        if trigger_width.replace(bounds.size.width) != bounds.size.width {
+                            window.defer(cx, move |_window, cx| cx.notify(entity_id));
+                        }
+                    },
                     |_, _, _, _| {},
                 )
                 .absolute()
@@ -1499,29 +1508,50 @@ mod tests {
     mod menu_width {
         use super::super::{Dropdown, DropdownItem};
         use gpui::{
-            AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-            TestAppContext, Window, div, px,
+            AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+            ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, Window,
+            div, px,
         };
 
         const TRIGGER_WIDTH: f32 = 400.0;
 
         struct Host {
             dropdown: Entity<Dropdown>,
+            trigger_width: f32,
+            probe: Option<String>,
+            renders: usize,
         }
 
         impl Render for Host {
-            fn render(
-                &mut self,
-                _window: &mut Window,
-                _cx: &mut Context<Self>,
-            ) -> impl IntoElement {
+            fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                self.renders += 1;
+
                 div()
                     .size_full()
-                    .child(div().w(px(TRIGGER_WIDTH)).child(self.dropdown.clone()))
+                    .child(div().w(px(self.trigger_width)).child(self.dropdown.clone()))
+                    .children(self.probe.clone().map(|text| {
+                        // The label's natural width, drawn with the menu rows' text style.
+                        div()
+                            .absolute()
+                            .whitespace_nowrap()
+                            .font_family(crate::fonts::ui_family(cx))
+                            .text_size(crate::density::font_base(cx))
+                            .debug_selector(|| "label-probe".to_string())
+                            .child(text)
+                    }))
             }
         }
 
-        fn open_with(cx: &mut TestAppContext, labels: &[&str]) -> (f32, f32) {
+        struct Opened<'a> {
+            host: Entity<Host>,
+            window: &'a mut VisualTestContext,
+        }
+
+        fn open_with<'a>(
+            cx: &'a mut TestAppContext,
+            labels: &[&str],
+            probe: Option<String>,
+        ) -> Opened<'a> {
             cx.update(gpui_component::init);
             let labels: Vec<String> = labels.iter().map(|label| (*label).to_string()).collect();
             let (host, window) = cx.add_window_view(|_window, cx| {
@@ -1529,7 +1559,12 @@ mod tests {
                     Dropdown::new("width-dropdown")
                         .items(labels.into_iter().map(DropdownItem::new).collect())
                 });
-                Host { dropdown }
+                Host {
+                    dropdown,
+                    trigger_width: TRIGGER_WIDTH,
+                    probe,
+                    renders: 0,
+                }
             });
             window.run_until_parked();
 
@@ -1537,18 +1572,23 @@ mod tests {
             window.update(|_, cx| dropdown.update(cx, |dropdown, cx| dropdown.open(cx)));
             window.run_until_parked();
 
-            let trigger = window
-                .debug_bounds("width-dropdown")
-                .expect("the dropdown is laid out");
-            let menu = window
-                .debug_bounds("width-dropdown-menu")
-                .expect("the open menu is laid out");
-            (trigger.size.width.into(), menu.size.width.into())
+            Opened { host, window }
+        }
+
+        fn width(window: &mut VisualTestContext, selector: &'static str) -> f32 {
+            window
+                .debug_bounds(selector)
+                .unwrap_or_else(|| panic!("{selector} is laid out"))
+                .size
+                .width
+                .into()
         }
 
         #[gpui::test]
         fn a_menu_of_short_items_is_as_wide_as_its_trigger(cx: &mut TestAppContext) {
-            let (trigger, menu) = open_with(cx, &["A", "B"]);
+            let opened = open_with(cx, &["A", "B"], None);
+            let trigger = width(&mut *opened.window, "width-dropdown");
+            let menu = width(&mut *opened.window, "width-dropdown-menu");
 
             assert_eq!(trigger, TRIGGER_WIDTH);
             assert!(
@@ -1560,11 +1600,67 @@ mod tests {
         #[gpui::test]
         fn a_long_item_widens_the_menu_past_its_trigger(cx: &mut TestAppContext) {
             let long = "a very long item label ".repeat(20);
-            let (trigger, menu) = open_with(cx, &["A", long.as_str()]);
+            let opened = open_with(cx, &["A", long.as_str()], Some(long.clone()));
+            let trigger = width(&mut *opened.window, "width-dropdown");
+            let menu = width(&mut *opened.window, "width-dropdown-menu");
+            let natural = width(&mut *opened.window, "label-probe");
 
             assert!(
                 menu > trigger,
                 "menu {menu} px not past a {trigger} px trigger"
+            );
+            assert!(
+                menu >= natural,
+                "menu {menu} px narrower than its {natural} px label"
+            );
+        }
+
+        fn resize_trigger(opened: &mut Opened<'_>, width: f32) {
+            let host = opened.host.clone();
+            opened.window.update(|_, cx| {
+                host.update(cx, |host, cx| {
+                    host.trigger_width = width;
+                    cx.notify();
+                })
+            });
+            // The width changes during that frame's prepaint, which asks for one more.
+            opened.window.update(|_, _| {});
+            opened.window.run_until_parked();
+        }
+
+        #[gpui::test]
+        fn a_menu_follows_a_trigger_resized_while_it_is_open(cx: &mut TestAppContext) {
+            let mut opened = open_with(cx, &["A", "B"], None);
+
+            resize_trigger(&mut opened, 250.0);
+            assert_eq!(width(&mut *opened.window, "width-dropdown"), 250.0);
+            assert_eq!(width(&mut *opened.window, "width-dropdown-menu"), 250.0);
+
+            resize_trigger(&mut opened, 500.0);
+            assert_eq!(width(&mut *opened.window, "width-dropdown-menu"), 500.0);
+        }
+
+        #[gpui::test]
+        fn an_unchanged_trigger_width_schedules_no_more_frames(cx: &mut TestAppContext) {
+            let mut opened = open_with(cx, &["A", "B"], None);
+            let renders = |opened: &mut Opened<'_>| {
+                let host = opened.host.clone();
+                opened.window.update(|_, cx| host.read(cx).renders)
+            };
+
+            // A window only draws again when something marked it dirty, so a
+            // prepaint that refreshes on every frame shows up as extra renders.
+            opened.window.update(|_, _| {});
+            let settled = renders(&mut opened);
+            for _ in 0..3 {
+                opened.window.update(|_, _| {});
+                opened.window.run_until_parked();
+            }
+
+            assert_eq!(
+                renders(&mut opened),
+                settled,
+                "an idle open dropdown keeps redrawing"
             );
         }
     }
