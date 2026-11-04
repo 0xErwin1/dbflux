@@ -580,8 +580,7 @@ impl DataTableState {
             reason = "the branch is guarded by col < self.column_widths.len()"
         )]
         if col < self.column_widths.len() {
-            let min_width = super::theme::MIN_COLUMN_WIDTH;
-            self.column_widths[col] = width.max(min_width);
+            self.column_widths[col] = bolt::components::grid::clamp_column_width(width);
 
             if let Some(manual) = self.manually_sized.get_mut(col) {
                 *manual = true;

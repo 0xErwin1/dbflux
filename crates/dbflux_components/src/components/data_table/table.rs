@@ -24,7 +24,10 @@ use super::state::DataTableState;
 use super::theme::{CELL_PADDING_X, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
 // The row list and cell painter moved to `bolt::components::grid`; the old
 // in-file names are the re-exported Bolt API.
-use bolt::components::grid::{GridCellCoord, GridColors, GridHost, render_rows};
+use bolt::components::grid::{
+    ColumnResizeDrag, GridCellCoord, GridColors, GridHost, column_resize_handle, render_rows,
+    track_column_resize,
+};
 use dbflux_core::SortDirection;
 
 /// Cached scroll state to prevent unnecessary syncs
@@ -122,28 +125,11 @@ pub fn context_menu_keystroke(action: ContextMenuAction, cx: &App) -> Option<Key
         .map(|keystroke| keystroke.inner().clone())
 }
 
-#[derive(Clone)]
-struct ResizeDragState {
-    col: Option<usize>,
-    start_x: gpui::Pixels,
-    original_width: f32,
-}
-
-impl Default for ResizeDragState {
-    fn default() -> Self {
-        Self {
-            col: None,
-            start_x: gpui::px(0.0),
-            original_width: 0.0,
-        }
-    }
-}
-
 pub struct DataTable {
     id: ElementId,
     state: Entity<DataTableState>,
     scroll_sync: Arc<Mutex<ScrollSyncState>>,
-    resize_drag: Arc<Mutex<ResizeDragState>>,
+    resize_drag: ColumnResizeDrag,
 }
 
 impl DataTable {
@@ -156,7 +142,7 @@ impl DataTable {
 
         Self {
             id: id.into(),
-            resize_drag: Arc::new(Mutex::new(ResizeDragState::default())),
+            resize_drag: ColumnResizeDrag::new(),
             state,
             scroll_sync: Arc::new(Mutex::new(ScrollSyncState::default())),
         }
@@ -471,11 +457,7 @@ impl gpui::Render for DataTable {
         let state_for_empty_context = self.state.clone();
         let focus_for_empty = focus_handle.clone();
 
-        // Resize drag handlers live on the root div so they keep firing
-        // even when the cursor leaves the narrow 6px resize handle.
-        let resize_drag_for_move = self.resize_drag.clone();
         let state_for_resize_move = self.state.clone();
-        let resize_drag_for_up = self.resize_drag.clone();
 
         // Forward horizontal wheel/trackpad deltas to the horizontal scroll
         // handle. The handle is owned by a 1px phantom scroller at the bottom
@@ -569,184 +551,164 @@ impl gpui::Render for DataTable {
                 })
         };
 
-        div()
-            .id(self.id.clone())
-            .key_context(CONTEXT)
-            .track_focus(&focus_handle)
-            .relative()
-            .size_full()
-            .overflow_hidden()
-            .font_family(fonts::grid_family(cx))
-            .bg(theme.table)
-            // Navigation actions
-            .on_action(on_move_up)
-            .on_action(on_move_down)
-            .on_action(on_move_left)
-            .on_action(on_move_right)
-            .on_action(on_select_up)
-            .on_action(on_select_down)
-            .on_action(on_select_left)
-            .on_action(on_select_right)
-            .on_action(on_line_start)
-            .on_action(on_line_end)
-            .on_action(on_top)
-            .on_action(on_bottom)
-            .on_action(on_select_line_start)
-            .on_action(on_select_line_end)
-            .on_action(on_select_top)
-            .on_action(on_select_bottom)
-            .on_action(on_select_all)
-            .on_action(on_clear_selection)
-            .on_action(on_start_edit)
-            .on_action(on_confirm_edit)
-            .on_action(on_cancel_edit)
-            .on_action(on_save_row)
-            .on_action(on_copy)
-            .on_action(on_copy_row)
-            // Row operations (vim-style)
-            .on_action(on_delete_row)
-            .on_action(on_add_row)
-            .on_action(on_duplicate_row)
-            .on_action(on_set_null)
-            // Undo/Redo
-            .on_action(on_undo)
-            .on_action(on_redo)
-            .on_action(on_toggle_column_group)
-            .on_action(on_step_out)
-            // Column resize: move and up handlers on the root div so the drag
-            // continues even when the cursor leaves the 6px handle area.
-            .on_mouse_move(move |event, _window, cx| {
-                let (col, new_width) = {
-                    let drag = resize_drag_for_move.lock().ok();
-                    if let Some(drag) = drag {
-                        if let Some(col) = drag.col {
-                            let delta = event.position.x - drag.start_x;
-                            let delta_f32: f32 = delta.into();
-                            let new_width = drag.original_width + delta_f32;
-                            (Some(col), new_width.max(super::theme::MIN_COLUMN_WIDTH))
-                        } else {
-                            (None, 0.0)
-                        }
-                    } else {
-                        (None, 0.0)
-                    }
-                };
-                if let Some(col) = col {
-                    state_for_resize_move.update(cx, |state, cx| {
-                        state.set_column_width(col, new_width, cx);
-                    });
-                }
-            })
-            .on_mouse_up(MouseButton::Left, move |_event, _window, _cx| {
-                if let Ok(mut drag) = resize_drag_for_up.lock() {
-                    drag.col = None;
-                }
-            })
-            .child(inner_table)
-            // Measure viewport size and sync horizontal scroll offset using canvas
-            .child({
-                let scroll_sync = self.scroll_sync.clone();
-                canvas(
-                    move |bounds, _, cx| {
-                        let mut sync = match scroll_sync.lock() {
-                            Ok(guard) => guard,
-                            Err(poison_err) => {
-                                log::warn!("Scroll sync mutex poisoned, recovering");
-                                poison_err.into_inner()
-                            }
-                        };
-                        state_entity.update(cx, |state, cx| {
-                            let new_size = bounds.size;
-                            let viewport_changed = new_size != sync.last_viewport_size;
-
-                            if viewport_changed {
-                                sync.last_viewport_size = new_size;
-                                if state.viewport_size() != new_size {
-                                    state.set_viewport_size(new_size, cx);
-                                }
-                            }
-
-                            // Only sync horizontal offset if viewport changed or offset actually changed
-                            let current_h_offset = state.horizontal_scroll_handle().offset().x;
-                            let h_offset_changed =
-                                (current_h_offset - sync.last_h_offset).abs() > gpui::px(0.5);
-
-                            if viewport_changed || h_offset_changed {
-                                sync.last_h_offset = current_h_offset;
-                                // Sync horizontal offset from scroll handle to trigger body re-render
-                                state.sync_horizontal_offset(cx);
-                            }
-                        });
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
+        // Resize drag handlers live on the root div so they keep firing
+        // even when the cursor leaves the narrow resize handle.
+        track_column_resize(
+            div()
+                .id(self.id.clone())
+                .key_context(CONTEXT)
+                .track_focus(&focus_handle)
+                .relative()
                 .size_full()
-            })
-            // Grid-only scroll chrome. Record mode owns a single vertical list
-            // and no horizontal axis, so it brings its own scrollbar instead.
-            .when(!record_mode, |root| {
-                root
-                    // Phantom scroller: owns the horizontal scroll handle for the scrollbar.
-                    // It's 1px tall and positioned at the bottom, so it never receives wheel events.
-                    // The mouse is always over the header or body, which don't capture horizontal wheel.
-                    .child(
-                        div()
-                            .id("table-hscroll-owner")
-                            .absolute()
-                            .left_0()
-                            .right(SCROLLBAR_WIDTH)
-                            .bottom_0()
-                            .h(px(1.0))
-                            .overflow_x_scroll()
-                            .track_scroll(&horizontal_scroll_handle)
-                            .child(div().min_w(px(total_width)).h(px(1.0))),
-                    )
-                    // Scrollbars as absolute overlays.
-                    .child(
-                        div()
-                            .absolute()
-                            .top(header_height)
-                            .right_0()
-                            .bottom_0()
-                            .w(SCROLLBAR_WIDTH)
-                            .when(row_count > 0, |this| {
-                                // The overlay strip below the header is the
-                                // visible viewport. The handle's own bounds are
-                                // the uniform_list element, which extends past
-                                // the visible area when the grid overflows
-                                // horizontally — deriving the hitbox from them
-                                // makes right-edge track clicks miss. Same
-                                // binding the horizontal bar above uses.
-                                this.child(
-                                    Scrollbar::vertical(&vertical_scroll_handle)
-                                        .viewport_from_layout(),
-                                )
-                            }),
-                    )
-                    // Horizontal scrollbar uses `ScrollbarMode::Always` because the phantom
-                    // scroller that owns the handle is 1px tall and never captures the wheel,
-                    // so the bar would otherwise stay transparent until the user navigates
-                    // off-screen with the keyboard.
-                    //
-                    // The scrollbar lays itself out over its handle's viewport by default,
-                    // which here is the 1px phantom, so the bar would be clipped to a
-                    // single pixel. It takes this overlay strip as its viewport instead;
-                    // the strip spans the phantom's width, so the thumb math matches.
-                    .child(
-                        div()
-                            .absolute()
-                            .left_0()
-                            .right(SCROLLBAR_WIDTH)
-                            .bottom_0()
-                            .h(SCROLLBAR_WIDTH)
-                            .child(
-                                Scrollbar::horizontal(&horizontal_scroll_handle)
-                                    .mode(ScrollbarMode::Always)
-                                    .viewport_from_layout(),
-                            ),
-                    )
-            })
+                .overflow_hidden()
+                .font_family(fonts::grid_family(cx))
+                .bg(theme.table)
+                // Navigation actions
+                .on_action(on_move_up)
+                .on_action(on_move_down)
+                .on_action(on_move_left)
+                .on_action(on_move_right)
+                .on_action(on_select_up)
+                .on_action(on_select_down)
+                .on_action(on_select_left)
+                .on_action(on_select_right)
+                .on_action(on_line_start)
+                .on_action(on_line_end)
+                .on_action(on_top)
+                .on_action(on_bottom)
+                .on_action(on_select_line_start)
+                .on_action(on_select_line_end)
+                .on_action(on_select_top)
+                .on_action(on_select_bottom)
+                .on_action(on_select_all)
+                .on_action(on_clear_selection)
+                .on_action(on_start_edit)
+                .on_action(on_confirm_edit)
+                .on_action(on_cancel_edit)
+                .on_action(on_save_row)
+                .on_action(on_copy)
+                .on_action(on_copy_row)
+                // Row operations (vim-style)
+                .on_action(on_delete_row)
+                .on_action(on_add_row)
+                .on_action(on_duplicate_row)
+                .on_action(on_set_null)
+                // Undo/Redo
+                .on_action(on_undo)
+                .on_action(on_redo)
+                .on_action(on_toggle_column_group)
+                .on_action(on_step_out),
+            &self.resize_drag,
+            move |resize, _window, cx| {
+                state_for_resize_move.update(cx, |state, cx| {
+                    state.set_column_width(resize.column, resize.width, cx);
+                });
+            },
+        )
+        .child(inner_table)
+        // Measure viewport size and sync horizontal scroll offset using canvas
+        .child({
+            let scroll_sync = self.scroll_sync.clone();
+            canvas(
+                move |bounds, _, cx| {
+                    let mut sync = match scroll_sync.lock() {
+                        Ok(guard) => guard,
+                        Err(poison_err) => {
+                            log::warn!("Scroll sync mutex poisoned, recovering");
+                            poison_err.into_inner()
+                        }
+                    };
+                    state_entity.update(cx, |state, cx| {
+                        let new_size = bounds.size;
+                        let viewport_changed = new_size != sync.last_viewport_size;
+
+                        if viewport_changed {
+                            sync.last_viewport_size = new_size;
+                            if state.viewport_size() != new_size {
+                                state.set_viewport_size(new_size, cx);
+                            }
+                        }
+
+                        // Only sync horizontal offset if viewport changed or offset actually changed
+                        let current_h_offset = state.horizontal_scroll_handle().offset().x;
+                        let h_offset_changed =
+                            (current_h_offset - sync.last_h_offset).abs() > gpui::px(0.5);
+
+                        if viewport_changed || h_offset_changed {
+                            sync.last_h_offset = current_h_offset;
+                            // Sync horizontal offset from scroll handle to trigger body re-render
+                            state.sync_horizontal_offset(cx);
+                        }
+                    });
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full()
+        })
+        // Grid-only scroll chrome. Record mode owns a single vertical list
+        // and no horizontal axis, so it brings its own scrollbar instead.
+        .when(!record_mode, |root| {
+            root
+                // Phantom scroller: owns the horizontal scroll handle for the scrollbar.
+                // It's 1px tall and positioned at the bottom, so it never receives wheel events.
+                // The mouse is always over the header or body, which don't capture horizontal wheel.
+                .child(
+                    div()
+                        .id("table-hscroll-owner")
+                        .absolute()
+                        .left_0()
+                        .right(SCROLLBAR_WIDTH)
+                        .bottom_0()
+                        .h(px(1.0))
+                        .overflow_x_scroll()
+                        .track_scroll(&horizontal_scroll_handle)
+                        .child(div().min_w(px(total_width)).h(px(1.0))),
+                )
+                // Scrollbars as absolute overlays.
+                .child(
+                    div()
+                        .absolute()
+                        .top(header_height)
+                        .right_0()
+                        .bottom_0()
+                        .w(SCROLLBAR_WIDTH)
+                        .when(row_count > 0, |this| {
+                            // The overlay strip below the header is the
+                            // visible viewport. The handle's own bounds are
+                            // the uniform_list element, which extends past
+                            // the visible area when the grid overflows
+                            // horizontally — deriving the hitbox from them
+                            // makes right-edge track clicks miss. Same
+                            // binding the horizontal bar above uses.
+                            this.child(
+                                Scrollbar::vertical(&vertical_scroll_handle).viewport_from_layout(),
+                            )
+                        }),
+                )
+                // Horizontal scrollbar uses `ScrollbarMode::Always` because the phantom
+                // scroller that owns the handle is 1px tall and never captures the wheel,
+                // so the bar would otherwise stay transparent until the user navigates
+                // off-screen with the keyboard.
+                //
+                // The scrollbar lays itself out over its handle's viewport by default,
+                // which here is the 1px phantom, so the bar would be clipped to a
+                // single pixel. It takes this overlay strip as its viewport instead;
+                // the strip spans the phantom's width, so the thumb math matches.
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right(SCROLLBAR_WIDTH)
+                        .bottom_0()
+                        .h(SCROLLBAR_WIDTH)
+                        .child(
+                            Scrollbar::horizontal(&horizontal_scroll_handle)
+                                .mode(ScrollbarMode::Always)
+                                .viewport_from_layout(),
+                        ),
+                )
+        })
     }
 }
 
@@ -797,7 +759,6 @@ impl DataTable {
                 let annotation = state.header_annotation(col_ix).cloned();
 
                 let state_for_click = state_entity.clone();
-                let resize_drag_for_down = resize_drag.clone();
 
                 div()
                     .id(("header-col", col_ix))
@@ -919,31 +880,14 @@ impl DataTable {
                                 }),
                         )
                     })
-                    // Resize handle: mouse-down starts the drag; move/up are
-                    // handled on the DataTable root div so the drag survives
-                    // the cursor leaving this 6px strip.
-                    .child(
-                        div()
-                            .id(("resize-handle", col_ix))
-                            .absolute()
-                            .right_0()
-                            .top_0()
-                            .bottom_0()
-                            .w(px(6.0)) // guardrail-allow: resize handle width, not spacing
-                            .cursor_col_resize()
-                            .hover(|s| s.bg(ChromeColors::tint(theme).opacity(0.3)))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                move |event: &MouseDownEvent, _window, cx| {
-                                    cx.stop_propagation();
-                                    if let Ok(mut drag) = resize_drag_for_down.lock() {
-                                        drag.col = Some(col_ix);
-                                        drag.start_x = event.position.x;
-                                        drag.original_width = width;
-                                    }
-                                },
-                            ),
-                    )
+                    // Move and release are handled on the DataTable root div, so
+                    // the drag survives the cursor leaving the handle.
+                    .child(column_resize_handle(
+                        col_ix,
+                        width,
+                        &resize_drag,
+                        ChromeColors::tint(theme).opacity(0.3),
+                    ))
             })
             .collect();
 
@@ -986,6 +930,7 @@ impl DataTable {
         let h_offset = state.horizontal_offset();
         let sort = state.sort();
         let tint = ChromeColors::tint(theme);
+        let resize_drag = self.resize_drag.clone();
         let strong = ChromeColors::strong(theme);
         let muted = theme.muted_foreground;
         let has_presence = document.has_presence();
@@ -1061,7 +1006,6 @@ impl DataTable {
                     .map(|sort| sort.direction);
                 let state_for_click = self.state.clone();
                 let state_for_menu = self.state.clone();
-                let resize_drag_for_down = self.resize_drag.clone();
 
                 let name_line = div()
                     .flex()
@@ -1173,28 +1117,12 @@ impl DataTable {
                     )
                     .child(name_line)
                     .when_some(presence_line, |cell, line| cell.child(line))
-                    .child(
-                        div()
-                            .id(("resize-handle", col_ix))
-                            .absolute()
-                            .right_0()
-                            .top_0()
-                            .bottom_0()
-                            .w(px(6.0)) // guardrail-allow: resize handle width, not spacing
-                            .cursor_col_resize()
-                            .hover(|handle| handle.bg(tint.opacity(0.3)))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                move |event: &MouseDownEvent, _window, cx| {
-                                    cx.stop_propagation();
-                                    if let Ok(mut drag) = resize_drag_for_down.lock() {
-                                        drag.col = Some(col_ix);
-                                        drag.start_x = event.position.x;
-                                        drag.original_width = width;
-                                    }
-                                },
-                            ),
-                    )
+                    .child(column_resize_handle(
+                        col_ix,
+                        width,
+                        &resize_drag,
+                        tint.opacity(0.3),
+                    ))
             })
             .collect::<Vec<_>>();
 
@@ -1731,5 +1659,100 @@ mod tests {
             visual.debug_bounds("table-header-annotation").is_some(),
             "the annotated column draws its facts"
         );
+    }
+
+    /// Dragging a header's trailing edge resizes that column through the
+    /// shared bolt handle, clamps at the minimum width and leaves the other
+    /// columns alone.
+    #[gpui::test]
+    fn dragging_a_header_edge_resizes_only_that_column(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("resize-test-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        visual.update(|_, cx| {
+            state.update(cx, |s, cx| s.set_column_width(0, 100.0, cx));
+        });
+        visual.run_until_parked();
+
+        let widths = |visual: &mut VisualTestContext| {
+            visual.update(|_, cx| state.read(cx).column_widths().to_vec())
+        };
+        let before = widths(visual);
+        let header = visual
+            .debug_bounds("table-header")
+            .expect("header must render");
+        let edge = gpui::point(
+            header.origin.x + super::super::theme::ROW_NUMBER_WIDTH + px(before[0]) - px(3.0),
+            header.origin.y + px(5.0), // guardrail-allow: test pointer offset inside the header
+        );
+        let none = gpui::Modifiers::default();
+
+        visual.simulate_mouse_down(edge, MouseButton::Left, none);
+        visual.simulate_mouse_move(
+            edge + gpui::point(px(40.0), px(0.0)),
+            MouseButton::Left,
+            none,
+        );
+        let grown = widths(visual);
+        assert_eq!(
+            grown[0],
+            before[0] + 40.0,
+            "the dragged column follows the pointer"
+        );
+        assert_eq!(grown[1..], before[1..], "other columns keep their widths");
+
+        visual.simulate_mouse_move(
+            gpui::point(header.origin.x + px(8.0), edge.y), // guardrail-allow: test pointer offset inside the header
+            MouseButton::Left,
+            none,
+        );
+        assert_eq!(
+            widths(visual)[0],
+            super::super::theme::MIN_COLUMN_WIDTH,
+            "the width clamps at the minimum"
+        );
+
+        visual.simulate_mouse_up(edge, MouseButton::Left, none);
+        visual.simulate_mouse_move(edge + gpui::point(px(80.0), px(0.0)), None, none);
+        assert_eq!(
+            widths(visual)[0],
+            super::super::theme::MIN_COLUMN_WIDTH,
+            "releasing ends the drag"
+        );
+
+        let before = widths(visual);
+        let second_edge = gpui::point(
+            header.origin.x + super::super::theme::ROW_NUMBER_WIDTH + px(before[0]) + px(before[1])
+                - px(3.0),
+            edge.y,
+        );
+        visual.simulate_mouse_down(second_edge, MouseButton::Left, none);
+        visual.simulate_mouse_move(
+            second_edge + gpui::point(px(25.0), px(0.0)),
+            MouseButton::Left,
+            none,
+        );
+        visual.simulate_mouse_up(second_edge, MouseButton::Left, none);
+        let after = widths(visual);
+        assert_eq!(
+            after[1],
+            before[1] + 25.0,
+            "the second column follows the pointer"
+        );
+        assert_eq!(after[0], before[0], "the first column keeps its width");
     }
 }
