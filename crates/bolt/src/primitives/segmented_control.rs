@@ -4,11 +4,15 @@
 //! segments. The active segment is a raised thumb with a 4 px cut; each
 //! segment shows an optional icon before its label.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::prelude::*;
 use gpui::{
-    AccessibleAction, App, ElementId, FontWeight, Role, SharedString, Toggled, Window, div,
+    AccessibleAction, App, Bounds, ElementId, FontWeight, Pixels, Role, SharedString, Toggled,
+    Window, canvas, div,
 };
 use gpui_component::ActiveTheme;
 
@@ -93,6 +97,25 @@ pub fn stepped_segment<'a>(ids: &[&'a str], active: &str, step: isize) -> Option
     (target != current).then(|| ids[target])
 }
 
+/// Where a [`SegmentedControl`] last painted its segments, in window
+/// coordinates. Share one with [`SegmentedControl::segment_bounds`]; a host
+/// scrolling the control into view reads it to reveal a segment exactly.
+#[derive(Clone, Default)]
+pub struct SegmentBounds(Rc<RefCell<HashMap<SharedString, Bounds<Pixels>>>>);
+
+impl SegmentBounds {
+    /// The bounds the segment `id` was last painted at, or `None` before the
+    /// first paint.
+    pub fn get(&self, id: &str) -> Option<Bounds<Pixels>> {
+        self.0.borrow().get(id).copied()
+    }
+
+    /// Records `bounds` for `id`; `true` when they differ from the last paint.
+    fn record(&self, id: SharedString, bounds: Bounds<Pixels>) -> bool {
+        self.0.borrow_mut().insert(id, bounds) != Some(bounds)
+    }
+}
+
 /// A horizontal row of mutually-exclusive segments.
 ///
 /// - Track: `ChamferCut::CONTROL`, `theme.background` fill, 1 px `theme.border`
@@ -128,6 +151,7 @@ pub struct SegmentedControl {
     track_id: Option<SharedString>,
     aria_label: Option<SharedString>,
     tabs: bool,
+    segment_bounds: Option<SegmentBounds>,
     on_select: Arc<dyn Fn(&SharedString, &mut Window, &mut App)>,
 }
 
@@ -160,8 +184,17 @@ impl SegmentedControl {
             track_id: None,
             aria_label: None,
             tabs: false,
+            segment_bounds: None,
             on_select: Arc::new(on_select),
         }
+    }
+
+    /// Records where each segment paints into `bounds`, keyed by the item
+    /// id, and asks for one more frame when a segment moved. A host that
+    /// scrolls the control reads it to reveal a segment exactly.
+    pub fn segment_bounds(mut self, bounds: &SegmentBounds) -> Self {
+        self.segment_bounds = Some(bounds.clone());
+        self
     }
 
     /// Gives a named control the tab list role and its segments the tab role
@@ -227,6 +260,7 @@ impl RenderOnce for SegmentedControl {
         let group = self.group;
         let is_named = group.is_some();
         let is_tab_list = self.tabs;
+        let segment_bounds = self.segment_bounds;
 
         let segments = self.items.into_iter().map(|item| {
             let is_active = item.id == active_id;
@@ -258,6 +292,9 @@ impl RenderOnce for SegmentedControl {
             let count_owner = segment_id.clone();
 
             let segment_element_id = ElementId::from(segment_id.clone());
+            let measured = segment_bounds
+                .clone()
+                .map(|segments| (segments, item.id.clone()));
 
             div()
                 .debug_selector(id_selector(&segment_element_id))
@@ -290,6 +327,23 @@ impl RenderOnce for SegmentedControl {
                 .cursor_pointer()
                 .text_color(text_color)
                 .child(thumb)
+                .when_some(measured, |this, (segments, item_id)| {
+                    this.child(
+                        canvas(
+                            move |bounds, window, cx| {
+                                // The change shows in the next frame; an
+                                // unchanged bounds must not ask for one, or
+                                // the window redraws forever.
+                                if segments.record(item_id.clone(), bounds) {
+                                    window.defer(cx, |window, _| window.refresh());
+                                }
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+                })
                 .when_some(item.icon, |this, icon| {
                     this.child(Icon::new(icon).size(Fields::SEGMENT_ICON).color(text_color))
                 })

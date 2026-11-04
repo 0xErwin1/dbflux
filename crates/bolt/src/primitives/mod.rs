@@ -35,8 +35,8 @@ pub use kbd::{Kbd, KbdTone, key_label};
 pub use label::Label;
 pub use loading_state::{LoadingState, Progress, Spinner, progress_fill_id};
 pub use segmented_control::{
-    SegmentedControl, SegmentedItem, new_active_id, segmented_group_id, segmented_item_id,
-    stepped_segment,
+    SegmentBounds, SegmentedControl, SegmentedItem, new_active_id, segmented_group_id,
+    segmented_item_id, stepped_segment,
 };
 pub use status::{Status, StatusIndicator, format_latency, status_diamond};
 pub use surface::{SurfaceInspection, SurfaceRole, inspect_surface_role, overlay_bg, surface};
