@@ -1733,5 +1733,26 @@ mod tests {
             super::super::theme::MIN_COLUMN_WIDTH,
             "releasing ends the drag"
         );
+
+        let before = widths(visual);
+        let second_edge = gpui::point(
+            header.origin.x + super::super::theme::ROW_NUMBER_WIDTH + px(before[0]) + px(before[1])
+                - px(3.0),
+            edge.y,
+        );
+        visual.simulate_mouse_down(second_edge, MouseButton::Left, none);
+        visual.simulate_mouse_move(
+            second_edge + gpui::point(px(25.0), px(0.0)),
+            MouseButton::Left,
+            none,
+        );
+        visual.simulate_mouse_up(second_edge, MouseButton::Left, none);
+        let after = widths(visual);
+        assert_eq!(
+            after[1],
+            before[1] + 25.0,
+            "the second column follows the pointer"
+        );
+        assert_eq!(after[0], before[0], "the first column keeps its width");
     }
 }
