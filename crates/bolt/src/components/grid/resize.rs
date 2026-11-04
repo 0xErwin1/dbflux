@@ -144,12 +144,13 @@ where
     let drag_for_up = drag.clone();
     let drag_for_up_out = drag.clone();
 
-    // GPUI skips `on_mouse_up` for a release outside the root, so the
-    // `on_mouse_up_out` handler and the pressed-button check on every move
-    // keep a drag from outliving the button.
+    // GPUI skips `on_mouse_up` for a release outside the root, so the drag
+    // also ends on `on_mouse_up_out`. A move reporting another button, or
+    // none, is ignored rather than ending the drag: on Wayland a Right press
+    // or release during a Left drag changes `pressed_button` while Left is
+    // still held.
     root.on_mouse_move(move |event, window, cx| {
         if event.pressed_button != Some(MouseButton::Left) {
-            drag_for_move.end();
             return;
         }
 
@@ -321,14 +322,47 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_move_without_a_pressed_button_ends_the_drag(cx: &mut gpui::TestAppContext) {
+    fn another_button_does_not_end_a_left_drag(cx: &mut gpui::TestAppContext) {
         let (drag, requests, visual) = harness(cx);
         let none = gpui::Modifiers::default();
+        let start = gpui::point(px(100.0), px(100.0)); // guardrail-allow: test pointer position
+        let step = gpui::point(px(10.0), px(0.0)); // guardrail-allow: test pointer position
 
-        drag.begin(0, px(100.0), 120.0); // guardrail-allow: test pointer position
-        visual.simulate_mouse_move(gpui::point(px(150.0), px(50.0)), None, none); // guardrail-allow: test pointer position
+        drag.begin(0, start.x, 120.0);
+        visual.simulate_mouse_down(start, MouseButton::Right, none);
+        visual.simulate_mouse_move(start + step, MouseButton::Right, none);
+        assert!(drag.is_active(), "a move reporting Right keeps the drag");
+        assert!(
+            requests.borrow().is_empty(),
+            "a move without Left does not resize"
+        );
 
-        assert!(requests.borrow().is_empty(), "no button, no resize");
-        assert!(!drag.is_active(), "the stale drag was dropped");
+        visual.simulate_mouse_up(start + step, MouseButton::Right, none);
+        assert!(drag.is_active(), "a Right release does not end the drag");
+
+        visual.simulate_mouse_move(start + step, None, none);
+        assert!(drag.is_active(), "a move with no button keeps the drag");
+        assert!(
+            requests.borrow().is_empty(),
+            "a move without Left does not resize"
+        );
+
+        visual.simulate_mouse_up(start + step, MouseButton::Left, none);
+        assert!(!drag.is_active(), "the Left release ends the drag");
+    }
+
+    #[gpui::test]
+    fn a_move_after_an_outside_release_does_not_resize(cx: &mut gpui::TestAppContext) {
+        let (drag, requests, visual) = harness(cx);
+        let none = gpui::Modifiers::default();
+        let inside = gpui::point(px(100.0), px(100.0)); // guardrail-allow: test pointer position
+        let outside = gpui::point(px(900.0), px(900.0)); // guardrail-allow: test pointer position
+
+        drag.begin(0, inside.x, 120.0);
+        visual.simulate_mouse_up(outside, MouseButton::Left, none);
+        visual.simulate_mouse_move(inside, None, none);
+
+        assert!(!drag.is_active(), "the outside release ended the drag");
+        assert!(requests.borrow().is_empty(), "the move does not resize");
     }
 }
