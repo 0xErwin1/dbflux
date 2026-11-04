@@ -4,13 +4,12 @@
 use std::ops::Range;
 
 use gpui::prelude::*;
-use gpui::{
-    AnyElement, App, Div, FontWeight, HighlightStyle, SharedString, StyledText, div, relative,
-};
+use gpui::{AnyElement, App, Div, SharedString, StyledText, div, relative};
 use gpui_component::ActiveTheme;
 
-use crate::primitives::Chamfer;
-use crate::tokens::{ChamferCut, ChromeColors, Fields, ModalMetrics};
+use crate::controls::value_field_base;
+use crate::primitives::{Chamfer, highlight_styles};
+use crate::tokens::{ChamferCut, ChromeColors, ModalMetrics};
 
 /// The lead sentence of a dialog body: 13.5 px body text on a 1.6 line
 /// height. Pass a [`StyledText`] or a row of spans for inline emphasis.
@@ -47,20 +46,6 @@ pub fn modal_code(code: impl Into<SharedString>, highlights: &[Range<usize>], cx
                 .border(theme.border),
         )
         .child(StyledText::new(code).with_highlights(highlights))
-}
-
-/// `ranges` paired with the statement highlight: bold tint.
-pub(crate) fn highlight_styles(
-    ranges: impl IntoIterator<Item = Range<usize>>,
-    cx: &App,
-) -> Vec<(Range<usize>, HighlightStyle)> {
-    let style = HighlightStyle {
-        color: Some(ChromeColors::tint(cx.theme())),
-        font_weight: Some(FontWeight::BOLD),
-        ..Default::default()
-    };
-
-    ranges.into_iter().map(|range| (range, style)).collect()
 }
 
 /// A cut-8 line frame that clips its rows, for framed lists and tables.
@@ -147,25 +132,13 @@ pub fn modal_value_field(
     let theme = cx.theme();
     let has_value = value.is_some();
 
-    div()
-        .relative()
-        .flex()
-        .items_center()
-        .gap(Fields::GAP)
-        .h(Fields::HEIGHT)
-        .px(Fields::PADDING_X)
+    value_field_base(cx)
         .font_family(crate::fonts::editor_family(cx))
-        .text_size(Fields::TEXT)
         .text_color(if has_value {
             ChromeColors::strong(theme)
         } else {
             theme.muted_foreground
         })
-        .child(
-            Chamfer::new(ChamferCut::CONTROL)
-                .fill(theme.background)
-                .border(theme.border),
-        )
         .child(
             div()
                 .flex_1()
@@ -183,4 +156,68 @@ pub fn inline_code(text: impl Into<SharedString>, cx: &App) -> AnyElement {
         .text_color(ChromeColors::strong(cx.theme()))
         .child(text.into())
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{
+        Context, InteractiveElement as _, IntoElement, Render, TestAppContext, VisualTestContext,
+        Window, div, px,
+    };
+
+    use super::modal_value_field;
+    use crate::accessibility::FrameCapture;
+    use crate::selector::id_selector;
+    use crate::tokens::{BASE_REM, Fields};
+
+    fn install_test_theme(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::install(
+                crate::brand::Brand::neutral(),
+                crate::palette::PaletteMode::Dark,
+                crate::density::Density::Default,
+                cx,
+            );
+        });
+    }
+
+    struct Host;
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            use gpui::{ParentElement as _, Styled as _};
+
+            let id = gpui::ElementId::Name("modal-value".into());
+
+            div().size_full().child(
+                div()
+                    .debug_selector(id_selector(&id))
+                    .id(id)
+                    .flex()
+                    .w(px(300.0))
+                    .child(modal_value_field(
+                        Some("https://example.test".into()),
+                        "None",
+                        None,
+                        cx,
+                    )),
+            )
+        }
+    }
+
+    /// A dialog's read-only value keeps the height of a text field, so it
+    /// still sits in a form row the way it did before the field moved.
+    #[gpui::test]
+    fn a_modal_value_field_keeps_the_field_height(cx: &mut TestAppContext) {
+        install_test_theme(cx);
+        let (_, window): (_, &mut VisualTestContext) = cx.add_window_view(|_, _| Host);
+        let capture = FrameCapture::observe(window);
+        let _frame = capture.frame(window);
+
+        let row = window
+            .debug_bounds("modal-value")
+            .expect("the value row is laid out");
+        assert_eq!(row.size.height, Fields::HEIGHT.to_pixels(px(BASE_REM)));
+    }
 }

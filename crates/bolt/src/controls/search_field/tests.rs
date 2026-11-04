@@ -1,13 +1,16 @@
+use std::cell::Cell;
+use std::rc::Rc;
+
 use gpui::{
-    AccessibilityFrame, AppContext as _, Context, Entity, IntoElement, Render, TestAppContext,
-    VisualTestContext, Window, div,
+    AccessibilityFrame, AppContext as _, Context, Entity, IntoElement, Modifiers, Render, Role,
+    TestAppContext, VisualTestContext, Window, div, px,
 };
 
-use super::{SearchCount, SearchField};
-use crate::accessibility::{FrameCapture, accessible_name};
+use super::{SearchCount, SearchField, SearchTrigger};
+use crate::accessibility::{FrameCapture, accessibility_node, accessible_name};
 use crate::controls::InputState;
 use crate::primitives::{BadgeTone, Kbd};
-use crate::tokens::Fields;
+use crate::tokens::{BASE_REM, Fields};
 
 fn install_test_theme(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
@@ -185,5 +188,171 @@ fn a_long_count_is_bounded_and_the_input_keeps_its_width(cx: &mut TestAppContext
     assert!(
         next.right() <= field.right(),
         "nothing paints past the field"
+    );
+}
+
+/// A closed field in a 300 px row, reporting the opens it is clicked for.
+struct TriggerHarness {
+    opens: Rc<Cell<usize>>,
+    shortcut: Option<&'static str>,
+    width: Option<gpui::Rems>,
+}
+
+impl Render for TriggerHarness {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui::{ParentElement as _, Styled as _};
+
+        let opens = self.opens.clone();
+        let field = SearchTrigger::new("body-search", "Search in body")
+            .on_open(move |_, _, _| opens.set(opens.get() + 1));
+        let field = match self.shortcut {
+            Some(shortcut) => field.shortcut(shortcut),
+            None => field,
+        };
+        let field = match self.width {
+            Some(width) => field.width(width),
+            None => field,
+        };
+
+        div()
+            .size_full()
+            .child(div().flex().w(px(300.0)).child(field))
+    }
+}
+
+fn closed<'a>(
+    cx: &'a mut TestAppContext,
+    shortcut: Option<&'static str>,
+    width: Option<gpui::Rems>,
+) -> (
+    Rc<Cell<usize>>,
+    AccessibilityFrame,
+    &'a mut VisualTestContext,
+) {
+    install_test_theme(cx);
+    let opens = Rc::new(Cell::new(0));
+    let reported = opens.clone();
+    let (_, window) = cx.add_window_view(move |_, _| TriggerHarness {
+        opens: reported,
+        shortcut,
+        width,
+    });
+    let capture = FrameCapture::observe(window);
+    let frame = capture.frame(window);
+    (opens, frame, window)
+}
+
+/// A closed field draws the same frame and height as the open one, fills the
+/// row it is given and draws no input and no count.
+#[gpui::test]
+fn a_closed_field_draws_the_field_metrics_and_no_input(cx: &mut TestAppContext) {
+    let (_opens, frame, window) = closed(cx, Some("Ctrl F"), None);
+
+    let field = window
+        .debug_bounds("body-search")
+        .expect("the closed field is laid out");
+
+    assert_eq!(field.size.height, Fields::HEIGHT.to_pixels(px(BASE_REM)));
+    assert_eq!(
+        field.size.width,
+        px(300.0),
+        "without a width it fills the row"
+    );
+    assert!(
+        frame
+            .nodes()
+            .all(|(_, node)| node.id() != "body-search-input"),
+        "a closed field has no input"
+    );
+    assert!(
+        frame
+            .nodes()
+            .all(|(_, node)| node.id() != "body-search-count"),
+        "a closed field draws no count"
+    );
+}
+
+/// The closed field is a button named by its placeholder, so a reader and
+/// automation find the control that opens the search.
+#[gpui::test]
+fn a_closed_field_is_a_button_named_by_its_placeholder(cx: &mut TestAppContext) {
+    let (_opens, frame, _window) = closed(cx, Some("Ctrl F"), None);
+
+    assert_eq!(
+        accessible_name(&frame, "body-search").as_deref(),
+        Some("Search in body")
+    );
+    assert_eq!(
+        accessibility_node(&frame, "body-search").map(|node| node.role()),
+        Some(Role::Button)
+    );
+}
+
+/// The placeholder is drawn between the icon and the shortcut keycap, and
+/// the keycap carries the chord it shows.
+#[gpui::test]
+fn a_closed_field_draws_the_placeholder_and_the_shortcut_keycap(cx: &mut TestAppContext) {
+    let (_opens, frame, window) = closed(cx, Some("Ctrl F"), None);
+
+    assert_eq!(
+        accessible_name(&frame, "body-search-placeholder").as_deref(),
+        Some("Search in body")
+    );
+    assert_eq!(
+        accessible_name(&frame, "body-search-key").as_deref(),
+        Some("Ctrl F")
+    );
+
+    let field = window
+        .debug_bounds("body-search")
+        .expect("the closed field is laid out");
+    let placeholder = window
+        .debug_bounds("body-search-placeholder")
+        .expect("the placeholder is laid out");
+    let key = window
+        .debug_bounds("body-search-key")
+        .expect("the keycap is laid out");
+
+    assert!(placeholder.left() > field.left(), "the icon leads the text");
+    assert!(
+        key.left() >= placeholder.right(),
+        "the keycap closes the field"
+    );
+    assert!(key.right() <= field.right(), "everything stays inside");
+}
+
+/// Clicking the closed field asks the host to open it.
+#[gpui::test]
+fn clicking_a_closed_field_opens_it(cx: &mut TestAppContext) {
+    let (opens, _frame, window) = closed(cx, Some("Ctrl F"), None);
+    let field = window
+        .debug_bounds("body-search")
+        .expect("the closed field is laid out");
+
+    window.simulate_click(field.center(), Modifiers::default());
+    window.run_until_parked();
+
+    assert_eq!(opens.get(), 1);
+}
+
+/// Without a shortcut the closed field draws no keycap, and a fixed width
+/// holds instead of filling the row.
+#[gpui::test]
+fn a_closed_field_without_a_shortcut_or_a_fixed_width(cx: &mut TestAppContext) {
+    let (_opens, frame, window) = closed(cx, None, Some(crate::tokens::ui(220.0)));
+
+    assert!(
+        frame
+            .nodes()
+            .all(|(_, node)| node.id() != "body-search-key"),
+        "no keycap without a shortcut"
+    );
+
+    let field = window
+        .debug_bounds("body-search")
+        .expect("the closed field is laid out");
+    assert_eq!(
+        field.size.width,
+        crate::tokens::ui(220.0).to_pixels(px(BASE_REM))
     );
 }
