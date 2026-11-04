@@ -93,10 +93,10 @@ fn compact_trigger_takes_precedence_over_toolbar_variant() {
 
 #[test]
 fn focus_ring_builder_stores_custom_ring_color() {
-    let dropdown =
-        Dropdown::new("ring-trigger").focus_ring_color(Some(gpui::black().opacity(0.25)));
+    let color = gpui::black().opacity(0.25);
+    let dropdown = Dropdown::new("ring-trigger").focus_ring_color(Some(color));
 
-    assert!(dropdown.focus_ring_color.is_some());
+    assert_eq!(dropdown.focus_ring_color, Some(color));
     assert!(!dropdown.focus_ring_visible);
 }
 
