@@ -13,7 +13,7 @@ pub use banner::{BannerBlock, BannerVariant};
 pub use bolt::primitives::{
     Chamfer, ChamferColors, ChamferCorners, ChamferEdge, ChamferFillKind, ChamferRing, DividerTone,
     FOCUS_MARKER_SELECTOR, FOCUS_RING_SELECTOR, FocusShape, Icon, Kbd, KbdTone, Label,
-    LoadingState, SegmentedControl, SegmentedItem, Spinner, Status, StatusIndicator,
+    LoadingState, SegmentBounds, SegmentedControl, SegmentedItem, Spinner, Status, StatusIndicator,
     SurfaceInspection, SurfaceRole, Text, TextColorSelection, TextDefaultColor, TextInspection,
     TextRoleContract, TextVariant, WhenFocusVisible, chamfer_border_polygons,
     chamfer_bottom_edge_polygon, chamfer_left_edge_polygon, chamfer_outside_polygons,

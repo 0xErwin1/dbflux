@@ -30,11 +30,12 @@ pub use bolt::composites::{
 };
 pub use bolt::composites::{
     EmptyState, EmptyStateAction, Island, IslandInspection, ListRow, MenuItem, SplitButton,
-    docked_island_frame, document_tab, document_tab_bar, document_tab_title, field_row,
-    field_row_vertical, field_row_vertical_with_desc, field_row_with_desc,
+    StripReveal, docked_island_frame, document_tab, document_tab_bar, document_tab_title,
+    field_row, field_row_vertical, field_row_vertical_with_desc, field_row_with_desc,
     field_row_with_label_width, inline_tab, inline_tab_bar, inspect_island, island_edge_ring,
     island_fill, menu_frame, menu_row, render_menu_container, render_menu_header, render_menu_item,
     render_menu_items, render_menu_overlay, render_separator, result_tab, result_tab_bar,
+    scroll_strip,
 };
 
 pub use breadcrumb::{Breadcrumb, BreadcrumbSegment};

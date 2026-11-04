@@ -14,6 +14,7 @@ mod field_row;
 mod island;
 mod menu_item;
 mod menu_popup;
+mod scroll_strip;
 mod shell_bar;
 mod split_button;
 mod splitter;
@@ -38,6 +39,7 @@ pub use menu_item::{
     render_separator,
 };
 pub use menu_popup::{render_menu_items, render_menu_overlay};
+pub use scroll_strip::{StripReveal, scroll_strip};
 pub use shell_bar::{
     BellUrgency, COMMAND_SEARCH_KEY_CONTEXT, CommandSearch, NotificationBell, ShellIcons,
 };
