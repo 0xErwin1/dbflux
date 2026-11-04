@@ -21,8 +21,6 @@
 crates/dbflux_components/src/components/data_table/record.rs:render_fields: propagation guard
 crates/dbflux_components/src/components/data_table/record.rs:render_record: edit commit
 crates/dbflux_components/src/components/data_table/table.rs:render: focus on press
-crates/dbflux_components/src/components/data_table/table.rs:render_document_header: resize grip
-crates/dbflux_components/src/components/data_table/table.rs:render_header: resize grip
 crates/bolt/src/components/grid/resize.rs:column_resize_handle: resize grip
 crates/bolt/src/components/document_tree/row.rs:render_chevron: propagation guard
 crates/bolt/src/components/document_tree/row.rs:render_row: propagation guard
