@@ -17,12 +17,15 @@
 //! group holds keyboard focus the chosen option is the group's focused node,
 //! so assistive technology follows the choice as it moves. Up and Down (and
 //! Left and Right) move the choice through the enabled options, reporting each
-//! one; Space and Enter report the current choice, unless it is disabled; a
-//! pointer press or the accessibility click action chooses the option it lands
-//! on. An arrow key that would move past either end is left to the host, so a
-//! form can move to the next field from there. An option marked
-//! [`OptionGroupItem::disabled`] is dimmed, is skipped by the arrow keys and
-//! answers neither a press nor an accessibility click.
+//! one; Space and Enter report the current choice, unless it is disabled; while
+//! nothing is chosen yet — a `selected` id matching no option, as an empty
+//! string does — the first arrow key chooses the first enabled option in that
+//! direction, so the keyboard can make the first choice; a pointer press or the
+//! accessibility click action chooses the option it lands on. An arrow key that
+//! would move past either end is left to the host, so a form can move to the
+//! next field from there. An option marked [`OptionGroupItem::disabled`] is
+//! dimmed, is skipped by the arrow keys and answers neither a press nor an
+//! accessibility click.
 //!
 //! Element ids derive from the group name, and a `:` or `%` inside a name is
 //! escaped so no two groups or options can share one: `option-group:<group>`
@@ -80,15 +83,29 @@ impl OptionGroupItem {
     }
 }
 
-/// The option `step` places away from `selected` among the enabled options of
-/// `items`, stopping at either end: `None` when no enabled option lies that
-/// way or `selected` is not one of `items`.
+/// The option the arrow key `step` moves to from `selected` among the enabled
+/// options of `items`, stopping at either end.
+///
+/// With no choice yet — `selected` matching none of `items`, as an empty string
+/// does — the first arrow reaches the nearest enabled option, so the keyboard
+/// can make the first choice: the first enabled option for `step > 0`, the last
+/// one for `step < 0`. `None` when no enabled option lies that way.
 fn stepped_option<'a>(
     items: &'a [OptionGroupItem],
     selected: &str,
     step: isize,
 ) -> Option<&'a SharedString> {
-    let mut index = items.iter().position(|item| item.id.as_ref() == selected)?;
+    let Some(current) = items.iter().position(|item| item.id.as_ref() == selected) else {
+        let first = if step > 0 {
+            items.iter().find(|item| !item.disabled)
+        } else {
+            items.iter().rev().find(|item| !item.disabled)
+        };
+
+        return first.map(|item| &item.id);
+    };
+
+    let mut index = current;
 
     loop {
         index = index.checked_add_signed(step)?;
@@ -330,8 +347,9 @@ impl RowContext<'_> {
 /// A vertical list of mutually-exclusive options.
 ///
 /// `group` names the control and every id below it, so it must be unique in
-/// the window; `selected` is the id of the chosen option and `on_change` is
-/// called with the id the user chooses.
+/// the window; `selected` is the id of the chosen option, or an id matching
+/// none of them while nothing is chosen yet; `on_change` is called with the id
+/// the user chooses.
 #[derive(IntoElement)]
 pub struct OptionGroup {
     group: SharedString,
@@ -525,6 +543,21 @@ mod tests {
         Arc<Mutex<Vec<String>>>,
         &mut VisualTestContext,
     ) {
+        open_with("omit", items, cx)
+    }
+
+    /// Opens a window holding one group with `selected` as the choice it
+    /// starts on, and logs every option it reports.
+    fn open_with<'a>(
+        selected: &str,
+        items: Vec<OptionGroupItem>,
+        cx: &'a mut TestAppContext,
+    ) -> (
+        Entity<Host>,
+        Arc<Mutex<Vec<String>>>,
+        &'a mut VisualTestContext,
+    ) {
+        let initial = SharedString::from(selected.to_string());
         cx.update(gpui_component::init);
         cx.update(|cx| {
             crate::theme::install(
@@ -542,7 +575,7 @@ mod tests {
         let (_root, window) = cx.add_window_view(move |window, cx| {
             let host = cx.new(move |cx| Host {
                 focus_handle: cx.focus_handle(),
-                selected: SharedString::from("omit"),
+                selected: initial,
                 changes: log,
                 items,
             });
@@ -597,6 +630,42 @@ mod tests {
 
         press(window, "left");
         assert_eq!(selected(&host, window), "omit");
+    }
+
+    #[gpui::test]
+    fn an_empty_choice_moves_to_the_first_or_last_enabled_option(cx: &mut TestAppContext) {
+        let (host, changes, window) = open_with("", gapped_items(), cx);
+        press(window, "tab");
+
+        press(window, "down");
+        assert_eq!(
+            selected(&host, window),
+            "omit",
+            "with no choice yet, Down takes the first enabled option"
+        );
+        assert_eq!(reported(&changes), ["omit"]);
+
+        let (host, changes, window) = open_with("", gapped_items(), cx);
+        press(window, "tab");
+
+        press(window, "up");
+        assert_eq!(
+            selected(&host, window),
+            "seal",
+            "with no choice yet, Up takes the last enabled option"
+        );
+        assert_eq!(reported(&changes), ["seal"]);
+
+        let (host, changes, window) = open_with(
+            "",
+            vec![OptionGroupItem::new("omit", "Leave out").disabled(true)],
+            cx,
+        );
+        press(window, "tab");
+
+        press(window, "down");
+        assert_eq!(selected(&host, window), "", "every option is disabled");
+        assert!(reported(&changes).is_empty());
     }
 
     #[gpui::test]
@@ -884,12 +953,21 @@ mod tests {
 
     #[gpui::test]
     fn an_option_without_a_description_draws_no_description_node(cx: &mut TestAppContext) {
-        let frame = render_frame(cx, disabled_surface);
-        let description = format!("{OMIT}-description");
+        let drawn = {
+            let (_host, _changes, window) = open(items(), cx);
+            window.debug_bounds(OMIT_DESCRIPTION).is_some()
+        };
         assert!(
-            frame
-                .nodes()
-                .all(|(_, node)| node.id() != description.as_str()),
+            drawn,
+            "the selector finds the description an option with one draws"
+        );
+
+        let missing = {
+            let (_host, _changes, window) = open(gapped_items(), cx);
+            window.debug_bounds(OMIT_DESCRIPTION).is_none()
+        };
+        assert!(
+            missing,
             "an option without a description draws no description node"
         );
     }

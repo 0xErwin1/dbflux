@@ -271,9 +271,12 @@ the radio group, so assistive technology follows the choice as it moves. Up and
 Down (and Left and Right) move the choice through the enabled options, reporting
 each one through `on_change`; Space and Enter report the current choice again,
 so an owner that only acts on the reported id keeps working, unless that choice
-is disabled; a pointer press or the accessibility click action chooses the
-option it lands on; an arrow key that would move past either end is left to the
-host, so a form can move to the next field from there. Disabled options are
+is disabled; while nothing is chosen yet (`selected` is an id that matches no
+option, such as an empty string) the first arrow key chooses the first enabled
+option in that direction, so the keyboard can make the first choice; a pointer
+press or the accessibility click action chooses the option it lands on; an arrow
+key that would move past either end is left to the host, so a form can move to
+the next field from there. Disabled options are
 dimmed with `Fields::DISABLED_OPACITY`, are skipped by the arrow keys and answer
 neither the pointer nor an accessibility click.
 
