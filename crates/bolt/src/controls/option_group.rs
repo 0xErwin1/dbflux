@@ -2,44 +2,83 @@
 //!
 //! One option is selected at a time and the group reports it, like a radio
 //! group. Each option is a radio indicator, a label and an optional muted
-//! description under the label.
+//! description under the label, clipped to one line.
 //!
 //! The indicator reuses [`super::Checkbox`]'s box: the same
 //! `Fields::CHECKBOX_SIZE` box and `ChamferCut::KEYCAP` cut, the accent fill
 //! with an accent-foreground dot when the option is chosen, the inset control
-//! line otherwise, and the same inset tint focus ring, drawn on the chosen
-//! option while the group holds keyboard focus.
+//! line otherwise, and the same tint focus ring. The ring sits outside the
+//! accent fill (`ChamferFillKind::Filled`) and is drawn only on the chosen
+//! option, while the group holds keyboard focus.
 //!
-//! The group is a single focusable stop, named by [`OptionGroup::aria_label`],
-//! with the radio-group role; each option is a radio button named by its label
-//! and toggled when chosen. Up and Down (and Left and Right) move the choice
-//! through the enabled options, Space and Enter report it, and a pointer press
-//! chooses the option it lands on. An arrow key that would move past either end
-//! is left to the host, so a form can move to the next field from there. An
-//! option marked
+//! The group is a single focusable stop with the radio-group role, named by
+//! [`OptionGroup::aria_label`]. Each option is a radio button named by its
+//! label and described by its description, toggled when chosen, and while the
+//! group holds keyboard focus the chosen option is the group's focused node,
+//! so assistive technology follows the choice as it moves. Up and Down (and
+//! Left and Right) move the choice through the enabled options, reporting each
+//! one; Space and Enter report the current choice, unless it is disabled; a
+//! pointer press or the accessibility click action chooses the option it lands
+//! on. An arrow key that would move past either end is left to the host, so a
+//! form can move to the next field from there. An option marked
 //! [`OptionGroupItem::disabled`] is dimmed, is skipped by the arrow keys and
 //! answers neither a press nor an accessibility click.
 //!
-//! Element ids derive from the group name: `option-group-<group>` for the
-//! group, `option-group-<group>-<id>` for an option and
-//! `option-group-<group>-<id>-description` for its description (see
-//! [`option_group_id`] and [`option_group_item_id`]).
+//! Element ids derive from the group name, and a `:` or `%` inside a name is
+//! escaped so no two groups or options can share one: `option-group:<group>`
+//! for the group, `option-group:<group>:<id>` for an option and
+//! `option-group:<group>:<id>:description` for its description (see
+//! [`option_group_id`], [`option_group_item_id`] and
+//! [`option_group_description_id`]).
 
 use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    AccessibleAction, App, ElementId, FocusHandle, KeyDownEvent, Role, SharedString, Toggled,
-    Window, div, relative,
+    AccessibleAction, AnyElement, App, Div, ElementId, FocusHandle, Hsla, KeyDownEvent, Rems, Role,
+    SharedString, Toggled, Window, div, relative,
 };
-use gpui_component::ActiveTheme;
+use gpui_component::{ActiveTheme, Theme};
 
 use crate::density;
 use crate::primitives::{Chamfer, ChamferFillKind, ChamferRing, Text};
-use crate::selector::{id_selector, labeled};
+use crate::selector::id_selector;
 use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes};
 
 type OptionChangeHandler = Rc<dyn Fn(&SharedString, &mut Window, &mut App)>;
+
+/// One option of an [`OptionGroup`].
+#[derive(Clone, Debug)]
+pub struct OptionGroupItem {
+    id: SharedString,
+    label: SharedString,
+    description: Option<SharedString>,
+    disabled: bool,
+}
+
+impl OptionGroupItem {
+    pub fn new(id: impl Into<SharedString>, label: impl Into<SharedString>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            description: None,
+            disabled: false,
+        }
+    }
+
+    /// Draws `description` as a smaller, muted line under the label, clipped
+    /// to that one line.
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Dims the option and keeps the keyboard and the pointer off it.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+}
 
 /// The option `step` places away from `selected` among the enabled options of
 /// `items`, stopping at either end: `None` when no enabled option lies that
@@ -61,47 +100,231 @@ fn stepped_option<'a>(
     }
 }
 
-/// One option of an [`OptionGroup`].
-#[derive(Clone, Debug)]
-pub struct OptionGroupItem {
-    id: SharedString,
-    label: SharedString,
-    description: Option<SharedString>,
-    disabled: bool,
+/// Runs the group's keyboard behaviour: the arrow keys move the choice among
+/// the enabled options, and Space or Enter reports the current one unless it is
+/// disabled. Returns whether the group consumed the key.
+fn handle_key(
+    items: &[OptionGroupItem],
+    selected: &str,
+    on_change: &OptionChangeHandler,
+    event: &KeyDownEvent,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let step = match event.keystroke.key.as_str() {
+        "up" | "left" => -1,
+        "down" | "right" => 1,
+        _ => 0,
+    };
+
+    if step != 0 {
+        let Some(next) = stepped_option(items, selected, step) else {
+            return false;
+        };
+
+        on_change(next, window, cx);
+
+        return true;
+    }
+
+    if !super::is_activation_key(&event.keystroke) {
+        return false;
+    }
+
+    let Some(current) = items
+        .iter()
+        .find(|item| item.id.as_ref() == selected)
+        .filter(|item| !item.disabled)
+    else {
+        return false;
+    };
+
+    on_change(&current.id, window, cx);
+
+    true
 }
 
-impl OptionGroupItem {
-    pub fn new(id: impl Into<SharedString>, label: impl Into<SharedString>) -> Self {
-        Self {
-            id: id.into(),
-            label: label.into(),
-            description: None,
-            disabled: false,
+/// Escapes the separators of an option group id inside a name, so the boundary
+/// between the group, the option and the description cannot be forged by one.
+fn escaped_id_part(part: &str) -> String {
+    let mut escaped = String::with_capacity(part.len());
+
+    for character in part.chars() {
+        match character {
+            '%' => escaped.push_str("%25"),
+            ':' => escaped.push_str("%3A"),
+            _ => escaped.push(character),
         }
     }
 
-    /// Draws `description` as a smaller, muted line under the label.
-    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-
-    /// Dims the option and keeps the keyboard and the pointer off it.
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
-        self
-    }
+    escaped
 }
 
 /// Element and accessibility id of the group named `group`.
 pub fn option_group_id(group: &str) -> SharedString {
-    SharedString::from(format!("option-group-{group}"))
+    SharedString::from(format!("option-group:{}", escaped_id_part(group)))
 }
 
 /// Element and accessibility id of the option `item` of the group named
 /// `group`.
 pub fn option_group_item_id(group: &str, item: &str) -> SharedString {
-    SharedString::from(format!("option-group-{group}-{item}"))
+    SharedString::from(format!(
+        "{}:{}",
+        option_group_id(group),
+        escaped_id_part(item)
+    ))
+}
+
+/// Element and accessibility id of the description of option `item` of the
+/// group named `group`.
+pub fn option_group_description_id(group: &str, item: &str) -> SharedString {
+    SharedString::from(format!("{}:description", option_group_item_id(group, item)))
+}
+
+/// What every row of one group shares: the theme, the chosen option and the
+/// handler the rows report to.
+struct RowContext<'a> {
+    group: &'a str,
+    selected: &'a SharedString,
+    focused: bool,
+    theme: &'a Theme,
+    tint: Hsla,
+    label_size: Rems,
+    on_change: OptionChangeHandler,
+}
+
+impl RowContext<'_> {
+    /// One option: the indicator, the label and the description under it.
+    fn render_row(&self, item: &OptionGroupItem) -> AnyElement {
+        let theme = self.theme;
+        let item_id = option_group_item_id(self.group, item.id.as_ref());
+        let is_selected = item.id == *self.selected;
+        let disabled = item.disabled;
+        let opacity = if disabled {
+            Fields::DISABLED_OPACITY
+        } else {
+            1.0
+        };
+        let label_color = if disabled {
+            theme.muted_foreground
+        } else {
+            theme.foreground
+        };
+        let description = item.description.clone();
+        let description_id = option_group_description_id(self.group, item.id.as_ref());
+
+        let text = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .gap(Fields::CHECK_ROW_LINE_GAP)
+            .child(
+                div()
+                    .min_h(Fields::CHECKBOX_SIZE)
+                    .flex()
+                    .items_center()
+                    .line_height(relative(1.))
+                    .text_size(self.label_size)
+                    .text_color(label_color)
+                    .child(item.label.clone()),
+            )
+            .when_some(description.clone(), |this, description| {
+                this.child(
+                    div()
+                        .debug_selector(id_selector(&ElementId::from(description_id)))
+                        .truncate()
+                        .child(
+                            Text::body(description)
+                                .font_size(FontSizes::XS)
+                                .muted_foreground(),
+                        ),
+                )
+            });
+
+        let click_id = item.id.clone();
+        let a11y_id = click_id.clone();
+        let on_change = self.on_change.clone();
+
+        div()
+            .debug_selector(id_selector(&ElementId::from(item_id.clone())))
+            .id(item_id.clone())
+            .role(Role::RadioButton)
+            .accessibility_id(item_id)
+            .aria_label(item.label.clone())
+            .when_some(description, |this, description| {
+                this.aria_description(description)
+            })
+            .aria_toggled(if is_selected {
+                Toggled::True
+            } else {
+                Toggled::False
+            })
+            .when(disabled, |this| this.aria_disabled(true))
+            .when(self.focused && is_selected, |this| {
+                this.aria_active_descendant()
+            })
+            .relative()
+            .flex()
+            .items_start()
+            .gap(Fields::CHECKBOX_GAP)
+            .w_full()
+            .py(Fields::CHECK_ROW_PADDING_Y)
+            .when(disabled, |this| this.cursor_not_allowed())
+            .when(!disabled, |this| {
+                let a11y_change = on_change.clone();
+
+                this.cursor_pointer()
+                    .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
+                        a11y_change(&a11y_id, window, cx);
+                    })
+                    .on_click(move |_, window, cx| {
+                        on_change(&click_id, window, cx);
+                    })
+            })
+            .child(self.indicator(is_selected, opacity))
+            .child(text)
+            .into_any_element()
+    }
+
+    /// The radio box of one option, with its dot and its focus ring.
+    fn indicator(&self, is_selected: bool, opacity: f32) -> Div {
+        let theme = self.theme;
+        let fill_kind = if is_selected {
+            ChamferFillKind::Filled
+        } else {
+            ChamferFillKind::Surface
+        };
+        let shape = if is_selected {
+            Chamfer::new(ChamferCut::KEYCAP).fill(theme.primary.opacity(opacity))
+        } else {
+            Chamfer::new(ChamferCut::KEYCAP)
+                .ring(ChamferRing::outline(theme.input.opacity(opacity)))
+        };
+
+        div()
+            .relative()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .size(Fields::CHECKBOX_SIZE)
+            .child(shape)
+            .when(is_selected, |this| {
+                this.child(
+                    div()
+                        .size(Fields::RADIO_DOT)
+                        .rounded_full()
+                        .bg(theme.primary_foreground.opacity(opacity)),
+                )
+            })
+            .when(self.focused && is_selected, |this| {
+                this.child(
+                    Chamfer::new(ChamferCut::KEYCAP)
+                        .ring(ChamferRing::focus_for(self.tint, fill_kind)),
+                )
+            })
+    }
 }
 
 /// A vertical list of mutually-exclusive options.
@@ -149,179 +372,66 @@ impl OptionGroup {
             .read(cx)
             .clone()
     }
-}
 
-impl RenderOnce for OptionGroup {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let focus_handle = self.focus_handle(window, cx);
-        let focused = focus_handle.is_focused(window);
-        let theme = cx.theme();
-        let tint = ChromeColors::tint(theme);
-        let label_size = density::font_base(cx);
+    /// The focusable container: the radio group the options hang from.
+    fn group_element(
+        &self,
+        focus_handle: FocusHandle,
+        rows: Vec<AnyElement>,
+    ) -> gpui::Stateful<Div> {
         let group_id = option_group_id(&self.group);
         let group_element_id = ElementId::from(group_id.clone());
-        let selected = self.selected;
-        let on_change = self.on_change;
-        let key_items = self.items.clone();
-        let selected_for_keys = selected.clone();
-        let change_for_keys = on_change.clone();
-
-        let rows = self.items.into_iter().map(|item| {
-            let item_element_id = option_group_item_id(&self.group, item.id.as_ref());
-            let is_selected = item.id == selected;
-            let disabled = item.disabled;
-            let opacity = if disabled {
-                Fields::DISABLED_OPACITY
-            } else {
-                1.0
-            };
-            let is_focused = focused && is_selected;
-            let fill_kind = if is_selected {
-                ChamferFillKind::Filled
-            } else {
-                ChamferFillKind::Surface
-            };
-
-            let shape = if is_selected {
-                Chamfer::new(ChamferCut::KEYCAP).fill(theme.primary.opacity(opacity))
-            } else {
-                Chamfer::new(ChamferCut::KEYCAP)
-                    .ring(ChamferRing::outline(theme.input.opacity(opacity)))
-            };
-
-            let indicator = div()
-                .relative()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .justify_center()
-                .size(Fields::CHECKBOX_SIZE)
-                .child(shape)
-                .when(is_selected, |this| {
-                    this.child(
-                        div()
-                            .size(Fields::RADIO_DOT)
-                            .rounded_full()
-                            .bg(theme.primary_foreground.opacity(opacity)),
-                    )
-                })
-                .when(is_focused, |this| {
-                    this.child(
-                        Chamfer::new(ChamferCut::KEYCAP)
-                            .ring(ChamferRing::focus_for(tint, fill_kind)),
-                    )
-                });
-
-            let label_color = if disabled {
-                theme.muted_foreground
-            } else {
-                theme.foreground
-            };
-
-            let description = item.description.map(|description| {
-                let description_id = SharedString::from(format!("{item_element_id}-description"));
-
-                labeled(
-                    div().child(
-                        Text::body(description.clone())
-                            .font_size(FontSizes::XS)
-                            .muted_foreground(),
-                    ),
-                    description_id,
-                    description,
-                )
-            });
-
-            let text = div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_w_0()
-                .gap(Fields::CHECK_ROW_LINE_GAP)
-                .child(
-                    div()
-                        .min_h(Fields::CHECKBOX_SIZE)
-                        .flex()
-                        .items_center()
-                        .line_height(relative(1.))
-                        .text_size(label_size)
-                        .text_color(label_color)
-                        .child(item.label.clone()),
-                )
-                .children(description);
-
-            let click_id = item.id.clone();
-            let a11y_id = item.id;
-
-            div()
-                .debug_selector(id_selector(&ElementId::from(item_element_id.clone())))
-                .id(item_element_id.clone())
-                .role(Role::RadioButton)
-                .accessibility_id(item_element_id)
-                .aria_label(item.label)
-                .aria_toggled(if is_selected {
-                    Toggled::True
-                } else {
-                    Toggled::False
-                })
-                .when(disabled, |this| this.aria_disabled(true))
-                .relative()
-                .flex()
-                .items_start()
-                .gap(Fields::CHECKBOX_GAP)
-                .w_full()
-                .py(Fields::CHECK_ROW_PADDING_Y)
-                .when(disabled, |this| this.cursor_not_allowed())
-                .when(!disabled, |this| {
-                    let a11y_change = on_change.clone();
-                    let click_change = on_change.clone();
-
-                    this.cursor_pointer()
-                        .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
-                            a11y_change(&a11y_id, window, cx);
-                        })
-                        .on_click(move |_, window, cx| {
-                            click_change(&click_id, window, cx);
-                        })
-                })
-                .child(indicator)
-                .child(text)
-        });
 
         div()
             .debug_selector(id_selector(&group_element_id))
             .id(group_element_id)
             .role(Role::RadioGroup)
             .accessibility_id(group_id)
-            .when_some(self.aria_label, |this, label| this.aria_label(label))
-            .track_focus(&focus_handle.clone().tab_index(0).tab_stop(true))
+            .when_some(self.aria_label.clone(), |this, label| {
+                this.aria_label(label)
+            })
+            .track_focus(&focus_handle.tab_index(0).tab_stop(true))
             .flex()
             .flex_col()
-            .font_family(crate::fonts::ui_family(cx))
-            .on_key_down(move |event: &KeyDownEvent, window, cx| {
-                let step = match event.keystroke.key.as_str() {
-                    "up" | "left" => -1,
-                    "down" | "right" => 1,
-                    _ => 0,
-                };
-
-                if step == 0 {
-                    if !super::is_activation_key(&event.keystroke) {
-                        return;
-                    }
-
-                    change_for_keys(&selected_for_keys, window, cx);
-                    cx.stop_propagation();
-
-                    return;
-                }
-
-                if let Some(next) = stepped_option(&key_items, &selected_for_keys, step) {
-                    change_for_keys(next, window, cx);
-                    cx.stop_propagation();
-                }
-            })
             .children(rows)
+    }
+}
+
+impl RenderOnce for OptionGroup {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let focus_handle = self.focus_handle(window, cx);
+        let focused = focus_handle.is_focused(window);
+        let rows: Vec<AnyElement> = {
+            let context = RowContext {
+                group: &self.group,
+                selected: &self.selected,
+                focused,
+                theme: cx.theme(),
+                tint: ChromeColors::tint(cx.theme()),
+                label_size: density::font_base(cx),
+                on_change: self.on_change.clone(),
+            };
+
+            self.items
+                .iter()
+                .map(|item| context.render_row(item))
+                .collect()
+        };
+
+        let font_family = crate::fonts::ui_family(cx);
+        let element = self
+            .group_element(focus_handle, rows)
+            .font_family(font_family);
+
+        let items = self.items;
+        let selected = self.selected;
+        let on_change = self.on_change;
+
+        element.on_key_down(move |event: &KeyDownEvent, window, cx| {
+            if handle_key(&items, &selected, &on_change, event, window, cx) {
+                cx.stop_propagation();
+            }
+        })
     }
 }
 
@@ -332,20 +442,23 @@ mod tests {
     use gpui::{
         AccessibilityFrame, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _,
         IntoElement, Modifiers, ParentElement as _, Render, Role, SharedString, Styled as _,
-        TestAppContext, Toggled, VisualTestContext, Window, div,
+        TestAppContext, Toggled, VisualTestContext, Window, div, px,
     };
 
-    use super::{OptionGroup, OptionGroupItem, option_group_id, option_group_item_id};
+    use super::{
+        OptionGroup, OptionGroupItem, option_group_description_id, option_group_id,
+        option_group_item_id,
+    };
     use crate::accessibility::render_frame;
     use crate::primitives::FOCUS_RING_SELECTOR;
     use crate::tokens::{BASE_REM, Fields};
 
     /// Every id the fixtures address, spelled out so a changed derivation fails
     /// a test instead of following the code.
-    const GROUP: &str = "option-group-secret-mode";
-    const OMIT: &str = "option-group-secret-mode-omit";
-    const ENCRYPT: &str = "option-group-secret-mode-encrypt";
-    const OMIT_DESCRIPTION: &str = "option-group-secret-mode-omit-description";
+    const GROUP: &str = "option-group:secret-mode";
+    const OMIT: &str = "option-group:secret-mode:omit";
+    const ENCRYPT: &str = "option-group:secret-mode:encrypt";
+    const OMIT_DESCRIPTION: &str = "option-group:secret-mode:omit:description";
 
     fn items() -> Vec<OptionGroupItem> {
         vec![
@@ -526,7 +639,7 @@ mod tests {
         );
         assert_eq!(reported(&changes), ["seal"]);
 
-        let disabled = center_of(window, "option-group-secret-mode-encrypt");
+        let disabled = center_of(window, ENCRYPT);
         window.simulate_click(disabled, Modifiers::default());
         window.run_until_parked();
 
@@ -601,18 +714,40 @@ mod tests {
         );
     }
 
-    fn node<'a>(frame: &'a AccessibilityFrame, id: &str) -> &'a gpui::FrameNode {
+    fn find_node<'a>(frame: &'a AccessibilityFrame, id: &str) -> Option<&'a gpui::FrameNode> {
         frame
             .nodes()
             .find(|(_, node)| node.id() == id)
-            .unwrap_or_else(|| panic!("{id} is in the frame"))
-            .1
+            .map(|(_, node)| node)
+    }
+
+    fn node<'a>(frame: &'a AccessibilityFrame, id: &str) -> &'a gpui::FrameNode {
+        find_node(frame, id).unwrap_or_else(|| panic!("{id} is in the frame"))
     }
 
     fn accessible<'a>(frame: &'a AccessibilityFrame, id: &str) -> &'a gpui::accesskit::Node {
         frame
             .accessibility_node(node(frame, id))
             .unwrap_or_else(|| panic!("{id} is an accessible node"))
+    }
+
+    /// A group in a column narrow enough that a long description would wrap.
+    struct NarrowHost;
+
+    impl Render for NarrowHost {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().w(px(220.0)).child(OptionGroup::new(
+                "secret-mode",
+                vec![
+                    OptionGroupItem::new("short", "Short").description("Sealed."),
+                    OptionGroupItem::new("long", "Long").description(
+                        "Values are sealed with a passphrase that nobody stores, and a bundle cannot be opened without it.",
+                    ),
+                ],
+                "short",
+                |_, _, _| {},
+            ))
+        }
     }
 
     fn surface(_cx: &mut gpui::App) -> gpui::AnyElement {
@@ -638,30 +773,105 @@ mod tests {
         assert_eq!(omit.toggled(), Some(Toggled::True));
         assert!(omit.supports_action(gpui::AccessibleAction::Click));
 
+        assert_eq!(
+            omit.description(),
+            Some("The bundle lists them by name, empty."),
+            "an option describes itself with its description"
+        );
+
         let encrypt = accessible(&frame, ENCRYPT);
         assert_eq!(encrypt.label(), Some("Encrypt"));
         assert_eq!(encrypt.toggled(), Some(Toggled::False));
+        assert_eq!(
+            encrypt.description(),
+            Some("Values are sealed with a passphrase.")
+        );
+        assert!(
+            find_node(&frame, OMIT_DESCRIPTION)
+                .and_then(|node| frame.accessibility_node(node))
+                .is_none(),
+            "the option describes itself, so the description is not a node of its own"
+        );
     }
 
     #[gpui::test]
-    fn a_description_is_a_label_node_under_the_label(cx: &mut TestAppContext) {
-        let frame = render_frame(cx, surface);
+    fn a_description_draws_under_the_label(cx: &mut TestAppContext) {
+        let (_host, _changes, window) = open(items(), cx);
 
-        let description = accessible(&frame, OMIT_DESCRIPTION);
-        assert_eq!(description.role(), Role::Label);
-        assert_eq!(
-            description.label(),
-            Some("The bundle lists them by name, empty.")
-        );
+        let option = window.debug_bounds(OMIT).expect("the option is laid out");
+        let description = window
+            .debug_bounds(OMIT_DESCRIPTION)
+            .expect("the description is drawn");
 
-        let option = node(&frame, OMIT);
-        let text = node(&frame, OMIT_DESCRIPTION);
-        assert!(option.bounds().contains(&text.bounds().center()));
+        assert!(option.contains(&description.center()));
         assert!(
-            text.bounds().top()
-                > option.bounds().top() + Fields::CHECKBOX_SIZE.to_pixels(gpui::px(BASE_REM)),
+            description.top() > option.top() + Fields::CHECKBOX_SIZE.to_pixels(px(BASE_REM)),
             "the description sits under the label line"
         );
+    }
+
+    #[gpui::test]
+    fn the_group_reports_the_selected_option_as_the_focused_node(cx: &mut TestAppContext) {
+        let (_host, _changes, window) = open(items(), cx);
+        let capture = crate::accessibility::FrameCapture::observe(window);
+
+        press(window, "tab");
+        let frame = capture.frame(window);
+        assert_eq!(
+            frame.tree().focus,
+            node(&frame, OMIT).accessibility_id(),
+            "the selected option is the focused node of the radio group"
+        );
+
+        press(window, "down");
+        let frame = capture.frame(window);
+        assert_eq!(
+            frame.tree().focus,
+            node(&frame, ENCRYPT).accessibility_id(),
+            "the focused node follows the choice"
+        );
+    }
+
+    #[gpui::test]
+    fn a_long_description_keeps_to_one_line(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (_view, window) = cx.add_window_view(|_, _| NarrowHost);
+        window.run_until_parked();
+
+        let short = window
+            .debug_bounds("option-group:secret-mode:short:description")
+            .expect("the short description is drawn")
+            .size
+            .height;
+        let long = window
+            .debug_bounds("option-group:secret-mode:long:description")
+            .expect("the long description is drawn")
+            .size
+            .height;
+
+        assert_eq!(long, short, "a description is one line, however long it is");
+        assert!(long > px(0.0));
+    }
+
+    #[gpui::test]
+    fn space_and_enter_do_not_report_a_disabled_selection(cx: &mut TestAppContext) {
+        let (host, changes, window) = open(
+            vec![
+                OptionGroupItem::new("omit", "Leave out").disabled(true),
+                OptionGroupItem::new("encrypt", "Encrypt"),
+            ],
+            cx,
+        );
+        press(window, "tab");
+
+        press(window, "space");
+        press(window, "enter");
+
+        assert!(reported(&changes).is_empty());
+        assert_eq!(selected(&host, window), "omit");
+
+        press(window, "down");
+        assert_eq!(selected(&host, window), "encrypt");
     }
 
     #[gpui::test]
@@ -688,5 +898,37 @@ mod tests {
     fn ids_are_derived_from_the_group_and_the_option() {
         assert_eq!(option_group_id("secret-mode").as_ref(), GROUP);
         assert_eq!(option_group_item_id("secret-mode", "omit").as_ref(), OMIT);
+        assert_eq!(
+            option_group_description_id("secret-mode", "omit").as_ref(),
+            OMIT_DESCRIPTION
+        );
+    }
+
+    #[test]
+    fn ids_do_not_collide_across_groups_items_and_descriptions() {
+        assert_ne!(
+            option_group_item_id("delivery-express", "express"),
+            option_group_item_id("delivery", "express-express"),
+            "the group and item boundary cannot be moved by a name"
+        );
+        assert_ne!(
+            option_group_item_id("delivery", "express"),
+            option_group_id("delivery-express")
+        );
+        assert_ne!(
+            option_group_item_id("delivery", "omit-description"),
+            option_group_description_id("delivery", "omit"),
+            "an item named like a description is not that description"
+        );
+        assert_ne!(
+            option_group_item_id("a:b", "c"),
+            option_group_item_id("a", "b:c"),
+            "a separator inside a name cannot move the boundary"
+        );
+        assert_ne!(
+            option_group_item_id("a%3Ab", "c"),
+            option_group_item_id("a:b", "c"),
+            "an escaped separator is not the same name"
+        );
     }
 }
