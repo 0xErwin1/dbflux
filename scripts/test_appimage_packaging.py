@@ -17,7 +17,7 @@ class LibraryPolicyTests(unittest.TestCase):
 
     def test_bundle_application_dependencies(self):
         for name in ("libxkbcommon-x11.so.0", "libfontconfig.so.1", "libssl.so.3",
-                     "libstdc++.so.6", "libxcb.so.1", "libfreetype.so.6"):
+                     "libxcb.so.1", "libfreetype.so.6"):
             with self.subTest(name=name):
                 result = self.policy(name)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -27,7 +27,8 @@ class LibraryPolicyTests(unittest.TestCase):
         for name in ("libc.so.6", "libm.so.6", "ld-linux-aarch64.so.1",
                      "ld-linux-x86-64.so.2", "libnss_files.so.2", "libGL.so.1",
                      "libEGL.so.1", "libvulkan.so.1", "libdrm.so.2",
-                     "libGLX_nvidia.so.0", "libgbm.so.1", "libGLESv2.so.2"):
+                     "libGLX_nvidia.so.0", "libgbm.so.1", "libGLESv2.so.2",
+                     "libstdc++.so.6", "libgcc_s.so.1"):
             with self.subTest(name=name):
                 result = self.policy(name)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -68,8 +69,14 @@ class LibraryPolicyTests(unittest.TestCase):
             host_only = verify(TEST_LDD="libxcb.so.1 => /lib/libxcb.so.1 (0x1)")
             self.assertNotEqual(host_only.returncode, 0)
             self.assertIn("Unbundled dependency", host_only.stderr)
-            (appdir / "usr/lib/libc.so.6").touch()
-            self.assertIn("Forbidden bundled", verify().stderr)
+            for forbidden in ("libc.so.6", "libstdc++.so.6", "libgcc_s.so.1"):
+                with self.subTest(forbidden=forbidden):
+                    (appdir / "usr/lib" / forbidden).touch()
+                    rejected = verify()
+                    self.assertEqual(rejected.returncode, 1, rejected.stderr)
+                    self.assertIn("Forbidden bundled", rejected.stderr)
+                    self.assertIn(forbidden, rejected.stderr)
+                    (appdir / "usr/lib" / forbidden).unlink()
 
     def test_invalid_library_arguments_have_explicit_diagnostics(self):
         cases = (

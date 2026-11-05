@@ -497,107 +497,120 @@ fn run_gui() {
         // AeroSpace, Spaces and Stage Manager.
         platform::apply_main_window_options(&mut main_window_options, 800.0, 600.0);
 
-        let window_handle = cx
-            .open_window(main_window_options, |window, cx| {
-                let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
-                workspace.update(cx, |workspace, cx| workspace.start_update_flow(cx));
+        let window_result = cx.open_window(main_window_options, |window, cx| {
+            let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
+            workspace.update(cx, |workspace, cx| workspace.start_update_flow(cx));
 
-                // Publish a weak handle before the view is moved into `Root` so
-                // both shutdown entry points (window close and SIGINT/SIGTERM)
-                // can flush pending document edits.
-                *WORKSPACE_FOR_SHUTDOWN
+            // Publish a weak handle before the view is moved into `Root` so
+            // both shutdown entry points (window close and SIGINT/SIGTERM)
+            // can flush pending document edits.
+            *WORKSPACE_FOR_SHUTDOWN
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(workspace.downgrade());
+
+            // The answer that quits in the active-query or the
+            // unsaved-changes prompt resumes the close it interrupted.
+            let app_state_for_quit = app_state.clone();
+            cx.subscribe(&workspace, move |_, _: &QuitConfirmed, cx| {
+                initiate_graceful_shutdown(&app_state_for_quit, cx);
+            })
+            .detach();
+
+            // The application menu bar. macOS draws it, and the menu it
+            // shows for the application name is empty until one is
+            // installed.
+            dbflux_ui::app_menu::install(cx, app_state.clone());
+
+            // The focused window is not always the workspace: the Settings
+            // window is a window of its own and propagates the commands it
+            // does not own. The application therefore answers the quit
+            // command, whichever window asked, by asking the workspace —
+            // and its running-query prompt — in the window that shows it.
+            let main_window = window.window_handle();
+            cx.on_action(move |action: &RunCommand, cx| {
+                if action.command.as_ref() != Command::Quit.action_id().as_ref() {
+                    cx.propagate();
+                    return;
+                }
+
+                let Some(workspace) = WORKSPACE_FOR_SHUTDOWN
                     .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(workspace.downgrade());
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone()
+                    .and_then(|workspace| workspace.upgrade())
+                else {
+                    return;
+                };
 
-                // The answer that quits in the active-query or the
-                // unsaved-changes prompt resumes the close it interrupted.
-                let app_state_for_quit = app_state.clone();
-                cx.subscribe(&workspace, move |_, _: &QuitConfirmed, cx| {
-                    initiate_graceful_shutdown(&app_state_for_quit, cx);
+                let outcome = main_window.update(cx, |_root, window, cx| {
+                    // The question belongs to the window that shows it, so
+                    // bring that one to the front of whoever asked.
+                    window.activate_window();
+                    workspace.update(cx, |workspace, cx| {
+                        if workspace.request_quit(window, cx) {
+                            cx.emit(QuitConfirmed);
+                        }
+                    });
+                });
+
+                if let Err(error) = outcome {
+                    log::warn!("The quit request did not reach the main window: {error}");
+                }
+            });
+
+            IpcServer::start_with_listener(
+                listener,
+                workspace.clone(),
+                window.window_handle(),
+                auth_token,
+                cx,
+            );
+            info!("IPC server started");
+
+            dbflux_ui_base::ui_automation::install(window, cx);
+
+            // "Follow system" resolved against the app-level appearance
+            // before any window existed; the window's own appearance is
+            // the reliable source on Linux, so resolve once more here and
+            // again whenever the OS switches between light and dark.
+            if theme_setting == dbflux_core::ThemeSetting::System {
+                dbflux_ui::theme::apply_theme(theme_setting, style_setting, Some(window), cx);
+            }
+
+            let app_state_for_appearance = app_state.clone();
+            window
+                .observe_window_appearance(move |window, cx| {
+                    let settings = app_state_for_appearance.read(cx).general_settings();
+                    let (current_theme, current_style) = (settings.theme, settings.style);
+
+                    if current_theme == dbflux_core::ThemeSetting::System {
+                        dbflux_ui::theme::apply_theme(
+                            current_theme,
+                            current_style,
+                            Some(window),
+                            cx,
+                        );
+                    }
                 })
                 .detach();
 
-                // The application menu bar. macOS draws it, and the menu it
-                // shows for the application name is empty until one is
-                // installed.
-                dbflux_ui::app_menu::install(cx, app_state.clone());
+            cx.new(|cx| Root::new(workspace, window, cx))
+        });
 
-                // The focused window is not always the workspace: the Settings
-                // window is a window of its own and propagates the commands it
-                // does not own. The application therefore answers the quit
-                // command, whichever window asked, by asking the workspace —
-                // and its running-query prompt — in the window that shows it.
-                let main_window = window.window_handle();
-                cx.on_action(move |action: &RunCommand, cx| {
-                    if action.command.as_ref() != Command::Quit.action_id().as_ref() {
-                        cx.propagate();
-                        return;
-                    }
-
-                    let Some(workspace) = WORKSPACE_FOR_SHUTDOWN
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .clone()
-                        .and_then(|workspace| workspace.upgrade())
-                    else {
-                        return;
-                    };
-
-                    let outcome = main_window.update(cx, |_root, window, cx| {
-                        // The question belongs to the window that shows it, so
-                        // bring that one to the front of whoever asked.
-                        window.activate_window();
-                        workspace.update(cx, |workspace, cx| {
-                            if workspace.request_quit(window, cx) {
-                                cx.emit(QuitConfirmed);
-                            }
-                        });
-                    });
-
-                    if let Err(error) = outcome {
-                        log::warn!("The quit request did not reach the main window: {error}");
-                    }
-                });
-
-                IpcServer::start_with_listener(
-                    listener,
-                    workspace.clone(),
-                    window.window_handle(),
-                    auth_token,
-                    cx,
+        let window_handle = match window_result {
+            Ok(handle) => handle,
+            Err(error) => {
+                log::error!("Failed to open main window: {error:#}");
+                eprintln!(
+                    "DBFlux: failed to open the main window: {error:#}\n\
+                     If this mentions GPU adapters, check that a Vulkan driver works on this \
+                     system, for example with `vulkaninfo --summary`."
                 );
-                info!("IPC server started");
-
-                dbflux_ui_base::ui_automation::install(window, cx);
-
-                // "Follow system" resolved against the app-level appearance
-                // before any window existed; the window's own appearance is
-                // the reliable source on Linux, so resolve once more here and
-                // again whenever the OS switches between light and dark.
-                if theme_setting == dbflux_core::ThemeSetting::System {
-                    dbflux_ui::theme::apply_theme(theme_setting, style_setting, Some(window), cx);
-                }
-
-                let app_state_for_appearance = app_state.clone();
-                window
-                    .observe_window_appearance(move |window, cx| {
-                        let settings = app_state_for_appearance.read(cx).general_settings();
-                        let (current_theme, current_style) = (settings.theme, settings.style);
-
-                        if current_theme == dbflux_core::ThemeSetting::System {
-                            dbflux_ui::theme::apply_theme(
-                                current_theme,
-                                current_style,
-                                Some(window),
-                                cx,
-                            );
-                        }
-                    })
-                    .detach();
-
-                cx.new(|cx| Root::new(workspace, window, cx))
-            })
-            .expect("Failed to open main window");
+                shutdown_all_managed_hosts();
+                cx.quit();
+                return;
+            }
+        };
 
         *MAIN_WINDOW_FOR_SHUTDOWN
             .lock()
