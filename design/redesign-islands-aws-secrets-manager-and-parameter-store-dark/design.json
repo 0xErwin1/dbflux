@@ -1,6 +1,6 @@
 {
-  "title": "DBFlux redesign: AWS Secrets Manager and Parameter Store (#1147) · dark",
-  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Migrate, AI, notifications, secrets, row \"AWS Secrets Manager and Parameter Store (#1147) · dark\".",
+  "title": "DBFlux redesign: AWS Secrets Manager and Parameter Store (#1147) \u00b7 dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands \u00b7 Migrate, AI, notifications, secrets, row \"AWS Secrets Manager and Parameter Store (#1147) \u00b7 dark\".",
   "artboards": [
     {
       "file": "01-isl-secrets.html",
@@ -27,6 +27,27 @@
       "file": "04-isl-secret-states.html",
       "title": "Secret store: states and dialogs",
       "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1640
+    },
+    {
+      "file": "05-isl-secret-multiline.html",
+      "title": "Secret: multi-line value in the details pane",
+      "tradeoff": "Islands, dark: Line breaks and dotenv/JSON highlighting in the pane, Open in editor for edits; the value block grows and pushes the details down.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "06-isl-secret-editor.html",
+      "title": "Secret: value open in an editor tab",
+      "tradeoff": "Islands, dark: Same editor as S3 objects; Save writes a new version, so every save shows up in Versions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "07-isl-secret-value-states.html",
+      "title": "Secret value: formats and states",
+      "tradeoff": "Islands, dark: Masked, nested JSON, long, single-line and binary values plus the save rules; reference sheet, not a screen.",
       "width": 1920,
       "height": 1640
     }
