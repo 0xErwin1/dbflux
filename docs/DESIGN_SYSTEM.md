@@ -125,8 +125,9 @@ option name escaped, so no two groups, options or descriptions can share an id
 spell them out). A segment's id defaults to `segmented-<group>-<id>`;
 `SegmentedItem::element_id` replaces it. An input
 records its selector on its frame, so a bare input (`appearance(false)`) has
-none. gpui records selectors only in debug builds with `test-support`;
-nothing changes in what is drawn.
+none. A form field row takes no id and records `field-row`. gpui records
+selectors only in debug builds with `test-support`; nothing changes in what is
+drawn.
 
 Some parts get an id derived from their owner's id:
 
@@ -184,6 +185,8 @@ one is off by default, so DBFlux draws the same pixels without them.
 |---|---|---|
 | `SegmentedControl` | `.tabs(true)` | A named control becomes a tab list and its segments tabs, selected when active, for a segmented control that switches views. The look and ids stay the same; the default is a radio group. |
 | `SegmentedControl` | `.track_id(..)`, `.aria_label(..)` | Replace the track's element and accessibility id (`segmented-<group>` by default; the segment ids keep the group) and name the radio group or tab list. Both need `.group(..)`: an unnamed control has no accessibility node. |
+| `SegmentedControl` | `SegmentedItem::disabled(..)`, `SegmentedItem::disabled_reason(..)`, `.disabled(true)` | A segment marked disabled, or every segment of a control marked disabled, draws at `Fields::DISABLED_OPACITY` (fill and content together, like a disabled button) with the not-allowed cursor and no hover wash, takes no click, and reports itself disabled with no click action in the accessibility tree. `disabled_reason(text)` also marks the segment disabled and shows `text` as its tooltip, for an option the product keeps visible but cannot offer right now. The arrow keys step over a disabled segment with `stepped_enabled_segment(&items, active, step)`, which counts only the enabled segments: from `A` with `B` disabled, a step of two lands on the second enabled segment after `A`, not on `B`. A segment keeps its reason while a locked control disables it. |
+| `FieldRow` | `.disabled(true)` | Draws a form field row locked: dimmed at `Fields::DISABLED_OPACITY`, with the not-allowed cursor and a plate that hides the row's own content from the pointer, so a click on what the row draws does nothing. It blocks pointer input on the row, not the control inside it: the control keeps its own disabled state, and an overlay it opened (a `Dropdown`'s menu) is drawn outside the row and still takes clicks, so a host locking such a row disables the control or closes the overlay. The builder also covers the shapes the free functions draw (`.desc(..)`, `.label_width(..)`, `.vertical()`, then `.build(cx)`); every row records the `field-row` selector. |
 | `SelectTrigger` | `.label_color(..)`, `.label_weight(..)`, `.label_font_family(..)` | Draw the label in a color, weight and font family of its own, such as an HTTP method chip (bold, mono, colored). A disabled trigger keeps the faded text color. Unset parts follow the field. |
 | `SelectTrigger` | `SelectTrigger::new(id, label)` | The closed field of a select, drawn by the same code as a standard `Dropdown` trigger: cut-6 field, optional leading icon, truncated label, chevron. It is a button with the caller's click handler, `.disabled(..)`, `.focus_ring(..)` or `.focused(..)`, for a product that opens its own popup. The `Dropdown` entity itself is unchanged. |
 | `Input` | `.padding(x, y)`, `.text_size(..)`, `.line_height(..)` | Replace the inner padding (the height then follows the line), the text size and the line height. With `appearance(false)`, set them to the values of the text the field replaces so nothing moves when the text turns into a field. Without them a bare input keeps gpui-component's size. |
