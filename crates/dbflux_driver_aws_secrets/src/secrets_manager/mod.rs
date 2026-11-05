@@ -92,8 +92,11 @@ impl SecretStoreSource for SecretsManagerStore {
         &self.descriptor
     }
 
-    /// `ListSecrets` with planned deletions included. `name_filter` is a
-    /// `Name` filter, which Secrets Manager evaluates as a prefix match.
+    /// `ListSecrets` with planned deletions included. `name_filter` is an
+    /// `all` filter: Secrets Manager splits names, descriptions and tags into
+    /// words and matches each word by prefix, ignoring case, so a word in the
+    /// middle of a path finds the secret. The `Name` filter only matches the
+    /// start of the full name, case-sensitively.
     fn list(&self, request: &SecretListRequest) -> Result<SecretListPage, DbError> {
         let mut call = self
             .client
@@ -113,7 +116,7 @@ impl SecretStoreSource for SecretsManagerStore {
         {
             call = call.filters(
                 Filter::builder()
-                    .key(FilterNameStringType::Name)
+                    .key(FilterNameStringType::All)
                     .values(name_filter)
                     .build(),
             );

@@ -228,7 +228,7 @@ fn connection_exposes_secrets_manager_then_parameter_store() -> Result<(), DbErr
 
 #[test]
 #[ignore = "requires Docker daemon"]
-fn secrets_manager_listing_paginates_and_filters_by_name_prefix() -> Result<(), DbError> {
+fn secrets_manager_listing_paginates_and_searches_by_word() -> Result<(), DbError> {
     containers::with_localstack_secrets_endpoint(|endpoint| {
         let seeder = Seeder::new(&endpoint);
         seeder.secret_string("app/prod/db", "one");
@@ -262,6 +262,18 @@ fn secrets_manager_listing_paginates_and_filters_by_name_prefix() -> Result<(), 
         })?;
         assert_eq!(names(&filtered), ["app/prod/api", "app/prod/db"]);
         assert!(filtered.child_paths.is_empty());
+
+        let middle_word = secrets.list(&SecretListRequest {
+            name_filter: Some("PROD".to_string()),
+            ..SecretListRequest::default()
+        })?;
+        assert_eq!(names(&middle_word), ["app/prod/api", "app/prod/db"]);
+
+        let last_word = secrets.list(&SecretListRequest {
+            name_filter: Some("key".to_string()),
+            ..SecretListRequest::default()
+        })?;
+        assert_eq!(names(&last_word), ["billing/key"]);
 
         Ok(())
     })
