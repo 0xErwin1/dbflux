@@ -685,6 +685,24 @@ mod menu_ids {
         );
     }
 
+    #[test]
+    fn a_row_forwards_the_icon_source_of_its_own_item() {
+        let source = crate::icon::IconSource::Svg("icons/folder.svg".into());
+
+        let with_icon = DropdownItem::new("One").icon(source.clone());
+        assert_eq!(
+            super::super::row_leading_icon(&with_icon),
+            Some(source),
+            "the row draws the source the item carries"
+        );
+
+        assert_eq!(
+            super::super::row_leading_icon(&DropdownItem::new("Two")),
+            None,
+            "an item without an icon asks for none"
+        );
+    }
+
     #[gpui::test]
     fn a_row_draws_the_icon_its_item_carries_before_the_label(cx: &mut TestAppContext) {
         let (_host, dropdown, window) = open(cx);
@@ -712,9 +730,11 @@ mod menu_ids {
         let row = window
             .debug_bounds(selector("-item-0"))
             .expect("the first row is laid out");
-        assert!(
-            icon.size.width > gpui::px(0.),
-            "the icon wrapper has a width"
+        let rem_size = window.update(|window, _cx| window.rem_size());
+        assert_eq!(
+            icon.size.width,
+            crate::tokens::Fields::LEADING_ICON.to_pixels(rem_size),
+            "the row draws the icon at the leading icon size"
         );
         assert!(
             icon.origin.x < row.center().x,

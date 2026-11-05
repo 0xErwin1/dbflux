@@ -246,6 +246,14 @@ enum MenuKey {
     Cancel,
 }
 
+/// The icon a row draws before its label: the one its item carries, and
+/// nothing else. The row render and its test both go through this seam, so a
+/// render that stopped forwarding the item's own source would fail a test
+/// rather than quietly drawing some other glyph.
+fn row_leading_icon(item: &DropdownItem) -> Option<IconSource> {
+    item.icon.clone()
+}
+
 fn menu_key(keys: &CommandSet, action_id: &str) -> Option<MenuKey> {
     match keys.command(action_id)? {
         Command::SelectNext => Some(MenuKey::SelectNext),
@@ -835,7 +843,7 @@ impl Dropdown {
 
                 let icon_selector = format!("{item_selector}-icon");
                 let label_selector = format!("{item_selector}-label");
-                let icon = item.icon.clone();
+                let icon = row_leading_icon(item);
                 let icon_color = item
                     .icon_tone
                     .map(|tone| tone.text_color(theme))
