@@ -2,24 +2,32 @@
 //! section, its details, its rotation and its tags.
 
 use super::render::{UNKNOWN, format_optional_time, listing_shortcut};
-use super::value::{RetrievedValue, ValueContent, ValueFailure, ValueView};
+use super::value::{MASK, RetrievedValue, ValueContent, ValueFailure, ValueView};
 use super::{DetailsState, SecretRowKey, SecretStoreDocument, ValueState};
 use crate::buckets_table::format_bytes;
 use dbflux_app::keymap::Command;
 use dbflux_components::controls::{Button, Input};
+use dbflux_components::fonts;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{
-    Badge, BadgeTone, BannerBlock, BannerVariant, Icon, SegmentedControl, SegmentedItem, Text,
+    Badge, BadgeTone, BannerBlock, BannerVariant, Chamfer, Icon, SegmentedControl, SegmentedItem,
+    Text,
 };
-use dbflux_components::tokens::{ChromeColors, DocumentMetrics, SecretStoreMetrics};
+use dbflux_components::tokens::{
+    ChamferCut, ChromeColors, DocumentMetrics, SecretStoreMetrics, ui,
+};
 use dbflux_core::{SecretDetails, SecretRotation, SecretStoreCapabilities, SecretSummary};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::scroll::ScrollableElement;
+use gpui_component::scroll::{ScrollableElement, Scrollbar};
 
-/// The masked text a value field shows until it is revealed.
-const MASK: &str = "••••••••••••";
+/// Lines the multi-line viewer keeps visible before it scrolls, so the
+/// sections below the value keep their place.
+pub(super) const VIEWER_VISIBLE_LINES: f32 = 14.0;
+
+/// Width of the viewer's line-number gutter: three digits at the editor size.
+const VIEWER_GUTTER_WIDTH: Rems = ui(28.0);
 
 fn section_title(title: String, cx: &App) -> Div {
     div()
@@ -501,6 +509,7 @@ impl SecretStoreDocument {
                     index,
                     key.map(str::to_string),
                     value.is_revealed(index),
+                    value,
                     cx,
                 )
             })
@@ -522,14 +531,22 @@ impl SecretStoreDocument {
     }
 
     /// One value field: its key on a key/value secret, the value in a
-    /// secret-marked read-only input, and its reveal and copy buttons.
+    /// secret-marked read-only input, and its reveal and copy buttons. A value
+    /// with more than one line is drawn in the multi-line viewer instead.
     fn render_value_field(
         &self,
         index: usize,
         key: Option<String>,
         revealed: bool,
+        value: &RetrievedValue,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if value.is_multiline() {
+            return self
+                .render_multiline_value_field(index, key, revealed, value, cx)
+                .into_any_element();
+        }
+
         let theme = cx.theme();
         let aria = key
             .clone()
@@ -554,7 +571,7 @@ impl SecretStoreDocument {
             .items_center()
             .gap(DocumentMetrics::GAP)
             .h(SecretStoreMetrics::VALUE_ROW_HEIGHT)
-            .font_family(dbflux_components::fonts::editor_family(cx))
+            .font_family(fonts::editor_family(cx))
             .text_size(DocumentMetrics::TABLE_META_FONT)
             .when_some(key, |row, key| {
                 row.child(
@@ -567,37 +584,49 @@ impl SecretStoreDocument {
                 )
             })
             .child(div().flex_1().min_w_0().child(field))
-            .child(
-                Button::new(
-                    SharedString::from(format!("secret-value-reveal-{index}")),
-                    if revealed {
-                        dbflux_i18n::t!("document.secret_store.value.hide")
-                    } else {
-                        dbflux_i18n::t!("document.secret_store.value.reveal")
-                    },
-                )
-                .ghost()
-                .icon(if revealed {
-                    AppIcon::EyeOff
-                } else {
-                    AppIcon::Eye
-                })
-                .icon_only()
-                .tab_stop(false)
-                .on_click(cx.listener(move |this, _, _, cx| this.toggle_reveal(index, cx))),
-            )
-            .child(
-                Button::new(
-                    SharedString::from(format!("secret-value-copy-{index}")),
-                    dbflux_i18n::t!("document.secret_store.value.copy"),
-                )
-                .ghost()
-                .icon(AppIcon::Copy)
-                .icon_only()
-                .tab_stop(false)
-                .on_click(cx.listener(move |this, _, _, cx| this.copy_value_field(index, cx))),
-            )
+            .children(value_field_buttons(index, revealed, cx))
             .into_any_element()
+    }
+
+    /// A value the viewer draws: its key and actions on one row, then the
+    /// bounded viewer box.
+    fn render_multiline_value_field(
+        &self,
+        index: usize,
+        key: Option<String>,
+        revealed: bool,
+        value: &RetrievedValue,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let muted = cx.theme().muted_foreground;
+        let family = fonts::editor_family(cx);
+        let lines = value.viewer_lines(revealed);
+
+        let header = div()
+            .flex()
+            .items_center()
+            .gap(DocumentMetrics::GAP)
+            .text_size(DocumentMetrics::TABLE_META_FONT)
+            .when_some(key, |header, key| {
+                header.child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(family)
+                        .text_color(muted)
+                        .child(key),
+                )
+            })
+            .child(div().flex_1())
+            .children(value_field_buttons(index, revealed, cx));
+
+        div()
+            .id(SharedString::from(format!("secret-value-field-{index}")))
+            .flex()
+            .flex_col()
+            .gap(SecretStoreMetrics::ROW_GAP)
+            .child(header)
+            .child(render_value_viewer(&lines, &self.value_viewer_scroll, cx))
     }
 
     fn render_value_actions(&self, value: &RetrievedValue, cx: &mut Context<Self>) -> Div {
@@ -638,6 +667,110 @@ impl SecretStoreDocument {
             .child(reveal_all)
             .child(copy_all)
     }
+}
+
+/// The reveal and copy buttons of one value field, shared by the single-line
+/// field and the multi-line viewer.
+fn value_field_buttons(
+    index: usize,
+    revealed: bool,
+    cx: &mut Context<SecretStoreDocument>,
+) -> [AnyElement; 2] {
+    [
+        Button::new(
+            SharedString::from(format!("secret-value-reveal-{index}")),
+            if revealed {
+                dbflux_i18n::t!("document.secret_store.value.hide")
+            } else {
+                dbflux_i18n::t!("document.secret_store.value.reveal")
+            },
+        )
+        .ghost()
+        .icon(if revealed {
+            AppIcon::EyeOff
+        } else {
+            AppIcon::Eye
+        })
+        .icon_only()
+        .tab_stop(false)
+        .on_click(cx.listener(move |this, _, _, cx| this.toggle_reveal(index, cx)))
+        .into_any_element(),
+        Button::new(
+            SharedString::from(format!("secret-value-copy-{index}")),
+            dbflux_i18n::t!("document.secret_store.value.copy"),
+        )
+        .ghost()
+        .icon(AppIcon::Copy)
+        .icon_only()
+        .tab_stop(false)
+        .on_click(cx.listener(move |this, _, _, cx| this.copy_value_field(index, cx)))
+        .into_any_element(),
+    ]
+}
+
+/// The bounded viewer of a multi-line value: a monospace box with a
+/// line-number gutter that keeps every line break and wraps long lines at the
+/// pane width. The box grows with its lines up to [`VIEWER_VISIBLE_LINES`]
+/// and scrolls past that, so a short value does not push the sections below
+/// it down and a long one does not run away.
+///
+/// The lines it draws are hidden from the accessibility tree and redacted in
+/// the rendered frame UI automation reads, so neither a masked nor a revealed
+/// value leaves the value behind.
+fn render_value_viewer(lines: &[String], scroll_handle: &ScrollHandle, cx: &App) -> Div {
+    let theme = cx.theme();
+    let muted = theme.muted_foreground;
+    let foreground = theme.foreground;
+    let fill = theme.popover;
+    let border = theme.border;
+
+    let line_height = fonts::ui_px(cx, DocumentMetrics::DETAIL_BLOCK_FONT)
+        * DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT;
+
+    let rows = lines.iter().enumerate().map(|(index, line)| {
+        div()
+            .id(SharedString::from(format!(
+                "secret-value-viewer-line-{index}"
+            )))
+            .relative()
+            .flex_shrink_0()
+            .w_full()
+            .min_h(line_height)
+            .pl(VIEWER_GUTTER_WIDTH)
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .w(VIEWER_GUTTER_WIDTH)
+                    .text_color(muted)
+                    .child((index + 1).to_string()),
+            )
+            .child(div().w_full().child(line.clone()))
+    });
+
+    div()
+        .relative()
+        .px(DocumentMetrics::DETAIL_BLOCK_PADDING_X)
+        .py(DocumentMetrics::DETAIL_BLOCK_PADDING_Y)
+        .font_family(fonts::editor_family(cx))
+        .text_size(DocumentMetrics::DETAIL_BLOCK_FONT)
+        .line_height(relative(DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT))
+        .text_color(foreground)
+        .child(Chamfer::new(ChamferCut::INPUT).fill(fill).border(border))
+        .child(
+            div()
+                .id("secret-value-viewer")
+                .flex()
+                .flex_col()
+                .max_h(line_height * VIEWER_VISIBLE_LINES)
+                .aria_hidden(true)
+                .frame_redacted(true)
+                .track_scroll(scroll_handle)
+                .children(rows)
+                .overflow_y_scroll(),
+        )
+        .child(Scrollbar::vertical(scroll_handle))
 }
 
 fn render_value_failed(failure: &ValueFailure, cx: &mut Context<SecretStoreDocument>) -> Div {

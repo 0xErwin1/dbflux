@@ -3,7 +3,8 @@ use super::listing::{
     keeps_loading, parent_path, path_segments,
 };
 use super::value::{
-    RetrievalTarget, ValueContent, ValueFailure, encode_base64, value_retrieval_event,
+    MASK, RetrievalTarget, RetrievedValue, ValueContent, ValueFailure, encode_base64,
+    value_retrieval_event,
 };
 use super::{
     DetailsState, PathMode, SecretRowKey, SecretStoreDocument, VALUE_RETRIEVE_FAILED_ACTION,
@@ -31,6 +32,12 @@ const PENDING_DELETION_SECRET: &str = "prod/deploy/legacy-token";
 const PLAINTEXT_SECRET: &str = "prod/notify/webhook-token";
 const BINARY_SECRET: &str = "prod/tls/signing-key";
 const DENIED_PARAMETER: &str = "/app/prod/db/password";
+/// A `.env` file a user stored in a secret: the line breaks are the point.
+const MULTILINE_SECRET: &str = "PORT=3000\nENV=prod\nDATABASE_URL=postgres://app@db:5432/app";
+/// JSON that does not open as key/value, because an object and an array are
+/// not scalar values. Its keys are in the order pretty-printing keeps.
+const NESTED_JSON_SECRET: &str =
+    r#"{"database":{"host":"db.internal","port":5432},"flags":["a,b","c"]}"#;
 
 struct Opened<'a> {
     doc: Entity<SecretStoreDocument>,
@@ -76,6 +83,32 @@ impl Opened<'_> {
     fn read<R>(&mut self, f: impl FnOnce(&SecretStoreDocument) -> R) -> R {
         let doc = self.doc.clone();
         self.window.update(|_, cx| f(doc.read(cx)))
+    }
+
+    /// Shows `text` as the retrieved value, the way a store returning a
+    /// multi-line secret would.
+    fn show_value(&mut self, text: &str) {
+        let value = RetrievedValue::new(&SecretValue::text(None, text.to_string()));
+        self.update(|doc, cx| {
+            doc.value = ValueState::Loaded(Box::new(value));
+            cx.notify();
+        });
+    }
+
+    /// The rendered-frame path of every element the window drew.
+    fn rendered_paths(&mut self) -> Vec<String> {
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
+        let frame = capture.frame(self.window);
+
+        frame
+            .nodes()
+            .map(|(_, node)| node.path().to_string())
+            .collect()
+    }
+
+    fn clipboard(&mut self) -> Option<String> {
+        self.window
+            .update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
     }
 
     fn select(&mut self, name: &str) {
@@ -706,6 +739,317 @@ fn the_reveal_all_button_names_what_it_will_do(cx: &mut TestAppContext) {
     let revealed = opened.rendered_text();
     assert!(revealed.contains("Hide all"), "revealed: {revealed}");
     assert!(!revealed.contains("Reveal all"), "revealed: {revealed}");
+}
+
+// -- Multi-line value viewer -----------------------------------------------
+
+/// A `.env` stored in a secret keeps a line break per assignment: the value
+/// opens in the viewer with one line each, in the order it was stored.
+#[test]
+fn a_multiline_value_opens_in_the_viewer_with_every_line() {
+    let value = RetrievedValue::new(&SecretValue::text(None, MULTILINE_SECRET.to_string()));
+
+    assert!(value.is_multiline());
+    assert_eq!(
+        value.viewer_lines(true),
+        vec![
+            "PORT=3000",
+            "ENV=prod",
+            "DATABASE_URL=postgres://app@db:5432/app",
+        ]
+    );
+}
+
+/// Nothing of the value is drawn before it is revealed: the viewer shows one
+/// mask per value line, so the line count shows and the text never does.
+#[test]
+fn the_viewer_masks_one_line_per_value_line() {
+    let value = RetrievedValue::new(&SecretValue::text(None, MULTILINE_SECRET.to_string()));
+
+    let masked = value.viewer_lines(false);
+
+    assert_eq!(masked.len(), MULTILINE_SECRET.lines().count());
+    assert!(masked.iter().all(|line| line == MASK), "{masked:?}");
+    assert!(!masked.join("\n").contains("PORT=3000"), "{masked:?}");
+}
+
+/// JSON that does not open as key/value — nested objects, arrays — is drawn
+/// pretty-printed with two spaces, and Copy value still copies the text the
+/// store returned.
+#[test]
+fn nested_json_is_drawn_pretty_printed() {
+    let value = RetrievedValue::new(&SecretValue::text(None, NESTED_JSON_SECRET.to_string()));
+
+    assert!(value.is_multiline());
+    assert_eq!(
+        value.viewer_lines(true),
+        vec![
+            "{",
+            "  \"database\": {",
+            "    \"host\": \"db.internal\",",
+            "    \"port\": 5432",
+            "  },",
+            "  \"flags\": [",
+            "    \"a,b\",",
+            "    \"c\"",
+            "  ]",
+            "}",
+        ]
+    );
+    assert_eq!(
+        value.content.full_text().expose_secret(),
+        NESTED_JSON_SECRET,
+        "formatting is view only"
+    );
+}
+
+/// A one-line value, a key/value secret and a binary one keep the field they
+/// always had: the viewer is for text with more than one line only.
+#[test]
+fn values_that_fit_one_line_keep_their_field() {
+    for text in [
+        FAKE_SECRET_PLAINTEXT,
+        // One-level JSON that opens as key/value, one line per pair.
+        "{\n  \"user\": \"a\",\n  \"port\": 5432\n}",
+    ] {
+        let value = RetrievedValue::new(&SecretValue::text(None, text.to_string()));
+        assert!(!value.is_multiline(), "{text}");
+        assert!(value.viewer_lines(true).is_empty(), "{text}");
+    }
+
+    let binary = RetrievedValue::new(&SecretValue::binary(None, FAKE_SECRET_BINARY.to_vec()));
+    assert!(!binary.is_multiline());
+    assert!(binary.viewer_lines(true).is_empty());
+}
+
+/// The viewer draws one row per line, masked until revealed, and neither
+/// state puts the text in the frame UI automation reads. Copy value copies
+/// the stored text, formatting and all.
+#[gpui::test]
+fn the_viewer_draws_the_lines_and_never_leaks_the_value(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.show_value(MULTILINE_SECRET);
+
+    let paths = opened.rendered_paths();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with("secret-value-viewer")),
+        "{paths:?}"
+    );
+    let lines = MULTILINE_SECRET.lines().count();
+    for index in 0..lines {
+        assert!(
+            paths
+                .iter()
+                .any(|path| path.ends_with(&format!("secret-value-viewer-line-{index}"))),
+            "line {index} is missing: {paths:?}"
+        );
+    }
+
+    let masked = opened.rendered_text();
+    assert!(opened.command(Command::ExpandCollapse));
+    let revealed = opened.rendered_text();
+
+    for line in MULTILINE_SECRET.lines() {
+        assert!(!masked.contains(line), "masked frame holds {line}");
+        assert!(!revealed.contains(line), "revealed frame holds {line}");
+    }
+
+    opened.update(|doc, cx| doc.copy_full_value(cx));
+    assert_eq!(opened.clipboard().as_deref(), Some(MULTILINE_SECRET));
+}
+
+/// The viewer keeps about fourteen lines visible and wraps a long line at the
+/// pane width instead of clipping it, so the sections below it keep their
+/// place.
+#[gpui::test]
+fn the_viewer_scrolls_after_about_fourteen_lines_and_wraps_long_ones(cx: &mut TestAppContext) {
+    use dbflux_components::fonts;
+    use dbflux_components::tokens::DocumentMetrics;
+
+    /// Longer than the details pane: it has to wrap to be readable.
+    const LONG_LINE: &str = "DATABASE_URL postgres app secret db.internal 5432 app sslmode require application_name dbflux connect_timeout ten keepalives_idle thirty pool_max twenty";
+    let many_lines = (0..40)
+        .map(|index| format!("KEY_{index}=value"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.show_value(&format!("{LONG_LINE}\n{many_lines}"));
+    assert!(opened.command(Command::ExpandCollapse), "reveal the value");
+
+    let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
+    let frame = capture.frame(opened.window);
+    let bounds = |suffix: &str| {
+        frame
+            .nodes()
+            .find(|(_, node)| node.path().ends_with(suffix))
+            .map(|(_, node)| node.bounds().size.height)
+    };
+
+    let line_height = opened
+        .window
+        .update(|_, cx| fonts::ui_px(cx, DocumentMetrics::DETAIL_BLOCK_FONT))
+        * DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT;
+
+    let viewer = bounds("secret-value-viewer").expect("the viewer is rendered");
+    let visible = line_height * super::details::VIEWER_VISIBLE_LINES;
+    assert!(
+        viewer >= visible - gpui::px(1.0),
+        "the viewer keeps its lines visible: {viewer:?} at {line_height:?} per line"
+    );
+    assert!(
+        viewer <= visible + DocumentMetrics::DETAIL_BLOCK_PADDING_Y * 2.0 + gpui::px(1.0),
+        "the viewer is bounded to those lines: {viewer:?} at {line_height:?} per line"
+    );
+
+    let first_line = bounds("secret-value-viewer-line-0").expect("the first line is rendered");
+    assert!(
+        first_line > line_height * 2.0,
+        "the long first line wraps instead of being clipped: {first_line:?}"
+    );
+
+    let last_line = bounds("secret-value-viewer-line-40").expect("the last line is rendered");
+    assert!(
+        (last_line - line_height).abs() < gpui::px(1.0),
+        "a short line takes one row: {last_line:?} at {line_height:?}"
+    );
+}
+
+/// The viewer scrolls: a wheel over the box moves its lines instead of the
+/// details body, so a long value stays inside its own bounded box.
+#[gpui::test]
+fn the_viewer_scrolls_its_own_lines(cx: &mut TestAppContext) {
+    let many_lines = (0..40)
+        .map(|index| format!("KEY_{index}=value"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.show_value(&many_lines);
+    assert!(opened.command(Command::ExpandCollapse), "reveal the value");
+
+    let bounds = |opened: &mut Opened<'_>, suffix: &str| {
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
+        let frame = capture.frame(opened.window);
+
+        frame
+            .nodes()
+            .find(|(_, node)| node.path().ends_with(suffix))
+            .map(|(_, node)| node.bounds())
+            .unwrap_or_else(|| panic!("{suffix} is rendered"))
+    };
+
+    let viewer = bounds(&mut opened, "secret-value-viewer");
+    let before = bounds(&mut opened, "secret-value-viewer-line-0").origin.y;
+
+    opened.window.simulate_event(gpui::ScrollWheelEvent {
+        position: viewer.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-120.0))),
+        ..Default::default()
+    });
+    opened.window.run_until_parked();
+
+    let after = bounds(&mut opened, "secret-value-viewer-line-0").origin.y;
+    assert!(
+        after < before,
+        "the wheel scrolls the viewer's own lines: {before:?} then {after:?}"
+    );
+}
+
+/// A short value gets a box its own height: the fourteen lines are a bound,
+/// not a reserved block that would push the sections below it down.
+#[gpui::test]
+fn a_short_value_takes_a_short_box(cx: &mut TestAppContext) {
+    use dbflux_components::fonts;
+    use dbflux_components::tokens::DocumentMetrics;
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.show_value("PORT=3000\nENV=prod");
+
+    let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
+    let frame = capture.frame(opened.window);
+    let viewer = frame
+        .nodes()
+        .find(|(_, node)| node.path().ends_with("secret-value-viewer"))
+        .map(|(_, node)| node.bounds().size.height)
+        .expect("the viewer is rendered");
+
+    let line_height = opened
+        .window
+        .update(|_, cx| fonts::ui_px(cx, DocumentMetrics::DETAIL_BLOCK_FONT))
+        * DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT;
+
+    assert!(
+        (viewer - line_height * 2.0).abs() < gpui::px(1.0),
+        "two lines take two rows: {viewer:?} at {line_height:?} per line"
+    );
+}
+
+/// A pretty-printed JSON line longer than the pane wraps like any other line.
+#[gpui::test]
+fn a_long_pretty_printed_json_line_wraps(cx: &mut TestAppContext) {
+    use dbflux_components::fonts;
+    use dbflux_components::tokens::DocumentMetrics;
+
+    let long_value = "postgres://app:secret@db.internal:5432/app sslmode require pool_max twenty";
+    let secret = format!(r#"{{"target":{{"url":"{long_value}"}}}}"#);
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.show_value(&secret);
+    assert!(opened.command(Command::ExpandCollapse), "reveal the value");
+
+    let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
+    let frame = capture.frame(opened.window);
+    let height = |suffix: &str| {
+        frame
+            .nodes()
+            .find(|(_, node)| node.path().ends_with(suffix))
+            .map(|(_, node)| node.bounds().size.height)
+    };
+
+    let line_height = opened
+        .window
+        .update(|_, cx| fonts::ui_px(cx, DocumentMetrics::DETAIL_BLOCK_FONT))
+        * DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT;
+
+    // `{`, the nested object, the long `url` line, then the closers.
+    let long_line = height("secret-value-viewer-line-2").expect("the long line is rendered");
+    assert!(
+        long_line > line_height * 2.0,
+        "the long JSON line wraps: {long_line:?} at {line_height:?} per line"
+    );
+}
+
+/// A single-line plaintext secret keeps the single-line field: no viewer, no
+/// gutter, and the frame names the field it always named.
+#[gpui::test]
+fn a_single_line_plaintext_secret_keeps_its_single_line_field(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+
+    let paths = opened.rendered_paths();
+
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with("secret-value-field-0")),
+        "{paths:?}"
+    );
+    assert!(
+        !paths
+            .iter()
+            .any(|path| path.contains("secret-value-viewer")),
+        "{paths:?}"
+    );
 }
 
 // -- Region switch ---------------------------------------------------------

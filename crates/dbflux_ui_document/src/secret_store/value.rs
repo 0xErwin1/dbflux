@@ -12,6 +12,9 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{SecretPayload, SecretValue};
 use uuid::Uuid;
 
+/// The masked text a value field shows until it is revealed.
+pub(crate) const MASK: &str = "••••••••••••";
+
 /// Audit action of a value retrieval that returned a value.
 pub const VALUE_RETRIEVED_ACTION: &str = "secret_value_retrieved";
 
@@ -81,6 +84,41 @@ pub enum ValueView {
     Plaintext,
 }
 
+/// The text the multi-line viewer draws for a value, decided once when the
+/// value is retrieved.
+#[derive(Debug)]
+struct ViewerText {
+    /// What the viewer draws: JSON pretty-printed with two spaces, or the
+    /// stored text with the line breaks it was stored with.
+    text: SecretString,
+}
+
+impl ViewerText {
+    /// The viewer a value needs, or `None` for a value that keeps its own
+    /// presentation: a key/value secret keeps its pairs, a binary one its
+    /// base64, and a value whose drawn text has a single line keeps the
+    /// single-line field it always had.
+    ///
+    /// A value the store keeps as JSON is drawn pretty-printed whenever it
+    /// does not open as key/value (nested objects, arrays). The stored text
+    /// stays the value's own, so Copy value copies what the store returned.
+    fn new(content: &ValueContent) -> Option<Self> {
+        let ValueContent::Plaintext(text) = content else {
+            return None;
+        };
+
+        let stored = text.expose_secret();
+        let drawn = match serde_json::from_str::<serde_json::Value>(stored) {
+            Ok(json) => serde_json::to_string_pretty(&json).unwrap_or_else(|_| stored.to_string()),
+            Err(_) => stored.to_string(),
+        };
+
+        (drawn.lines().count() > 1).then(|| Self {
+            text: SecretString::from(drawn),
+        })
+    }
+}
+
 /// A value fetched by an explicit retrieval.
 #[derive(Debug)]
 pub struct RetrievedValue {
@@ -88,6 +126,9 @@ pub struct RetrievedValue {
     pub content: ValueContent,
     pub retrieved_at: DateTime<Local>,
     pub view: ValueView,
+    /// What the multi-line viewer draws, `None` when the value keeps the
+    /// single-line field.
+    viewer: Option<ViewerText>,
     /// Which fields are drawn in plain text: one per key/value pair, or a
     /// single entry for the plaintext and binary views.
     revealed: Vec<bool>,
@@ -105,6 +146,7 @@ impl RetrievedValue {
 
         let mut retrieved = Self {
             version: value.version.clone(),
+            viewer: ViewerText::new(&content),
             content,
             retrieved_at: Local::now(),
             view,
@@ -123,6 +165,32 @@ impl RetrievedValue {
                 .map(|(key, value)| (Some(key.as_str()), value))
                 .collect(),
             (content, _) => vec![(None, content.full_text())],
+        }
+    }
+
+    /// Whether the value is drawn in the multi-line viewer instead of the
+    /// single-line field: its text has more than one line, because it holds
+    /// line breaks or because JSON that does not open as key/value is drawn
+    /// pretty-printed.
+    pub fn is_multiline(&self) -> bool {
+        self.viewer.is_some()
+    }
+
+    /// The lines the viewer draws, in order: the value's own lines once it is
+    /// revealed, one mask per line while it is hidden, so the line count
+    /// shows and the text never does. Empty when the value keeps the
+    /// single-line field.
+    pub fn viewer_lines(&self, revealed: bool) -> Vec<String> {
+        let Some(viewer) = &self.viewer else {
+            return Vec::new();
+        };
+
+        let text = viewer.text.expose_secret();
+
+        if revealed {
+            text.lines().map(str::to_string).collect()
+        } else {
+            vec![MASK.to_string(); text.lines().count()]
         }
     }
 
