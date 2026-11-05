@@ -47,14 +47,19 @@
 //!   surface to a text range it measured inside a field as well as to an
 //!   element. Without an anchor the surface stays where the host renders it, as
 //!   `anchored()` does for a trigger.
-//! - **Dismissal.** Escape closes it, and so does a click away from it. The
-//!   click-away layer is drawn under the surface rather than around it, so a
-//!   click in anything drawn above it — a `Dropdown` list opened from inside the
-//!   body, for one — is a click inside and leaves the popover alone.
+//! - **Dismissal.** Escape closes it, and so does a click away from it.
+//!   Escape is caught twice, so a host's own key bindings cannot swallow it: the
+//!   frame answers the product's cancel action ([`Command::Cancel`], through the
+//!   installed [`CommandSet`]) the way a `Dropdown` does, and a raw Escape that
+//!   no binding claimed is caught on the way down with `capture_key_down`, before
+//!   anything inside the body sees it. The click-away layer is drawn under the
+//!   surface rather than around it, so a click in anything drawn above it — a
+//!   `Dropdown` list opened from inside the body, for one — is a click inside and
+//!   leaves the popover alone.
 //! - **Focus.** Opening moves focus to the handle given to
 //!   [`PopoverState::set_initial_focus`] (or to the surface itself, with nothing
 //!   to focus) and remembers the element that had it; closing gives that element
-//!   focus back.
+//!   focus back while focus is still anywhere inside the surface.
 //! - **Hover intent.** Built with [`PopoverState::hover_intent`], the surface
 //!   opens [`HOVER_DELAY`] after the pointer comes to rest on its anchor, stays
 //!   open while the pointer is over the anchor or the surface, and closes
@@ -75,6 +80,7 @@ use gpui::{
 use gpui_component::ActiveTheme;
 
 use crate::icon::IconSource;
+use crate::keymap::{Command, CommandSet, KeyCommandHandler};
 use crate::primitives::{Icon, SurfaceRole, Text, surface};
 use crate::selector::id_selector;
 use crate::tokens::{ChromeColors, PopoverMetrics, Spacing};
@@ -488,9 +494,14 @@ impl PopoverState {
             return;
         };
 
-        let ours = window.focused(cx).is_some_and(|focused| {
-            focused == self.focus || self.initial_focus.as_ref() == Some(&focused)
-        });
+        // Focus is ours while it sits on the surface itself, on the handle the
+        // host opens it for, or on anything the body focused of its own (a
+        // field that took the keyboard from the initial one).
+        let inside = self.focus.contains_focused(window, cx);
+        let ours = inside
+            || window.focused(cx).is_some_and(|focused| {
+                focused == self.focus || self.initial_focus.as_ref() == Some(&focused)
+            });
 
         if ours {
             previous.focus(window, cx);
@@ -655,7 +666,7 @@ impl Popover {
             .gap(PopoverMetrics::GAP)
             .text_color(crate::colors(cx).foreground)
             .track_focus(&focus)
-            .on_key_down({
+            .capture_key_down({
                 let state = self.state.downgrade();
                 move |event: &KeyDownEvent, window, cx| {
                     if event.keystroke.key != "escape" || event.keystroke.modifiers.modified() {
@@ -733,6 +744,38 @@ impl Popover {
                     .gap(PopoverMetrics::FOOTER_GAP)
                     .children(self.footer),
             );
+        }
+
+        // A product's keymap binds Escape to one of its own actions while the
+        // field in the body has focus (a field's cancel) and while the shell
+        // does (a shell-wide cancel). A binding is dispatched before any key
+        // listener runs, so `capture_key_down` above never sees that Escape: the
+        // frame answers the product's cancel action instead, from where it sits
+        // on the dispatch path — inside every shell that would answer it, and
+        // outside anything the body opened of its own, which gets the cancel
+        // first and keeps the surface open.
+        if let Some(keys) = cx.try_global::<CommandSet>() {
+            let attach = keys.attach;
+            let state = self.state.downgrade();
+            let handler: KeyCommandHandler = Rc::new(move |action_id, window, cx| {
+                let cancels = cx
+                    .try_global::<CommandSet>()
+                    .and_then(|keys| keys.command(action_id))
+                    == Some(Command::Cancel);
+
+                if !cancels {
+                    return false;
+                }
+
+                let Some(state) = state.upgrade() else {
+                    return false;
+                };
+
+                state.update(cx, |state, cx| state.close(window, cx));
+                true
+            });
+
+            frame = attach(frame, handler);
         }
 
         frame

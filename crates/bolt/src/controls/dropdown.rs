@@ -1,3 +1,19 @@
+//! A select: a trigger that draws the current choice and a menu of the
+//! choices, opened over the trigger.
+//!
+//! An open menu is found and driven by id, so automation and tests pick a row
+//! by name instead of by position:
+//!
+//! - `<id>-menu` is the menu surface the rows are drawn in.
+//! - `<id>-menu-rows` is the scrolling column of rows inside it.
+//! - `<id>-item-<n>` is the `n`th row, numbered from 0 in the order of the
+//!   items the dropdown was built with. Clicking that element selects that row,
+//!   exactly as clicking the row itself does.
+//!
+//! The menu keys come from the product's keymap through [`crate::keymap`]: the
+//! dropdown answers the actions the installed [`CommandSet`] maps onto its menu
+//! commands and propagates the ones it does not own.
+
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -253,6 +269,14 @@ impl Dropdown {
 
     fn menu_debug_selector(&self) -> String {
         format!("{}-menu", self.id)
+    }
+
+    fn menu_rows_debug_selector(&self) -> String {
+        format!("{}-menu-rows", self.id)
+    }
+
+    fn item_debug_selector(&self, index: usize) -> String {
+        format!("{}-item-{index}", self.id)
     }
 
     pub fn new(id: impl Into<ElementId>) -> Self {
@@ -762,6 +786,7 @@ impl Dropdown {
             .enumerate()
             .map(|(index, item)| {
                 let is_highlighted = self.highlighted_index == Some(index);
+                let item_selector = self.item_debug_selector(index);
 
                 let row_shape = if is_highlighted {
                     Chamfer::new(ChamferCut::KEYCAP).fill(highlight_fill)
@@ -782,7 +807,8 @@ impl Dropdown {
                 };
 
                 let mut row = div()
-                    .id(index)
+                    .id(SharedString::from(item_selector.clone()))
+                    .debug_selector(move || item_selector)
                     .relative()
                     .flex()
                     .items_center()
@@ -812,9 +838,12 @@ impl Dropdown {
             .collect();
 
         let menu_debug_selector = self.menu_debug_selector();
+        let rows_debug_selector = self.menu_rows_debug_selector();
+        let rows_id = SharedString::from(rows_debug_selector.clone());
 
         let rows = div()
-            .id("dropdown-menu-rows")
+            .id(rows_id)
+            .debug_selector(move || rows_debug_selector)
             .max_h(Fields::MENU_MAX_HEIGHT)
             .py(Fields::MENU_PADDING_Y)
             .overflow_y_scroll()

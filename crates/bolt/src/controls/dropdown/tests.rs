@@ -609,3 +609,93 @@ mod menu_width {
         );
     }
 }
+
+/// The ids of an open menu: automation and tests pick a row by name instead
+/// of by position.
+mod menu_ids {
+    use super::super::{Dropdown, DropdownItem};
+    use gpui::{
+        AppContext as _, Context, Entity, IntoElement, Modifiers, ParentElement as _, Render,
+        Styled as _, TestAppContext, VisualTestContext, Window, div,
+    };
+
+    const DROPDOWN_ID: &str = "menu-ids-dropdown";
+
+    /// A selector under the dropdown's id. `debug_bounds` takes a
+    /// `&'static str`, and the id the test asserts on is built from the
+    /// dropdown's own id rather than written out, so it leaks this one
+    /// string.
+    fn selector(suffix: &str) -> &'static str {
+        Box::leak(format!("{DROPDOWN_ID}{suffix}").into_boxed_str())
+    }
+
+    struct Host {
+        dropdown: Entity<Dropdown>,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.dropdown.clone())
+        }
+    }
+
+    fn open(cx: &mut TestAppContext) -> (Entity<Host>, Entity<Dropdown>, &mut VisualTestContext) {
+        cx.update(gpui_component::init);
+
+        let (host, window) = cx.add_window_view(|_window, cx| {
+            let dropdown = cx.new(|_cx| {
+                Dropdown::new(DROPDOWN_ID).items(vec![
+                    DropdownItem::new("One"),
+                    DropdownItem::new("Two"),
+                    DropdownItem::new("Three"),
+                ])
+            });
+            Host { dropdown }
+        });
+        window.run_until_parked();
+
+        let dropdown = host.read_with(window, |host, _cx| host.dropdown.clone());
+        window.update(|_, cx| dropdown.update(cx, |dropdown, cx| dropdown.open(cx)));
+        window.run_until_parked();
+
+        (host, dropdown, window)
+    }
+
+    #[gpui::test]
+    fn every_open_row_carries_an_id_named_after_the_dropdown_and_its_index(
+        cx: &mut TestAppContext,
+    ) {
+        let (_host, _dropdown, window) = open(cx);
+
+        assert!(
+            window.debug_bounds(selector("-menu-rows")).is_some(),
+            "the list container is found by name"
+        );
+
+        for index in 0..3 {
+            let row = selector(&format!("-item-{index}"));
+            assert!(
+                window.debug_bounds(row).is_some(),
+                "row {index} is found by `{row}`"
+            );
+        }
+        assert!(
+            window.debug_bounds(selector("-item-3")).is_none(),
+            "the list has three rows"
+        );
+    }
+
+    #[gpui::test]
+    fn clicking_a_row_by_its_id_selects_that_row(cx: &mut TestAppContext) {
+        let (_host, dropdown, window) = open(cx);
+
+        let bounds = window.debug_bounds(selector("-item-1"));
+        let row = bounds.expect("the second row is laid out").center();
+
+        window.simulate_click(row, Modifiers::default());
+        window.run_until_parked();
+
+        let selected = window.update(|_window, cx| dropdown.read(cx).selected());
+        assert_eq!(selected, Some(1), "clicking the row by its id selects it");
+    }
+}

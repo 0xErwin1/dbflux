@@ -678,3 +678,279 @@ fn a_dismissed_hover_popover_waits_for_the_pointer_to_leave(cx: &mut TestAppCont
         "the pointer has to leave the anchor and come back"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Escape while the host binds it
+// ---------------------------------------------------------------------------
+
+/// A host whose keymap binds Escape to one of its own actions, the way a
+/// product binds a text field's cancel or a shell-wide cancel: the binding is
+/// dispatched before any key listener, so the frame has to answer the action.
+mod escape_bound_by_the_host {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use gpui::prelude::*;
+    use gpui::{
+        Action, Context, Entity, FocusHandle, Focusable as _, IntoElement, KeyBinding, Render,
+        SharedString, TestAppContext, VisualTestContext, Window, div, px,
+    };
+
+    use super::{anchor, install_test_theme};
+    use crate::composites::popover::{Popover, PopoverState};
+    use crate::controls::{Button, Input, InputState};
+    use crate::keymap::{Command, CommandSet, KeyCommand, attach_key_commands};
+
+    /// The host keymap's cancel action, carrying the command id its binding
+    /// runs, as a product's own action does.
+    #[derive(Clone, Debug, PartialEq, Eq, Action)]
+    #[action(namespace = bolt_popover_test, no_json)]
+    struct TestCancel {
+        id: SharedString,
+    }
+
+    impl KeyCommand for TestCancel {
+        fn key_command_id(&self) -> &str {
+            &self.id
+        }
+    }
+
+    const CANCEL_ID: &str = "test_cancel";
+
+    /// The body of the popover: an input the host wraps in the key context its
+    /// text-field keys are bound in, or a plain field.
+    #[derive(Clone, Copy)]
+    enum Body {
+        Input,
+        Field,
+    }
+
+    struct Host {
+        state: Entity<PopoverState>,
+        body: Body,
+        trigger: FocusHandle,
+        field: FocusHandle,
+        input: Entity<InputState>,
+        cancels: Rc<RefCell<usize>>,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.state
+                .update(cx, |state, _cx| state.set_anchor(Some(anchor())));
+
+            let body = match self.body {
+                Body::Input => div()
+                    .key_context("Input")
+                    .child(Input::new(&self.input))
+                    .into_any_element(),
+                Body::Field => div()
+                    .id("escape-field")
+                    .track_focus(&self.field)
+                    .h(px(30.0))
+                    .child("Name")
+                    .into_any_element(),
+            };
+
+            div()
+                .size_full()
+                .key_context("Shell")
+                .on_action(cx.listener(|this, _: &TestCancel, _window, _cx| {
+                    *this.cancels.borrow_mut() += 1;
+                }))
+                .child(
+                    div()
+                        .id("escape-trigger")
+                        .track_focus(&self.trigger)
+                        .absolute()
+                        .left(px(120.0))
+                        .top(px(120.0))
+                        .w(px(140.0))
+                        .h(px(20.0)),
+                )
+                .child(
+                    Popover::new("escape-popover", self.state.clone())
+                        .title("Rename")
+                        .body(body)
+                        .footer(vec![Button::new("escape-done", "Done")]),
+                )
+        }
+    }
+
+    struct Setup<'a> {
+        host: Entity<Host>,
+        state: Entity<PopoverState>,
+        trigger: FocusHandle,
+        cancels: Rc<RefCell<usize>>,
+        window: &'a mut VisualTestContext,
+    }
+
+    /// Installs the host keymap seam and its bindings: Escape runs the host's
+    /// cancel action under the shell context, and under the text field's
+    /// context too.
+    fn install_host_keymap(cx: &mut TestAppContext) {
+        let cancel = || TestCancel {
+            id: CANCEL_ID.into(),
+        };
+
+        cx.update(|cx| {
+            cx.set_global(
+                CommandSet::new("Shell", attach_key_commands::<TestCancel>)
+                    .map(Command::Cancel, CANCEL_ID),
+            );
+            cx.bind_keys([
+                KeyBinding::new("escape", cancel(), Some("Shell")),
+                KeyBinding::new("escape", cancel(), Some("Input")),
+            ]);
+        });
+    }
+
+    fn open(cx: &mut TestAppContext, body: Body) -> Setup<'_> {
+        install_test_theme(cx);
+        install_host_keymap(cx);
+
+        let cancels: Rc<RefCell<usize>> = Rc::default();
+        let (host, window) = cx.add_window_view({
+            let cancels = cancels.clone();
+            move |window, cx| {
+                let field = cx.focus_handle();
+                let input = cx.new(|cx| InputState::new(window, cx));
+                let initial_focus = match body {
+                    Body::Input => input.read(cx).focus_handle(cx),
+                    Body::Field => field.clone(),
+                };
+                let state = cx.new(PopoverState::new);
+
+                state.update(cx, |state, _cx| {
+                    state.set_initial_focus(Some(initial_focus))
+                });
+
+                Host {
+                    state,
+                    body,
+                    trigger: cx.focus_handle(),
+                    field,
+                    input,
+                    cancels,
+                }
+            }
+        });
+        window.run_until_parked();
+
+        let (state, trigger) = window.update(|_window, cx| {
+            let host = host.read(cx);
+            (host.state.clone(), host.trigger.clone())
+        });
+
+        let mut setup = Setup {
+            host,
+            state,
+            trigger,
+            cancels,
+            window,
+        };
+
+        setup.focus_trigger();
+        setup.open_at_anchor();
+
+        setup
+    }
+
+    impl Setup<'_> {
+        fn focus_trigger(&mut self) {
+            let trigger = self.trigger.clone();
+            self.window.update(|window, cx| trigger.focus(window, cx));
+            self.window.run_until_parked();
+        }
+
+        fn open_at_anchor(&mut self) {
+            self.state.update_in(self.window, |state, window, cx| {
+                state.open_at(anchor(), window, cx)
+            });
+            self.window.run_until_parked();
+        }
+
+        fn is_open(&mut self) -> bool {
+            let state = self.state.clone();
+            self.window.update(|_window, cx| state.read(cx).is_open())
+        }
+
+        fn trigger_focused(&mut self) -> bool {
+            let trigger = self.trigger.clone();
+            self.window.update(|window, _cx| trigger.is_focused(window))
+        }
+
+        fn cancels(&self) -> usize {
+            *self.cancels.borrow()
+        }
+
+        fn press_escape(&mut self) {
+            self.window.simulate_keystrokes("escape");
+            self.window.run_until_parked();
+        }
+    }
+
+    /// A text field in the body carries its own Escape binding, so the key is
+    /// dispatched as the host's cancel action instead of reaching the frame's
+    /// key listener; the surface still closes and hands focus back.
+    #[gpui::test]
+    fn an_input_in_the_body_binding_escape_still_closes_the_popover(cx: &mut TestAppContext) {
+        let mut setup = open(cx, Body::Input);
+        assert!(setup.is_open(), "the popover opens");
+
+        let input_focused = {
+            let host = setup.host.clone();
+            setup.window.update(|window, cx| {
+                let input = host.read(cx).input.clone();
+                input.read(cx).focus_handle(cx).is_focused(window)
+            })
+        };
+        assert!(input_focused, "the popover focuses the field in its body");
+
+        setup.press_escape();
+
+        assert!(
+            !setup.is_open(),
+            "Escape closes the popover even though the field answered it"
+        );
+        assert!(
+            setup.trigger_focused(),
+            "closing gives focus back to the trigger"
+        );
+        assert_eq!(
+            setup.cancels(),
+            0,
+            "the popover answers the cancel once it is open"
+        );
+    }
+
+    /// An ancestor binds Escape in a key context the popover sits inside; the
+    /// popover closes without the host's own cancel running.
+    #[gpui::test]
+    fn an_ancestor_binding_escape_to_an_action_still_closes_the_popover(cx: &mut TestAppContext) {
+        let mut setup = open(cx, Body::Field);
+        assert!(setup.is_open(), "the popover opens");
+
+        setup.press_escape();
+
+        assert!(
+            !setup.is_open(),
+            "Escape closes the popover from an ancestor's binding"
+        );
+        assert!(setup.trigger_focused(), "focus comes back to the trigger");
+        assert_eq!(setup.cancels(), 0, "the popover takes the host's cancel");
+    }
+
+    /// The host's cancel still reaches the host while the popover is closed.
+    #[gpui::test]
+    fn the_host_still_answers_escape_once_the_popover_is_closed(cx: &mut TestAppContext) {
+        let mut setup = open(cx, Body::Field);
+        setup.press_escape();
+        assert!(!setup.is_open());
+
+        setup.focus_trigger();
+        setup.press_escape();
+
+        assert_eq!(setup.cancels(), 1, "the closed popover answers no key");
+    }
+}
