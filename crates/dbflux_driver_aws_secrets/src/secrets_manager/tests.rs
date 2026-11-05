@@ -89,10 +89,67 @@ fn a_service_page_token_is_not_read_as_a_prefix_one() {
 /// The prefix fallback runs for a search that matched nothing, and only then.
 #[test]
 fn the_prefix_fallback_runs_only_for_an_empty_first_page_of_a_search() {
-    assert!(needs_prefix_fallback(true, Some("b2back"), true, false));
+    assert!(needs_prefix_fallback(
+        true,
+        false,
+        Some("b2back"),
+        true,
+        false
+    ));
 
-    assert!(!needs_prefix_fallback(false, Some("b2back"), true, false));
-    assert!(!needs_prefix_fallback(true, None, true, false));
-    assert!(!needs_prefix_fallback(true, Some("b2back"), false, false));
-    assert!(!needs_prefix_fallback(true, Some("b2back"), true, true));
+    assert!(!needs_prefix_fallback(
+        false,
+        false,
+        Some("b2back"),
+        true,
+        false
+    ));
+    assert!(!needs_prefix_fallback(true, false, None, true, false));
+    assert!(!needs_prefix_fallback(
+        true,
+        false,
+        Some("b2back"),
+        false,
+        false
+    ));
+    assert!(!needs_prefix_fallback(
+        true,
+        false,
+        Some("b2back"),
+        true,
+        true
+    ));
+}
+
+/// An empty page that carries a next token is part of a filtered listing, not
+/// its end: falling back would drop the secrets the later pages hold.
+#[test]
+fn an_empty_page_with_a_next_token_keeps_the_listing() {
+    assert!(!needs_prefix_fallback(
+        true,
+        true,
+        Some("b2back"),
+        true,
+        false
+    ));
+}
+
+/// A fallback listing keeps the `Name` filter on every page, so a token of one
+/// filter is never sent with the other.
+#[test]
+fn a_fallback_listing_keeps_its_filter_on_every_page() {
+    let (key, token, in_prefix_listing) = page_filter(Some("name|abc"));
+    assert!(matches!(key, FilterNameStringType::Name));
+    assert_eq!(token.as_deref(), Some("abc"));
+    assert!(in_prefix_listing);
+
+    let (key, token, in_prefix_listing) = page_filter(Some("abc"));
+    assert!(matches!(key, FilterNameStringType::All));
+    assert_eq!(token.as_deref(), Some("abc"));
+    assert!(!in_prefix_listing);
+
+    let (key, token, in_prefix_listing) = page_filter(None);
+    assert!(matches!(key, FilterNameStringType::All));
+    assert!(token.is_none());
+    assert!(!in_prefix_listing);
 }

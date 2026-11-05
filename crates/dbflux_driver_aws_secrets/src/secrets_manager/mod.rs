@@ -28,16 +28,38 @@ const MAX_PAGE_SIZE: u32 = 100;
 /// and never start with it.
 const PREFIX_TOKEN: &str = "name|";
 
+/// The filter a listing page is asked with, the service token to send, and
+/// whether the page belongs to the `Name` fallback listing. A marked token
+/// keeps that listing on its own filter on every page, so a token from one
+/// filter is never sent with the other.
+fn page_filter(page_token: Option<&str>) -> (FilterNameStringType, Option<String>, bool) {
+    match page_token.and_then(decode_prefix_token) {
+        Some(service_token) => (
+            FilterNameStringType::Name,
+            Some(service_token.to_string()),
+            true,
+        ),
+        None => (
+            FilterNameStringType::All,
+            page_token.map(ToString::to_string),
+            false,
+        ),
+    }
+}
+
 /// Whether a page that matched nothing is asked again with the `Name` filter:
-/// only for a search, only on the first page, and never while a prefix
-/// listing is being paged, whose empty page means its end.
+/// only for a search, only on the first page, never while a prefix listing is
+/// being paged, and only when the empty page ended the listing. An empty page
+/// that carries a next token is a page of a filtered listing, not its end, so
+/// falling back there would drop the secrets the following pages hold.
 fn needs_prefix_fallback(
     entries_are_empty: bool,
+    has_next_page: bool,
     search: Option<&str>,
     first_page: bool,
-    resumed_prefix: bool,
+    in_prefix_listing: bool,
 ) -> bool {
-    entries_are_empty && search.is_some() && first_page && !resumed_prefix
+    entries_are_empty && !has_next_page && search.is_some() && first_page && !in_prefix_listing
 }
 
 /// A page token of the `Name` filter listing, marked so the next request uses
@@ -189,23 +211,16 @@ impl SecretStoreSource for SecretsManagerStore {
             .map(str::trim)
             .filter(|value| !value.is_empty());
 
-        let resumed_prefix = request.page_token.as_deref().and_then(decode_prefix_token);
-        let key = if resumed_prefix.is_some() {
-            FilterNameStringType::Name
-        } else {
-            FilterNameStringType::All
-        };
-        let token = resumed_prefix
-            .map(ToString::to_string)
-            .or_else(|| request.page_token.clone());
+        let (key, token, in_prefix_listing) = page_filter(request.page_token.as_deref());
 
-        let page = self.list_page(request, key, search, token.as_deref(), false)?;
+        let page = self.list_page(request, key, search, token.as_deref(), in_prefix_listing)?;
 
         let fall_back = needs_prefix_fallback(
             page.entries.is_empty(),
+            page.next_page_token.is_none(),
             search,
             token.is_none(),
-            resumed_prefix.is_some(),
+            in_prefix_listing,
         );
         match (fall_back, search) {
             (true, Some(search)) => self.list_page(
