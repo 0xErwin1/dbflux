@@ -112,7 +112,6 @@ impl RenderOnce for ModalCode {
             .w_full()
             .py(ModalMetrics::CODE_PADDING_Y)
             .font_family(crate::fonts::editor_family(cx))
-            .text_size(ModalMetrics::CODE_FONT)
             .text_color(ChromeColors::strong(cx.theme()));
 
         // The gutter runs to the frame's left edge; without it the code keeps

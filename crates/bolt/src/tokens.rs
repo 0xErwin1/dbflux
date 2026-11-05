@@ -117,7 +117,9 @@ impl ChamferCut {
 pub struct CodeMetrics;
 
 impl CodeMetrics {
-    /// A numbered code line row. (20 px)
+    /// The size a read-only code block draws its text at. (12.5 px)
+    pub const FONT: Rems = ui(12.5);
+    /// A numbered code line row, tall enough for one line at `FONT`. (20 px)
     pub const LINE_HEIGHT: Rems = ui(20.0);
     /// Width of the right-aligned line-number gutter. (46 px)
     pub const GUTTER_WIDTH: Rems = ui(46.0);
@@ -158,10 +160,10 @@ impl ModalMetrics {
     pub const LEAD_FONT: Rems = ui(13.5);
     pub const LEAD_LINE_HEIGHT: f32 = 1.6;
     /// Statement block: cut 8, 10 px vertical and 12 px horizontal padding,
-    /// 12.5 px mono.
+    /// the code font of [`CodeMetrics`].
     pub const CODE_PADDING_Y: Pixels = px(10.0);
     pub const CODE_PADDING_X: Pixels = px(12.0);
-    pub const CODE_FONT: Rems = ui(12.5);
+    pub const CODE_FONT: Rems = CodeMetrics::FONT;
     /// Numbered statement block: the line rows of [`CodeMetrics`].
     pub const CODE_LINE_HEIGHT: Rems = CodeMetrics::LINE_HEIGHT;
     pub const CODE_GUTTER_WIDTH: Rems = CodeMetrics::GUTTER_WIDTH;

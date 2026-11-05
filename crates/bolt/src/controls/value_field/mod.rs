@@ -14,7 +14,8 @@ use crate::tokens::{ChamferCut, Fields};
 ///
 /// It holds the text, never an `Entity<InputState>`, so a page that shows many
 /// effective values — a setting a profile resolves to, a computed path — draws
-/// each one without a field state per value. [`Self::mono`] draws the value in
+/// each one without a field state per value. The value is always one line: a
+/// `\r` or `\n` in it reads as a space, so it cannot draw past the field. [`Self::mono`] draws the value in
 /// the editor face, for a value as it is written in a file.
 ///
 /// With [`Self::id`] the value is a label node `<id>-value` named by its text,
@@ -70,7 +71,7 @@ impl RenderOnce for ValueField {
             .flex_1()
             .min_w_0()
             .truncate()
-            .child(self.value.clone());
+            .child(one_line(&self.value));
         let value = match &self.id {
             Some(id) => {
                 let value_id = ElementId::Name(format!("{id}-value").into());
@@ -79,7 +80,7 @@ impl RenderOnce for ValueField {
                     .debug_selector(id_selector(&value_id))
                     .id(value_id)
                     .role(Role::Label)
-                    .aria_label(self.value.clone())
+                    .aria_label(one_line(&self.value))
                     .into_any_element()
             }
             None => value.into_any_element(),
@@ -122,6 +123,17 @@ pub(crate) fn value_field_base(cx: &App) -> Div {
                 .fill(theme.background)
                 .border(theme.border),
         )
+}
+
+/// A value as one line: a break of any kind reads as a space, so a value
+/// carrying one cannot draw past a field's height. Shared by [`ValueField`]
+/// and [`modal_value_field`](crate::modals::modal_value_field).
+pub(crate) fn one_line(value: &str) -> SharedString {
+    if !value.contains(['\r', '\n']) {
+        return value.to_owned().into();
+    }
+
+    value.replace("\r\n", " ").replace(['\r', '\n'], " ").into()
 }
 
 /// The face a value draws in: the caller's, or the interface face.

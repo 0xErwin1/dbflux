@@ -183,3 +183,86 @@ fn the_caller_ranges_draw_bold_in_the_tint(cx: &mut TestAppContext) {
         );
     });
 }
+
+/// The caller's ranges reach the text sorted and non-overlapping: a range
+/// pair given out of order, and one that overlaps its neighbour, still color
+/// the bytes they name.
+#[gpui::test]
+fn unordered_and_overlapping_highlights_are_normalized(cx: &mut TestAppContext) {
+    install_test_theme(cx);
+
+    cx.update(|cx| {
+        let tint = gpui::HighlightStyle {
+            color: Some(crate::tokens::ChromeColors::tint(
+                gpui_component::ActiveTheme::theme(cx),
+            )),
+            font_weight: Some(gpui::FontWeight::BOLD),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            CodeView::new("body", "abcdefgh")
+                .highlights(vec![4..6, 0..2])
+                .styled_runs(cx),
+            vec![(0..2, tint), (4..6, tint)],
+            "an out-of-order pair is drawn in byte order"
+        );
+        assert_eq!(
+            CodeView::new("body", "abcdefgh")
+                .highlights(vec![0..4, 2..6])
+                .styled_runs(cx),
+            vec![(0..6, tint)],
+            "an overlap of one style is drawn once"
+        );
+    });
+}
+
+/// A numbered view draws its rows at its own code font, so a host with a
+/// larger text size cannot make the lines outgrow their 20 px rows.
+#[gpui::test]
+fn a_numbered_view_draws_its_rows_at_the_code_font(cx: &mut TestAppContext) {
+    let mut lines = Vec::new();
+
+    for text_size in [crate::tokens::ui(12.5), crate::tokens::ui(30.0)] {
+        install_test_theme(cx);
+        let (_, window) = cx.add_window_view(move |_, _| ProbeFont { text_size });
+        let capture = FrameCapture::observe(window);
+        let _frame = capture.frame(window);
+        lines.push(
+            window
+                .debug_bounds("probe-code-line-1")
+                .expect("line 1 is drawn"),
+        );
+    }
+
+    assert_eq!(
+        lines[0].size.width, lines[1].size.width,
+        "the host's text size does not stretch the code"
+    );
+    assert_eq!(
+        lines[1].size.height,
+        ModalMetrics::CODE_LINE_HEIGHT.to_pixels(px(BASE_REM)),
+        "a numbered line is one line tall at any host size"
+    );
+}
+
+struct ProbeFont {
+    text_size: gpui::Rems,
+}
+
+impl gpui::Render for ProbeFont {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement as _, Styled as _};
+
+        gpui::div().size_full().child(
+            gpui::div()
+                .w(px(480.0))
+                .text_size(self.text_size)
+                .child(CodeView::new("probe-code", "SELECT id\nFROM users\n").line_numbers(true)),
+        )
+    }
+}

@@ -7,7 +7,7 @@ use gpui::prelude::*;
 use gpui::{AnyElement, App, Div, SharedString, StyledText, div, relative};
 use gpui_component::ActiveTheme;
 
-use crate::controls::value_field_base;
+use crate::controls::{one_line, value_field_base};
 use crate::primitives::{Chamfer, highlight_styles};
 use crate::tokens::{ChamferCut, ChromeColors, ModalMetrics};
 
@@ -30,7 +30,10 @@ pub fn modal_lead(content: impl IntoElement, cx: &App) -> Div {
 pub fn modal_code(code: impl Into<SharedString>, highlights: &[Range<usize>], cx: &App) -> Div {
     let theme = cx.theme();
     let code: SharedString = code.into();
-    let highlights = highlight_styles(highlights.iter().cloned(), cx);
+    // Styled text needs sorted, non-overlapping runs, and the caller's ranges
+    // are neither.
+    let highlights =
+        crate::syntax::overlay(Vec::new(), highlight_styles(highlights.iter().cloned(), cx));
 
     div()
         .relative()
@@ -144,7 +147,7 @@ pub fn modal_value_field(
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .child(value.unwrap_or_else(|| placeholder.into())),
+                .child(value.map_or_else(|| placeholder.into(), |value| one_line(&value))),
         )
         .children(trailing)
 }
@@ -182,7 +185,9 @@ mod tests {
         });
     }
 
-    struct Host;
+    struct Host {
+        value: &'static str,
+    }
 
     impl Render for Host {
         fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -196,28 +201,42 @@ mod tests {
                     .id(id)
                     .flex()
                     .w(px(300.0))
-                    .child(modal_value_field(
-                        Some("https://example.test".into()),
-                        "None",
-                        None,
-                        cx,
-                    )),
+                    .child(modal_value_field(Some(self.value.into()), "None", None, cx)),
             )
         }
+    }
+
+    fn row_height(value: &'static str, cx: &mut TestAppContext) -> gpui::Pixels {
+        install_test_theme(cx);
+        let (_, window): (_, &mut VisualTestContext) =
+            cx.add_window_view(move |_, _| Host { value });
+        let capture = FrameCapture::observe(window);
+        let _frame = capture.frame(window);
+
+        window
+            .debug_bounds("modal-value")
+            .expect("the value row is laid out")
+            .size
+            .height
     }
 
     /// A dialog's read-only value keeps the height of a text field, so it
     /// still sits in a form row the way it did before the field moved.
     #[gpui::test]
     fn a_modal_value_field_keeps_the_field_height(cx: &mut TestAppContext) {
-        install_test_theme(cx);
-        let (_, window): (_, &mut VisualTestContext) = cx.add_window_view(|_, _| Host);
-        let capture = FrameCapture::observe(window);
-        let _frame = capture.frame(window);
+        assert_eq!(
+            row_height("https://example.test", cx),
+            Fields::HEIGHT.to_pixels(px(BASE_REM))
+        );
+    }
 
-        let row = window
-            .debug_bounds("modal-value")
-            .expect("the value row is laid out");
-        assert_eq!(row.size.height, Fields::HEIGHT.to_pixels(px(BASE_REM)));
+    /// A dialog's read-only value is one line too: a break in it reads as a
+    /// space instead of drawing a second row past the field.
+    #[gpui::test]
+    fn a_modal_value_field_draws_one_line_whatever_breaks_the_value(cx: &mut TestAppContext) {
+        assert_eq!(
+            row_height("first\r\nsecond\nthird", cx),
+            Fields::HEIGHT.to_pixels(px(BASE_REM))
+        );
     }
 }

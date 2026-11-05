@@ -23,11 +23,13 @@ use crate::tokens::CodeMetrics;
 /// than the view, and the gutter stays in place. A vertical wheel is left to
 /// the host, whether or not the view scrolls.
 ///
-/// The view draws no frame, padding or face of its own: the host places it in a
+/// The view draws no frame or padding of its own: the host places it in a
 /// [`FieldWell`](crate::primitives::FieldWell) or any other container, and its
-/// text follows the container's font family, size and color. The view is a
-/// label node named by [`Self::aria_label`], or by the code itself when the
-/// caller names none.
+/// font family and color follow that container. Its text size does not: the
+/// code draws at [`CodeMetrics::FONT`] so a line fits its
+/// [`CodeMetrics::LINE_HEIGHT`] row at any host size. The view is a label node
+/// named by [`Self::aria_label`], or by the code itself when the caller names
+/// none.
 ///
 /// ```ignore
 /// FieldWell::new().id("document-text").child(
@@ -117,11 +119,10 @@ impl CodeView {
         });
         let mut highlights = highlight_styles(self.highlights.iter().cloned(), cx);
         highlights.extend(toned);
-        // Toned ranges may overlap the tint ones, and text runs may not; the
-        // overlay below normalizes them without dropping either.
-        if !self.toned_highlights.is_empty() {
-            highlights = crate::syntax::overlay(Vec::new(), highlights);
-        }
+        // Styled text needs sorted, non-overlapping runs; the caller's ranges
+        // are neither, and a toned range may cover a tint one. Normalizing
+        // every time keeps an unordered pair off the wrong bytes.
+        let highlights = crate::syntax::overlay(Vec::new(), highlights);
         match &self.language {
             Some(language) => crate::syntax::overlay(
                 crate::syntax::highlight(language, &self.code, cx),
@@ -143,7 +144,10 @@ impl RenderOnce for CodeView {
             .id(id)
             .role(Role::Label)
             .aria_label(name)
-            .w_full();
+            .w_full()
+            // The rows are `CodeMetrics::LINE_HEIGHT` tall, so the code draws
+            // at the code font whatever size the host set around it.
+            .text_size(CodeMetrics::FONT);
 
         if !self.line_numbers {
             return view.child(StyledText::new(self.code).with_highlights(runs));

@@ -19,6 +19,7 @@ fn install_test_theme(cx: &mut TestAppContext) {
 
 /// A single value field in a 300 px row.
 struct Harness {
+    value: gpui::SharedString,
     mono: bool,
     with_id: bool,
 }
@@ -27,7 +28,7 @@ impl Render for Harness {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         use gpui::{ParentElement as _, Styled as _};
 
-        let field = ValueField::new("/var/lib/proxy.pem").mono(self.mono);
+        let field = ValueField::new(self.value.clone()).mono(self.mono);
         let field = if self.with_id {
             field.id("proxy-ca-path")
         } else {
@@ -46,7 +47,27 @@ fn open(
     with_id: bool,
 ) -> (&mut VisualTestContext, gpui::AccessibilityFrame) {
     install_test_theme(cx);
-    let (_, window) = cx.add_window_view(move |_, _| Harness { mono, with_id });
+    let (_, window) = cx.add_window_view(move |_, _| Harness {
+        value: "/var/lib/proxy.pem".into(),
+        mono,
+        with_id,
+    });
+    let capture = FrameCapture::observe(window);
+    let frame = capture.frame(window);
+    (window, frame)
+}
+
+fn open_with(
+    value: impl Into<gpui::SharedString>,
+    cx: &mut TestAppContext,
+) -> (&mut VisualTestContext, gpui::AccessibilityFrame) {
+    install_test_theme(cx);
+    let value = value.into();
+    let (_, window) = cx.add_window_view(move |_, _| Harness {
+        value,
+        mono: false,
+        with_id: true,
+    });
     let capture = FrameCapture::observe(window);
     let frame = capture.frame(window);
     (window, frame)
@@ -109,4 +130,28 @@ fn a_value_field_draws_the_interface_face_in_the_value_color(cx: &mut TestAppCon
         );
         assert_eq!(value_color(&theme, Some(theme.danger)), theme.danger);
     });
+}
+
+/// A value with a line break draws on one line: the break reads as a space,
+/// so nothing draws past the field's height.
+#[gpui::test]
+fn a_value_field_draws_one_line_whatever_breaks_the_value(cx: &mut TestAppContext) {
+    let (window, frame) = open_with("first\r\nsecond\nthird", cx);
+
+    let field = window
+        .debug_bounds("proxy-ca-path")
+        .expect("the field is laid out");
+    let value = window
+        .debug_bounds("proxy-ca-path-value")
+        .expect("the value is laid out");
+
+    assert!(
+        value.size.height <= field.size.height,
+        "the value stays inside the field's height"
+    );
+    assert_eq!(
+        accessible_name(&frame, "proxy-ca-path-value").as_deref(),
+        Some("first second third"),
+        "a break reads as one space"
+    );
 }

@@ -36,4 +36,4 @@ pub use search_field::{SearchCount, SearchField, SearchTrigger};
 pub use select_trigger::SelectTrigger;
 pub use type_to_confirm::{TypeToConfirm, TypeToConfirmEvent};
 pub use value_field::ValueField;
-pub(crate) use value_field::value_field_base;
+pub(crate) use value_field::{one_line, value_field_base};

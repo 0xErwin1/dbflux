@@ -356,3 +356,63 @@ fn a_closed_field_without_a_shortcut_or_a_fixed_width(cx: &mut TestAppContext) {
         crate::tokens::ui(220.0).to_pixels(px(BASE_REM))
     );
 }
+
+/// A closed field narrower than its contents keeps its parts in order inside
+/// the frame: the placeholder truncates first, the icon and the keycap keep
+/// their size, and the keycap never paints past the frame's own width.
+#[gpui::test]
+fn a_narrow_closed_field_keeps_its_parts_inside_the_frame(cx: &mut TestAppContext) {
+    let rem = px(BASE_REM);
+    let inset = Fields::PADDING_X + Fields::LEADING_ICON.to_pixels(rem) + Fields::GAP;
+    let mut keycap_width = None;
+
+    for width in [60.0_f32, 80.0, 90.0, 100.0, 140.0] {
+        install_test_theme(cx);
+        let (_, window) = cx.add_window_view(move |_, _| ProbeTrigger { width });
+        let capture = FrameCapture::observe(window);
+        let _frame = capture.frame(window);
+        let field = window.debug_bounds("probe-trigger").expect("field");
+        let placeholder = window
+            .debug_bounds("probe-trigger-placeholder")
+            .expect("placeholder");
+        let key = window.debug_bounds("probe-trigger-key").expect("keycap");
+
+        assert!(
+            placeholder.left() >= field.left() + inset,
+            "at {width} px the icon keeps its width and the text starts after it"
+        );
+        assert!(
+            placeholder.right() <= key.left(),
+            "at {width} px the placeholder truncates before the keycap"
+        );
+        let expected = *keycap_width.get_or_insert(key.size.width);
+        assert_eq!(
+            key.size.width, expected,
+            "at {width} px the keycap keeps its size"
+        );
+
+        if width >= 100.0 {
+            assert!(
+                key.right() <= field.right(),
+                "at {width} px the keycap stays inside the frame"
+            );
+        }
+    }
+}
+
+struct ProbeTrigger {
+    width: f32,
+}
+
+impl Render for ProbeTrigger {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui::{ParentElement as _, Styled as _};
+
+        div().size_full().child(
+            div().flex().w(px(self.width)).child(
+                SearchTrigger::new("probe-trigger", "Search the whole document body")
+                    .shortcut("Ctrl F"),
+            ),
+        )
+    }
+}

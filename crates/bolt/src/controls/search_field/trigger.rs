@@ -18,7 +18,9 @@ use crate::tokens::Fields;
 ///
 /// The trigger records `id`, the placeholder `<id>-placeholder` and the
 /// keycap `<id>-key`, and is a button named by [`Self::aria_label`] or by its
-/// placeholder. Every word is the caller's.
+/// placeholder. Every word is the caller's. A field narrower than its parts
+/// truncates the placeholder first, and a field too narrow for the icon and
+/// the keycap clips them at its own edge instead of painting past it.
 ///
 /// ```ignore
 /// SearchTrigger::new("body-search", search_label)
@@ -99,14 +101,19 @@ impl RenderOnce for SearchTrigger {
 
         let field = field_shell(field_id, self.width)
             .font_family(crate::fonts::ui_family(cx))
+            // A field narrower than its parts clips them instead of painting
+            // the keycap past its own edge.
+            .overflow_hidden()
             .role(Role::Button)
             .aria_label(name)
             .cursor_pointer()
             .child(field_shape(&theme, theme.border))
             .child(
-                Icon::new(icon)
-                    .size(Fields::LEADING_ICON)
-                    .color(theme.muted_foreground),
+                div().flex_none().child(
+                    Icon::new(icon)
+                        .size(Fields::LEADING_ICON)
+                        .color(theme.muted_foreground),
+                ),
             )
             .child(
                 div()
@@ -123,7 +130,12 @@ impl RenderOnce for SearchTrigger {
                     .child(self.placeholder),
             )
             .when_some(self.shortcut, |field, shortcut| {
-                field.child(Kbd::new(shortcut.clone()).id(key_id).aria_label(shortcut))
+                // The keycap keeps its size; the placeholder truncates first.
+                field.child(
+                    div()
+                        .flex_none()
+                        .child(Kbd::new(shortcut.clone()).id(key_id).aria_label(shortcut)),
+                )
             });
 
         match self.on_open {
