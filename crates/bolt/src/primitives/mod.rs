@@ -10,6 +10,7 @@ mod icon;
 mod kbd;
 mod label;
 mod loading_state;
+mod markdown;
 mod segmented_control;
 mod status;
 mod surface;
@@ -34,6 +35,7 @@ pub use icon::Icon;
 pub use kbd::{Kbd, KbdTone, key_label};
 pub use label::Label;
 pub use loading_state::{LoadingState, Progress, Spinner, progress_fill_id};
+pub use markdown::{MarkdownTypography, MarkdownView};
 pub use segmented_control::{
     SegmentBounds, SegmentedControl, SegmentedItem, new_active_id, segmented_group_id,
     segmented_item_id, stepped_segment,
@@ -43,4 +45,6 @@ pub use surface::{SurfaceInspection, SurfaceRole, inspect_surface_role, overlay_
 pub use text::{
     Text, TextColorSelection, TextDefaultColor, TextInspection, TextRoleContract, TextVariant,
 };
-pub use timeline_strip::{TimelineBar, TimelineStrip};
+pub use timeline_strip::{
+    TimelineBar, TimelineBucket, TimelineHistogram, TimelineLegend, TimelineStrip,
+};

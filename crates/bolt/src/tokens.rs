@@ -2026,6 +2026,21 @@ impl DocumentMetrics {
     pub const TIMELINE_BUCKETS: i64 = 48;
 }
 
+/// Type and rhythm of a rendered markdown document (`primitives::MarkdownView`):
+/// the blocks of the document sit `PARAGRAPH_GAP` apart on the interface face,
+/// headings run from `FontSizes::TITLE` down to `FontSizes::LABEL`, and a
+/// fenced code block draws its mono text inside `CODE_BLOCK_PADDING`.
+pub struct MarkdownMetrics;
+
+impl MarkdownMetrics {
+    /// Space between the blocks of the document. (8 px)
+    pub const PARAGRAPH_GAP: Rems = ui(8.0);
+    /// Code text inside a fenced block or a table cell. (12 px)
+    pub const CODE_FONT: Rems = ui(12.0);
+    /// Padding inside a fenced code block. (12 px)
+    pub const CODE_BLOCK_PADDING: Pixels = px(12.0);
+}
+
 /// Geometry of the object-storage views (the buckets and object-browser
 /// design boards): their tables, the bucket details strip and the object
 /// preview rail.
