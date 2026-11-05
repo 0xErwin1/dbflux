@@ -38,7 +38,7 @@ rendering in Bolt, the domain knowledge behind a seam the product fills.
 | `bolt::modals` | The modal dialog, its focus helper and the shared body blocks (lead, statement, numbered statement, field, form row, value field) |
 | `bolt::shell` | The activity rail: view buttons with one active entry, top or bottom pinned |
 | `bolt::data` | The row-and-cell contract: `ColumnView`, `CellView`, `CellTone`, `CellContent`, `RowSource`, `RowVisualState`, `ColumnKind` |
-| `bolt::components::grid` | The data-grid row list and cell painter over `RowSource`, plus the `GridHost` carrying the host facts |
+| `bolt::components::grid` | The data-grid row list and cell painter over `RowSource`, the `GridHost` carrying the host facts, the column resize drag, and `GridOverflow` for a grid wider than its viewport |
 | `bolt::components::tree_nav` | Tree navigation: flattening, cursor, expansion, the gutter, the navigation row with its chevron, count and trailing slot |
 | `bolt::components::document_tree` | The document-tree row painter, its value-type colors and its row host |
 | `bolt::chart` | Decimation, axis ticks, series stats, legend, axis bar, point inspector, the spec's value types and the readout formatters |
@@ -144,6 +144,8 @@ Some parts get an id derived from their owner's id:
 | An activity rail button | `rail-<entry id>` |
 | A rail button's count badge | `rail-<entry id>-count` |
 | The notification bell's count badge | `notifications-badge` (`NotificationBell::badge_id` replaces it) |
+| A grid overflow's scrollbar strip | `<id>-scrollbar` |
+
 | A closed search field's placeholder | `<trigger id>-placeholder` |
 | A closed search field's shortcut keycap | `<trigger id>-key` |
 | A value field's value | `<value field id>-value` |
@@ -256,6 +258,43 @@ Its accessibility role is a splitter, oriented across the axis.
 `.value_percent(..)` reports the first pane's share of the split as its value,
 numeric from 0 to 100 and as text (`62%`). DBFlux's sidebar and inspector keep
 their own grips.
+
+### Grid overflow
+
+`GridOverflow` puts the grid's header row and its row list in one viewport
+that scrolls sideways, for a pane narrower than the columns add up to. The
+host keeps the column widths and the scroll offset, exactly as it does for
+`render_header` and `render_rows`:
+
+```rust
+GridOverflow::new("events-grid", &horizontal, total_width)
+    .header(render_header(..))
+    .rows(uniform_list(..).track_scroll(&rows))
+    .flex_1()
+    .min_h_0()
+```
+
+- The header and the rows scroll on the one handle passed to `new`, so a
+  column stays over its own cells at every offset, and the wheel's horizontal
+  delta scrolls them together.
+- A horizontal scrollbar draws in a `GridMetrics::SCROLLBAR_WIDTH` (12 px)
+  strip along the bottom of the viewport, the way the data table draws it.
+  While the columns are wider than the viewport the row list ends one strip
+  above the edge, so the last row stays reachable at the bottom of the
+  vertical scroll instead of sitting under the bar. A grid that fits reserves
+  nothing: no bar, full height. The strip follows the width the grid is given,
+  measured during layout, so narrowing or widening the pane needs no extra
+  frame.
+- Only the horizontal axis belongs to the viewport: the row list keeps its own
+  vertical scroll, and a vertical wheel never turns into a sideways one.
+- Column resize keeps working while the grid is scrolled. The header's handles
+  move with the header, and `track_column_resize` resizes by pointer delta, so
+  the scroll offset never enters the width. The host mounts it on its own root,
+  around the overflow.
+
+A grid that fits its viewport draws exactly as it does without the wrapper,
+which is why the component is opt-in: a product wraps the grid only where the
+pane can be narrower than the columns.
 
 ### Option group
 
