@@ -447,7 +447,8 @@ impl Fields {
     pub const MENU_MAX_HEIGHT: Pixels = px(220.0);
     /// Alpha of the tint wash behind the highlighted select menu row.
     pub const MENU_HIGHLIGHT_ALPHA: f32 = 0.14;
-    /// Opacity of a disabled control's rest fill.
+    /// Opacity of a disabled control's rest fill, and of a disabled segment,
+    /// whose fill and content fade together.
     pub const DISABLED_OPACITY: f32 = 0.45;
 }
 
