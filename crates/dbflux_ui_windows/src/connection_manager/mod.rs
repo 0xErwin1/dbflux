@@ -301,13 +301,18 @@ struct DriverInfo {
 const KEYRING_PASSWORD_READ_ERROR: &str =
     "Could not read the password from the system keyring (it may be locked)";
 
+const KEYRING_SECRETS_READ_ERROR: &str =
+    "Could not read saved secrets from the system keyring (it may be locked)";
+
+type SecretRead = Result<Option<SecretString>, dbflux_core::DbError>;
+
 /// Same contract as `SecretManager::get_password`: a store that is not
-/// available holds no password (`Ok(None)`), a failing read is an error.
+/// available holds no secret (`Ok(None)`), a failing read is an error.
 #[allow(clippy::result_large_err)]
-fn read_saved_password(
+fn read_saved_secret(
     secret_store: &std::sync::RwLock<Box<dyn dbflux_core::SecretStore>>,
-    profile: &dbflux_core::ConnectionProfile,
-) -> Result<Option<SecretString>, dbflux_core::DbError> {
+    secret_ref: &str,
+) -> SecretRead {
     let store = secret_store
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -316,7 +321,33 @@ fn read_saved_password(
         return Ok(None);
     }
 
-    store.get(&profile.secret_ref())
+    store.get(secret_ref)
+}
+
+/// Everything the edit dialog reads from the keyring when it opens. Each read
+/// is independent, so one failure does not hide what the others returned.
+struct SavedSecrets {
+    password: SecretRead,
+    /// The profile's inline SSH secret; `None` when the profile has no inline tunnel.
+    ssh: Option<SecretRead>,
+    /// The bound tunnel profile's secret; `None` when no tunnel saves one.
+    tunnel: Option<SecretRead>,
+}
+
+#[allow(clippy::result_large_err)]
+fn read_saved_secrets(
+    secret_store: &std::sync::RwLock<Box<dyn dbflux_core::SecretStore>>,
+    profile: &dbflux_core::ConnectionProfile,
+    tunnel: Option<&SshTunnelProfile>,
+) -> SavedSecrets {
+    SavedSecrets {
+        password: read_saved_secret(secret_store, &profile.secret_ref()),
+        ssh: profile
+            .config
+            .ssh_tunnel()
+            .map(|_| read_saved_secret(secret_store, &profile.ssh_secret_ref())),
+        tunnel: tunnel.map(|tunnel| read_saved_secret(secret_store, &tunnel.secret_ref())),
+    }
 }
 
 /// What the form knows about the password the keyring holds for the profile
@@ -354,6 +385,8 @@ struct FormState {
     form_save_password: bool,
     form_save_ssh_secret: bool,
     stored_password: StoredPassword,
+    /// Same meaning as `stored_password`, for the profile's inline SSH secret.
+    stored_ssh_secret: StoredPassword,
     input_name: Entity<InputState>,
     /// Filter text for the driver-select picker. Bound to a text input that
     /// is focused on `/` from anywhere within the picker. The query is read
@@ -523,9 +556,9 @@ pub struct ConnectionManagerWindow {
     /// grid navigation steps by it.
     driver_grid_columns: usize,
     editing_profile_id: Option<uuid::Uuid>,
-    /// The pending keyring read of the edited profile's password; dropping it
+    /// The pending keyring read of the edited profile's secrets; dropping it
     /// with the window cancels the apply step.
-    password_read_task: Option<Task<()>>,
+    secrets_read_task: Option<Task<()>>,
 
     validation_errors: Vec<String>,
     test_status: TestStatus,
@@ -1031,7 +1064,7 @@ impl ConnectionManagerWindow {
             available_drivers,
             driver_grid_columns: render_driver_select::DEFAULT_GRID_COLUMNS,
             editing_profile_id: None,
-            password_read_task: None,
+            secrets_read_task: None,
             validation_errors: Vec::new(),
             test_status: TestStatus::None,
             test_error: None,
@@ -1056,6 +1089,7 @@ impl ConnectionManagerWindow {
                 form_save_password: true,
                 form_save_ssh_secret: true,
                 stored_password: StoredPassword::Known,
+                stored_ssh_secret: StoredPassword::Known,
                 input_name,
                 driver_filter_input,
                 driver_filter_focused: false,
@@ -1295,8 +1329,6 @@ impl ConnectionManagerWindow {
             state.set_value(&profile.name, window, cx);
         });
 
-        instance.start_password_read(profile, window, cx);
-
         instance.load_settings_tab(
             profile.settings_overrides.as_ref(),
             profile.connection_settings.as_ref(),
@@ -1344,6 +1376,7 @@ impl ConnectionManagerWindow {
                 .get_or_insert(*proxy_profile_id);
         }
 
+        let mut bound_tunnel: Option<SshTunnelProfile> = None;
         if let Some(AccessKind::Ssh {
             ssh_tunnel_profile_id,
         }) = &profile.access_kind
@@ -1359,8 +1392,10 @@ impl ConnectionManagerWindow {
                 .cloned();
 
             if let Some(tunnel) = selected_tunnel {
-                let secret = app_state.read(cx).get_ssh_tunnel_secret(&tunnel);
-                instance.apply_ssh_tunnel(&tunnel, secret, window, cx);
+                instance.apply_ssh_tunnel(&tunnel, None, window, cx);
+                if tunnel.save_secret {
+                    bound_tunnel = Some(tunnel);
+                }
             }
         }
 
@@ -1432,27 +1467,9 @@ impl ConnectionManagerWindow {
                     instance.access.ssh_auth_method = SshAuthSelection::Password;
                 }
             }
-
-            if let Some(ssh_secret) = app_state.read(cx).get_ssh_password(profile) {
-                let ssh_secret = ssh_secret.expose_secret().to_string();
-                match instance.access.ssh_auth_method {
-                    SshAuthSelection::PrivateKey => {
-                        instance
-                            .access
-                            .input_ssh_key_passphrase
-                            .update(cx, |state, cx| {
-                                state.set_value(ssh_secret.clone(), window, cx);
-                            });
-                    }
-                    SshAuthSelection::Password => {
-                        instance.access.input_ssh_password.update(cx, |state, cx| {
-                            state.set_value(ssh_secret.clone(), window, cx);
-                        });
-                    }
-                }
-                instance.form.form_save_ssh_secret = true;
-            }
         }
+
+        instance.start_secrets_read(profile, bound_tunnel, window, cx);
 
         instance.load_value_source_selectors(profile, window, cx);
         instance.sync_access_tab_mode_from_state();
@@ -1657,46 +1674,54 @@ impl ConnectionManagerWindow {
         values
     }
 
-    /// Reads the saved password off the UI thread, because a locked keyring
-    /// can block the call. Until it completes the form is `Loading`, which
-    /// keeps saving from deleting an entry the form has not seen.
-    fn start_password_read(
+    /// Reads the saved password and SSH secrets off the UI thread, because a
+    /// locked keyring can block the call. Until it completes the form is
+    /// `Loading`, which keeps saving from deleting an entry the form has not
+    /// seen.
+    fn start_secrets_read(
         &mut self,
         profile: &dbflux_core::ConnectionProfile,
+        tunnel: Option<SshTunnelProfile>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.form.stored_password = StoredPassword::Loading;
+        if profile.config.ssh_tunnel().is_some() {
+            self.form.stored_ssh_secret = StoredPassword::Loading;
+        }
 
         let secret_store = self.app_state.read(cx).secret_store();
         let profile = profile.clone();
 
         let read = cx.background_executor().spawn({
             let profile = profile.clone();
-            async move { read_saved_password(&secret_store, &profile) }
+            let tunnel = tunnel.clone();
+            async move { read_saved_secrets(&secret_store, &profile, tunnel.as_ref()) }
         });
 
-        self.password_read_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = read.await;
+        self.secrets_read_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let secrets = read.await;
 
             this.update_in(cx, |this, window, cx| {
-                this.apply_password_read(&profile, result, window, cx);
+                this.apply_secrets_read(&profile, tunnel.as_ref(), secrets, window, cx);
             })
             .log_err();
         }));
     }
 
-    #[allow(clippy::result_large_err)]
-    fn apply_password_read(
+    fn apply_secrets_read(
         &mut self,
         profile: &dbflux_core::ConnectionProfile,
-        result: Result<Option<SecretString>, dbflux_core::DbError>,
+        tunnel: Option<&SshTunnelProfile>,
+        secrets: SavedSecrets,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.password_read_task = None;
+        self.secrets_read_task = None;
 
-        match result {
+        let mut failures: Vec<(&str, dbflux_core::DbError)> = Vec::new();
+
+        match secrets.password {
             Ok(password) => {
                 self.form.stored_password = StoredPassword::Known;
 
@@ -1716,11 +1741,7 @@ impl ConnectionManagerWindow {
                 // keyring has a failure worth reporting.
                 self.form.stored_password = StoredPassword::Unreadable;
                 if dbflux_core::password_lives_in_keyring(profile) {
-                    report_error(
-                        UserFacingError::new(ErrorKind::Storage, KEYRING_PASSWORD_READ_ERROR)
-                            .with_cause(error.to_string()),
-                        cx,
-                    );
+                    failures.push(("password", error));
                 } else {
                     log::warn!(
                         "Keyring read failed for profile {}, whose password does not live in \
@@ -1731,7 +1752,100 @@ impl ConnectionManagerWindow {
             }
         }
 
+        if let Some(result) = secrets.ssh {
+            match result {
+                Ok(secret) => {
+                    self.form.stored_ssh_secret = StoredPassword::Known;
+                    let auth_selection = self.access.ssh_auth_method;
+                    if let Some(secret) = secret
+                        && self.fill_empty_ssh_secret_input(auth_selection, &secret, window, cx)
+                    {
+                        self.form.form_save_ssh_secret = true;
+                    }
+                }
+                Err(error) => {
+                    self.form.stored_ssh_secret = StoredPassword::Unreadable;
+                    failures.push(("SSH secret", error));
+                }
+            }
+        }
+
+        if let (Some(result), Some(tunnel)) = (secrets.tunnel, tunnel) {
+            match result {
+                Ok(secret) => {
+                    // The user may have picked another tunnel while the read ran.
+                    if let Some(secret) = secret
+                        && self.access.selected_ssh_tunnel_id == Some(tunnel.id)
+                    {
+                        let auth_selection = match tunnel.config.auth_method {
+                            SshAuthMethod::PrivateKey { .. } => SshAuthSelection::PrivateKey,
+                            SshAuthMethod::Password => SshAuthSelection::Password,
+                        };
+                        if self.fill_empty_ssh_secret_input(auth_selection, &secret, window, cx) {
+                            self.form.form_save_ssh_secret = tunnel.save_secret;
+                        }
+                    }
+                }
+                Err(error) => failures.push(("SSH tunnel secret", error)),
+            }
+        }
+
+        self.report_secrets_read_failures(failures, cx);
         cx.notify();
+    }
+
+    /// Fills the SSH secret input for `auth_selection` unless the user typed
+    /// into it first. Returns whether it filled the input.
+    fn fill_empty_ssh_secret_input(
+        &mut self,
+        auth_selection: SshAuthSelection,
+        secret: &SecretString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let input = match auth_selection {
+            SshAuthSelection::PrivateKey => &self.access.input_ssh_key_passphrase,
+            SshAuthSelection::Password => &self.access.input_ssh_password,
+        };
+
+        if !input.read(cx).value().is_empty() {
+            return false;
+        }
+
+        let value = secret.expose_secret().to_string();
+        input.update(cx, |state, cx| {
+            state.set_value(value, window, cx);
+        });
+        true
+    }
+
+    /// One report for the whole open, however many secrets failed. Only the
+    /// failed secrets' names and the error text go in the cause, never a value.
+    fn report_secrets_read_failures(
+        &self,
+        failures: Vec<(&str, dbflux_core::DbError)>,
+        cx: &mut Context<Self>,
+    ) {
+        if failures.is_empty() {
+            return;
+        }
+
+        let only_password = failures.iter().all(|(name, _)| *name == "password");
+        let summary = if only_password {
+            KEYRING_PASSWORD_READ_ERROR
+        } else {
+            KEYRING_SECRETS_READ_ERROR
+        };
+        let cause = failures
+            .iter()
+            .map(|(name, error)| format!("{name}: {error}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+
+        report_error(
+            UserFacingError::new(ErrorKind::Storage, summary).with_cause(cause),
+            cx,
+        );
     }
 
     /// Placeholder for the password input. An unreadable keyring says so,
