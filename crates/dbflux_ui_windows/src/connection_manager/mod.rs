@@ -350,6 +350,24 @@ fn read_saved_secrets(
     }
 }
 
+/// A form action postponed until the keyring read completes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DeferredAction {
+    Save,
+    TestConnection,
+}
+
+impl DeferredAction {
+    /// Save outranks Test Connection: a Test requested after a Save must not
+    /// cancel it, while a Save requested after a Test replaces it.
+    fn merge(pending: Option<Self>, requested: Self) -> Self {
+        match (pending, requested) {
+            (Some(Self::Save), Self::TestConnection) => Self::Save,
+            (_, requested) => requested,
+        }
+    }
+}
+
 /// What the form knows about the password the keyring holds for the profile
 /// being edited.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -361,8 +379,10 @@ enum StoredPassword {
     /// The keyring answered: the password field shows what it holds, if anything.
     #[default]
     Known,
-    /// The keyring refused the read, so an empty password field says nothing
-    /// about the saved entry, and saving must not delete it.
+    /// The form never showed the saved entry: the keyring refused the read,
+    /// or its result was discarded because the field it belonged to changed.
+    /// An empty field says nothing about the entry, and saving must not
+    /// delete it.
     Unreadable,
 }
 
@@ -559,6 +579,14 @@ pub struct ConnectionManagerWindow {
     /// The pending keyring read of the edited profile's secrets; dropping it
     /// with the window cancels the apply step.
     secrets_read_task: Option<Task<()>>,
+    /// Save or Test Connection requested while the keyring read was pending.
+    /// Both would otherwise evaluate a form that is still `Loading`; the
+    /// request runs once the read has been applied.
+    deferred_after_secrets_read: Option<DeferredAction>,
+    /// Secret inputs the user edited while the keyring read was pending. A
+    /// cleared input looks untouched, so emptiness alone cannot tell "never
+    /// typed" from "typed and deleted".
+    inputs_edited_during_read: HashSet<EntityId>,
 
     validation_errors: Vec<String>,
     test_status: TestStatus,
@@ -952,7 +980,7 @@ impl ConnectionManagerWindow {
             cx.subscribe_in(
                 input,
                 window,
-                |this, _, event: &InputEvent, window, cx| match event {
+                |this, input, event: &InputEvent, window, cx| match event {
                     InputEvent::PressEnter {
                         secondary: false, ..
                     } => {
@@ -962,6 +990,9 @@ impl ConnectionManagerWindow {
                     InputEvent::Blur => {
                         this.exit_edit_mode_on_blur(window, cx);
                     }
+                    InputEvent::Change => {
+                        this.note_edit_during_secrets_read(input.entity_id());
+                    }
                     _ => {}
                 },
             )
@@ -970,7 +1001,7 @@ impl ConnectionManagerWindow {
         let password_change_sub = cx.subscribe_in(
             &input_password,
             window,
-            |this, _, event: &InputEvent, window, cx| match event {
+            |this, input, event: &InputEvent, window, cx| match event {
                 InputEvent::PressEnter {
                     secondary: false, ..
                 } => {
@@ -981,6 +1012,7 @@ impl ConnectionManagerWindow {
                     this.exit_edit_mode_on_blur(window, cx);
                 }
                 InputEvent::Change => {
+                    this.note_edit_during_secrets_read(input.entity_id());
                     this.handle_field_change("password", window, cx);
                 }
                 _ => {}
@@ -1065,6 +1097,8 @@ impl ConnectionManagerWindow {
             driver_grid_columns: render_driver_select::DEFAULT_GRID_COLUMNS,
             editing_profile_id: None,
             secrets_read_task: None,
+            deferred_after_secrets_read: None,
+            inputs_edited_during_read: HashSet::new(),
             validation_errors: Vec::new(),
             test_status: TestStatus::None,
             test_error: None,
@@ -1686,6 +1720,8 @@ impl ConnectionManagerWindow {
         cx: &mut Context<Self>,
     ) {
         self.form.stored_password = StoredPassword::Loading;
+        self.inputs_edited_during_read.clear();
+        let read_auth_method = self.access.ssh_auth_method;
         if profile.config.ssh_tunnel().is_some() {
             self.form.stored_ssh_secret = StoredPassword::Loading;
         }
@@ -1703,7 +1739,14 @@ impl ConnectionManagerWindow {
             let secrets = read.await;
 
             this.update_in(cx, |this, window, cx| {
-                this.apply_secrets_read(&profile, tunnel.as_ref(), secrets, window, cx);
+                this.apply_secrets_read(
+                    &profile,
+                    tunnel.as_ref(),
+                    secrets,
+                    read_auth_method,
+                    window,
+                    cx,
+                );
             })
             .log_err();
         }));
@@ -1714,6 +1757,7 @@ impl ConnectionManagerWindow {
         profile: &dbflux_core::ConnectionProfile,
         tunnel: Option<&SshTunnelProfile>,
         secrets: SavedSecrets,
+        read_auth_method: SshAuthSelection,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1725,14 +1769,29 @@ impl ConnectionManagerWindow {
             Ok(password) => {
                 self.form.stored_password = StoredPassword::Known;
 
-                let input_is_empty = self.form.input_password.read(cx).value().is_empty();
+                // A password that lives behind another source (env, file, ...)
+                // must never land in that source's input, where it would be
+                // saved as the variable name or path.
+                let password_source_is_literal = self
+                    .form
+                    .password_value_source_selector
+                    .read(cx)
+                    .is_literal(cx);
+                let input_is_untouched = self.form.input_password.read(cx).value().is_empty()
+                    && !self
+                        .inputs_edited_during_read
+                        .contains(&self.form.input_password.entity_id());
                 if let Some(password) = password
-                    && input_is_empty
+                    && password_source_is_literal
+                    && input_is_untouched
                 {
                     let password = password.expose_secret().to_string();
                     self.form.input_password.update(cx, |state, cx| {
                         state.set_value(password, window, cx);
                     });
+                    // `set_value` emits no Change, so the URI would keep
+                    // showing the connection without its password.
+                    self.sync_fields_to_uri(window, cx);
                 }
             }
             Err(error) => {
@@ -1754,11 +1813,18 @@ impl ConnectionManagerWindow {
 
         if let Some(result) = secrets.ssh {
             match result {
+                Ok(secret) if self.access.ssh_auth_method != read_auth_method => {
+                    // The secret belongs to the method that was selected when
+                    // the read started; filling another method's input would
+                    // misplace it. The form never shows the entry, so it stays
+                    // as protected from deletion as an unreadable one.
+                    drop(secret);
+                    self.form.stored_ssh_secret = StoredPassword::Unreadable;
+                }
                 Ok(secret) => {
                     self.form.stored_ssh_secret = StoredPassword::Known;
-                    let auth_selection = self.access.ssh_auth_method;
                     if let Some(secret) = secret
-                        && self.fill_empty_ssh_secret_input(auth_selection, &secret, window, cx)
+                        && self.fill_empty_ssh_secret_input(read_auth_method, &secret, window, cx)
                     {
                         self.form.form_save_ssh_secret = true;
                     }
@@ -1791,7 +1857,34 @@ impl ConnectionManagerWindow {
         }
 
         self.report_secrets_read_failures(failures, cx);
+        self.inputs_edited_during_read.clear();
         cx.notify();
+
+        match self.deferred_after_secrets_read.take() {
+            Some(DeferredAction::Save) => self.save_profile(window, cx),
+            Some(DeferredAction::TestConnection) => self.test_connection(window, cx),
+            None => {}
+        }
+    }
+
+    fn note_edit_during_secrets_read(&mut self, input: EntityId) {
+        if self.secrets_read_task.is_some() {
+            self.inputs_edited_during_read.insert(input);
+        }
+    }
+
+    /// Records `action` and returns true while the keyring read is pending,
+    /// so the caller must stop: running it now would evaluate `Loading`.
+    pub(super) fn defer_until_secrets_read(&mut self, action: DeferredAction) -> bool {
+        if self.secrets_read_task.is_none() {
+            return false;
+        }
+
+        self.deferred_after_secrets_read = Some(DeferredAction::merge(
+            self.deferred_after_secrets_read,
+            action,
+        ));
+        true
     }
 
     /// Fills the SSH secret input for `auth_selection` unless the user typed
@@ -1808,7 +1901,9 @@ impl ConnectionManagerWindow {
             SshAuthSelection::Password => &self.access.input_ssh_password,
         };
 
-        if !input.read(cx).value().is_empty() {
+        if !input.read(cx).value().is_empty()
+            || self.inputs_edited_during_read.contains(&input.entity_id())
+        {
             return false;
         }
 
