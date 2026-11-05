@@ -96,7 +96,9 @@ impl SecretStoreSource for SecretsManagerStore {
     /// `all` filter: Secrets Manager splits names, descriptions and tags into
     /// words and matches each word by prefix, ignoring case, so a word in the
     /// middle of a path finds the secret. The `Name` filter only matches the
-    /// start of the full name, case-sensitively.
+    /// start of the full name, case-sensitively. An endpoint that treats `all`
+    /// as a name prefix instead (LocalStack does) still matches a typed
+    /// prefix, and finds nothing else.
     fn list(&self, request: &SecretListRequest) -> Result<SecretListPage, DbError> {
         let mut call = self
             .client
