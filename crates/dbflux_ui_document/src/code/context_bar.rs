@@ -190,8 +190,8 @@ impl CodeDocument {
 
                 let metadata = driver.metadata();
                 item.icon(AppIcon::for_driver(metadata.icon, metadata.category))
-                    .icon_color(
-                        DriverIconTone::for_driver(metadata.icon, metadata.category).resolve(cx),
+                    .icon_tone(
+                        DriverIconTone::for_driver(metadata.icon, metadata.category).badge_tone(),
                     )
             })
             .collect();

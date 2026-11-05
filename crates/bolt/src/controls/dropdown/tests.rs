@@ -706,12 +706,23 @@ mod menu_ids {
         let icon = window
             .debug_bounds(selector("-item-0-icon"))
             .expect("the first row draws its icon");
+        let label = window
+            .debug_bounds(selector("-item-0-label"))
+            .expect("the first row draws its label");
         let row = window
             .debug_bounds(selector("-item-0"))
             .expect("the first row is laid out");
         assert!(
+            icon.size.width > gpui::px(0.),
+            "the icon wrapper has a width"
+        );
+        assert!(
             icon.origin.x < row.center().x,
             "the icon sits at the start of the row"
+        );
+        assert!(
+            icon.right() <= label.origin.x,
+            "the icon ends before the label starts"
         );
         assert!(
             window.debug_bounds(selector("-item-1-icon")).is_none(),
