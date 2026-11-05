@@ -14,8 +14,9 @@ use crate::tokens::{ChamferCut, Fields};
 ///
 /// It holds the text, never an `Entity<InputState>`, so a page that shows many
 /// effective values — a setting a profile resolves to, a computed path — draws
-/// each one without a field state per value. The value is always one line: a
-/// `\r` or `\n` in it reads as a space, so it cannot draw past the field. [`Self::mono`] draws the value in
+/// each one without a field state per value. The value is normalized when the
+/// field is built — [`Self::new`] turns a `\r` or `\n` into a space — so it is
+/// always one line and cannot draw past the field. [`Self::mono`] draws the value in
 /// the editor face, for a value as it is written in a file.
 ///
 /// With [`Self::id`] the value is a label node `<id>-value` named by its text,
@@ -36,10 +37,15 @@ pub struct ValueField {
 }
 
 impl ValueField {
+    /// A field drawing `value`. The value is normalized once, here: a `\r` or
+    /// `\n` reads as a space, so the field draws one line whatever the caller
+    /// passes and the render makes no second copy of it.
     pub fn new(value: impl Into<SharedString>) -> Self {
+        let value: SharedString = value.into();
+
         Self {
             id: None,
-            value: value.into(),
+            value: one_line(&value),
             mono: false,
             text_color: None,
         }
@@ -71,7 +77,7 @@ impl RenderOnce for ValueField {
             .flex_1()
             .min_w_0()
             .truncate()
-            .child(one_line(&self.value));
+            .child(self.value.clone());
         let value = match &self.id {
             Some(id) => {
                 let value_id = ElementId::Name(format!("{id}-value").into());
@@ -80,7 +86,7 @@ impl RenderOnce for ValueField {
                     .debug_selector(id_selector(&value_id))
                     .id(value_id)
                     .role(Role::Label)
-                    .aria_label(one_line(&self.value))
+                    .aria_label(self.value.clone())
                     .into_any_element()
             }
             None => value.into_any_element(),
