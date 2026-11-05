@@ -31,7 +31,7 @@ rendering in Bolt, the domain knowledge behind a seam the product fills.
 | `bolt::colors` | `Colors`: the neutral and semantic color roles per palette, read through `bolt::colors(cx)` |
 | `bolt::semantic` | Banner, row-state and chart-chrome colors per palette |
 | `bolt::icon` | `IconSource`: a named icon or an SVG path |
-| `bolt::primitives` | Badge, banner, chamfer, divider, file picker, focus ring, keycap, label, loading state, segmented control, status, surface, text, timeline strip, type-to-confirm |
+| `bolt::primitives` | Badge, banner, chamfer, divider, file picker, focus ring, keycap, label, loading state, markdown view, segmented control, status, surface, text, timeline strip and histogram, type-to-confirm |
 | `bolt::controls` | Button, checkbox, option group, dropdown, select trigger, input, search field with a match count, read-only text view, key capture |
 | `bolt::composites` | Tabs (document, result, inline), menu item and popup menu, form popover, list row, empty state, split button, splitter, field row, island |
 | `bolt::selector` | `id_selector`: the gpui debug selector every id-bearing component records for its element id |
@@ -144,6 +144,10 @@ Some parts get an id derived from their owner's id:
 | An activity rail button | `rail-<entry id>` |
 | A rail button's count badge | `rail-<entry id>-count` |
 | The notification bell's count badge | `notifications-badge` (`NotificationBell::badge_id` replaces it) |
+| A markdown view's document | `<view id>-body` |
+| A timeline histogram's bars | `<histogram id>-bar-<n>`, plus `<histogram id>-bar-<n>-rest` and `<histogram id>-bar-<n>-highlight` for the two parts of a bar and `<histogram id>-gap-<n>` for the gap after it |
+| A timeline histogram's legend | `<histogram id>-legend`, and `<histogram id>-legend-<n>` and `<histogram id>-swatch-<n>` for its entries |
+
 | A grid overflow's scrollbar strip | `<id>-scrollbar` |
 
 | A closed search field's placeholder | `<trigger id>-placeholder` |
@@ -258,6 +262,65 @@ Its accessibility role is a splitter, oriented across the axis.
 `.value_percent(..)` reports the first pane's share of the split as its value,
 numeric from 0 to 100 and as text (`62%`). DBFlux's sidebar and inspector keep
 their own grips.
+
+## Documents and timelines
+
+Two primitives read a document's own content instead of drawing interface
+chrome around it.
+
+### Markdown documents
+
+`MarkdownView::new(id, source)` renders a markdown document — headings,
+paragraphs, lists, inline code, fenced code blocks, links and tables — in
+Bolt's type and colors:
+
+- The prose is the interface face at `FontSizes::BASE`; a heading takes a step
+  of the scale per level, `FontSizes::TITLE` for a `#` down to
+  `FontSizes::LABEL`; a fenced code block is the mono face at
+  `MarkdownMetrics::CODE_FONT` on the raised fill, and inline code, table
+  headers and the block itself sit on the raised fill; links use the link role
+  and the blocks sit `MarkdownMetrics::PARAGRAPH_GAP` apart.
+- `.selectable(true)` is the default, so dragging over the document copies the
+  text it draws rather than the markdown source. `.selectable(false)` draws the
+  same document without the selection.
+- `.well(true)` puts the document on the inset ground inside the line border,
+  `Spacing::MD` of side padding and `Spacing::SM` above and below, for a
+  read-only preview that sits in a field. Without it the document sits on the
+  pane's own ground.
+- `.aria_label(..)` names the view, which is a group node.
+- `MarkdownView::typography(cx)` returns the `MarkdownTypography` the view
+  draws with — `body`, `code`, `headings` by level and `paragraph_gap` —
+  resolved from the tokens and the active interface size, so a test checks the
+  scale without a render.
+
+The renderer and the parser are gpui-component's `TextView`; Bolt styles it and
+never parses markdown itself. Links open with the platform's opener.
+
+### Count histograms
+
+`TimelineHistogram::new(id)` is the counting half of the timeline used above a
+log or audit table: one bar per time bucket, sized by its share of the busiest
+bucket, with a highlighted series stacked over the rest of the bucket.
+
+- `.buckets(..)` or `.bucket(..)` take `TimelineBucket::new(total, highlighted)`.
+  A negative count is no events, the highlighted part is cut at its bucket's
+  total, and a bucket with any event draws at least a hairline.
+- `.primary_tone(..)` (accent by default) and `.highlight_tone(..)` (danger by
+  default) color the two parts; `.legend([..])` adds the swatch legend, each
+  `TimelineLegend::new(label, tone)` a square and the caller's own word.
+- The bars are `DocumentMetrics::TIMELINE_BAR_HEIGHT` tall and
+  `DocumentMetrics::TIMELINE_BAR_GAP` apart, `TIMELINE_PADDING_Y` above and
+  below, with the legend `TIMELINE_LEGEND_GAP` to their right, its entries
+  `TIMELINE_LEGEND_ROW_GAP` apart and `TIMELINE_LEGEND_FONT` in size. The
+  legend never grows past `TIMELINE_LEGEND_MAX_WIDTH`: a label too long for it
+  truncates with an ellipsis instead of squeezing the bars.
+- A strip holding so many buckets that the gaps no longer fit drops the gaps
+  before it drops the bars: every bucket with events keeps at least a hairline,
+  and the gap shrinks from `TIMELINE_BAR_GAP` down to nothing as the buckets
+  crowd. A bucket with no events takes no width of its own.
+- It paints no ground and no border: it is the strip inside a region the
+  caller frames. It draws no interaction either — a document that lets the
+  reader drag across the bars to zoom owns that gesture itself.
 
 ### Grid overflow
 

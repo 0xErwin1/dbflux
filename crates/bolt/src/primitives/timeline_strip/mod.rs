@@ -1,4 +1,11 @@
 //! `TimelineStrip` — phase bars laid over one time axis.
+//!
+//! `TimelineHistogram` is its counting sibling: per-bucket bar heights rather
+//! than phases, in `histogram`.
+
+mod histogram;
+
+pub use histogram::{TimelineBucket, TimelineHistogram, TimelineLegend};
 
 use std::time::Duration;
 
