@@ -1197,7 +1197,11 @@ impl AppState {
         self.facade.secrets.delete_password(profile);
     }
 
-    pub fn get_password(&self, profile: &ConnectionProfile) -> Option<SecretString> {
+    #[allow(clippy::result_large_err)]
+    pub fn get_password(
+        &self,
+        profile: &ConnectionProfile,
+    ) -> Result<Option<SecretString>, dbflux_core::DbError> {
         self.facade.secrets.get_password(profile)
     }
 

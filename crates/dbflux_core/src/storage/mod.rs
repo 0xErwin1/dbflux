@@ -9,7 +9,9 @@ pub(crate) mod ui_state;
 pub use history::HistoryEntry;
 pub use recent_files::RecentFile;
 pub use saved_query::SavedQuery;
-pub use secret_manager::{HasSecretRef, SecretManager};
+pub use secret_manager::{
+    HasSecretRef, SecretManager, keyring_password_for_connect, password_lives_in_keyring,
+};
 pub use secrets::{
     KeyringSecretStore, NoopSecretStore, SecretStore, auth_field_secret_ref, connection_secret_ref,
     create_secret_store, proxy_secret_ref, ssh_tunnel_secret_ref,
