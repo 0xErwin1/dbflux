@@ -28,6 +28,18 @@ const MAX_PAGE_SIZE: u32 = 100;
 /// and never start with it.
 const PREFIX_TOKEN: &str = "name|";
 
+/// Whether a page that matched nothing is asked again with the `Name` filter:
+/// only for a search, only on the first page, and never while a prefix
+/// listing is being paged, whose empty page means its end.
+fn needs_prefix_fallback(
+    entries_are_empty: bool,
+    search: Option<&str>,
+    first_page: bool,
+    resumed_prefix: bool,
+) -> bool {
+    entries_are_empty && search.is_some() && first_page && !resumed_prefix
+}
+
 /// A page token of the `Name` filter listing, marked so the next request uses
 /// the same filter its token belongs to.
 fn encode_prefix_token(token: &str) -> String {
@@ -189,9 +201,13 @@ impl SecretStoreSource for SecretsManagerStore {
 
         let page = self.list_page(request, key, search, token.as_deref(), false)?;
 
-        let word_filter_matched_nothing =
-            page.entries.is_empty() && resumed_prefix.is_none() && token.is_none();
-        match (word_filter_matched_nothing, search) {
+        let fall_back = needs_prefix_fallback(
+            page.entries.is_empty(),
+            search,
+            token.is_none(),
+            resumed_prefix.is_some(),
+        );
+        match (fall_back, search) {
             (true, Some(search)) => self.list_page(
                 request,
                 FilterNameStringType::Name,

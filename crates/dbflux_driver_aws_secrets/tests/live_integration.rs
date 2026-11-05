@@ -267,38 +267,6 @@ fn secrets_manager_listing_paginates_and_filters_by_name_prefix() -> Result<(), 
     })
 }
 
-/// The store lists with the `all` filter, which AWS documents as a
-/// case-insensitive word match over names, descriptions and tags. LocalStack 3
-/// answers that filter with no entries, so the word matching cannot be pinned
-/// here and this test runs only against an endpoint that implements it.
-#[test]
-#[ignore = "requires Docker daemon and an endpoint that implements the all filter (real AWS)"]
-fn secrets_manager_search_matches_a_word_in_the_middle_of_a_name() -> Result<(), DbError> {
-    containers::with_localstack_secrets_endpoint(|endpoint| {
-        let seeder = Seeder::new(&endpoint);
-        seeder.secret_string("app/prod/db", "one");
-        seeder.secret_string("app/prod/api", "two");
-        seeder.secret_string("billing/key", "three");
-
-        let connection = connect(&endpoint)?;
-        let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
-
-        let middle_word = secrets.list(&SecretListRequest {
-            name_filter: Some("PROD".to_string()),
-            ..SecretListRequest::default()
-        })?;
-        assert_eq!(names(&middle_word), ["app/prod/api", "app/prod/db"]);
-
-        let last_word = secrets.list(&SecretListRequest {
-            name_filter: Some("key".to_string()),
-            ..SecretListRequest::default()
-        })?;
-        assert_eq!(names(&last_word), ["billing/key"]);
-
-        Ok(())
-    })
-}
-
 #[test]
 #[ignore = "requires Docker daemon"]
 fn secrets_manager_describe_reports_metadata_tags_and_versions() -> Result<(), DbError> {

@@ -85,3 +85,14 @@ fn a_service_page_token_is_not_read_as_a_prefix_one() {
     assert_eq!(decode_prefix_token("name-abc"), None);
     assert_eq!(decode_prefix_token("xname|abc"), None);
 }
+
+/// The prefix fallback runs for a search that matched nothing, and only then.
+#[test]
+fn the_prefix_fallback_runs_only_for_an_empty_first_page_of_a_search() {
+    assert!(needs_prefix_fallback(true, Some("b2back"), true, false));
+
+    assert!(!needs_prefix_fallback(false, Some("b2back"), true, false));
+    assert!(!needs_prefix_fallback(true, None, true, false));
+    assert!(!needs_prefix_fallback(true, Some("b2back"), false, false));
+    assert!(!needs_prefix_fallback(true, Some("b2back"), true, true));
+}
