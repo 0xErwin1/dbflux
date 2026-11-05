@@ -685,6 +685,71 @@ mod menu_ids {
         );
     }
 
+    #[test]
+    fn a_row_forwards_the_icon_source_of_its_own_item() {
+        let source = crate::icon::IconSource::Svg("icons/folder.svg".into());
+
+        let with_icon = DropdownItem::new("One").icon(source.clone());
+        assert_eq!(
+            super::super::row_leading_icon(&with_icon),
+            Some(source),
+            "the row draws the source the item carries"
+        );
+
+        assert_eq!(
+            super::super::row_leading_icon(&DropdownItem::new("Two")),
+            None,
+            "an item without an icon asks for none"
+        );
+    }
+
+    #[gpui::test]
+    fn a_row_draws_the_icon_its_item_carries_before_the_label(cx: &mut TestAppContext) {
+        let (_host, dropdown, window) = open(cx);
+
+        window.update(|_, cx| {
+            dropdown.update(cx, |dropdown, cx| {
+                dropdown.set_items(
+                    vec![
+                        DropdownItem::new("One")
+                            .icon(crate::icon::IconSource::Svg("icons/folder.svg".into())),
+                        DropdownItem::new("Two"),
+                    ],
+                    cx,
+                );
+            })
+        });
+        window.run_until_parked();
+
+        let icon = window
+            .debug_bounds(selector("-item-0-icon"))
+            .expect("the first row draws its icon");
+        let label = window
+            .debug_bounds(selector("-item-0-label"))
+            .expect("the first row draws its label");
+        let row = window
+            .debug_bounds(selector("-item-0"))
+            .expect("the first row is laid out");
+        let rem_size = window.update(|window, _cx| window.rem_size());
+        assert_eq!(
+            icon.size.width,
+            crate::tokens::Fields::LEADING_ICON.to_pixels(rem_size),
+            "the row draws the icon at the leading icon size"
+        );
+        assert!(
+            icon.origin.x < row.center().x,
+            "the icon sits at the start of the row"
+        );
+        assert!(
+            icon.right() <= label.origin.x,
+            "the icon ends before the label starts"
+        );
+        assert!(
+            window.debug_bounds(selector("-item-1-icon")).is_none(),
+            "a row without an icon draws none"
+        );
+    }
+
     #[gpui::test]
     fn clicking_a_row_by_its_id_selects_that_row(cx: &mut TestAppContext) {
         let (_host, dropdown, window) = open(cx);
