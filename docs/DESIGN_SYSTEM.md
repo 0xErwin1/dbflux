@@ -33,7 +33,7 @@ rendering in Bolt, the domain knowledge behind a seam the product fills.
 | `bolt::icon` | `IconSource`: a named icon or an SVG path |
 | `bolt::primitives` | Badge, banner, chamfer, divider, file picker, focus ring, keycap, label, loading state, segmented control, status, surface, text, timeline strip, type-to-confirm |
 | `bolt::controls` | Button, checkbox, dropdown, select trigger, input, search field with a match count, read-only text view, key capture |
-| `bolt::composites` | Tabs (document, result, inline), menu item and popup menu, list row, empty state, split button, splitter, field row, island |
+| `bolt::composites` | Tabs (document, result, inline), menu item and popup menu, form popover, list row, empty state, split button, splitter, field row, island |
 | `bolt::selector` | `id_selector`: the gpui debug selector every id-bearing component records for its element id |
 | `bolt::modals` | The modal dialog, its focus helper and the shared body blocks (lead, statement, numbered statement, field, form row, value field) |
 | `bolt::shell` | The activity rail: view buttons with one active entry, top or bottom pinned |
@@ -129,6 +129,8 @@ Some parts get an id derived from their owner's id:
 | A button's `.kbd(..)` keycap | `<button id>-key` |
 | A menu row's shortcut | `<row id>-key` |
 | A menu row's check mark | `<row id>-check` |
+| A popover's title, body and footer | `<id>-title`, `<id>-body`, `<id>-footer` |
+| A popover's click-away layer | `<id>-away` |
 | The command search field's shortcut keycap | `<field id>-key` |
 | An activity rail button | `rail-<entry id>` |
 | A rail button's count badge | `rail-<entry id>-count` |
@@ -233,6 +235,54 @@ Its accessibility role is a splitter, oriented across the axis.
 `.value_percent(..)` reports the first pane's share of the split as its value,
 numeric from 0 to 100 and as text (`62%`). DBFlux's sidebar and inspector keep
 their own grips.
+
+### Form popovers
+
+`Popover` is the floating surface a screen opens over one thing it is about: a
+title, a body of fields and a footer of buttons, on the cut-12 overlay surface
+(`SurfaceRole::Overlay`) with the panel fill and the line-2 border. It is two
+pieces, and a host owns both:
+
+- `PopoverState` is the entity that holds the open flag, the anchor, the focus
+  and the hover-intent timers. `open_at(bounds, window, cx)` opens the surface
+  against a rectangle and `open(window, cx)` opens it where the host last
+  pointed it; `close(window, cx)` closes it; `set_anchor(bounds)` moves what it
+  points at; `set_initial_focus(handle)` names the field focus moves into;
+  `on_dismiss(handler)` runs once it has closed and focus has come back.
+- `Popover::new(id, state)` is the frame. It draws nothing while the state is
+  closed, so a host renders it every frame. `.title(..)`, `.icon(..)`,
+  `.body(..)` and `.footer(buttons)` build the parts, `.width(..)` replaces
+  `PopoverMetrics::WIDTH`, and `.aria_label(..)` names the dialog, which
+  otherwise takes its name from the title.
+
+**Anchoring.** The anchor is a `Bounds<Pixels>` in window coordinates, so a
+host anchors the surface to an element's laid-out bounds or to a range of text
+it measured inside a field (a mark in an editable string). The surface lands
+`PopoverMetrics::ANCHOR_GAP` under the rectangle, flips above it when there is
+no room below, and is snapped inside the window keeping
+`PopoverMetrics::WINDOW_MARGIN`; `place_popover` is that placement as a
+function. With no anchor it stays where the host renders it, as `anchored()`
+does for a trigger.
+
+**Dismissal.** Escape closes the surface, and so does a click away from it. The
+click-away layer is drawn under the surface rather than around it, so a click
+in anything drawn above it — a `Dropdown` list opened from the body, for one —
+is a click inside and leaves the popover open; the same click still selects the
+dropdown row.
+
+**Focus.** Opening moves focus to the handle given to
+`set_initial_focus` (or to the surface itself, with nothing to focus) and
+remembers the element that had it; closing gives that element focus back, so
+Escape returns the user to the trigger.
+
+**Hover intent.** Built with `PopoverState::hover_intent(true)`, the surface
+opens `HOVER_DELAY` (400 ms) after the pointer comes to rest on the anchor,
+stays open while the pointer is over the anchor or the surface, and closes
+`HOVER_GRACE` (120 ms) after it leaves both. The host reports the anchor's
+hover with `hover_anchor(true/false, window, cx)`; once the surface is open it
+follows the pointer itself. A surface dismissed while the pointer still rests
+on its anchor waits for the pointer to leave and come back. Both timings are
+exported constants, so a test advances the gpui clock by them.
 
 ## Reading colors
 
