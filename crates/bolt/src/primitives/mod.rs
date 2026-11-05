@@ -3,7 +3,9 @@
 mod badge;
 mod banner;
 mod chamfer;
+mod code_view;
 mod divider;
+mod field_well;
 mod file_picker;
 mod focus_ring;
 mod icon;
@@ -24,7 +26,12 @@ pub use chamfer::{
     chamfer_outside_polygons, chamfer_points, chamfer_ring_points, chamfer_top_edge_polygon,
     clamp_cut, motion_ease, snap_bounds_to_device, snap_length_to_device, transition_color,
 };
+pub use code_view::CodeView;
+pub(crate) use code_view::highlight_styles;
+#[cfg(test)]
+pub(crate) use code_view::{CodeLine, split_lines, split_runs};
 pub use divider::{DividerTone, divider, hdivider, vdivider};
+pub use field_well::{FieldWell, FieldWellInspection, inspect_field_well};
 pub use file_picker::{FilePicker, file_picker_label};
 pub use focus_ring::{
     FOCUS_MARKER_SELECTOR, FOCUS_RING_SELECTOR, FocusShape, WhenFocusVisible, focus_ring,
