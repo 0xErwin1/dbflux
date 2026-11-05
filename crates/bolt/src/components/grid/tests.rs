@@ -608,11 +608,12 @@ mod overflow {
     use std::rc::Rc;
     use std::sync::Arc;
 
+    use gpui::prelude::FluentBuilder;
     use gpui::{
         AnyElement, Bounds, Context, InteractiveElement, IntoElement, Modifiers, MouseButton,
-        ParentElement, Pixels, Point, Render, ScrollDelta, ScrollHandle, ScrollWheelEvent, Styled,
-        TestAppContext, TouchPhase, UniformListScrollHandle, VisualTestContext, Window, div, point,
-        px, uniform_list,
+        ParentElement, Pixels, Point, Render, ScrollDelta, ScrollHandle, ScrollWheelEvent,
+        StatefulInteractiveElement, Styled, TestAppContext, TouchPhase, UniformListScrollHandle,
+        VisualTestContext, Window, div, point, px, uniform_list,
     };
     use gpui_base::ScrollbarHandle as _;
     use gpui_component::ActiveTheme;
@@ -639,6 +640,7 @@ mod overflow {
     struct OverflowHost {
         handle: ScrollHandle,
         list: UniformListScrollHandle,
+        page: ScrollHandle,
         drag: ColumnResizeDrag,
         resizes: Rc<RefCell<Vec<ColumnResize>>>,
         pane: Pixels,
@@ -646,6 +648,14 @@ mod overflow {
         virtualized: bool,
         resizable: bool,
         row_count: usize,
+        /// The grid takes its height from its own header and rows, the way
+        /// it does in a page that lays out to its content.
+        content_height: bool,
+        /// The host is as tall as its content instead of a pane of its own.
+        page_height: bool,
+        /// The host is the whole window and scrolls vertically, with room
+        /// below the grid for the page to scroll through.
+        scrolling_page: bool,
     }
 
     impl OverflowHost {
@@ -653,6 +663,7 @@ mod overflow {
             Self {
                 handle: ScrollHandle::new(),
                 list: UniformListScrollHandle::new(),
+                page: ScrollHandle::new(),
                 drag: ColumnResizeDrag::new(),
                 resizes: Rc::new(RefCell::new(Vec::new())),
                 pane: NARROW_PANE,
@@ -660,6 +671,28 @@ mod overflow {
                 virtualized: false,
                 resizable: false,
                 row_count: 2,
+                content_height: false,
+                page_height: true,
+                scrolling_page: false,
+            }
+        }
+
+        /// A grid in a page that takes its content's height, as a settings
+        /// page or a form section lays out.
+        fn in_a_content_height_page() -> Self {
+            Self {
+                content_height: true,
+                page_height: false,
+                ..Self::new()
+            }
+        }
+
+        /// The same grid inside the sideways viewport a page that scrolls as
+        /// a whole keeps for its tables.
+        fn without_the_wrapper() -> Self {
+            Self {
+                wrapped: false,
+                ..Self::in_a_content_height_page()
             }
         }
 
@@ -788,15 +821,16 @@ mod overflow {
                 GridOverflow::new("grid-overflow", &self.handle, total_width)
                     .header(header)
                     .rows(body)
-                    .flex_1()
-                    .min_h_0()
+                    .when(self.content_height, |overflow| overflow.content_height())
+                    .when(!self.content_height, |overflow| overflow.flex_1().min_h_0())
                     .into_any_element()
             } else {
                 div()
                     .flex()
                     .flex_col()
-                    .flex_1()
-                    .min_h_0()
+                    // A page that takes its content's height gives the grid no
+                    // pane to fill, so it lays out the way it does there.
+                    .when(!self.content_height, |column| column.flex_1().min_h_0())
                     .overflow_hidden()
                     .child(header)
                     .child(body)
@@ -804,14 +838,27 @@ mod overflow {
             };
 
             let resizes = self.resizes.clone();
+            let page = self.page.clone();
 
             track_column_resize(
                 div()
                     .flex()
                     .flex_col()
                     .w(self.pane)
-                    .h(px(180.0))
-                    .child(content),
+                    .id("grid-root")
+                    .when(self.scrolling_page, |root| {
+                        root.h(px(180.0))
+                            .debug_selector(|| "grid-page".to_string())
+                            .overflow_y_scroll()
+                            .track_scroll(&page)
+                    })
+                    .when(self.page_height && !self.scrolling_page, |root| {
+                        root.h(px(180.0))
+                    })
+                    .child(content)
+                    // Room below the grid, so the page has something to
+                    // scroll through.
+                    .when(self.scrolling_page, |root| root.child(div().h(px(2000.0)))),
                 &self.drag,
                 move |resize, _window, _cx| resizes.borrow_mut().push(resize),
             )
@@ -823,9 +870,26 @@ mod overflow {
         cx: &mut TestAppContext,
     ) -> (gpui::Entity<OverflowHost>, &mut VisualTestContext) {
         install_test_theme(cx);
+        let content_height = host.content_height;
         let (entity, window) = cx.add_window_view(move |_, _| host);
         window.run_until_parked();
+        // A pane with a definite height draws the strip in one frame, so those
+        // hosts are left with the single draw.
+        if content_height {
+            settle(window);
+        }
         (entity, window)
+    }
+
+    /// Draws the frame the grid asks for once it has laid the grid out.
+    ///
+    /// A content-height grid reads the width its viewport was given from the
+    /// handle the viewport tracks, so its strip is drawn in the frame after
+    /// that width first reaches it — the same one frame gpui's own scrollbar
+    /// settles in. A grid in a pane with a definite height measures the width
+    /// during layout and draws in one frame.
+    fn settle(window: &mut VisualTestContext) {
+        window.update(|window, cx| window.draw(cx).clear(cx));
     }
 
     fn bounds(window: &mut VisualTestContext, selector: &'static str) -> Bounds<Pixels> {
@@ -1073,6 +1137,203 @@ mod overflow {
             bounds(window, "grid-body").bottom(),
             viewport.bottom(),
             "no strip is reserved when the columns fit"
+        );
+    }
+
+    /// A grid in content-height mode takes the height of its header and its
+    /// rows, so a page that lays out to its content draws the rows instead of
+    /// collapsing the viewport to nothing.
+    #[gpui::test]
+    fn a_content_height_grid_lays_out_its_header_and_rows_in_a_page_of_its_own_height(
+        cx: &mut TestAppContext,
+    ) {
+        let mut host = OverflowHost::in_a_content_height_page();
+        host.pane = WIDE_PANE;
+        let (_, window) = open(host, cx);
+
+        let viewport = bounds(window, "grid-overflow");
+        let header = bounds(window, "grid-header-cell-0");
+        let body = bounds(window, "grid-body");
+
+        assert!(
+            viewport.size.height > px(0.0),
+            "the viewport takes the height of its content instead of collapsing"
+        );
+        assert_eq!(
+            body.top() - viewport.top() + body.size.height,
+            viewport.size.height,
+            "the viewport is exactly the header plus the rows"
+        );
+        assert_eq!(
+            body.size.height,
+            GridMetrics::ROW_HEIGHT * 2.0,
+            "both rows lay out at their natural height"
+        );
+        assert!(
+            header.bottom() <= body.top(),
+            "the rows draw under the header"
+        );
+        assert_eq!(
+            body.bottom(),
+            viewport.bottom(),
+            "a grid that fits fills the viewport it takes from its content"
+        );
+    }
+
+    /// Content-height mode still scrolls sideways: the header and the rows
+    /// move together behind the viewport, and the strip the horizontal
+    /// scrollbar draws in is reserved below the rows.
+    #[gpui::test]
+    fn a_content_height_grid_still_scrolls_sideways_with_the_strip_reserved(
+        cx: &mut TestAppContext,
+    ) {
+        let (host, window) = open(OverflowHost::in_a_content_height_page(), cx);
+        let viewport = bounds(window, "grid-overflow");
+        let body = bounds(window, "grid-body");
+        let strip = bounds(window, "grid-overflow-scrollbar");
+        let header_before = bounds(window, "grid-header-cell-1");
+
+        assert_eq!(viewport.size.width, NARROW_PANE);
+        assert!(
+            window.update(|_, cx| host.read(cx).handle.max_offset().x) > px(0.0),
+            "three {COLUMN_WIDTH} px columns overflow the viewport"
+        );
+        assert_eq!(
+            body.bottom(),
+            viewport.bottom() - GridMetrics::SCROLLBAR_WIDTH,
+            "the rows stop one strip above the viewport edge"
+        );
+        assert_eq!(
+            strip.top(),
+            body.bottom(),
+            "the bar sits in the strip the rows leave free"
+        );
+        assert_eq!(strip.bottom(), viewport.bottom());
+
+        wheel_sideways(window, &host, px(-40.0));
+
+        assert_eq!(horizontal_offset(window, &host), px(-40.0));
+        assert_eq!(
+            bounds(window, "grid-header-cell-1").left() - header_before.left(),
+            px(-40.0),
+            "the header follows the sideways scroll"
+        );
+        assert_eq!(
+            bounds(window, "grid-body").left() - body.left(),
+            px(-40.0),
+            "the rows follow it by the same amount"
+        );
+    }
+
+    /// A content-height grid that fits draws exactly where the same grid
+    /// draws in a page's own sideways viewport, and reserves no strip.
+    #[gpui::test]
+    fn a_content_height_grid_that_fits_draws_as_it_does_without_the_wrapper(
+        cx: &mut TestAppContext,
+    ) {
+        let mut plain_host = OverflowHost::without_the_wrapper();
+        plain_host.pane = WIDE_PANE;
+        let (_, plain) = open(plain_host, cx);
+        let plain_cells = [
+            plain.debug_bounds("grid-header-cell-0"),
+            plain.debug_bounds("grid-header-cell-1"),
+            plain.debug_bounds("grid-header-cell-2"),
+        ];
+        let plain_body = plain.debug_bounds("grid-body");
+
+        let mut host = OverflowHost::in_a_content_height_page();
+        host.pane = WIDE_PANE;
+        let (_, window) = open(host, cx);
+        let viewport = bounds(window, "grid-overflow");
+
+        assert_eq!(viewport.size.width, WIDE_PANE, "the grid fills its page");
+        for (index, cell) in [
+            "grid-header-cell-0",
+            "grid-header-cell-1",
+            "grid-header-cell-2",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                plain_cells[index],
+                window.debug_bounds(cell),
+                "{cell} draws where it drew without the overflow"
+            );
+        }
+        assert_eq!(
+            window.debug_bounds("grid-body"),
+            plain_body,
+            "the rows span the rectangle they span without the wrapper"
+        );
+        assert_eq!(
+            bounds(window, "grid-body").bottom(),
+            viewport.bottom(),
+            "no strip is reserved when the columns fit"
+        );
+    }
+
+    /// The strip a content-height grid reserves follows the width it is given:
+    /// a page narrowed past the columns takes it and gives it back when it
+    /// widens, and a fitting grid keeps the height of its own rows.
+    #[gpui::test]
+    fn a_content_height_grid_reserves_the_strip_only_while_the_columns_overflow(
+        cx: &mut TestAppContext,
+    ) {
+        let mut host = OverflowHost::in_a_content_height_page();
+        host.pane = WIDE_PANE;
+        let (host, window) = open(host, cx);
+        let rows_height = bounds(window, "grid-body").size.height;
+
+        resize(window, &host, NARROW_PANE);
+        settle(window);
+        assert_eq!(
+            bounds(window, "grid-body").bottom(),
+            bounds(window, "grid-overflow").bottom() - GridMetrics::SCROLLBAR_WIDTH,
+            "a page narrower than the columns reserves the strip"
+        );
+
+        resize(window, &host, WIDE_PANE);
+        settle(window);
+        assert_eq!(
+            bounds(window, "grid-body").bottom(),
+            bounds(window, "grid-overflow").bottom(),
+            "a page wider than the columns reserves nothing"
+        );
+        assert_eq!(
+            bounds(window, "grid-body").size.height,
+            rows_height,
+            "the rows keep the height of their own rows"
+        );
+    }
+
+    /// The rows do not scroll vertically in content-height mode, so a
+    /// vertical wheel over the grid goes on to the page around it.
+    #[gpui::test]
+    fn a_vertical_wheel_over_a_content_height_grid_scrolls_the_page(cx: &mut TestAppContext) {
+        let mut host = OverflowHost::in_a_content_height_page();
+        host.scrolling_page = true;
+        let (host, window) = open(host, cx);
+        let header = bounds(window, "grid-header-cell-0");
+        let over_grid = point(header.center().x, header.center().y);
+
+        wheel_at(window, over_grid, point(px(0.0), px(-40.0)));
+
+        let page = window.update(|_, cx| host.read(cx).page.offset());
+        assert!(
+            page.y < px(0.0),
+            "the wheel scrolled the page the grid sits on"
+        );
+        assert_eq!(page.x, px(0.0));
+        assert_eq!(
+            horizontal_offset(window, &host),
+            px(0.0),
+            "the grid did not scroll sideways"
+        );
+        assert_eq!(
+            window.update(|_, cx| host.read(cx).handle.offset().y),
+            px(0.0),
+            "the viewport has no vertical scroll of its own"
         );
     }
 
