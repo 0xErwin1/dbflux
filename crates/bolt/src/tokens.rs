@@ -436,6 +436,13 @@ impl Fields {
     pub const CHECK_MARK: Rems = ui(12.0);
     /// Gap between a checkbox and its label. (10 px)
     pub const CHECKBOX_GAP: Pixels = px(10.0);
+    /// Dot inside a chosen radio indicator, drawn on the accent fill. (6 px)
+    pub const RADIO_DOT: Rems = ui(6.0);
+    /// Vertical padding of a checkbox or option row. (6 px)
+    pub const CHECK_ROW_PADDING_Y: Pixels = px(6.0);
+    /// Gap between the label line of a checkbox or option row and the
+    /// description under it. (3 px)
+    pub const CHECK_ROW_LINE_GAP: Pixels = px(3.0);
 
     /// Vertical padding of a select menu. (8 px)
     pub const MENU_PADDING_Y: Pixels = px(8.0);
@@ -982,6 +989,31 @@ impl SplitterMetrics {
     pub const HOVER_ALPHA: f32 = 0.3;
     /// Distance one arrow key moves the split. (16 px)
     pub const KEY_STEP: Pixels = px(16.0);
+}
+
+/// Geometry of a form popover (`composites::Popover`): the floating surface a
+/// host anchors to an element or a text range, with a title, a body and a
+/// footer of buttons.
+pub struct PopoverMetrics;
+
+impl PopoverMetrics {
+    /// Default width of the surface. (360 px)
+    pub const WIDTH: Rems = ui(360.0);
+    /// Padding of the title, the body and the footer. (14 px)
+    pub const PADDING: Pixels = px(14.0);
+    /// Gap between the title, the body and the footer. (10 px)
+    pub const GAP: Pixels = px(10.0);
+    /// Title size, matching a modal's header title. (14 px)
+    pub const TITLE_FONT: Rems = ui(14.0);
+    /// Leading icon beside the title. (16 px)
+    pub const TITLE_ICON: Rems = ui(16.0);
+    /// Gap between the footer's buttons, right-aligned. (8 px)
+    pub const FOOTER_GAP: Pixels = px(8.0);
+    /// Space between the anchor and the surface. (6 px)
+    pub const ANCHOR_GAP: Pixels = px(6.0);
+    /// Space the surface keeps from the window's edges when it flips or snaps.
+    /// (8 px)
+    pub const WINDOW_MARGIN: Pixels = px(8.0);
 }
 
 /// Geometry of trees (`TreeNav` rows and the connections sidebar), from the
