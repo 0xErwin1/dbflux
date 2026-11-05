@@ -51,6 +51,13 @@ pub struct DropdownItem {
     pub label: SharedString,
     #[allow(dead_code)]
     pub value: SharedString,
+    /// Drawn before the label of the item's row in the open menu. A product
+    /// that shows the same set of sources in its rows and in its trigger (the
+    /// connection selector) sets it per item, so a row says which driver it
+    /// belongs to instead of relying on the label alone.
+    pub icon: Option<IconSource>,
+    /// Tone for [`DropdownItem::icon`]; the muted foreground when unset.
+    pub icon_color: Option<Hsla>,
 }
 
 impl DropdownItem {
@@ -60,6 +67,8 @@ impl DropdownItem {
         Self {
             value: label.clone(),
             label,
+            icon: None,
+            icon_color: None,
         }
     }
 
@@ -67,7 +76,21 @@ impl DropdownItem {
         Self {
             label: label.into(),
             value: value.into(),
+            icon: None,
+            icon_color: None,
         }
+    }
+
+    /// Draws `icon` before the row's label, in the muted color unless
+    /// [`DropdownItem::icon_color`] says otherwise.
+    pub fn icon(mut self, icon: impl Into<IconSource>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    pub fn icon_color(mut self, color: Hsla) -> Self {
+        self.icon_color = Some(color);
+        self
     }
 }
 
@@ -806,6 +829,10 @@ impl Dropdown {
                     theme.foreground
                 };
 
+                let icon_selector = format!("{item_selector}-icon");
+                let icon = item.icon.clone();
+                let icon_color = item.icon_color.unwrap_or(theme.muted_foreground);
+
                 let mut row = div()
                     .id(SharedString::from(item_selector.clone()))
                     .debug_selector(move || item_selector)
@@ -819,8 +846,18 @@ impl Dropdown {
                     .text_size(menu_font_size)
                     .whitespace_nowrap()
                     .text_color(text_color)
-                    .child(row_shape)
-                    .child(item.label.clone());
+                    .child(row_shape);
+
+                if let Some(icon) = icon {
+                    row = row.gap(Fields::GAP).child(
+                        div()
+                            .flex_none()
+                            .debug_selector(move || icon_selector)
+                            .child(Icon::new(icon).size(Fields::LEADING_ICON).color(icon_color)),
+                    );
+                }
+
+                row = row.child(item.label.clone());
 
                 if is_disabled {
                     row = row.cursor_not_allowed();

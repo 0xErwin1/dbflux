@@ -686,6 +686,40 @@ mod menu_ids {
     }
 
     #[gpui::test]
+    fn a_row_draws_the_icon_its_item_carries_before_the_label(cx: &mut TestAppContext) {
+        let (_host, dropdown, window) = open(cx);
+
+        window.update(|_, cx| {
+            dropdown.update(cx, |dropdown, cx| {
+                dropdown.set_items(
+                    vec![
+                        DropdownItem::new("One")
+                            .icon(crate::icon::IconSource::Svg("icons/folder.svg".into())),
+                        DropdownItem::new("Two"),
+                    ],
+                    cx,
+                );
+            })
+        });
+        window.run_until_parked();
+
+        let icon = window
+            .debug_bounds(selector("-item-0-icon"))
+            .expect("the first row draws its icon");
+        let row = window
+            .debug_bounds(selector("-item-0"))
+            .expect("the first row is laid out");
+        assert!(
+            icon.origin.x < row.center().x,
+            "the icon sits at the start of the row"
+        );
+        assert!(
+            window.debug_bounds(selector("-item-1-icon")).is_none(),
+            "a row without an icon draws none"
+        );
+    }
+
+    #[gpui::test]
     fn clicking_a_row_by_its_id_selects_that_row(cx: &mut TestAppContext) {
         let (_host, dropdown, window) = open(cx);
 
