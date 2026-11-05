@@ -360,6 +360,34 @@ A grid that fits its viewport draws exactly as it does without the wrapper,
 which is why the component is opt-in: a product wraps the grid only where the
 pane can be narrower than the columns.
 
+The sizing above is for a pane with a definite height. A page that lays out to
+its content's height — a settings page, a form section, a document that
+scrolls as a whole — has no such height, so a viewport that fills its pane
+collapses to 0 px and its rows are clipped away. Those pages take
+`.content_height()` and chain no height at all:
+
+```rust
+GridOverflow::new("tables-grid", &horizontal, total_width)
+    .header(render_header(..))
+    .rows(rows)
+    .content_height()
+```
+
+- The viewport takes the height of its header and its rows instead of the
+  height of a pane, and the rows are not asked to scroll vertically: a
+  vertical wheel over the grid goes on to the page around it, because the
+  component keeps `restrict_scroll_to_axis` on the viewport.
+- It still scrolls sideways on the same handle, header and rows together, with
+  the bar and its reserved strip only while the columns overflow. A grid that
+  fits draws exactly as it does without the wrapper, at the height of its own
+  rows.
+- Without a pane there is no definite height for a container query to be given,
+  so the width is read from the handle the viewport tracks, which carries the
+  frame just laid out, and a frame drawn with a width that has since changed
+  asks for one more. The strip settles in the frame after the page's width
+  first reaches the grid — the same frame gpui's own scrollbar settles in — and
+  a grid that fits draws as it does unwrapped on every frame.
+
 ### Option group
 
 `OptionGroup::new(group, items, selected, on_change)` is the vertical list of
