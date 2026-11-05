@@ -1278,12 +1278,23 @@ impl ConnectionManagerWindow {
             }
             Ok(None) => {}
             Err(error) => {
+                // Unreadable either way, so saving cannot delete an entry the
+                // form never saw; only a profile whose password lives in the
+                // keyring has a failure worth reporting.
                 instance.form.stored_password = StoredPassword::Unreadable;
-                report_error(
-                    UserFacingError::new(ErrorKind::Storage, KEYRING_PASSWORD_READ_ERROR)
-                        .with_cause(error.to_string()),
-                    cx,
-                );
+                if dbflux_core::password_lives_in_keyring(profile) {
+                    report_error(
+                        UserFacingError::new(ErrorKind::Storage, KEYRING_PASSWORD_READ_ERROR)
+                            .with_cause(error.to_string()),
+                        cx,
+                    );
+                } else {
+                    log::warn!(
+                        "Keyring read failed for profile {}, whose password does not live in \
+                         the keyring: {error}",
+                        profile.id
+                    );
+                }
             }
         }
 

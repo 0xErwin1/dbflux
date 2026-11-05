@@ -2857,11 +2857,19 @@ impl ConnectProfileParams {
             return Ok(None);
         };
 
-        get_stored_password(&self.profile, secret_store).map_err(|error| {
-            format!(
-                "Could not read the password from the system keyring (it may be locked): {error}"
-            )
-        })
+        if !self.profile.save_password {
+            return Ok(None);
+        }
+
+        let read = match secret_store.read() {
+            Ok(store) => store.get(&self.profile.secret_ref()),
+            Err(poison_err) => {
+                log::warn!("Secret store RwLock poisoned during password retrieval, recovering...");
+                poison_err.into_inner().get(&self.profile.secret_ref())
+            }
+        };
+
+        crate::keyring_password_for_connect(&self.profile, self.driver.requires_password(), read)
     }
 }
 
@@ -6511,6 +6519,21 @@ mod tests {
                 passwords,
             )
         }
+
+        /// A recording driver that authenticates with a password.
+        fn recording_with_password() -> (Arc<Self>, RecordedConnects) {
+            let passwords = Arc::new(Mutex::new(Vec::new()));
+            let mut metadata = postgres_metadata("test-pg-switch");
+            metadata.capabilities |= DriverCapabilities::AUTHENTICATION;
+            (
+                Arc::new(Self {
+                    metadata,
+                    form: &TEST_FORM,
+                    passwords: passwords.clone(),
+                }),
+                passwords,
+            )
+        }
     }
 
     impl DbDriver for PerDatabaseSwitchDriver {
@@ -7665,7 +7688,7 @@ mod tests {
     #[test]
     fn connect_fails_with_the_keyring_error_when_the_saved_password_cannot_be_read() {
         let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
-        let (driver, recorded) = PerDatabaseSwitchDriver::recording();
+        let (driver, recorded) = PerDatabaseSwitchDriver::recording_with_password();
 
         let params = ConnectProfileParams {
             profile,
@@ -7691,6 +7714,26 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(recorded_connect_calls(&recorded).is_empty());
+    }
+
+    #[test]
+    fn connect_for_a_driver_without_a_password_ignores_a_failing_keyring() {
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let (driver, recorded) = PerDatabaseSwitchDriver::recording();
+
+        let params = ConnectProfileParams {
+            profile,
+            driver,
+            secret_store: Some(failing_secret_store()),
+            ssh_secret: None,
+            proxy: None,
+            password_override: None,
+        };
+        params.execute(None).expect("connect should succeed");
+
+        let calls = recorded_connect_calls(&recorded);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, None);
     }
 
     #[test]

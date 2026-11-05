@@ -349,17 +349,27 @@ impl SecretManager {
     }
 }
 
-/// The keyring password a connect hands the driver, given the keyring read. A read failure
-/// fails the connect only when the keyring is where the password lives: a
-/// profile whose password comes from a value ref resolves it elsewhere, so a
+/// Whether the keyring is where `profile` keeps its password: the profile
+/// saves it and no value ref (environment, secret manager, ...) supplies it.
+pub fn password_lives_in_keyring(profile: &ConnectionProfile) -> bool {
+    profile.save_password && !profile.value_refs.contains_key("password")
+}
+
+/// The keyring password a connect hands the driver, given the keyring read.
+///
+/// A profile that does not save its password gets none, even if a stale
+/// entry survives in the keyring. A read failure fails the connect only when
+/// the driver authenticates with a password and the keyring is where it
+/// lives: anything else resolves its password elsewhere or needs none, so a
 /// locked keyring must not block it.
 pub fn keyring_password_for_connect(
     profile: &ConnectionProfile,
+    driver_requires_password: bool,
     read: Result<Option<SecretString>, crate::DbError>,
 ) -> Result<Option<SecretString>, String> {
     match read {
-        Ok(password) => Ok(password),
-        Err(error) if profile.save_password && !profile.value_refs.contains_key("password") => {
+        Ok(password) => Ok(password.filter(|_| profile.save_password)),
+        Err(error) if driver_requires_password && password_lives_in_keyring(profile) => {
             Err(format!(
                 "Could not read the password from the system keyring (it may be locked): {error}"
             ))
@@ -396,7 +406,7 @@ mod keyring_password_tests {
 
     #[test]
     fn a_locked_keyring_fails_a_profile_that_saves_its_password() {
-        let error = keyring_password_for_connect(&profile(true), locked())
+        let error = keyring_password_for_connect(&profile(true), true, locked())
             .expect_err("a locked keyring is not an absent password");
 
         assert!(
@@ -410,7 +420,7 @@ mod keyring_password_tests {
 
     #[test]
     fn a_locked_keyring_does_not_block_a_profile_that_does_not_save_its_password() {
-        let password = keyring_password_for_connect(&profile(false), locked())
+        let password = keyring_password_for_connect(&profile(false), true, locked())
             .expect("the keyring holds nothing this profile needs");
 
         assert!(password.is_none());
@@ -426,7 +436,7 @@ mod keyring_password_tests {
             },
         );
 
-        let password = keyring_password_for_connect(&profile, locked())
+        let password = keyring_password_for_connect(&profile, true, locked())
             .expect("the value ref resolves the password elsewhere");
 
         assert!(password.is_none());
@@ -436,12 +446,33 @@ mod keyring_password_tests {
     fn a_readable_keyring_returns_the_saved_password() {
         let password = keyring_password_for_connect(
             &profile(true),
+            true,
             Ok(Some(SecretString::from("saved password"))),
         )
         .expect("keyring read succeeds")
         .expect("a saved password is returned");
 
         assert_eq!(password.expose_secret(), "saved password");
+    }
+
+    #[test]
+    fn a_locked_keyring_does_not_block_a_driver_without_a_password() {
+        let password = keyring_password_for_connect(&profile(true), false, locked())
+            .expect("the driver authenticates without a password");
+
+        assert!(password.is_none());
+    }
+
+    #[test]
+    fn a_stale_entry_is_not_used_by_a_profile_that_does_not_save_its_password() {
+        let password = keyring_password_for_connect(
+            &profile(false),
+            true,
+            Ok(Some(SecretString::from("stale password"))),
+        )
+        .expect("keyring read succeeds");
+
+        assert!(password.is_none());
     }
 }
 

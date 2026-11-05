@@ -2307,6 +2307,44 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn editing_a_value_ref_profile_with_an_unreadable_keyring_reports_nothing() {
+        let mut cx = TestAppContext::single();
+        let host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let mut profile = sqlite_profile("value ref profile");
+        profile.value_refs.insert(
+            "password".to_string(),
+            ValueRef::Env {
+                key: "DBFLUX_TEST_PASSWORD".to_string(),
+            },
+        );
+        fixture.seed(&profile, "stale password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+        fixture.read_fails.store(true, Ordering::SeqCst);
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+
+        let stored_password = window
+            .update(&mut cx, |manager, _window, _cx| {
+                manager.form.stored_password
+            })
+            .expect("edit window stays available");
+        assert_eq!(
+            stored_password,
+            StoredPassword::Unreadable,
+            "saving still must not delete the entry the form never saw"
+        );
+        assert_eq!(cx.update(|cx| host.read(cx).toast_count()), 0);
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
     fn saving_with_a_value_ref_source_keeps_an_entry_the_keyring_would_not_read() {
         let mut cx = TestAppContext::single();
         let _host = init_form_test_runtime(&mut cx);
@@ -2327,12 +2365,16 @@ mod tests {
                 let env_ref = ValueRef::Env {
                     key: "DBFLUX_TEST_PASSWORD".to_string(),
                 };
-                manager
+                let env_key = manager
                     .form
                     .password_value_source_selector
                     .update(cx, |selector, cx| {
-                        selector.set_value_ref(Some(&env_ref), window, cx);
+                        selector.set_value_ref(Some(&env_ref), window, cx)
                     });
+                manager
+                    .form
+                    .input_password
+                    .update(cx, |input, cx| input.set_value(env_key, window, cx));
                 assert!(
                     !manager
                         .form
@@ -2351,6 +2393,14 @@ mod tests {
         );
         let persisted = cx.update(|cx| app_state.read(cx).profiles().to_vec());
         assert_eq!(persisted.len(), 1, "the edit is committed");
+        assert!(
+            matches!(
+                persisted[0].value_refs.get("password"),
+                Some(ValueRef::Env { key }) if key == "DBFLUX_TEST_PASSWORD"
+            ),
+            "the new password source is saved: {:?}",
+            persisted[0].value_refs.get("password")
+        );
         assert!(
             window.root(&mut cx).is_err(),
             "a successful save closes the window"

@@ -30,9 +30,21 @@ fn duplicate_profile_in_state(
         .connection_tree()
         .find_by_profile(profile_id)
         .and_then(|node| node.parent_id);
-    let password = state
-        .get_password(&original)
-        .map_err(DuplicateProfileError::PasswordRead)?;
+    // Only a profile that keeps its password in the keyring needs the read to
+    // succeed; any other profile is copied without the keyring entry.
+    let password = match state.get_password(&original) {
+        Ok(password) => password,
+        Err(error) if dbflux_core::password_lives_in_keyring(&original) => {
+            return Err(DuplicateProfileError::PasswordRead(error));
+        }
+        Err(error) => {
+            log::warn!(
+                "Duplicating profile {} without its keyring entry, which could not be read: {error}",
+                original.id
+            );
+            None
+        }
+    };
     let ssh_password = state.get_ssh_password(&original);
 
     let mut cloned = original;
@@ -677,6 +689,37 @@ mod tests {
             .parse::<Uuid>()
             .expect("clone target secret reference contains a UUID");
         assert_ne!(target_id, source.id, "clone target UUID is fresh");
+    }
+
+    #[gpui::test]
+    fn duplicate_profile_read_failure_does_not_block_a_profile_without_a_saved_password(
+        cx: &mut TestAppContext,
+    ) {
+        let app_state = test_app_state(cx);
+        let fixture = SecretStoreFixture::new();
+        install_secret_store(&app_state, fixture.clone(), cx);
+        let mut source = source_profile();
+        source.save_password = false;
+        app_state.update(cx, |state, _| {
+            state.add_profile_in_folder(source.clone(), None);
+        });
+        fixture.read_fails.store(true, Ordering::SeqCst);
+
+        #[expect(
+            clippy::result_large_err,
+            reason = "duplicate_profile_in_state is production API returning DbError; the test \
+                      only asserts is_ok, so boxing the Err just to shrink the closure would \
+                      diverge from the exercised signature"
+        )]
+        let result = app_state.update(cx, |state, cx| {
+            duplicate_profile_in_state(state, source.id, cx)
+        });
+
+        assert!(
+            matches!(result, Ok(Some(_))),
+            "a profile that does not keep its password in the keyring is still copied"
+        );
+        assert_eq!(profiles(&app_state, cx).len(), 2);
     }
 
     #[gpui::test]

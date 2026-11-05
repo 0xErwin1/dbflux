@@ -301,7 +301,8 @@ pub use storage::{
     HasSecretRef, HistoryEntry, KeyringSecretStore, NoopSecretStore, RecentFile, SavedQuery,
     SecretManager, SecretStore, SessionManifest, SessionStore, SessionTab, SessionTabKind, UiState,
     UiStateStore, auth_field_secret_ref, connection_secret_ref, create_secret_store,
-    keyring_password_for_connect, proxy_secret_ref, ssh_tunnel_secret_ref,
+    keyring_password_for_connect, password_lives_in_keyring, proxy_secret_ref,
+    ssh_tunnel_secret_ref,
 };
 
 pub use observability::{
