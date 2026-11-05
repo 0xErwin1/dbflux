@@ -763,6 +763,16 @@ impl SecretStoreDocument {
             return;
         };
 
+        // The multi-line viewer draws the value itself, so no field input is
+        // built for it: an input would hold a second plaintext copy of the
+        // value that nothing reads.
+        if value.is_multiline() {
+            self.value_inputs.clear();
+            self.value_input_masks.clear();
+            self.value_inputs_view = None;
+            return;
+        }
+
         let field_count = value.field_count();
 
         if self.value_inputs_view != Some(value.view) || self.value_inputs.len() != field_count {

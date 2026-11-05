@@ -107,6 +107,8 @@ pub struct SecretStoreDocument {
     /// The masked flag last applied to each of `value_inputs`.
     value_input_masks: Vec<bool>,
     value_inputs_view: Option<ValueView>,
+    /// Scroll position of the multi-line viewer.
+    value_viewer_scroll: ScrollHandle,
     last_call: Option<CallTiming>,
     /// Whether the connection's driver advertises `REGION_SWITCH`. Never a
     /// driver id: the capability gates the control.
@@ -264,6 +266,7 @@ impl SecretStoreDocument {
             value_inputs: Vec::new(),
             value_input_masks: Vec::new(),
             value_inputs_view: None,
+            value_viewer_scroll: ScrollHandle::new(),
             last_call: None,
             region_switchable,
             region,
@@ -574,6 +577,7 @@ impl SecretStoreDocument {
         self.value_inputs.clear();
         self.value_input_masks.clear();
         self.value_inputs_view = None;
+        self.value_viewer_scroll.set_offset(point(px(0.0), px(0.0)));
     }
 
     pub fn toggle_reveal(&mut self, index: usize, cx: &mut Context<Self>) {
