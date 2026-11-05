@@ -23,6 +23,23 @@ pub const SECRETS_MANAGER_ID: &str = "secrets-manager";
 /// `ListSecrets` accepts 1 to 100 results per page.
 const MAX_PAGE_SIZE: u32 = 100;
 
+/// Marks a page token that belongs to the `Name` filter, so a listing that
+/// fell back to it keeps paging with that filter. Service tokens are opaque
+/// and never start with it.
+const PREFIX_TOKEN: &str = "name|";
+
+/// A page token of the `Name` filter listing, marked so the next request uses
+/// the same filter its token belongs to.
+fn encode_prefix_token(token: &str) -> String {
+    format!("{PREFIX_TOKEN}{token}")
+}
+
+/// The service page token behind a marked one, or `None` for a token the
+/// service returned for the `all` filter.
+fn decode_prefix_token(token: &str) -> Option<&str> {
+    token.strip_prefix(PREFIX_TOKEN)
+}
+
 /// Staging label of the version `GetSecretValue` returns by default.
 const CURRENT_STAGE: &str = "AWSCURRENT";
 
@@ -87,41 +104,29 @@ impl SecretsManagerStore {
     }
 }
 
-impl SecretStoreSource for SecretsManagerStore {
-    fn descriptor(&self) -> &SecretStoreDescriptor {
-        &self.descriptor
-    }
-
-    /// `ListSecrets` with planned deletions included. `name_filter` is an
-    /// `all` filter: Secrets Manager splits names, descriptions and tags into
-    /// words and matches each word by prefix, ignoring case, so a word in the
-    /// middle of a path finds the secret. The `Name` filter only matches the
-    /// start of the full name, case-sensitively. An endpoint that treats `all`
-    /// as a name prefix instead (LocalStack does) still matches a typed
-    /// prefix, and finds nothing else.
-    fn list(&self, request: &SecretListRequest) -> Result<SecretListPage, DbError> {
+impl SecretsManagerStore {
+    /// One `ListSecrets` page, with the filter the caller chose and, when the
+    /// page came from the prefix fallback, a token that says so.
+    fn list_page(
+        &self,
+        request: &SecretListRequest,
+        key: FilterNameStringType,
+        search: Option<&str>,
+        token: Option<&str>,
+        prefix_fallback: bool,
+    ) -> Result<SecretListPage, DbError> {
         let mut call = self
             .client
             .list_secrets()
             .include_planned_deletion(true)
-            .set_next_token(request.page_token.clone());
+            .set_next_token(token.map(ToString::to_string));
 
         if let Some(page_size) = request.page_size {
             call = call.max_results(clamp_page_size(page_size));
         }
 
-        if let Some(name_filter) = request
-            .name_filter
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            call = call.filters(
-                Filter::builder()
-                    .key(FilterNameStringType::All)
-                    .values(name_filter)
-                    .build(),
-            );
+        if let Some(search) = search {
+            call = call.filters(Filter::builder().key(key).values(search).build());
         }
 
         let output = runtime()
@@ -135,8 +140,67 @@ impl SecretStoreSource for SecretsManagerStore {
                 .map(summary_from_entry)
                 .collect(),
             child_paths: Vec::new(),
-            next_page_token: output.next_token().map(ToString::to_string),
+            next_page_token: output.next_token().map(|token| {
+                if prefix_fallback {
+                    encode_prefix_token(token)
+                } else {
+                    token.to_string()
+                }
+            }),
         })
+    }
+}
+
+impl SecretStoreSource for SecretsManagerStore {
+    fn descriptor(&self) -> &SecretStoreDescriptor {
+        &self.descriptor
+    }
+
+    /// `ListSecrets` with planned deletions included. `name_filter` is an
+    /// `all` filter: Secrets Manager splits names, descriptions and tags into
+    /// words and matches each word by prefix, ignoring case, so a word in the
+    /// middle of a path finds the secret. The `Name` filter only matches the
+    /// start of the full name, case-sensitively.
+    ///
+    /// An endpoint that treats `all` as a name prefix instead (LocalStack
+    /// does) still matches a typed prefix and finds nothing else. An endpoint
+    /// that does not implement `all` at all answers it with no entries, so a
+    /// search that finds nothing is asked once more with the `Name` filter,
+    /// which is what this store used before: the fallback narrows a search
+    /// rather than widening it, and costs one request only when the word
+    /// filter matched nothing. Its pages carry [`PREFIX_TOKEN`] so the rest of
+    /// that listing keeps using the filter its token belongs to.
+    fn list(&self, request: &SecretListRequest) -> Result<SecretListPage, DbError> {
+        let search = request
+            .name_filter
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+
+        let resumed_prefix = request.page_token.as_deref().and_then(decode_prefix_token);
+        let key = if resumed_prefix.is_some() {
+            FilterNameStringType::Name
+        } else {
+            FilterNameStringType::All
+        };
+        let token = resumed_prefix
+            .map(ToString::to_string)
+            .or_else(|| request.page_token.clone());
+
+        let page = self.list_page(request, key, search, token.as_deref(), false)?;
+
+        let word_filter_matched_nothing =
+            page.entries.is_empty() && resumed_prefix.is_none() && token.is_none();
+        match (word_filter_matched_nothing, search) {
+            (true, Some(search)) => self.list_page(
+                request,
+                FilterNameStringType::Name,
+                Some(search),
+                None,
+                true,
+            ),
+            _ => Ok(page),
+        }
     }
 
     fn describe(&self, name: &str) -> Result<SecretDetails, DbError> {

@@ -67,3 +67,21 @@ fn version_labels_are_sorted_and_distinct() {
     );
     assert_eq!(current_version(&versions).as_deref(), Some("a"));
 }
+
+/// The fallback listing is paged with a token the service returned for the
+/// `Name` filter, marked so the next request asks with that same filter.
+#[test]
+fn a_prefix_page_token_carries_its_service_token() {
+    assert_eq!(
+        decode_prefix_token(&encode_prefix_token("eyJhIjoiYiJ9")),
+        Some("eyJhIjoiYiJ9")
+    );
+}
+
+/// A token the service returned for the `all` filter is passed back untouched.
+#[test]
+fn a_service_page_token_is_not_read_as_a_prefix_one() {
+    assert_eq!(decode_prefix_token("eyJhIjoiYiJ9"), None);
+    assert_eq!(decode_prefix_token("name-abc"), None);
+    assert_eq!(decode_prefix_token("xname|abc"), None);
+}
