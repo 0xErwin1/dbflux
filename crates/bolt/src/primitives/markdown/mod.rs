@@ -33,7 +33,6 @@ use crate::fonts;
 use crate::primitives::Chamfer;
 use crate::selector::id_selector;
 use crate::tokens::{ChamferCut, FontSizes, MarkdownMetrics, Spacing};
-use crate::typography::AppFonts;
 
 /// The type a [`MarkdownView`] draws with, resolved from the tokens and the
 /// active interface size so a product's test can read it without a render.
@@ -138,11 +137,16 @@ impl RenderOnce for MarkdownView {
 
         let markdown = TextView::markdown(ElementId::Name(text_name), self.source)
             .selectable(self.selectable)
-            .style(text_style(&typography, &theme, role));
+            .style(text_style(
+                &typography,
+                &theme,
+                role,
+                crate::fonts::editor_family(cx),
+            ));
         let body = div()
             .debug_selector(id_selector(&body_id))
             .id(body_id)
-            .font_family(AppFonts::INTERFACE)
+            .font_family(crate::fonts::ui_family(cx))
             .text_size(typography.body)
             .text_color(role.foreground)
             .child(markdown);
@@ -176,10 +180,11 @@ fn text_style(
     typography: &MarkdownTypography,
     theme: &gpui_component::Theme,
     role: crate::Colors,
+    code_family: SharedString,
 ) -> TextViewStyle {
     let headings = typography.headings;
     let code_block = StyleRefinement::default()
-        .font_family(AppFonts::MONO)
+        .font_family(code_family)
         .text_size(typography.code)
         .p(MarkdownMetrics::CODE_BLOCK_PADDING)
         .bg(role.raised);
