@@ -39,7 +39,7 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AuthProfile, AuthSessionState, ConnectionHookBindings, ConnectionMcpPolicyBinding, DbConfig,
     DbDriver, DbKind, DriverCapabilities, DriverFormDef, FormFieldDef, FormFieldKind,
-    GlobalOverrides, SshAuthMethod, SshTunnelProfile, ValueRef,
+    GlobalOverrides, LogErr, SshAuthMethod, SshTunnelProfile, ValueRef,
 };
 use dbflux_ui_base::platform;
 use dbflux_ui_base::sso_wizard::SsoWizard;
@@ -301,10 +301,32 @@ struct DriverInfo {
 const KEYRING_PASSWORD_READ_ERROR: &str =
     "Could not read the password from the system keyring (it may be locked)";
 
+/// Same contract as `SecretManager::get_password`: a store that is not
+/// available holds no password (`Ok(None)`), a failing read is an error.
+#[allow(clippy::result_large_err)]
+fn read_saved_password(
+    secret_store: &std::sync::RwLock<Box<dyn dbflux_core::SecretStore>>,
+    profile: &dbflux_core::ConnectionProfile,
+) -> Result<Option<SecretString>, dbflux_core::DbError> {
+    let store = secret_store
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    if !store.is_available() {
+        return Ok(None);
+    }
+
+    store.get(&profile.secret_ref())
+}
+
 /// What the form knows about the password the keyring holds for the profile
 /// being edited.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum StoredPassword {
+    /// The keyring read is still running on the background executor, so an
+    /// empty password field says nothing yet, and saving must not delete the
+    /// saved entry.
+    Loading,
     /// The keyring answered: the password field shows what it holds, if anything.
     #[default]
     Known,
@@ -501,6 +523,9 @@ pub struct ConnectionManagerWindow {
     /// grid navigation steps by it.
     driver_grid_columns: usize,
     editing_profile_id: Option<uuid::Uuid>,
+    /// The pending keyring read of the edited profile's password; dropping it
+    /// with the window cancels the apply step.
+    password_read_task: Option<Task<()>>,
 
     validation_errors: Vec<String>,
     test_status: TestStatus,
@@ -1006,6 +1031,7 @@ impl ConnectionManagerWindow {
             available_drivers,
             driver_grid_columns: render_driver_select::DEFAULT_GRID_COLUMNS,
             editing_profile_id: None,
+            password_read_task: None,
             validation_errors: Vec::new(),
             test_status: TestStatus::None,
             test_error: None,
@@ -1269,34 +1295,7 @@ impl ConnectionManagerWindow {
             state.set_value(&profile.name, window, cx);
         });
 
-        match app_state.read(cx).get_password(profile) {
-            Ok(Some(password)) => {
-                let password = password.expose_secret().to_string();
-                instance.form.input_password.update(cx, |state, cx| {
-                    state.set_value(password.clone(), window, cx);
-                });
-            }
-            Ok(None) => {}
-            Err(error) => {
-                // Unreadable either way, so saving cannot delete an entry the
-                // form never saw; only a profile whose password lives in the
-                // keyring has a failure worth reporting.
-                instance.form.stored_password = StoredPassword::Unreadable;
-                if dbflux_core::password_lives_in_keyring(profile) {
-                    report_error(
-                        UserFacingError::new(ErrorKind::Storage, KEYRING_PASSWORD_READ_ERROR)
-                            .with_cause(error.to_string()),
-                        cx,
-                    );
-                } else {
-                    log::warn!(
-                        "Keyring read failed for profile {}, whose password does not live in \
-                         the keyring: {error}",
-                        profile.id
-                    );
-                }
-            }
-        }
+        instance.start_password_read(profile, window, cx);
 
         instance.load_settings_tab(
             profile.settings_overrides.as_ref(),
@@ -1656,6 +1655,83 @@ impl ConnectionManagerWindow {
         }
 
         values
+    }
+
+    /// Reads the saved password off the UI thread, because a locked keyring
+    /// can block the call. Until it completes the form is `Loading`, which
+    /// keeps saving from deleting an entry the form has not seen.
+    fn start_password_read(
+        &mut self,
+        profile: &dbflux_core::ConnectionProfile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.form.stored_password = StoredPassword::Loading;
+
+        let secret_store = self.app_state.read(cx).secret_store();
+        let profile = profile.clone();
+
+        let read = cx.background_executor().spawn({
+            let profile = profile.clone();
+            async move { read_saved_password(&secret_store, &profile) }
+        });
+
+        self.password_read_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = read.await;
+
+            this.update_in(cx, |this, window, cx| {
+                this.apply_password_read(&profile, result, window, cx);
+            })
+            .log_err();
+        }));
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn apply_password_read(
+        &mut self,
+        profile: &dbflux_core::ConnectionProfile,
+        result: Result<Option<SecretString>, dbflux_core::DbError>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.password_read_task = None;
+
+        match result {
+            Ok(password) => {
+                self.form.stored_password = StoredPassword::Known;
+
+                let input_is_empty = self.form.input_password.read(cx).value().is_empty();
+                if let Some(password) = password
+                    && input_is_empty
+                {
+                    let password = password.expose_secret().to_string();
+                    self.form.input_password.update(cx, |state, cx| {
+                        state.set_value(password, window, cx);
+                    });
+                }
+            }
+            Err(error) => {
+                // Unreadable either way, so saving cannot delete an entry the
+                // form never saw; only a profile whose password lives in the
+                // keyring has a failure worth reporting.
+                self.form.stored_password = StoredPassword::Unreadable;
+                if dbflux_core::password_lives_in_keyring(profile) {
+                    report_error(
+                        UserFacingError::new(ErrorKind::Storage, KEYRING_PASSWORD_READ_ERROR)
+                            .with_cause(error.to_string()),
+                        cx,
+                    );
+                } else {
+                    log::warn!(
+                        "Keyring read failed for profile {}, whose password does not live in \
+                         the keyring: {error}",
+                        profile.id
+                    );
+                }
+            }
+        }
+
+        cx.notify();
     }
 
     /// Placeholder for the password input. An unreadable keyring says so,

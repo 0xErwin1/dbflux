@@ -21,20 +21,20 @@ use super::{ConnectionManagerWindow, DismissEvent, StoredPassword, TestStatus};
 const PRIMARY_PASSWORD_SAVE_ERROR: &str =
     "Unable to save the connection password to the system keyring. Unlock it and try again.";
 
-/// Deletes the saved password the form no longer wants, unless the keyring
-/// refused to read it when the form opened. The form then never saw the
-/// entry, so the user cannot have meant to drop it, and a keyring unlocked
+/// Deletes the saved password the form no longer wants, unless the form has
+/// not seen it: the keyring read is still pending, or the keyring refused it
+/// when the form opened. The form then never saw the entry, so the user cannot have meant to drop it, and a keyring unlocked
 /// since would otherwise lose a password nobody chose to remove.
-fn delete_password_unless_unreadable(
+fn delete_password_unless_unseen(
     state: &mut dbflux_ui_base::AppStateEntity,
     profile: &ConnectionProfile,
     stored_password: StoredPassword,
 ) {
     match stored_password {
         StoredPassword::Known => state.delete_password(profile),
-        StoredPassword::Unreadable => log::warn!(
-            "Keeping the saved password for profile {}: the keyring could not be read when the \
-             form opened",
+        StoredPassword::Loading | StoredPassword::Unreadable => log::warn!(
+            "Keeping the saved password for profile {}: the keyring had not been read when the \
+             form was saved, or could not be",
             profile.id
         ),
     }
@@ -585,7 +585,7 @@ impl ConnectionManagerWindow {
                     state.save_password(&profile, &SecretString::from(password.clone()))
                 } else {
                     if wants_password_deleted {
-                        delete_password_unless_unreadable(state, &profile, stored_password);
+                        delete_password_unless_unseen(state, &profile, stored_password);
                     }
                     Ok(())
                 };
@@ -2279,6 +2279,7 @@ mod tests {
         fixture.read_fails.store(true, Ordering::SeqCst);
 
         let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
 
         let (stored_password, password_value, placeholder) = window
             .update(&mut cx, |manager, _window, cx| {
@@ -2326,6 +2327,7 @@ mod tests {
         fixture.read_fails.store(true, Ordering::SeqCst);
 
         let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
 
         let stored_password = window
             .update(&mut cx, |manager, _window, _cx| {
@@ -2357,6 +2359,7 @@ mod tests {
         });
         fixture.read_fails.store(true, Ordering::SeqCst);
         let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
         fixture.read_fails.store(false, Ordering::SeqCst);
 
         window
@@ -2420,6 +2423,7 @@ mod tests {
         });
         fixture.read_fails.store(true, Ordering::SeqCst);
         let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
         fixture.read_fails.store(false, Ordering::SeqCst);
 
         window
@@ -2464,6 +2468,7 @@ mod tests {
             state.add_profile_in_folder(profile.clone(), None)
         });
         let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
 
         let (stored_password, password_value) = window
             .update(&mut cx, |manager, _window, cx| {
@@ -2505,6 +2510,7 @@ mod tests {
         });
 
         let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
 
         let (stored_password, password_value) = window
             .update(&mut cx, |manager, _window, cx| {
@@ -2517,6 +2523,105 @@ mod tests {
         assert_eq!(stored_password, StoredPassword::Known);
         assert_eq!(password_value, "");
         assert_eq!(cx.update(|cx| host.read(cx).toast_count()), 0);
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn saving_while_the_keyring_read_is_pending_keeps_the_saved_entry() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("pending read profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                assert_eq!(manager.form.stored_password, StoredPassword::Loading);
+                assert_eq!(manager.form.input_password.read(cx).value(), "");
+                manager.form.form_save_password = false;
+                manager.save_profile(window, cx)
+            })
+            .expect("save leaves the form window available");
+
+        assert_eq!(
+            fixture.saved(&profile).as_deref(),
+            Some("saved password"),
+            "the entry the form had not read yet is not deleted"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn the_saved_password_fills_the_empty_input_when_the_keyring_read_completes() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("slow keyring profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        cx.run_until_parked();
+
+        let (stored_password, password_value) = window
+            .update(&mut cx, |manager, _window, cx| {
+                (
+                    manager.form.stored_password,
+                    manager.form.input_password.read(cx).value().to_string(),
+                )
+            })
+            .expect("edit window stays available");
+        assert_eq!(stored_password, StoredPassword::Known);
+        assert_eq!(password_value, "saved password");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_password_typed_before_the_keyring_read_completes_is_kept() {
+        let mut cx = TestAppContext::single();
+        let _host = init_form_test_runtime(&mut cx);
+        let fixture = SecretStoreFixture::new(PasswordSaveOutcome::Success);
+        let app_state = test_app_state(&mut cx, fixture.clone());
+        let profile = sqlite_profile("typed first profile");
+        fixture.seed(&profile, "saved password");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_untouched_edit_window(app_state.clone(), profile.clone(), &mut cx);
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.form.input_password.update(cx, |input, cx| {
+                    input.set_value("typed password", window, cx)
+                });
+            })
+            .expect("edit window stays available");
+        cx.run_until_parked();
+
+        let (stored_password, password_value) = window
+            .update(&mut cx, |manager, _window, cx| {
+                (
+                    manager.form.stored_password,
+                    manager.form.input_password.read(cx).value().to_string(),
+                )
+            })
+            .expect("edit window stays available");
+        assert_eq!(stored_password, StoredPassword::Known);
+        assert_eq!(password_value, "typed password");
 
         window
             .update(&mut cx, |_, window, _| window.remove_window())
