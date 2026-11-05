@@ -23,23 +23,24 @@ pub const SECRETS_MANAGER_ID: &str = "secrets-manager";
 /// `ListSecrets` accepts 1 to 100 results per page.
 const MAX_PAGE_SIZE: u32 = 100;
 
-/// Marks a page token that belongs to the `Name` filter, so a listing that
-/// fell back to it keeps paging with that filter. Service tokens are opaque
-/// and never start with it.
-const PREFIX_TOKEN: &str = "name|";
+/// Marks of the wrapped page token, one per filter, so a listing keeps paging
+/// with the filter its token belongs to.
+const NAME_TOKEN_MARK: &str = "sst1n:";
+const ALL_TOKEN_MARK: &str = "sst1a:";
 
 /// The filter a listing page is asked with, the service token to send, and
 /// whether the page belongs to the `Name` fallback listing. A marked token
 /// keeps that listing on its own filter on every page, so a token from one
 /// filter is never sent with the other.
 fn page_filter(page_token: Option<&str>) -> (FilterNameStringType, Option<String>, bool) {
-    match page_token.and_then(decode_prefix_token) {
-        Some(service_token) => (
-            FilterNameStringType::Name,
-            Some(service_token.to_string()),
-            true,
-        ),
-        None => (
+    match page_token.map(decode_page_token) {
+        Some(Some((key, service_token))) => {
+            let in_name_listing = matches!(key, FilterNameStringType::Name);
+            (key, Some(service_token), in_name_listing)
+        }
+        // A token this store did not wrap is passed back as the service gave
+        // it, with the word filter it was asked with.
+        _ => (
             FilterNameStringType::All,
             page_token.map(ToString::to_string),
             false,
@@ -62,16 +63,49 @@ fn needs_prefix_fallback(
     entries_are_empty && !has_next_page && search.is_some() && first_page && !in_prefix_listing
 }
 
-/// A page token of the `Name` filter listing, marked so the next request uses
-/// the same filter its token belongs to.
-fn encode_prefix_token(token: &str) -> String {
-    format!("{PREFIX_TOKEN}{token}")
+/// Wraps the filter a page token belongs to and the service token itself.
+///
+/// `ListSecrets` tokens are opaque, so no unreserved prefix can be taken from
+/// their namespace: every token this store returns carries this wrapper, and
+/// the service token travels hex-encoded inside it, which no wrapper mark can
+/// be confused with.
+fn encode_page_token(key: &FilterNameStringType, token: &str) -> String {
+    let mark = if matches!(key, FilterNameStringType::Name) {
+        NAME_TOKEN_MARK
+    } else {
+        ALL_TOKEN_MARK
+    };
+    format!("{mark}{}", hex_encode(token))
 }
 
-/// The service page token behind a marked one, or `None` for a token the
-/// service returned for the `all` filter.
-fn decode_prefix_token(token: &str) -> Option<&str> {
-    token.strip_prefix(PREFIX_TOKEN)
+/// The filter and the service token behind a wrapped one, or `None` for a
+/// token this store did not produce.
+fn decode_page_token(token: &str) -> Option<(FilterNameStringType, String)> {
+    let (mark, encoded) = [NAME_TOKEN_MARK, ALL_TOKEN_MARK]
+        .into_iter()
+        .find_map(|mark| token.strip_prefix(mark).map(|rest| (mark, rest)))?;
+    let key = if mark == NAME_TOKEN_MARK {
+        FilterNameStringType::Name
+    } else {
+        FilterNameStringType::All
+    };
+    Some((key, hex_decode(encoded)?))
+}
+
+fn hex_encode(value: &str) -> String {
+    value.bytes().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn hex_decode(value: &str) -> Option<String> {
+    if value.is_empty() || !value.len().is_multiple_of(2) {
+        return None;
+    }
+    let bytes = value
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+        .collect::<Option<Vec<u8>>>()?;
+    String::from_utf8(bytes).ok()
 }
 
 /// Staging label of the version `GetSecretValue` returns by default.
@@ -144,10 +178,9 @@ impl SecretsManagerStore {
     fn list_page(
         &self,
         request: &SecretListRequest,
-        key: FilterNameStringType,
+        filter_key: FilterNameStringType,
         search: Option<&str>,
         token: Option<&str>,
-        prefix_fallback: bool,
     ) -> Result<SecretListPage, DbError> {
         let mut call = self
             .client
@@ -160,7 +193,12 @@ impl SecretsManagerStore {
         }
 
         if let Some(search) = search {
-            call = call.filters(Filter::builder().key(key).values(search).build());
+            call = call.filters(
+                Filter::builder()
+                    .key(filter_key.clone())
+                    .values(search)
+                    .build(),
+            );
         }
 
         let output = runtime()
@@ -174,13 +212,9 @@ impl SecretsManagerStore {
                 .map(summary_from_entry)
                 .collect(),
             child_paths: Vec::new(),
-            next_page_token: output.next_token().map(|token| {
-                if prefix_fallback {
-                    encode_prefix_token(token)
-                } else {
-                    token.to_string()
-                }
-            }),
+            next_page_token: output
+                .next_token()
+                .map(|token| encode_page_token(&filter_key, token)),
         })
     }
 }
@@ -202,7 +236,7 @@ impl SecretStoreSource for SecretsManagerStore {
     /// search that finds nothing is asked once more with the `Name` filter,
     /// which is what this store used before: the fallback narrows a search
     /// rather than widening it, and costs one request only when the word
-    /// filter matched nothing. Its pages carry [`PREFIX_TOKEN`] so the rest of
+    /// filter matched nothing. Its pages carry a wrapped token so the rest of
     /// that listing keeps using the filter its token belongs to.
     fn list(&self, request: &SecretListRequest) -> Result<SecretListPage, DbError> {
         let search = request
@@ -213,7 +247,7 @@ impl SecretStoreSource for SecretsManagerStore {
 
         let (key, token, in_prefix_listing) = page_filter(request.page_token.as_deref());
 
-        let page = self.list_page(request, key, search, token.as_deref(), in_prefix_listing)?;
+        let page = self.list_page(request, key, search, token.as_deref())?;
 
         let fall_back = needs_prefix_fallback(
             page.entries.is_empty(),
@@ -223,13 +257,9 @@ impl SecretStoreSource for SecretsManagerStore {
             in_prefix_listing,
         );
         match (fall_back, search) {
-            (true, Some(search)) => self.list_page(
-                request,
-                FilterNameStringType::Name,
-                Some(search),
-                None,
-                true,
-            ),
+            (true, Some(search)) => {
+                self.list_page(request, FilterNameStringType::Name, Some(search), None)
+            }
             _ => Ok(page),
         }
     }

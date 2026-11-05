@@ -68,22 +68,32 @@ fn version_labels_are_sorted_and_distinct() {
     assert_eq!(current_version(&versions).as_deref(), Some("a"));
 }
 
-/// The fallback listing is paged with a token the service returned for the
-/// `Name` filter, marked so the next request asks with that same filter.
+/// A wrapped token carries the filter of its listing and the service token,
+/// so the next request asks with the filter its token belongs to.
 #[test]
-fn a_prefix_page_token_carries_its_service_token() {
-    assert_eq!(
-        decode_prefix_token(&encode_prefix_token("eyJhIjoiYiJ9")),
-        Some("eyJhIjoiYiJ9")
-    );
+fn a_page_token_carries_the_filter_of_its_listing() {
+    let wrapped = encode_page_token(&FilterNameStringType::Name, "eyJhIjoiYiJ9");
+    let (key, token) = decode_page_token(&wrapped).expect("a wrapped token decodes");
+    assert!(matches!(key, FilterNameStringType::Name));
+    assert_eq!(token, "eyJhIjoiYiJ9");
+
+    let wrapped = encode_page_token(&FilterNameStringType::All, "eyJhIjoiYiJ9");
+    let (key, token) = decode_page_token(&wrapped).expect("a wrapped token decodes");
+    assert!(matches!(key, FilterNameStringType::All));
+    assert_eq!(token, "eyJhIjoiYiJ9");
 }
 
-/// A token the service returned for the `all` filter is passed back untouched.
+/// A service token is opaque, so a token that was not wrapped here is never
+/// read as one of ours, whatever it starts with.
 #[test]
-fn a_service_page_token_is_not_read_as_a_prefix_one() {
-    assert_eq!(decode_prefix_token("eyJhIjoiYiJ9"), None);
-    assert_eq!(decode_prefix_token("name-abc"), None);
-    assert_eq!(decode_prefix_token("xname|abc"), None);
+fn an_unwrapped_token_is_not_read_as_a_wrapped_one() {
+    for token in ["eyJhIjoiYiJ9", "name-abc", "sst1n", "sst1n:", "sst1n:zz"] {
+        assert_eq!(decode_page_token(token), None, "{token}");
+    }
+    let (key, token, in_name_listing) = page_filter(Some("eyJhIjoiYiJ9"));
+    assert!(matches!(key, FilterNameStringType::All));
+    assert_eq!(token.as_deref(), Some("eyJhIjoiYiJ9"));
+    assert!(!in_name_listing);
 }
 
 /// The prefix fallback runs for a search that matched nothing, and only then.
@@ -138,18 +148,20 @@ fn an_empty_page_with_a_next_token_keeps_the_listing() {
 /// filter is never sent with the other.
 #[test]
 fn a_fallback_listing_keeps_its_filter_on_every_page() {
-    let (key, token, in_prefix_listing) = page_filter(Some("name|abc"));
+    let wrapped_name = encode_page_token(&FilterNameStringType::Name, "abc");
+    let (key, token, in_name_listing) = page_filter(Some(&wrapped_name));
     assert!(matches!(key, FilterNameStringType::Name));
     assert_eq!(token.as_deref(), Some("abc"));
-    assert!(in_prefix_listing);
+    assert!(in_name_listing);
 
-    let (key, token, in_prefix_listing) = page_filter(Some("abc"));
+    let wrapped_all = encode_page_token(&FilterNameStringType::All, "abc");
+    let (key, token, in_name_listing) = page_filter(Some(&wrapped_all));
     assert!(matches!(key, FilterNameStringType::All));
     assert_eq!(token.as_deref(), Some("abc"));
-    assert!(!in_prefix_listing);
+    assert!(!in_name_listing);
 
-    let (key, token, in_prefix_listing) = page_filter(None);
+    let (key, token, in_name_listing) = page_filter(None);
     assert!(matches!(key, FilterNameStringType::All));
     assert!(token.is_none());
-    assert!(!in_prefix_listing);
+    assert!(!in_name_listing);
 }
