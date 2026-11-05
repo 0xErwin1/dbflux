@@ -1,8 +1,10 @@
-//! `SearchField` — a framed search input with a trailing match count.
+//! `SearchField` — a framed search input with a trailing match count, and
+//! [`SearchTrigger`], its closed state.
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, ElementId, Entity, Focusable as _, Hsla, Rems, Role, SharedString, Window, div,
+    AnyElement, App, ElementId, Entity, Focusable as _, Hsla, Rems, Role, SharedString, Stateful,
+    Window, div,
 };
 use gpui_component::{ActiveTheme, Theme};
 
@@ -51,6 +53,9 @@ impl SearchCount {
 /// `<id>-count`, a label node named by the count's text so a reader hears
 /// it. The input announces [`SearchField::aria_label`]. Every word is the
 /// caller's: the count is formatted by the product in its own language.
+///
+/// A search a screen keeps closed until the user asks for it draws
+/// [`SearchTrigger`] instead: the same frame and metrics, opening this field.
 ///
 /// ```ignore
 /// SearchField::new("body-search", &input)
@@ -129,9 +134,7 @@ impl RenderOnce for SearchField {
             .is_some_and(|count| count.tone == BadgeTone::Danger);
 
         let (border, ring) = field_frame(failed, focused, &theme);
-        let mut shape = Chamfer::new(ChamferCut::CONTROL)
-            .fill(theme.background)
-            .border(border);
+        let mut shape = field_shape(&theme, border);
         if let Some(ring) = ring {
             shape = shape.ring(ring);
         }
@@ -166,21 +169,7 @@ impl RenderOnce for SearchField {
 
         let id = ElementId::Name(self.id);
 
-        div()
-            .debug_selector(id_selector(&id))
-            .id(id)
-            .relative()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(Fields::GAP)
-            .h(Fields::HEIGHT)
-            .px(Fields::PADDING_X)
-            .text_size(Fields::TEXT)
-            .map(|field| match self.width {
-                Some(width) => field.w(width),
-                None => field.flex_1().min_w_0(),
-            })
+        field_shell(id, self.width)
             .child(shape)
             .child(
                 Icon::new(icon)
@@ -196,6 +185,36 @@ impl RenderOnce for SearchField {
             .children(count)
             .children(self.trailing)
     }
+}
+
+/// The frame both a search field and its closed trigger draw: the ground fill
+/// cut 6 behind `border`.
+pub(super) fn field_shape(theme: &Theme, border: Hsla) -> Chamfer {
+    Chamfer::new(ChamferCut::CONTROL)
+        .fill(theme.background)
+        .border(border)
+}
+
+/// The metrics both a search field and its closed trigger draw: `id` as the
+/// field's element, `Fields::HEIGHT` tall with `Fields::PADDING_X` of inset,
+/// its parts `Fields::GAP` apart, at `Fields::TEXT`. `width` fixes the field;
+/// without one it fills the space it is given.
+pub(super) fn field_shell(id: ElementId, width: Option<Rems>) -> Stateful<gpui::Div> {
+    div()
+        .debug_selector(id_selector(&id))
+        .id(id)
+        .relative()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(Fields::GAP)
+        .h(Fields::HEIGHT)
+        .px(Fields::PADDING_X)
+        .text_size(Fields::TEXT)
+        .map(|field| match width {
+            Some(width) => field.w(width),
+            None => field.flex_1().min_w_0(),
+        })
 }
 
 /// The field's border and ring for its state.
@@ -217,6 +236,10 @@ fn field_frame(failed: bool, focused: bool, theme: &Theme) -> (Hsla, Option<Cham
         (theme.border, None)
     }
 }
+
+mod trigger;
+
+pub use trigger::SearchTrigger;
 
 #[cfg(test)]
 mod tests;

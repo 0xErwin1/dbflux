@@ -32,13 +32,13 @@ rendering in Bolt, the domain knowledge behind a seam the product fills.
 | `bolt::semantic` | Banner, row-state and chart-chrome colors per palette |
 | `bolt::icon` | `IconSource`: a named icon or an SVG path |
 | `bolt::primitives` | Badge, banner, chamfer, divider, file picker, focus ring, keycap, label, loading state, markdown view, segmented control, status, surface, text, timeline strip and histogram, type-to-confirm |
-| `bolt::controls` | Button, checkbox, dropdown, select trigger, input, search field with a match count, read-only text view, key capture |
-| `bolt::composites` | Tabs (document, result, inline), menu item and popup menu, list row, empty state, split button, splitter, field row, island |
+| `bolt::controls` | Button, checkbox, option group, dropdown, select trigger, input, search field with a match count, read-only text view, key capture |
+| `bolt::composites` | Tabs (document, result, inline), menu item and popup menu, form popover, list row, empty state, split button, splitter, field row, island |
 | `bolt::selector` | `id_selector`: the gpui debug selector every id-bearing component records for its element id |
 | `bolt::modals` | The modal dialog, its focus helper and the shared body blocks (lead, statement, numbered statement, field, form row, value field) |
 | `bolt::shell` | The activity rail: view buttons with one active entry, top or bottom pinned |
 | `bolt::data` | The row-and-cell contract: `ColumnView`, `CellView`, `CellTone`, `CellContent`, `RowSource`, `RowVisualState`, `ColumnKind` |
-| `bolt::components::grid` | The data-grid row list and cell painter over `RowSource`, plus the `GridHost` carrying the host facts |
+| `bolt::components::grid` | The data-grid row list and cell painter over `RowSource`, the `GridHost` carrying the host facts, the column resize drag, and `GridOverflow` for a grid wider than its viewport |
 | `bolt::components::tree_nav` | Tree navigation: flattening, cursor, expansion, the gutter, the navigation row with its chevron, count and trailing slot |
 | `bolt::components::document_tree` | The document-tree row painter, its value-type colors and its row host |
 | `bolt::chart` | Decimation, axis ticks, series stats, legend, axis bar, point inspector, the spec's value types and the readout formatters |
@@ -112,12 +112,18 @@ a database or a design board: a source-scanning guardrail in
 
 ## Finding components in tests
 
-Every Bolt component that takes an element id (button, checkbox, dropdown,
-select trigger, input, file picker, tabs, menu row and overlay, list row,
-split button, splitter, segmented control and its segments, modal backdrop)
-records that id as its gpui debug selector, so a product's GPUI test finds it with
-`cx.debug_bounds("<id>")`. A segment's id defaults to
-`segmented-<group>-<id>`; `SegmentedItem::element_id` replaces it. An input
+Every Bolt component that takes an element id (button, checkbox, option group
+and its options, dropdown, select trigger, input, file picker, tabs, menu row
+and overlay, list row, split button, splitter, segmented control and its
+segments, modal backdrop) records that id as its gpui debug selector, so a
+product's GPUI test finds it with `cx.debug_bounds("<id>")`. An option group
+names itself with `OptionGroup::new(group, ..)`; ids are
+`option-group:<group>`, `option-group:<group>:<id>` and
+`option-group:<group>:<id>:description`, with any `:` or `%` inside a group or
+option name escaped, so no two groups, options or descriptions can share an id
+(`option_group_id`, `option_group_item_id` and `option_group_description_id`
+spell them out). A segment's id defaults to `segmented-<group>-<id>`;
+`SegmentedItem::element_id` replaces it. An input
 records its selector on its frame, so a bare input (`appearance(false)`) has
 none. A form field row takes no id and records `field-row`. gpui records
 selectors only in debug builds with `test-support`; nothing changes in what is
@@ -127,9 +133,13 @@ Some parts get an id derived from their owner's id:
 
 | Part | Selector |
 |---|---|
+| A field's error caption (`Input::error(..)`) | `<field id>-error` |
+| An option group's option description | `option-group:<group>:<id>:description` |
 | A button's `.kbd(..)` keycap | `<button id>-key` |
 | A menu row's shortcut | `<row id>-key` |
 | A menu row's check mark | `<row id>-check` |
+| A popover's title, body and footer | `<id>-title`, `<id>-body`, `<id>-footer` |
+| A popover's click-away layer | `<id>-away` |
 | The command search field's shortcut keycap | `<field id>-key` |
 | An activity rail button | `rail-<entry id>` |
 | A rail button's count badge | `rail-<entry id>-count` |
@@ -137,6 +147,14 @@ Some parts get an id derived from their owner's id:
 | A markdown view's document | `<view id>-body` |
 | A timeline histogram's bars | `<histogram id>-bar-<n>`, plus `<histogram id>-bar-<n>-rest` and `<histogram id>-bar-<n>-highlight` for the two parts of a bar and `<histogram id>-gap-<n>` for the gap after it |
 | A timeline histogram's legend | `<histogram id>-legend`, and `<histogram id>-legend-<n>` and `<histogram id>-swatch-<n>` for its entries |
+
+| A grid overflow's scrollbar strip | `<id>-scrollbar` |
+
+| A closed search field's placeholder | `<trigger id>-placeholder` |
+| A closed search field's shortcut keycap | `<trigger id>-key` |
+| A value field's value | `<value field id>-value` |
+| A code view's `n`th line, numbered from 1 | `<view id>-line-<n>` |
+| A code view's scrolling code column | `<view id>-lines` |
 
 The rail root carries its own id as a selector too. The count badges carry
 the count they draw as their accessible label (none while hidden), and the
@@ -186,6 +204,7 @@ one is off by default, so DBFlux draws the same pixels without them.
 | `SelectTrigger` | `SelectTrigger::new(id, label)` | The closed field of a select, drawn by the same code as a standard `Dropdown` trigger: cut-6 field, optional leading icon, truncated label, chevron. It is a button with the caller's click handler, `.disabled(..)`, `.focus_ring(..)` or `.focused(..)`, for a product that opens its own popup. The `Dropdown` entity itself is unchanged. |
 | `Input` | `.padding(x, y)`, `.text_size(..)`, `.line_height(..)` | Replace the inner padding (the height then follows the line), the text size and the line height. With `appearance(false)`, set them to the values of the text the field replaces so nothing moves when the text turns into a field. Without them a bare input keeps gpui-component's size. |
 | `Input` | `.font_weight(..)` | Replaces the text weight, normal in a framed field and medium in a bare one. Set a bare field to normal so it matches text drawn at the regular weight. |
+| `Input` | `.error(Option<impl Into<SharedString>>)` | Reports a validation error: the frame's line becomes the danger role and the message is drawn as a 12 px danger caption one `Spacing::XXS` (6 px) under the field, with the element id `<field id>-error`. The caption is an alert node named by the message, so assistive technology announces it when it appears; the input's own node is untouched, because gpui has no description or invalid state for a node another element builds. The caption sits outside the frame, so the field keeps its size, and a field that fills its row still fills it. `None` draws the field exactly as without the option. |
 | `InputState` | `decorate_input(&state, styled_ranges(ranges, style), cx)` | Styles UTF-8 byte ranges of a single-line field with a `HighlightStyle` (text color, background wash, underline) while it is edited as well as at rest. The ranges follow edits, do not grow when typing at an edge, and are not drawn while the field is masked. The returned `TextDecorationCollection` replaces them with `.set(..)` or removes them with `.clear(..)`; `set_value` removes ranges over the old text, so set them again after it. The product computes the ranges; Bolt never parses the text. A field without decorations renders as before. |
 | `CommandSearch` | `.shrinkable(true)` | The field shrinks below its 420 px width in a narrow title bar, down to `ShellMetrics::COMMAND_SEARCH_MIN_WIDTH`, and the placeholder truncates with an ellipsis. By default it keeps its width and never shrinks. |
 | `EmptyState` | `.primary_action(Button)` | A real button under the sentence for the one thing the region asks for. The key-hint actions stay below it. |
@@ -193,6 +212,10 @@ one is off by default, so DBFlux draws the same pixels without them.
 | `Splitter` | `Splitter::new(id, SplitAxis)` | The resize gutter between two panes (see below). |
 | `RailEntry` | `.count(n, BellUrgency)` | A count badge over the rail button's top-right corner, sized and colored like the notification bell's. A zero count shows none. |
 | `StatusChip` | `.tone(color)`, `.wash(true)` | A tone draws the chip's text in that color, semibold. With the wash the chip also sits on the tone at `ShellMetrics::STATUS_CHIP_ALPHA` instead of the island fill. |
+| `SearchField` | `SearchTrigger::new(id, placeholder)` | The field's closed state: the same frame, leading icon and metrics as the open field, drawing the placeholder and an optional `.shortcut("Ctrl F")` keycap instead of an input. `.on_open(..)` runs when it is clicked and the host opens the field; no `InputState` exists while it is closed. `.icon(..)` and `.width(..)` behave as on the field. |
+| `ValueField` | `ValueField::new(value)` | A value drawn in the frame of a text field — cut 6, ground fill, line, `Fields::HEIGHT`, `Fields::PADDING_X` — without an `InputState` per value, for a page that shows many effective values. It is always one line: a `\r` or `\n` in the value reads as a space, so nothing draws past the field. `.mono(true)` draws it in the editor face, `.text_color(..)` overrides the strong value color, and `.id(..)` names the value node `<id>-value`. |
+| `CodeView` | `CodeView::new(id, code)` | Read-only code with the rows, gutter and syntax seam of `ModalCode` (see below), drawable outside a dialog. It brings no frame or padding of its own, so the host places it in a `FieldWell` or any container for its font family and color; its size is its own — `CodeMetrics::FONT` (12.5 px), so a line always fits a `CodeMetrics::LINE_HEIGHT` (20 px) row whatever size the host sets around it. The caller's highlight ranges are sorted and merged before they reach the text, so an unordered or overlapping set colors the bytes it names. |
+| `FieldWell` | `FieldWell::new()` | The framed, filled area a read-only block sits in: the ground fill cut 6 behind a line, with `.child(..)` content above it. `.id(..)` records the well, `.cut(..)` draws another cut, and it is a `Styled`/`ParentElement`, so layout chains as on a `div`. |
 
 ### Shell chrome
 
@@ -298,6 +321,140 @@ bucket, with a highlighted series stacked over the rest of the bucket.
 - It paints no ground and no border: it is the strip inside a region the
   caller frames. It draws no interaction either — a document that lets the
   reader drag across the bars to zoom owns that gesture itself.
+
+### Grid overflow
+
+`GridOverflow` puts the grid's header row and its row list in one viewport
+that scrolls sideways, for a pane narrower than the columns add up to. The
+host keeps the column widths and the scroll offset, exactly as it does for
+`render_header` and `render_rows`:
+
+```rust
+GridOverflow::new("events-grid", &horizontal, total_width)
+    .header(render_header(..))
+    .rows(uniform_list(..).track_scroll(&rows))
+    .flex_1()
+    .min_h_0()
+```
+
+- The header and the rows scroll on the one handle passed to `new`, so a
+  column stays over its own cells at every offset, and the wheel's horizontal
+  delta scrolls them together.
+- A horizontal scrollbar draws in a `GridMetrics::SCROLLBAR_WIDTH` (12 px)
+  strip along the bottom of the viewport, the way the data table draws it.
+  While the columns are wider than the viewport the row list ends one strip
+  above the edge, so the last row stays reachable at the bottom of the
+  vertical scroll instead of sitting under the bar. A grid that fits reserves
+  nothing: no bar, full height. The strip follows the width the grid is given,
+  measured during layout, so narrowing or widening the pane needs no extra
+  frame.
+- Only the horizontal axis belongs to the viewport: the row list keeps its own
+  vertical scroll, and a vertical wheel never turns into a sideways one.
+- Column resize keeps working while the grid is scrolled. The header's handles
+  move with the header, and `track_column_resize` resizes by pointer delta, so
+  the scroll offset never enters the width. The host mounts it on its own root,
+  around the overflow.
+
+A grid that fits its viewport draws exactly as it does without the wrapper,
+which is why the component is opt-in: a product wraps the grid only where the
+pane can be narrower than the columns.
+
+### Option group
+
+`OptionGroup::new(group, items, selected, on_change)` is the vertical list of
+mutually-exclusive options a form uses where a segmented control is too narrow:
+each `OptionGroupItem` is a label, an optional description drawn under it as one
+line (12 px, muted, clipped when it is longer) and a per-option `.disabled(..)`. The group draws its own name
+as the radio group, so `group` must be unique in the window; `.aria_label(..)`
+names it for assistive technology, since a radio group has no text of its own.
+
+The indicator reuses the checkbox's geometry: a `Fields::CHECKBOX_SIZE` (16 px)
+box with `ChamferCut::KEYCAP`, the accent fill with a `Fields::RADIO_DOT` (6 px)
+accent-foreground dot when chosen, the inset control line otherwise, and the
+same tint focus ring, drawn outside the accent fill of the chosen option while
+the group holds keyboard focus. Rows take
+`Fields::CHECK_ROW_PADDING_Y` above and below, `Fields::CHECKBOX_GAP` between the
+indicator and the text, and `Fields::CHECK_ROW_LINE_GAP` between the label and
+its description, so an option lines up with a `Checkbox` row above it.
+
+The group is one focusable stop, a radio group whose options are radio buttons
+named by their labels, described by their descriptions, and toggled when chosen;
+while the group holds keyboard focus, the chosen option is the focused node of
+the radio group, so assistive technology follows the choice as it moves. Up and
+Down (and Left and Right) move the choice through the enabled options, reporting
+each one through `on_change`; Space and Enter report the current choice again,
+so an owner that only acts on the reported id keeps working, unless that choice
+is disabled; while nothing is chosen yet (`selected` is an id that matches no
+option, such as an empty string) the first arrow key chooses the first enabled
+option in that direction, so the keyboard can make the first choice; a pointer
+press or the accessibility click action chooses the option it lands on; an arrow
+key that would move past either end is left to the host, so a form can move to
+the next field from there. Disabled options are
+dimmed with `Fields::DISABLED_OPACITY`, are skipped by the arrow keys and answer
+neither the pointer nor an accessibility click.
+
+```rust
+OptionGroup::new(
+    "secret-mode",
+    vec![
+        OptionGroupItem::new("omit", "Leave secrets out")
+            .description("The bundle lists them by name, empty."),
+        OptionGroupItem::new("encrypt", "Encrypt secrets with a passphrase")
+            .description("Values are sealed with a passphrase."),
+    ],
+    mode.clone(),
+    move |id, _, cx| set_mode(id.clone(), cx),
+)
+.aria_label("Secrets in a bundle")
+```
+
+### Form popovers
+
+`Popover` is the floating surface a screen opens over one thing it is about: a
+title, a body of fields and a footer of buttons, on the cut-12 overlay surface
+(`SurfaceRole::Overlay`) with the panel fill and the line-2 border. It is two
+pieces, and a host owns both:
+
+- `PopoverState` is the entity that holds the open flag, the anchor, the focus
+  and the hover-intent timers. `open_at(bounds, window, cx)` opens the surface
+  against a rectangle and `open(window, cx)` opens it where the host last
+  pointed it; `close(window, cx)` closes it; `set_anchor(bounds)` moves what it
+  points at; `set_initial_focus(handle)` names the field focus moves into;
+  `on_dismiss(handler)` runs once it has closed and focus has come back.
+- `Popover::new(id, state)` is the frame. It draws nothing while the state is
+  closed, so a host renders it every frame. `.title(..)`, `.icon(..)`,
+  `.body(..)` and `.footer(buttons)` build the parts, `.width(..)` replaces
+  `PopoverMetrics::WIDTH`, and `.aria_label(..)` names the dialog, which
+  otherwise takes its name from the title.
+
+**Anchoring.** The anchor is a `Bounds<Pixels>` in window coordinates, so a
+host anchors the surface to an element's laid-out bounds or to a range of text
+it measured inside a field (a mark in an editable string). The surface lands
+`PopoverMetrics::ANCHOR_GAP` under the rectangle, flips above it when there is
+no room below, and is snapped inside the window keeping
+`PopoverMetrics::WINDOW_MARGIN`; `place_popover` is that placement as a
+function. With no anchor it stays where the host renders it, as `anchored()`
+does for a trigger.
+
+**Dismissal.** Escape closes the surface, and so does a click away from it. The
+click-away layer is drawn under the surface rather than around it, so a click
+in anything drawn above it — a `Dropdown` list opened from the body, for one —
+is a click inside and leaves the popover open; the same click still selects the
+dropdown row.
+
+**Focus.** Opening moves focus to the handle given to
+`set_initial_focus` (or to the surface itself, with nothing to focus) and
+remembers the element that had it; closing gives that element focus back, so
+Escape returns the user to the trigger.
+
+**Hover intent.** Built with `PopoverState::hover_intent(true)`, the surface
+opens `HOVER_DELAY` (400 ms) after the pointer comes to rest on the anchor,
+stays open while the pointer is over the anchor or the surface, and closes
+`HOVER_GRACE` (120 ms) after it leaves both. The host reports the anchor's
+hover with `hover_anchor(true/false, window, cx)`; once the surface is open it
+follows the pointer itself. A surface dismissed while the pointer still rests
+on its anchor waits for the pointer to leave and come back. Both timings are
+exported constants, so a test advances the gpui clock by them.
 
 ## Reading colors
 
@@ -418,8 +575,13 @@ let runs = bolt::syntax::overlay(
 StyledText::new(body).with_highlights(runs)
 ```
 
-`ModalCode::language(name)` colors a modal code block the same way, line
-numbers included, with its `.highlights(..)` drawn over the syntax.
+`CodeView::language(name)` colors a read-only code view the same way, line
+numbers included, with its `.highlights(..)` drawn over the syntax;
+`ModalCode` is a `CodeView` in a `FieldWell`, so a block inside a dialog and a
+code view inside a page draw the same rows, gutter and colors. A code view
+that carries an id records `<id>-line-<n>` for each numbered line and
+`<id>-lines` for the column that scrolls sideways beneath a fixed gutter,
+exactly as the modal block does.
 `ModalCode::highlights_with_tone(ranges, tone)` adds ranges drawn bold in a
 `BadgeTone`'s text color instead of the tint (for example `Warning` for a
 reference that does not resolve); they draw over the tint highlights and the

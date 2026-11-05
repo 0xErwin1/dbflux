@@ -598,3 +598,505 @@ fn a_header_without_resize_lays_out_the_cells_as_before(cx: &mut TestAppContext)
         "handles are overlaid and never move a cell"
     );
 }
+
+/// The grid inside its horizontal overflow, composed the way a product
+/// composes it: one root that follows a column drag, and a header plus a
+/// body sharing a single sideways scroll.
+mod overflow {
+    use std::cell::RefCell;
+    use std::ops::Range;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    use gpui::{
+        AnyElement, Bounds, Context, InteractiveElement, IntoElement, Modifiers, MouseButton,
+        ParentElement, Pixels, Point, Render, ScrollDelta, ScrollHandle, ScrollWheelEvent, Styled,
+        TestAppContext, TouchPhase, UniformListScrollHandle, VisualTestContext, Window, div, point,
+        px, uniform_list,
+    };
+    use gpui_base::ScrollbarHandle as _;
+    use gpui_component::ActiveTheme;
+
+    use super::super::{
+        ColumnResize, ColumnResizeDrag, GridCellCoord, GridColors, GridHost, GridOverflow,
+        HeaderResize, RESIZE_HANDLE_WIDTH, render_header, render_rows, track_column_resize,
+    };
+    use super::install_test_theme;
+    use crate::data::{
+        CellAlignment, CellTone, CellView, ColumnKind, ColumnView, RowVisualState, StaticRows,
+    };
+    use crate::tokens::GridMetrics;
+
+    /// A viewport narrower than the grid's columns.
+    const NARROW_PANE: Pixels = px(300.0);
+    /// A viewport wider than them.
+    const WIDE_PANE: Pixels = px(900.0);
+    const COLUMN_WIDTH: f32 = 200.0;
+    const COLUMN_COUNT: usize = 3;
+
+    /// A host with a grid, its horizontal overflow, and the column drag
+    /// mounted on its root.
+    struct OverflowHost {
+        handle: ScrollHandle,
+        list: UniformListScrollHandle,
+        drag: ColumnResizeDrag,
+        resizes: Rc<RefCell<Vec<ColumnResize>>>,
+        pane: Pixels,
+        wrapped: bool,
+        virtualized: bool,
+        resizable: bool,
+        row_count: usize,
+    }
+
+    impl OverflowHost {
+        fn new() -> Self {
+            Self {
+                handle: ScrollHandle::new(),
+                list: UniformListScrollHandle::new(),
+                drag: ColumnResizeDrag::new(),
+                resizes: Rc::new(RefCell::new(Vec::new())),
+                pane: NARROW_PANE,
+                wrapped: true,
+                virtualized: false,
+                resizable: false,
+                row_count: 2,
+            }
+        }
+
+        fn total_width(&self) -> f32 {
+            f32::from(GridMetrics::ROW_NUMBER_WIDTH) + COLUMN_WIDTH * COLUMN_COUNT as f32
+        }
+    }
+
+    /// The grid's columns and rows: `row_count` rows of three cells each.
+    fn grid_rows(row_count: usize) -> StaticRows {
+        let mut rows = StaticRows::new();
+
+        for column in 0..COLUMN_COUNT {
+            rows.push_column(
+                ColumnView::new(format!("column {column}"), ColumnKind::Text)
+                    .with_fixed_width(px(COLUMN_WIDTH)),
+            );
+        }
+
+        for row in 0..row_count {
+            let cells = (0..COLUMN_COUNT)
+                .map(|column| {
+                    CellView::new(
+                        format!("cell {row}:{column}"),
+                        CellTone::Normal,
+                        CellAlignment::Left,
+                    )
+                })
+                .collect();
+            rows.push_row(cells, RowVisualState::Clean);
+        }
+
+        rows
+    }
+
+    /// The rows `range` of `source`, painted by the grid's own row renderer.
+    fn rows_of(
+        range: Range<usize>,
+        source: &StaticRows,
+        total_width: f32,
+        colors: &GridColors,
+        cx: &mut gpui::App,
+    ) -> Vec<AnyElement> {
+        let widths = [COLUMN_WIDTH; COLUMN_COUNT];
+        let is_selected = |_: GridCellCoord| false;
+        let host = GridHost {
+            column_widths: &widths,
+            active: None,
+            editing: None,
+            is_selected: &is_selected,
+            reference_row: false,
+            on_cell_click: Arc::new(|_, _, _, _| {}),
+            on_cell_context: Arc::new(|_, _, _, _| {}),
+            braces_icon: gpui_component::IconName::ChevronRight.into(),
+            chevron_icon: gpui_component::IconName::ChevronRight.into(),
+            reference_icon: gpui_component::IconName::ChevronRight.into(),
+        };
+
+        render_rows(
+            range,
+            source,
+            &host,
+            None,
+            total_width,
+            GridMetrics::FONT,
+            GridMetrics::ROW_HEIGHT,
+            GridMetrics::HEADER_ICON,
+            crate::colors(cx).muted,
+            colors,
+        )
+    }
+
+    impl Render for OverflowHost {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let colors = GridColors::of(cx.theme());
+            let widths = [COLUMN_WIDTH; COLUMN_COUNT];
+            let total_width = self.total_width();
+            let source = Arc::new(grid_rows(self.row_count));
+            let resize = self.resizable.then_some(HeaderResize {
+                drag: &self.drag,
+                hover: colors.border,
+            });
+            let header = render_header(
+                "grid-header-cell",
+                source.as_ref(),
+                &widths,
+                crate::fonts::grid_header_height(cx),
+                total_width,
+                GridMetrics::FONT,
+                GridMetrics::TYPE_FONT,
+                &colors,
+                resize,
+            );
+
+            let body = if self.virtualized {
+                let rows_source = Arc::clone(&source);
+                uniform_list(
+                    "grid-rows",
+                    self.row_count,
+                    move |range, _window, cx: &mut gpui::App| {
+                        rows_of(range, rows_source.as_ref(), total_width, &colors, cx)
+                    },
+                )
+                .track_scroll(&self.list)
+                .flex_1()
+                .min_h_0()
+                .into_any_element()
+            } else {
+                div()
+                    .debug_selector(|| "grid-body".to_string())
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .children(rows_of(
+                        0..self.row_count,
+                        source.as_ref(),
+                        total_width,
+                        &colors,
+                        cx,
+                    ))
+                    .into_any_element()
+            };
+
+            let content = if self.wrapped {
+                GridOverflow::new("grid-overflow", &self.handle, total_width)
+                    .header(header)
+                    .rows(body)
+                    .flex_1()
+                    .min_h_0()
+                    .into_any_element()
+            } else {
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(header)
+                    .child(body)
+                    .into_any_element()
+            };
+
+            let resizes = self.resizes.clone();
+
+            track_column_resize(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w(self.pane)
+                    .h(px(180.0))
+                    .child(content),
+                &self.drag,
+                move |resize, _window, _cx| resizes.borrow_mut().push(resize),
+            )
+        }
+    }
+
+    fn open(
+        host: OverflowHost,
+        cx: &mut TestAppContext,
+    ) -> (gpui::Entity<OverflowHost>, &mut VisualTestContext) {
+        install_test_theme(cx);
+        let (entity, window) = cx.add_window_view(move |_, _| host);
+        window.run_until_parked();
+        (entity, window)
+    }
+
+    fn bounds(window: &mut VisualTestContext, selector: &'static str) -> Bounds<Pixels> {
+        window
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is laid out"))
+    }
+
+    /// A wheel event at `position`, in content pixels.
+    fn wheel_at(window: &mut VisualTestContext, position: Point<Pixels>, delta: Point<Pixels>) {
+        window.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Pixels(delta),
+            modifiers: Modifiers::none(),
+            touch_phase: TouchPhase::Moved,
+        });
+        window.run_until_parked();
+    }
+
+    /// A sideways wheel over the grid.
+    fn wheel_sideways(
+        window: &mut VisualTestContext,
+        host: &gpui::Entity<OverflowHost>,
+        dx: Pixels,
+    ) {
+        let position = window.update(|_, cx| host.read(cx).handle.bounds().center());
+
+        wheel_at(window, position, point(dx, px(0.0)));
+    }
+
+    fn horizontal_offset(
+        window: &mut VisualTestContext,
+        host: &gpui::Entity<OverflowHost>,
+    ) -> Pixels {
+        window.update(|_, cx| host.read(cx).handle.offset().x)
+    }
+
+    /// Gives the grid a pane `pane` wide and lets it lay out again.
+    fn resize(window: &mut VisualTestContext, host: &gpui::Entity<OverflowHost>, pane: Pixels) {
+        window.update(|_, cx| {
+            host.update(cx, |host, cx| {
+                host.pane = pane;
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+    }
+
+    /// A grid whose columns add up past its viewport scrolls sideways, and
+    /// the header and the rows move by the same amount, so a column stays
+    /// over its own cells.
+    #[gpui::test]
+    fn a_grid_wider_than_its_viewport_scrolls_its_header_and_rows_together(
+        cx: &mut TestAppContext,
+    ) {
+        let (host, window) = open(OverflowHost::new(), cx);
+        let viewport = bounds(window, "grid-overflow");
+        let header_before = bounds(window, "grid-header-cell-1");
+        let body_before = bounds(window, "grid-body");
+
+        assert_eq!(viewport.size.width, NARROW_PANE);
+        assert!(
+            window.update(|_, cx| host.read(cx).handle.max_offset().x) > px(0.0),
+            "three {COLUMN_WIDTH} px columns overflow the viewport"
+        );
+
+        wheel_sideways(window, &host, px(-40.0));
+
+        assert_eq!(horizontal_offset(window, &host), px(-40.0));
+        assert_eq!(
+            bounds(window, "grid-header-cell-1").left() - header_before.left(),
+            px(-40.0),
+            "the header follows the sideways scroll"
+        );
+        assert_eq!(
+            bounds(window, "grid-body").left() - body_before.left(),
+            px(-40.0),
+            "the rows follow it by the same amount"
+        );
+    }
+
+    /// The rows keep their own vertical scroll: a vertical wheel over the
+    /// body moves the list and leaves the sideways offset alone.
+    #[gpui::test]
+    fn a_vertical_wheel_still_scrolls_the_rows_of_an_overflowing_grid(cx: &mut TestAppContext) {
+        let mut host = OverflowHost::new();
+        host.virtualized = true;
+        host.row_count = 60;
+        let (host, window) = open(host, cx);
+        let header = bounds(window, "grid-header-cell-0");
+        let over_body = point(header.center().x, header.bottom() + px(20.0));
+
+        wheel_at(window, over_body, point(px(0.0), px(-40.0)));
+
+        let list = window.update(|_, cx| host.read(cx).list.0.borrow().base_handle.offset());
+        assert!(list.y < px(0.0), "the body scrolled vertically");
+        assert_eq!(list.x, px(0.0), "the grid did not scroll sideways");
+        assert_eq!(horizontal_offset(window, &host), px(0.0));
+    }
+
+    /// A grid that fits its viewport draws exactly where it drew without the
+    /// overflow — the same header cells over a body spanning the same
+    /// rectangle — and no scroll moves it.
+    #[gpui::test]
+    fn a_grid_that_fits_lays_out_as_it_did_without_the_overflow(cx: &mut TestAppContext) {
+        let mut plain_host = OverflowHost::new();
+        plain_host.pane = WIDE_PANE;
+        plain_host.wrapped = false;
+        let (_, plain) = open(plain_host, cx);
+        let plain_cells = [
+            plain.debug_bounds("grid-header-cell-0"),
+            plain.debug_bounds("grid-header-cell-1"),
+            plain.debug_bounds("grid-header-cell-2"),
+        ];
+        let plain_body = plain.debug_bounds("grid-body");
+
+        let mut wrapped_host = OverflowHost::new();
+        wrapped_host.pane = WIDE_PANE;
+        let (host, window) = open(wrapped_host, cx);
+
+        assert_eq!(
+            bounds(window, "grid-overflow").size.width,
+            WIDE_PANE,
+            "the grid fills the width it is given"
+        );
+        for (index, cell) in [
+            "grid-header-cell-0",
+            "grid-header-cell-1",
+            "grid-header-cell-2",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                plain_cells[index],
+                window.debug_bounds(cell),
+                "{cell} draws where it drew without the overflow"
+            );
+        }
+
+        assert_eq!(
+            window.debug_bounds("grid-body"),
+            plain_body,
+            "the rows span the rectangle they span without the wrapper"
+        );
+        assert_eq!(
+            window.update(|_, cx| host.read(cx).handle.content_size().width),
+            WIDE_PANE,
+            "the grid's content fills the pane, as it does without the wrapper"
+        );
+
+        let before = bounds(window, "grid-header-cell-1");
+        wheel_sideways(window, &host, px(-40.0));
+
+        assert_eq!(
+            window.update(|_, cx| host.read(cx).handle.max_offset().x),
+            px(0.0),
+            "a grid that fits has nothing to scroll"
+        );
+        assert_eq!(
+            bounds(window, "grid-header-cell-1"),
+            before,
+            "a wheel does not move a grid that fits"
+        );
+    }
+
+    /// A header drag resizes its column while the grid is scrolled: the
+    /// handle is wherever the header is drawn and the drag follows pointer
+    /// movement, not the scroll position.
+    #[gpui::test]
+    fn a_column_resize_keeps_working_while_the_grid_is_scrolled(cx: &mut TestAppContext) {
+        let mut host = OverflowHost::new();
+        host.resizable = true;
+        let (host, window) = open(host, cx);
+
+        wheel_sideways(window, &host, px(-40.0));
+        assert_eq!(horizontal_offset(window, &host), px(-40.0));
+
+        // The first column's trailing edge, wherever the scroll put it.
+        let cell = bounds(window, "grid-header-cell-0");
+        let grab = point(cell.right() - RESIZE_HANDLE_WIDTH / 2.0, cell.center().y);
+        window.simulate_mouse_down(grab, MouseButton::Left, Modifiers::none());
+        window.simulate_mouse_move(
+            grab + point(px(30.0), px(0.0)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+
+        let resizes = window.update(|_, cx| host.read(cx).resizes.borrow().clone());
+        assert_eq!(
+            resizes,
+            vec![ColumnResize {
+                column: 0,
+                width: COLUMN_WIDTH + 30.0,
+            }],
+            "the drag resizes its own column by the pointer delta"
+        );
+    }
+
+    /// The horizontal scrollbar draws in a strip along the bottom of the
+    /// viewport, the way the data table draws it.
+    #[gpui::test]
+    fn the_horizontal_scrollbar_overlays_the_bottom_of_the_viewport(cx: &mut TestAppContext) {
+        let (_, window) = open(OverflowHost::new(), cx);
+        let viewport = bounds(window, "grid-overflow");
+        let strip = bounds(window, "grid-overflow-scrollbar");
+
+        assert_eq!(strip.size.height, GridMetrics::SCROLLBAR_WIDTH);
+        assert_eq!(strip.size.width, viewport.size.width);
+        assert_eq!(strip.bottom(), viewport.bottom());
+    }
+
+    /// A grid whose columns overflow ends its rows above the scrollbar's
+    /// strip, so the last row is reachable at the bottom of the vertical
+    /// scroll instead of sitting under the bar.
+    #[gpui::test]
+    fn an_overflowing_grid_reserves_the_strip_below_its_rows(cx: &mut TestAppContext) {
+        let (_, window) = open(OverflowHost::new(), cx);
+        let viewport = bounds(window, "grid-overflow");
+        let body = bounds(window, "grid-body");
+        let strip = bounds(window, "grid-overflow-scrollbar");
+
+        assert_eq!(
+            body.bottom(),
+            viewport.bottom() - GridMetrics::SCROLLBAR_WIDTH,
+            "the rows stop one strip above the viewport edge"
+        );
+        assert_eq!(
+            strip.top(),
+            body.bottom(),
+            "the bar sits in the strip the rows leave free"
+        );
+    }
+
+    /// A grid that fits draws no bar, so it keeps the height of its whole
+    /// viewport: the strip is reserved only while the columns overflow.
+    #[gpui::test]
+    fn a_grid_that_fits_keeps_the_full_height_of_its_viewport(cx: &mut TestAppContext) {
+        let mut host = OverflowHost::new();
+        host.pane = WIDE_PANE;
+        let (_, window) = open(host, cx);
+        let viewport = bounds(window, "grid-overflow");
+
+        assert_eq!(
+            bounds(window, "grid-body").bottom(),
+            viewport.bottom(),
+            "no strip is reserved when the columns fit"
+        );
+    }
+
+    /// The reserve follows the width the grid is given: narrowing the pane
+    /// past the columns takes the strip, and widening it back returns the
+    /// height to the rows.
+    #[gpui::test]
+    fn the_reserved_strip_follows_the_width_the_grid_is_given(cx: &mut TestAppContext) {
+        let mut host = OverflowHost::new();
+        host.pane = WIDE_PANE;
+        let (host, window) = open(host, cx);
+
+        resize(window, &host, NARROW_PANE);
+        assert_eq!(
+            bounds(window, "grid-body").bottom(),
+            bounds(window, "grid-overflow").bottom() - GridMetrics::SCROLLBAR_WIDTH,
+            "a pane narrower than the columns reserves the strip"
+        );
+
+        resize(window, &host, WIDE_PANE);
+        assert_eq!(
+            bounds(window, "grid-body").bottom(),
+            bounds(window, "grid-overflow").bottom(),
+            "a pane wider than the columns keeps the full height"
+        );
+    }
+}

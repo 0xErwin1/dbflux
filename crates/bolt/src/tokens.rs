@@ -110,6 +110,23 @@ impl ChamferCut {
     pub const MODAL: Pixels = px(18.0);
 }
 
+/// Geometry of a read-only code block: the line rows of the number gutter.
+///
+/// It is a block of its own so a code view outside a dialog draws the same
+/// rows a statement block does, and neither one copies the other's numbers.
+pub struct CodeMetrics;
+
+impl CodeMetrics {
+    /// The size a read-only code block draws its text at. (12.5 px)
+    pub const FONT: Rems = ui(12.5);
+    /// A numbered code line row, tall enough for one line at `FONT`. (20 px)
+    pub const LINE_HEIGHT: Rems = ui(20.0);
+    /// Width of the right-aligned line-number gutter. (46 px)
+    pub const GUTTER_WIDTH: Rems = ui(46.0);
+    /// Space between the line number and the code. (14 px)
+    pub const GUTTER_PADDING_RIGHT: Pixels = px(14.0);
+}
+
 /// Geometry of `modals::Modal`, taken from the modals design board.
 pub struct ModalMetrics;
 
@@ -143,15 +160,14 @@ impl ModalMetrics {
     pub const LEAD_FONT: Rems = ui(13.5);
     pub const LEAD_LINE_HEIGHT: f32 = 1.6;
     /// Statement block: cut 8, 10 px vertical and 12 px horizontal padding,
-    /// 12.5 px mono.
+    /// the code font of [`CodeMetrics`].
     pub const CODE_PADDING_Y: Pixels = px(10.0);
     pub const CODE_PADDING_X: Pixels = px(12.0);
-    pub const CODE_FONT: Rems = ui(12.5);
-    /// Numbered statement block: 20 px lines, a 46 px right-aligned gutter
-    /// with 14 px between the number and the code.
-    pub const CODE_LINE_HEIGHT: Rems = ui(20.0);
-    pub const CODE_GUTTER_WIDTH: Rems = ui(46.0);
-    pub const CODE_GUTTER_PADDING_RIGHT: Pixels = px(14.0);
+    pub const CODE_FONT: Rems = CodeMetrics::FONT;
+    /// Numbered statement block: the line rows of [`CodeMetrics`].
+    pub const CODE_LINE_HEIGHT: Rems = CodeMetrics::LINE_HEIGHT;
+    pub const CODE_GUTTER_WIDTH: Rems = CodeMetrics::GUTTER_WIDTH;
+    pub const CODE_GUTTER_PADDING_RIGHT: Pixels = CodeMetrics::GUTTER_PADDING_RIGHT;
     /// A labelled field: 12 px muted label, 6 px above its control.
     pub const FIELD_LABEL_FONT: Rems = ui(12.0);
     pub const FIELD_GAP: Pixels = px(6.0);
@@ -420,6 +436,13 @@ impl Fields {
     pub const CHECK_MARK: Rems = ui(12.0);
     /// Gap between a checkbox and its label. (10 px)
     pub const CHECKBOX_GAP: Pixels = px(10.0);
+    /// Dot inside a chosen radio indicator, drawn on the accent fill. (6 px)
+    pub const RADIO_DOT: Rems = ui(6.0);
+    /// Vertical padding of a checkbox or option row. (6 px)
+    pub const CHECK_ROW_PADDING_Y: Pixels = px(6.0);
+    /// Gap between the label line of a checkbox or option row and the
+    /// description under it. (3 px)
+    pub const CHECK_ROW_LINE_GAP: Pixels = px(3.0);
 
     /// Vertical padding of a select menu. (8 px)
     pub const MENU_PADDING_Y: Pixels = px(8.0);
@@ -968,6 +991,31 @@ impl SplitterMetrics {
     pub const KEY_STEP: Pixels = px(16.0);
 }
 
+/// Geometry of a form popover (`composites::Popover`): the floating surface a
+/// host anchors to an element or a text range, with a title, a body and a
+/// footer of buttons.
+pub struct PopoverMetrics;
+
+impl PopoverMetrics {
+    /// Default width of the surface. (360 px)
+    pub const WIDTH: Rems = ui(360.0);
+    /// Padding of the title, the body and the footer. (14 px)
+    pub const PADDING: Pixels = px(14.0);
+    /// Gap between the title, the body and the footer. (10 px)
+    pub const GAP: Pixels = px(10.0);
+    /// Title size, matching a modal's header title. (14 px)
+    pub const TITLE_FONT: Rems = ui(14.0);
+    /// Leading icon beside the title. (16 px)
+    pub const TITLE_ICON: Rems = ui(16.0);
+    /// Gap between the footer's buttons, right-aligned. (8 px)
+    pub const FOOTER_GAP: Pixels = px(8.0);
+    /// Space between the anchor and the surface. (6 px)
+    pub const ANCHOR_GAP: Pixels = px(6.0);
+    /// Space the surface keeps from the window's edges when it flips or snaps.
+    /// (8 px)
+    pub const WINDOW_MARGIN: Pixels = px(8.0);
+}
+
 /// Geometry of trees (`TreeNav` rows and the connections sidebar), from the
 /// sidebar and the board's tree.
 pub struct TreeMetrics;
@@ -1054,6 +1102,9 @@ impl GridMetrics {
     pub const REFERENCE_ROW_ALPHA: f32 = 0.10;
     /// Bottom line under the reference row.
     pub const REFERENCE_ROW_BORDER_ALPHA: f32 = 0.45;
+    /// Thickness of the strip along a viewport edge that a scrollbar
+    /// overlays: the bar's 8 px thumb with its 4 px inset on each side. (12 px)
+    pub const SCROLLBAR_WIDTH: Pixels = px(12.0);
 }
 
 /// Geometry of the result chrome: the footer under a result grid and the
