@@ -8,10 +8,18 @@
 //! the viewport, and the wheel keeps scrolling the row list vertically
 //! because the viewport claims only the horizontal axis.
 //!
+//! While the columns overflow, the row list ends one
+//! [`GridMetrics::SCROLLBAR_WIDTH`] above the viewport's edge, so the last row
+//! stays reachable at the bottom of the vertical scroll instead of sitting
+//! under the bar. A grid that fits its viewport draws exactly as it draws
+//! without this wrapper: the content fills the pane and keeps the full height,
+//! because no bar is shown and no strip is reserved.
+//!
 //! The component owns no widths and no scroll offset: the host keeps the
-//! column widths, sums them into `total_width`, and keeps the handle. A grid
-//! that fits its viewport draws exactly as it draws without this wrapper,
-//! and the scrollbar hides itself because the content no longer overflows.
+//! column widths, sums them into `total_width`, and keeps the handle. The
+//! reserve, and with it the bar, follow the width the grid is given: the
+//! viewport is built from its own measured size in the same frame, so a pane
+//! that grows or shrinks is laid out correctly without a frame of lag.
 //!
 //! Column resize keeps working while the grid is scrolled: the header's drag
 //! handles move with the header, and [`crate::components::grid::track_column_resize`]
@@ -21,7 +29,7 @@
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Div, ElementId, IntoElement, RenderOnce, ScrollHandle, StyleRefinement,
-    Styled, Window, div, px,
+    Styled, Window, container_query, div, px,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 
@@ -38,6 +46,10 @@ use crate::tokens::GridMetrics;
 /// [`GridOverflow::header`] and [`GridOverflow::rows`]. It lays out as a flex
 /// column that clips its overflow, so chain the sizing the grid needs
 /// (`.flex_1()`, `.min_h_0()`) like on a `div`.
+///
+/// While the columns are wider than the viewport, the row list ends one
+/// [`GridMetrics::SCROLLBAR_WIDTH`] above the viewport's bottom edge, so the
+/// bar covers no row; a grid that fits keeps the full height of its viewport.
 ///
 /// The host keeps the handle across frames: a `ScrollHandle` created on every
 /// render starts the grid back at the left. The id is recorded as the
@@ -90,33 +102,50 @@ impl RenderOnce for GridOverflow {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let scrollbar_id = ElementId::Name(format!("{}-scrollbar", self.id).into());
         let strip_id = scrollbar_id.clone();
+        let viewport_id = self.id;
+        let handle = self.handle.clone();
+        let total_width = self.total_width;
+        let content = div()
+            .flex()
+            .flex_col()
+            .h_full()
+            // The content fills the viewport, so a grid that fits spans the
+            // pane as it does unwrapped, and grows past it only when the
+            // columns need it.
+            .w_full()
+            .min_w(px(total_width))
+            .children(self.header)
+            .children(self.rows)
+            .into_any_element();
 
         self.base
+            // The viewport is built from the width it is given, in the same
+            // frame, so the strip is reserved exactly while the columns
+            // overflow it and a grid that fits keeps its full height.
             .child(
-                div()
-                    .debug_selector(id_selector(&self.id))
-                    .id(self.id)
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .overflow_x_scroll()
-                    // A vertical wheel belongs to the row list, never to the
-                    // sideways scroll.
-                    .restrict_scroll_to_axis()
-                    .track_scroll(&self.handle)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .h_full()
-                            .min_w(px(self.total_width))
-                            .children(self.header)
-                            .children(self.rows),
-                    ),
+                container_query(move |size, _window, _cx| {
+                    let overflowing = total_width > f32::from(size.width);
+
+                    div()
+                        .debug_selector(id_selector(&viewport_id))
+                        .id(viewport_id)
+                        .size_full()
+                        .overflow_x_scroll()
+                        // A vertical wheel belongs to the row list, never to
+                        // the sideways scroll.
+                        .restrict_scroll_to_axis()
+                        .track_scroll(&handle)
+                        .when(overflowing, |viewport| {
+                            viewport.pb(GridMetrics::SCROLLBAR_WIDTH)
+                        })
+                        .child(content)
+                })
+                .flex_1()
+                .min_h_0()
+                .w_full(),
             )
-            // The scrollbar overlays the bottom of the viewport rather than
-            // taking a row of its own, so a grid that fits loses no height.
+            // The bar sits in the strip the row list leaves free while the
+            // columns overflow, and draws nothing when they fit.
             .child(
                 div()
                     .debug_selector(id_selector(&strip_id))

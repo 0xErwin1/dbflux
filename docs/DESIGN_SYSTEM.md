@@ -256,10 +256,14 @@ GridOverflow::new("events-grid", &horizontal, total_width)
 - The header and the rows scroll on the one handle passed to `new`, so a
   column stays over its own cells at every offset, and the wheel's horizontal
   delta scrolls them together.
-- A horizontal scrollbar overlays the bottom of the viewport in a
-  `GridMetrics::SCROLLBAR_WIDTH` (12 px) strip, the way the data table draws
-  it. It draws only while the columns are wider than the viewport, so it costs
-  a grid that fits no height and shows no bar.
+- A horizontal scrollbar draws in a `GridMetrics::SCROLLBAR_WIDTH` (12 px)
+  strip along the bottom of the viewport, the way the data table draws it.
+  While the columns are wider than the viewport the row list ends one strip
+  above the edge, so the last row stays reachable at the bottom of the
+  vertical scroll instead of sitting under the bar. A grid that fits reserves
+  nothing: no bar, full height. The strip follows the width the grid is given,
+  measured during layout, so narrowing or widening the pane needs no extra
+  frame.
 - Only the horizontal axis belongs to the viewport: the row list keeps its own
   vertical scroll, and a vertical wheel never turns into a sideways one.
 - Column resize keeps working while the grid is scrolled. The header's handles

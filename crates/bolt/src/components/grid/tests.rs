@@ -614,6 +614,7 @@ mod overflow {
         TestAppContext, TouchPhase, UniformListScrollHandle, VisualTestContext, Window, div, point,
         px, uniform_list,
     };
+    use gpui_base::ScrollbarHandle as _;
     use gpui_component::ActiveTheme;
 
     use super::super::{
@@ -862,6 +863,17 @@ mod overflow {
         window.update(|_, cx| host.read(cx).handle.offset().x)
     }
 
+    /// Gives the grid a pane `pane` wide and lets it lay out again.
+    fn resize(window: &mut VisualTestContext, host: &gpui::Entity<OverflowHost>, pane: Pixels) {
+        window.update(|_, cx| {
+            host.update(cx, |host, cx| {
+                host.pane = pane;
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+    }
+
     /// A grid whose columns add up past its viewport scrolls sideways, and
     /// the header and the rows move by the same amount, so a column stays
     /// over its own cells.
@@ -915,7 +927,8 @@ mod overflow {
     }
 
     /// A grid that fits its viewport draws exactly where it drew without the
-    /// overflow, and no scroll moves it.
+    /// overflow — the same header cells over a body spanning the same
+    /// rectangle — and no scroll moves it.
     #[gpui::test]
     fn a_grid_that_fits_lays_out_as_it_did_without_the_overflow(cx: &mut TestAppContext) {
         let mut plain_host = OverflowHost::new();
@@ -927,6 +940,7 @@ mod overflow {
             plain.debug_bounds("grid-header-cell-1"),
             plain.debug_bounds("grid-header-cell-2"),
         ];
+        let plain_body = plain.debug_bounds("grid-body");
 
         let mut wrapped_host = OverflowHost::new();
         wrapped_host.pane = WIDE_PANE;
@@ -951,6 +965,17 @@ mod overflow {
                 "{cell} draws where it drew without the overflow"
             );
         }
+
+        assert_eq!(
+            window.debug_bounds("grid-body"),
+            plain_body,
+            "the rows span the rectangle they span without the wrapper"
+        );
+        assert_eq!(
+            window.update(|_, cx| host.read(cx).handle.content_size().width),
+            WIDE_PANE,
+            "the grid's content fills the pane, as it does without the wrapper"
+        );
 
         let before = bounds(window, "grid-header-cell-1");
         wheel_sideways(window, &host, px(-40.0));
@@ -1011,5 +1036,67 @@ mod overflow {
         assert_eq!(strip.size.height, GridMetrics::SCROLLBAR_WIDTH);
         assert_eq!(strip.size.width, viewport.size.width);
         assert_eq!(strip.bottom(), viewport.bottom());
+    }
+
+    /// A grid whose columns overflow ends its rows above the scrollbar's
+    /// strip, so the last row is reachable at the bottom of the vertical
+    /// scroll instead of sitting under the bar.
+    #[gpui::test]
+    fn an_overflowing_grid_reserves_the_strip_below_its_rows(cx: &mut TestAppContext) {
+        let (_, window) = open(OverflowHost::new(), cx);
+        let viewport = bounds(window, "grid-overflow");
+        let body = bounds(window, "grid-body");
+        let strip = bounds(window, "grid-overflow-scrollbar");
+
+        assert_eq!(
+            body.bottom(),
+            viewport.bottom() - GridMetrics::SCROLLBAR_WIDTH,
+            "the rows stop one strip above the viewport edge"
+        );
+        assert_eq!(
+            strip.top(),
+            body.bottom(),
+            "the bar sits in the strip the rows leave free"
+        );
+    }
+
+    /// A grid that fits draws no bar, so it keeps the height of its whole
+    /// viewport: the strip is reserved only while the columns overflow.
+    #[gpui::test]
+    fn a_grid_that_fits_keeps_the_full_height_of_its_viewport(cx: &mut TestAppContext) {
+        let mut host = OverflowHost::new();
+        host.pane = WIDE_PANE;
+        let (_, window) = open(host, cx);
+        let viewport = bounds(window, "grid-overflow");
+
+        assert_eq!(
+            bounds(window, "grid-body").bottom(),
+            viewport.bottom(),
+            "no strip is reserved when the columns fit"
+        );
+    }
+
+    /// The reserve follows the width the grid is given: narrowing the pane
+    /// past the columns takes the strip, and widening it back returns the
+    /// height to the rows.
+    #[gpui::test]
+    fn the_reserved_strip_follows_the_width_the_grid_is_given(cx: &mut TestAppContext) {
+        let mut host = OverflowHost::new();
+        host.pane = WIDE_PANE;
+        let (host, window) = open(host, cx);
+
+        resize(window, &host, NARROW_PANE);
+        assert_eq!(
+            bounds(window, "grid-body").bottom(),
+            bounds(window, "grid-overflow").bottom() - GridMetrics::SCROLLBAR_WIDTH,
+            "a pane narrower than the columns reserves the strip"
+        );
+
+        resize(window, &host, WIDE_PANE);
+        assert_eq!(
+            bounds(window, "grid-body").bottom(),
+            bounds(window, "grid-overflow").bottom(),
+            "a pane wider than the columns keeps the full height"
+        );
     }
 }
