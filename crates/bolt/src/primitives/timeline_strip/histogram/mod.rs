@@ -83,15 +83,20 @@ impl TimelineLegend {
 /// The bars fill the width the parent gives them, `TIMELINE_PADDING_Y` above
 /// and below, and the legend sits `TIMELINE_LEGEND_GAP` to their right: its
 /// entries are `TIMELINE_LEGEND_ROW_GAP` apart, each an `TIMELINE_SWATCH`
-/// square and its label in `TIMELINE_LEGEND_FONT`. A bucket is sized by its
-/// share of the busiest bucket, and a bucket with any event draws at least a
-/// hairline so it still shows.
+/// square and its label in `TIMELINE_LEGEND_FONT`, the legend at most
+/// `TIMELINE_LEGEND_MAX_WIDTH` wide with a label too long for it cut with an
+/// ellipsis. A bucket is sized by its share of the busiest bucket, and a bucket
+/// with any event draws at least a hairline so it still shows: the bars are
+/// `TIMELINE_BAR_GAP` apart until the strip holds so many buckets that the gaps
+/// no longer fit, and then the gaps shrink to nothing before any populated bar
+/// does.
 ///
 /// The histogram paints no ground and no border: it is the strip inside a
 /// region the caller frames. It is a group under its id, named by
 /// `.aria_label(..)` when it has one; its bars are the elements
-/// `<id>-bar-<n>`, `<id>-bar-<n>-rest` and `<id>-bar-<n>-highlight`, numbered
-/// from 0 in the order the buckets were given, and its legend entries the
+/// `<id>-bar-<n>`, `<id>-bar-<n>-rest` and `<id>-bar-<n>-highlight`, the gaps
+/// between them `<id>-gap-<n>`, all numbered from 0 in the order the buckets
+/// were given, and its legend entries the
 /// elements `<id>-legend-<n>` and `<id>-swatch-<n>` inside the element
 /// `<id>-legend`.
 #[derive(IntoElement)]
@@ -163,11 +168,19 @@ impl RenderOnce for TimelineHistogram {
         let rest_color = self.primary.text_color(&theme);
         let highlight_color = self.highlight.text_color(&theme);
 
-        let bars = self.buckets.iter().enumerate().map(|(index, bucket)| {
+        // A bucket with events keeps a hairline whatever else is on the strip,
+        // and the gaps between the bars are the ones that give way when they no
+        // longer fit, rather than the bars.
+        let last = self.buckets.len().saturating_sub(1);
+        let bars = self.buckets.iter().enumerate().flat_map(|(index, bucket)| {
             let (rest, highlighted) = bucket_heights(*bucket, peak);
-
-            part(&self.id, format!("bar-{index}"), div())
+            let bar = part(&self.id, format!("bar-{index}"), div())
                 .flex_1()
+                .min_w(if bucket.total() > 0 {
+                    Borders::THIN
+                } else {
+                    px(0.0)
+                })
                 .flex()
                 .flex_col()
                 .justify_end()
@@ -181,7 +194,15 @@ impl RenderOnce for TimelineHistogram {
                     part(&self.id, format!("bar-{index}-rest"), div())
                         .h(rest)
                         .bg(rest_color),
-                )
+                );
+            let gap = (index < last).then(|| {
+                part(&self.id, format!("gap-{index}"), div())
+                    .w(DocumentMetrics::TIMELINE_BAR_GAP)
+                    .min_w_0()
+                    .flex_shrink_1()
+            });
+
+            std::iter::once(bar.into_any_element()).chain(gap.map(IntoElement::into_any_element))
         });
 
         let legend = (!self.legend.is_empty()).then(|| {
@@ -193,6 +214,7 @@ impl RenderOnce for TimelineHistogram {
                 .flex()
                 .flex_col()
                 .flex_shrink_0()
+                .max_w(DocumentMetrics::TIMELINE_LEGEND_MAX_WIDTH)
                 .gap(DocumentMetrics::TIMELINE_LEGEND_ROW_GAP)
                 .text_size(DocumentMetrics::TIMELINE_LEGEND_FONT)
                 .text_color(theme.muted_foreground)
@@ -200,6 +222,7 @@ impl RenderOnce for TimelineHistogram {
                     part(&self.id, format!("legend-{index}"), div())
                         .flex()
                         .items_center()
+                        .min_w_0()
                         .gap(DocumentMetrics::GAP)
                         .child(
                             part(
@@ -207,9 +230,10 @@ impl RenderOnce for TimelineHistogram {
                                 format!("swatch-{index}"),
                                 div().size(DocumentMetrics::TIMELINE_SWATCH),
                             )
+                            .flex_none()
                             .bg(entry.tone.text_color(&theme)),
                         )
-                        .child(entry.label.clone())
+                        .child(div().min_w_0().truncate().child(entry.label.clone()))
                 }))
         });
 
@@ -230,7 +254,6 @@ impl RenderOnce for TimelineHistogram {
                     .min_w_0()
                     .flex()
                     .items_end()
-                    .gap(DocumentMetrics::TIMELINE_BAR_GAP)
                     .h(DocumentMetrics::TIMELINE_BAR_HEIGHT)
                     .children(bars),
             )
@@ -265,19 +288,19 @@ pub(super) fn peak(buckets: &[TimelineBucket]) -> i64 {
 /// it. A count that rounds to nothing but has events still draws a hairline,
 /// so a bucket is never invisible.
 pub(super) fn bucket_heights(bucket: TimelineBucket, peak: i64) -> (Pixels, Pixels) {
-    let peak = peak.max(1);
-    let height = |count: i64| -> Pixels {
-        if count <= 0 {
-            px(0.0)
-        } else {
-            (DocumentMetrics::TIMELINE_BAR_HEIGHT * (count as f32 / peak as f32)).max(Borders::THIN)
-        }
-    };
+    if bucket.total <= 0 {
+        return (px(0.0), px(0.0));
+    }
 
-    (
-        height(bucket.total - bucket.highlighted),
-        height(bucket.highlighted),
-    )
+    // One height for the whole bucket, minimum included, split by the highlighted
+    // share: the minimum belongs to the bucket, so a bucket with a highlighted
+    // part is exactly as tall as the same bucket without one.
+    let height = (DocumentMetrics::TIMELINE_BAR_HEIGHT
+        * (bucket.total as f32 / peak.max(1) as f32))
+        .max(Borders::THIN);
+    let highlighted = height * (bucket.highlighted as f32 / bucket.total as f32);
+
+    (height - highlighted, highlighted)
 }
 
 #[cfg(test)]

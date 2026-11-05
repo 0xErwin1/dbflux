@@ -135,7 +135,7 @@ Some parts get an id derived from their owner's id:
 | A rail button's count badge | `rail-<entry id>-count` |
 | The notification bell's count badge | `notifications-badge` (`NotificationBell::badge_id` replaces it) |
 | A markdown view's document | `<view id>-body` |
-| A timeline histogram's bars | `<histogram id>-bar-<n>`, plus `<histogram id>-bar-<n>-rest` and `<histogram id>-bar-<n>-highlight` for the two parts of a bar |
+| A timeline histogram's bars | `<histogram id>-bar-<n>`, plus `<histogram id>-bar-<n>-rest` and `<histogram id>-bar-<n>-highlight` for the two parts of a bar and `<histogram id>-gap-<n>` for the gap after it |
 | A timeline histogram's legend | `<histogram id>-legend`, and `<histogram id>-legend-<n>` and `<histogram id>-swatch-<n>` for its entries |
 
 The rail root carries its own id as a selector too. The count badges carry
@@ -288,7 +288,13 @@ bucket, with a highlighted series stacked over the rest of the bucket.
 - The bars are `DocumentMetrics::TIMELINE_BAR_HEIGHT` tall and
   `DocumentMetrics::TIMELINE_BAR_GAP` apart, `TIMELINE_PADDING_Y` above and
   below, with the legend `TIMELINE_LEGEND_GAP` to their right, its entries
-  `TIMELINE_LEGEND_ROW_GAP` apart and `TIMELINE_LEGEND_FONT` in size.
+  `TIMELINE_LEGEND_ROW_GAP` apart and `TIMELINE_LEGEND_FONT` in size. The
+  legend never grows past `TIMELINE_LEGEND_MAX_WIDTH`: a label too long for it
+  truncates with an ellipsis instead of squeezing the bars.
+- A strip holding so many buckets that the gaps no longer fit drops the gaps
+  before it drops the bars: every bucket with events keeps at least a hairline,
+  and the gap shrinks from `TIMELINE_BAR_GAP` down to nothing as the buckets
+  crowd. A bucket with no events takes no width of its own.
 - It paints no ground and no border: it is the strip inside a region the
   caller frames. It draws no interaction either — a document that lets the
   reader drag across the bars to zoom owns that gesture itself.

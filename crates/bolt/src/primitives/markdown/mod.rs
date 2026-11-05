@@ -188,7 +188,11 @@ fn text_style(
         .text_size(typography.code)
         .p(MarkdownMetrics::CODE_BLOCK_PADDING)
         .bg(role.raised);
-    let table_head = StyleRefinement::default().font_weight(FontWeight::SEMIBOLD);
+    // The theme puts a table's head on the inset ground; the header row of a
+    // document's table belongs with the block on the raised fill.
+    let table_head = StyleRefinement::default()
+        .font_weight(FontWeight::SEMIBOLD)
+        .bg(role.raised);
     let table_cell = StyleRefinement::default().px(Spacing::SM).py(Spacing::XXS);
     let inline_code = HighlightStyle {
         color: Some(role.strong),

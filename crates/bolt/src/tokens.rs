@@ -2015,11 +2015,13 @@ impl DocumentMetrics {
     pub const DETAIL_BLOCK_LINE_HEIGHT: f32 = 1.7;
     pub const DETAIL_ACTIONS_MARGIN_TOP: Pixels = px(12.0);
     /// Timeline strip: 10 by 14 px padding, 52 px bars 2 px apart, 12 px to
-    /// the legend, 8 px legend swatches, 11.5 px legend text.
+    /// the legend, a legend at most 160 px wide, 8 px legend swatches, 11.5 px
+    /// legend text.
     pub const TIMELINE_PADDING_Y: Pixels = px(10.0);
     pub const TIMELINE_BAR_HEIGHT: Pixels = px(52.0);
     pub const TIMELINE_BAR_GAP: Pixels = px(2.0);
     pub const TIMELINE_LEGEND_GAP: Pixels = px(12.0);
+    pub const TIMELINE_LEGEND_MAX_WIDTH: Pixels = px(160.0);
     pub const TIMELINE_SWATCH: Pixels = px(8.0);
     pub const TIMELINE_LEGEND_ROW_GAP: Pixels = px(6.0);
     pub const TIMELINE_LEGEND_FONT: Rems = ui(11.5);
@@ -2036,7 +2038,7 @@ pub struct MarkdownMetrics;
 impl MarkdownMetrics {
     /// Space between the blocks of the document. (8 px)
     pub const PARAGRAPH_GAP: Rems = ui(8.0);
-    /// Code text inside a fenced block or a table cell. (12 px)
+    /// Code text inside a fenced code block. (12 px)
     pub const CODE_FONT: Rems = ui(12.0);
     /// Padding inside a fenced code block. (12 px)
     pub const CODE_BLOCK_PADDING: Pixels = px(12.0);

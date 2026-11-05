@@ -130,6 +130,23 @@ fn the_highlight_can_never_grow_past_its_bucket_and_a_negative_count_is_no_event
     assert_eq!(TimelineBucket::new(7, 3).total(), 7);
 }
 
+/// A bucket's minimum height is the bucket's, not each of its parts: a bucket
+/// whose two parts both round to nothing is as tall as the same bucket with
+/// nothing highlighted, and the highlight is a share of that one height.
+#[test]
+fn a_mixed_bucket_is_as_tall_as_its_own_count() {
+    let (rest, highlighted) = bucket_heights(TimelineBucket::new(2, 1), 10_000);
+    let (plain, _) = bucket_heights(TimelineBucket::new(2, 0), 10_000);
+
+    assert_eq!(rest + highlighted, plain);
+    assert_eq!(rest + highlighted, Borders::THIN);
+    assert_eq!(rest, highlighted);
+    assert_eq!(
+        bucket_heights(TimelineBucket::new(2, 2), 10_000),
+        (px(0.0), Borders::THIN)
+    );
+}
+
 #[test]
 fn the_peak_is_the_busiest_bucket() {
     assert_eq!(
@@ -174,6 +191,8 @@ fn the_bars_share_the_strips_axis_with_the_highlight_over_the_rest(cx: &mut Test
         third.right() + DocumentMetrics::TIMELINE_BAR_GAP
     );
     assert_eq!(first.size.width, third.size.width);
+    // An empty bucket keeps its slot on the axis while there is room.
+    assert_eq!(empty.size.width, first.size.width);
     assert_eq!(
         third.bottom(),
         histogram.bottom() - DocumentMetrics::TIMELINE_PADDING_Y
@@ -283,6 +302,83 @@ fn the_legend_is_drawn_only_when_it_is_given(cx: &mut TestAppContext) {
         first_entry.bottom() + DocumentMetrics::TIMELINE_LEGEND_ROW_GAP
     );
     assert_eq!(column.right(), px(HISTOGRAM_WIDTH));
+}
+
+/// A long legend label cannot take the bars' width: the legend is bounded and
+/// its label truncates, so the bars keep a real share of the strip.
+#[gpui::test]
+fn a_long_legend_label_cannot_take_the_bars_width(cx: &mut TestAppContext) {
+    fn long_label(_cx: &mut App) -> AnyElement {
+        TimelineHistogram::new("events")
+            .bucket(TimelineBucket::new(4, 1))
+            .legend([TimelineLegend::new(
+                "a refused call, with the reason it was refused and the rule that refused it",
+                BadgeTone::Danger,
+            )])
+            .into_any_element()
+    }
+
+    let (_frame, window) = histogram_window(cx, long_label);
+    let histogram = window
+        .debug_bounds("events")
+        .expect("the histogram is laid out");
+    let legend = window.debug_bounds("events-legend").expect("the legend");
+    let bar = window.debug_bounds("events-bar-0").expect("the first bar");
+
+    assert!(
+        legend.size.width <= DocumentMetrics::TIMELINE_LEGEND_MAX_WIDTH,
+        "the legend stays within its own width: {:?}",
+        legend.size.width
+    );
+    assert_eq!(bar.left(), histogram.left());
+    assert_eq!(
+        bar.right(),
+        legend.left() - DocumentMetrics::TIMELINE_LEGEND_GAP
+    );
+    assert!(
+        bar.size.width >= px(HISTOGRAM_WIDTH / 2.0),
+        "the bars keep half the strip: {:?}",
+        bar.size.width
+    );
+}
+
+/// Enough buckets to need more gap than the strip is wide: the gaps give way
+/// so every bucket with events still draws a hairline, and the row still fits.
+#[gpui::test]
+fn many_buckets_keep_a_hairline_each(cx: &mut TestAppContext) {
+    const BUCKETS: usize = 288;
+
+    fn dense(_cx: &mut App) -> AnyElement {
+        TimelineHistogram::new("events")
+            .buckets((0..BUCKETS).map(|_| TimelineBucket::new(1, 0)))
+            .into_any_element()
+    }
+
+    let (_frame, window) = histogram_window(cx, dense);
+    let histogram = window
+        .debug_bounds("events")
+        .expect("the histogram is laid out");
+    let first = window.debug_bounds("events-bar-0").expect("the first bar");
+    let second = window.debug_bounds("events-bar-1").expect("the second bar");
+    // The id of the last of the `BUCKETS` bars.
+    let last = window.debug_bounds("events-bar-287").expect("the last bar");
+
+    assert!(
+        first.size.width >= Borders::THIN,
+        "a populated bucket keeps a hairline: {:?}",
+        first.size.width
+    );
+    assert!(
+        second.left() - first.right() < DocumentMetrics::TIMELINE_BAR_GAP,
+        "the gaps shrink when they do not fit: {:?}",
+        second.left() - first.right()
+    );
+    assert!(
+        last.right() <= histogram.right(),
+        "the burst still fits the strip: {:?} > {:?}",
+        last.right(),
+        histogram.right()
+    );
 }
 
 /// The histogram is a group named by the caller, so a screen can announce

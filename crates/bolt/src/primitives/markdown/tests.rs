@@ -3,6 +3,7 @@ use gpui::{
     AnyElement, App, IntoElement, Modifiers, MouseButton, TestAppContext, VisualTestContext, point,
 };
 use gpui_base::TextSelection;
+use gpui_component::ActiveTheme;
 
 use crate::accessibility::{FrameCapture, accessibility_node, accessible_name};
 use crate::fonts;
@@ -228,6 +229,26 @@ fn the_well_insets_the_document_only_when_asked(cx: &mut TestAppContext) {
 
     assert_eq!(body.left(), view.left());
     assert_eq!(body.right(), view.right());
+}
+
+/// A table's header row sits on the raised fill, the same ground as the code
+/// blocks and the inline code around it. The renderer paints the table itself,
+/// so the frame cannot show the fill: the test pins the style the renderer is
+/// given, which the component folds onto the theme's own table style.
+#[gpui::test]
+fn a_table_header_sits_on_the_raised_fill(cx: &mut TestAppContext) {
+    install_test_theme(cx);
+    cx.update(|cx| {
+        let role = crate::colors(cx);
+        let style = super::text_style(
+            &MarkdownView::typography(cx),
+            cx.theme(),
+            role,
+            fonts::editor_family(cx),
+        );
+
+        assert_eq!(style.table_head.background, Some(role.raised.into()));
+    });
 }
 
 /// A named view is a group that announces its name; an unnamed one carries no
