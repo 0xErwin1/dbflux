@@ -12,6 +12,7 @@ mod readonly_text_view;
 mod search_field;
 mod select_trigger;
 mod type_to_confirm;
+mod value_field;
 
 pub use button::{
     Button, ButtonFills, ButtonSize, ButtonVariant, button_colors, is_activation_key,
@@ -36,6 +37,8 @@ pub use option_group::{
     option_group_item_id,
 };
 pub use readonly_text_view::ReadonlyTextView;
-pub use search_field::{SearchCount, SearchField};
+pub use search_field::{SearchCount, SearchField, SearchTrigger};
 pub use select_trigger::SelectTrigger;
 pub use type_to_confirm::{TypeToConfirm, TypeToConfirmEvent};
+pub use value_field::ValueField;
+pub(crate) use value_field::{one_line, value_field_base};

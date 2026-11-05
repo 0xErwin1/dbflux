@@ -144,6 +144,11 @@ Some parts get an id derived from their owner's id:
 | An activity rail button | `rail-<entry id>` |
 | A rail button's count badge | `rail-<entry id>-count` |
 | The notification bell's count badge | `notifications-badge` (`NotificationBell::badge_id` replaces it) |
+| A closed search field's placeholder | `<trigger id>-placeholder` |
+| A closed search field's shortcut keycap | `<trigger id>-key` |
+| A value field's value | `<value field id>-value` |
+| A code view's `n`th line, numbered from 1 | `<view id>-line-<n>` |
+| A code view's scrolling code column | `<view id>-lines` |
 
 The rail root carries its own id as a selector too. The count badges carry
 the count they draw as their accessible label (none while hidden), and the
@@ -201,6 +206,10 @@ one is off by default, so DBFlux draws the same pixels without them.
 | `Splitter` | `Splitter::new(id, SplitAxis)` | The resize gutter between two panes (see below). |
 | `RailEntry` | `.count(n, BellUrgency)` | A count badge over the rail button's top-right corner, sized and colored like the notification bell's. A zero count shows none. |
 | `StatusChip` | `.tone(color)`, `.wash(true)` | A tone draws the chip's text in that color, semibold. With the wash the chip also sits on the tone at `ShellMetrics::STATUS_CHIP_ALPHA` instead of the island fill. |
+| `SearchField` | `SearchTrigger::new(id, placeholder)` | The field's closed state: the same frame, leading icon and metrics as the open field, drawing the placeholder and an optional `.shortcut("Ctrl F")` keycap instead of an input. `.on_open(..)` runs when it is clicked and the host opens the field; no `InputState` exists while it is closed. `.icon(..)` and `.width(..)` behave as on the field. |
+| `ValueField` | `ValueField::new(value)` | A value drawn in the frame of a text field — cut 6, ground fill, line, `Fields::HEIGHT`, `Fields::PADDING_X` — without an `InputState` per value, for a page that shows many effective values. It is always one line: a `\r` or `\n` in the value reads as a space, so nothing draws past the field. `.mono(true)` draws it in the editor face, `.text_color(..)` overrides the strong value color, and `.id(..)` names the value node `<id>-value`. |
+| `CodeView` | `CodeView::new(id, code)` | Read-only code with the rows, gutter and syntax seam of `ModalCode` (see below), drawable outside a dialog. It brings no frame or padding of its own, so the host places it in a `FieldWell` or any container for its font family and color; its size is its own — `CodeMetrics::FONT` (12.5 px), so a line always fits a `CodeMetrics::LINE_HEIGHT` (20 px) row whatever size the host sets around it. The caller's highlight ranges are sorted and merged before they reach the text, so an unordered or overlapping set colors the bytes it names. |
+| `FieldWell` | `FieldWell::new()` | The framed, filled area a read-only block sits in: the ground fill cut 6 behind a line, with `.child(..)` content above it. `.id(..)` records the well, `.cut(..)` draws another cut, and it is a `Styled`/`ParentElement`, so layout chains as on a `div`. |
 
 ### Shell chrome
 
@@ -464,8 +473,13 @@ let runs = bolt::syntax::overlay(
 StyledText::new(body).with_highlights(runs)
 ```
 
-`ModalCode::language(name)` colors a modal code block the same way, line
-numbers included, with its `.highlights(..)` drawn over the syntax.
+`CodeView::language(name)` colors a read-only code view the same way, line
+numbers included, with its `.highlights(..)` drawn over the syntax;
+`ModalCode` is a `CodeView` in a `FieldWell`, so a block inside a dialog and a
+code view inside a page draw the same rows, gutter and colors. A code view
+that carries an id records `<id>-line-<n>` for each numbered line and
+`<id>-lines` for the column that scrolls sideways beneath a fixed gutter,
+exactly as the modal block does.
 `ModalCode::highlights_with_tone(ranges, tone)` adds ranges drawn bold in a
 `BadgeTone`'s text color instead of the tint (for example `Warning` for a
 reference that does not resolve); they draw over the tint highlights and the

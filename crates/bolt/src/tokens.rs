@@ -110,6 +110,23 @@ impl ChamferCut {
     pub const MODAL: Pixels = px(18.0);
 }
 
+/// Geometry of a read-only code block: the line rows of the number gutter.
+///
+/// It is a block of its own so a code view outside a dialog draws the same
+/// rows a statement block does, and neither one copies the other's numbers.
+pub struct CodeMetrics;
+
+impl CodeMetrics {
+    /// The size a read-only code block draws its text at. (12.5 px)
+    pub const FONT: Rems = ui(12.5);
+    /// A numbered code line row, tall enough for one line at `FONT`. (20 px)
+    pub const LINE_HEIGHT: Rems = ui(20.0);
+    /// Width of the right-aligned line-number gutter. (46 px)
+    pub const GUTTER_WIDTH: Rems = ui(46.0);
+    /// Space between the line number and the code. (14 px)
+    pub const GUTTER_PADDING_RIGHT: Pixels = px(14.0);
+}
+
 /// Geometry of `modals::Modal`, taken from the modals design board.
 pub struct ModalMetrics;
 
@@ -143,15 +160,14 @@ impl ModalMetrics {
     pub const LEAD_FONT: Rems = ui(13.5);
     pub const LEAD_LINE_HEIGHT: f32 = 1.6;
     /// Statement block: cut 8, 10 px vertical and 12 px horizontal padding,
-    /// 12.5 px mono.
+    /// the code font of [`CodeMetrics`].
     pub const CODE_PADDING_Y: Pixels = px(10.0);
     pub const CODE_PADDING_X: Pixels = px(12.0);
-    pub const CODE_FONT: Rems = ui(12.5);
-    /// Numbered statement block: 20 px lines, a 46 px right-aligned gutter
-    /// with 14 px between the number and the code.
-    pub const CODE_LINE_HEIGHT: Rems = ui(20.0);
-    pub const CODE_GUTTER_WIDTH: Rems = ui(46.0);
-    pub const CODE_GUTTER_PADDING_RIGHT: Pixels = px(14.0);
+    pub const CODE_FONT: Rems = CodeMetrics::FONT;
+    /// Numbered statement block: the line rows of [`CodeMetrics`].
+    pub const CODE_LINE_HEIGHT: Rems = CodeMetrics::LINE_HEIGHT;
+    pub const CODE_GUTTER_WIDTH: Rems = CodeMetrics::GUTTER_WIDTH;
+    pub const CODE_GUTTER_PADDING_RIGHT: Pixels = CodeMetrics::GUTTER_PADDING_RIGHT;
     /// A labelled field: 12 px muted label, 6 px above its control.
     pub const FIELD_LABEL_FONT: Rems = ui(12.0);
     pub const FIELD_GAP: Pixels = px(6.0);
