@@ -171,12 +171,28 @@ impl CodeDocument {
     }
 
     fn connection_items(app_state: &Entity<AppStateEntity>, cx: &App) -> Vec<DropdownItem> {
-        let mut items: Vec<_> = app_state
-            .read(cx)
+        let state = app_state.read(cx);
+
+        let mut items: Vec<_> = state
             .connections()
             .values()
             .map(|connected| {
-                DropdownItem::with_value(&connected.profile.name, connected.profile.id.to_string())
+                let item = DropdownItem::with_value(
+                    &connected.profile.name,
+                    connected.profile.id.to_string(),
+                );
+
+                // Each row carries its driver's logo, so the list says which
+                // engine a profile talks to before the name is read.
+                let Some(driver) = state.drivers().get(&connected.profile.driver_id()) else {
+                    return item;
+                };
+
+                let metadata = driver.metadata();
+                item.icon(AppIcon::for_driver(metadata.icon, metadata.category))
+                    .icon_tone(
+                        DriverIconTone::for_driver(metadata.icon, metadata.category).badge_tone(),
+                    )
             })
             .collect();
 
