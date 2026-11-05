@@ -140,6 +140,7 @@ Some parts get an id derived from their owner's id:
 | A menu row's check mark | `<row id>-check` |
 | A popover's title, body and footer | `<id>-title`, `<id>-body`, `<id>-footer` |
 | A popover's click-away layer | `<id>-away` |
+| An open dropdown's menu, its scrolling column of rows, and its `n`th row numbered from 0 | `<id>-menu`, `<id>-menu-rows`, `<id>-item-<n>` |
 | The command search field's shortcut keycap | `<field id>-key` |
 | An activity rail button | `rail-<entry id>` |
 | A rail button's count badge | `rail-<entry id>-count` |
@@ -436,16 +437,24 @@ no room below, and is snapped inside the window keeping
 function. With no anchor it stays where the host renders it, as `anchored()`
 does for a trigger.
 
-**Dismissal.** Escape closes the surface, and so does a click away from it. The
-click-away layer is drawn under the surface rather than around it, so a click
-in anything drawn above it — a `Dropdown` list opened from the body, for one —
-is a click inside and leaves the popover open; the same click still selects the
-dropdown row.
+**Dismissal.** Escape closes the surface, and so does a click away from it.
+Escape is caught twice, so a host's own key bindings cannot swallow it: the
+frame answers the product's cancel action (the command a `CommandSet` maps
+onto `Command::Cancel`) the way a `Dropdown` does, from where it sits on the
+dispatch path — inside every shell that would answer that action, and outside
+anything the body opened for itself, which gets the cancel first and leaves the
+popover open. A raw Escape that no binding claimed is caught on the way down,
+before anything inside the body sees it. The click-away layer is drawn under the
+surface rather than around it, so a click in anything drawn above it — a
+`Dropdown` list opened from the body, for one — is a click inside and leaves the
+popover open; the same click still selects the dropdown row.
 
 **Focus.** Opening moves focus to the handle given to
 `set_initial_focus` (or to the surface itself, with nothing to focus) and
-remembers the element that had it; closing gives that element focus back, so
-Escape returns the user to the trigger.
+remembers the element that had it; closing gives that element focus back while
+focus is still anywhere inside the surface, so a field the body focused instead
+of the initial one still hands focus back, and Escape returns the user to the
+trigger.
 
 **Hover intent.** Built with `PopoverState::hover_intent(true)`, the surface
 opens `HOVER_DELAY` (400 ms) after the pointer comes to rest on the anchor,
