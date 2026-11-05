@@ -298,6 +298,21 @@ struct DriverInfo {
     picker_rank: u16,
 }
 
+const KEYRING_PASSWORD_READ_ERROR: &str =
+    "Could not read the password from the system keyring (it may be locked)";
+
+/// What the form knows about the password the keyring holds for the profile
+/// being edited.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum StoredPassword {
+    /// The keyring answered: the password field shows what it holds, if anything.
+    #[default]
+    Known,
+    /// The keyring refused the read, so an empty password field says nothing
+    /// about the saved entry, and saving must not delete it.
+    Unreadable,
+}
+
 /// Driver and credential input widgets for the connection form's main tab.
 struct FormState {
     selected_driver_id: Option<String>,
@@ -316,6 +331,7 @@ struct FormState {
     read_only: bool,
     form_save_password: bool,
     form_save_ssh_secret: bool,
+    stored_password: StoredPassword,
     input_name: Entity<InputState>,
     /// Filter text for the driver-select picker. Bound to a text input that
     /// is focused on `/` from anywhere within the picker. The query is read
@@ -1013,6 +1029,7 @@ impl ConnectionManagerWindow {
                 read_only: false,
                 form_save_password: true,
                 form_save_ssh_secret: true,
+                stored_password: StoredPassword::Known,
                 input_name,
                 driver_filter_input,
                 driver_filter_focused: false,
@@ -1252,11 +1269,33 @@ impl ConnectionManagerWindow {
             state.set_value(&profile.name, window, cx);
         });
 
-        if let Some(password) = app_state.read(cx).get_password(profile) {
-            let password = password.expose_secret().to_string();
-            instance.form.input_password.update(cx, |state, cx| {
-                state.set_value(password.clone(), window, cx);
-            });
+        match app_state.read(cx).get_password(profile) {
+            Ok(Some(password)) => {
+                let password = password.expose_secret().to_string();
+                instance.form.input_password.update(cx, |state, cx| {
+                    state.set_value(password.clone(), window, cx);
+                });
+            }
+            Ok(None) => {}
+            Err(error) => {
+                // Unreadable either way, so saving cannot delete an entry the
+                // form never saw; only a profile whose password lives in the
+                // keyring has a failure worth reporting.
+                instance.form.stored_password = StoredPassword::Unreadable;
+                if dbflux_core::password_lives_in_keyring(profile) {
+                    report_error(
+                        UserFacingError::new(ErrorKind::Storage, KEYRING_PASSWORD_READ_ERROR)
+                            .with_cause(error.to_string()),
+                        cx,
+                    );
+                } else {
+                    log::warn!(
+                        "Keyring read failed for profile {}, whose password does not live in \
+                         the keyring: {error}",
+                        profile.id
+                    );
+                }
+            }
         }
 
         instance.load_settings_tab(
@@ -1617,6 +1656,20 @@ impl ConnectionManagerWindow {
         }
 
         values
+    }
+
+    /// Placeholder for the password input. An unreadable keyring says so,
+    /// because an empty field would otherwise read as "no password saved".
+    fn password_placeholder(&self, password_source_is_literal: bool, cx: &Context<Self>) -> String {
+        if password_source_is_literal && self.form.stored_password == StoredPassword::Unreadable {
+            return dbflux_i18n::t!("connection_manager.placeholder.password_unreadable");
+        }
+
+        self.form
+            .password_value_source_selector
+            .read(cx)
+            .source_placeholder(cx)
+            .unwrap_or_else(|| self.secret_field_label(cx))
     }
 
     /// Label of the canonical secret input for the selected driver.
@@ -4654,6 +4707,7 @@ mod tests {
     const CONNECTION_MANAGER_PLACEHOLDER_KEYS: &[&str] = &[
         "connection_manager.placeholder.connection_name",
         "connection_manager.placeholder.password",
+        "connection_manager.placeholder.password_unreadable",
         "connection_manager.placeholder.key_passphrase_optional",
         "connection_manager.placeholder.ssh_password",
         "connection_manager.placeholder.ca_cert_path",

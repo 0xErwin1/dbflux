@@ -337,6 +337,7 @@ connection_manager:
     seconds: 秒
     connection_name: 连接名称
     password: 密码
+    password_unreadable: "无法读取已保存的密码：系统密钥环可能已锁定"
     key_passphrase_optional: 密钥口令（可选）
     ssh_password: SSH 密码
     ca_cert_path: CA 证书路径
