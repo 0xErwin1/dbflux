@@ -352,11 +352,9 @@ fn send_focus_request<S: Read + Write>(stream: &mut S, request_id: u64) -> io::R
 /// holders.
 #[expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     reason = "startup preserves the existing fail-fast behavior for poisoned \
-              process-global locks and failure to open the main window; bridge \
-              initialization runs under its guard, so panic-freedom is an \
-              assumption, not a mutex guarantee"
+              process-global locks; bridge initialization runs under its \
+              guard, so panic-freedom is an assumption, not a mutex guarantee"
 )]
 fn run_gui() {
     // Runs first: it sets PATH, which is only sound before any other thread
