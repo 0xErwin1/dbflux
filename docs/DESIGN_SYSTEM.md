@@ -32,7 +32,7 @@ rendering in Bolt, the domain knowledge behind a seam the product fills.
 | `bolt::semantic` | Banner, row-state and chart-chrome colors per palette |
 | `bolt::icon` | `IconSource`: a named icon or an SVG path |
 | `bolt::primitives` | Badge, banner, chamfer, divider, file picker, focus ring, keycap, label, loading state, segmented control, status, surface, text, timeline strip, type-to-confirm |
-| `bolt::controls` | Button, checkbox, dropdown, select trigger, input, search field with a match count, read-only text view, key capture |
+| `bolt::controls` | Button, checkbox, option group, dropdown, select trigger, input, search field with a match count, read-only text view, key capture |
 | `bolt::composites` | Tabs (document, result, inline), menu item and popup menu, form popover, list row, empty state, split button, splitter, field row, island |
 | `bolt::selector` | `id_selector`: the gpui debug selector every id-bearing component records for its element id |
 | `bolt::modals` | The modal dialog, its focus helper and the shared body blocks (lead, statement, numbered statement, field, form row, value field) |
@@ -112,12 +112,18 @@ a database or a design board: a source-scanning guardrail in
 
 ## Finding components in tests
 
-Every Bolt component that takes an element id (button, checkbox, dropdown,
-select trigger, input, file picker, tabs, menu row and overlay, list row,
-split button, splitter, segmented control and its segments, modal backdrop)
-records that id as its gpui debug selector, so a product's GPUI test finds it with
-`cx.debug_bounds("<id>")`. A segment's id defaults to
-`segmented-<group>-<id>`; `SegmentedItem::element_id` replaces it. An input
+Every Bolt component that takes an element id (button, checkbox, option group
+and its options, dropdown, select trigger, input, file picker, tabs, menu row
+and overlay, list row, split button, splitter, segmented control and its
+segments, modal backdrop) records that id as its gpui debug selector, so a
+product's GPUI test finds it with `cx.debug_bounds("<id>")`. An option group
+names itself with `OptionGroup::new(group, ..)`; ids are
+`option-group:<group>`, `option-group:<group>:<id>` and
+`option-group:<group>:<id>:description`, with any `:` or `%` inside a group or
+option name escaped, so no two groups, options or descriptions can share an id
+(`option_group_id`, `option_group_item_id` and `option_group_description_id`
+spell them out). A segment's id defaults to `segmented-<group>-<id>`;
+`SegmentedItem::element_id` replaces it. An input
 records its selector on its frame, so a bare input (`appearance(false)`) has
 none. A form field row takes no id and records `field-row`. gpui records
 selectors only in debug builds with `test-support`; nothing changes in what is
@@ -127,6 +133,8 @@ Some parts get an id derived from their owner's id:
 
 | Part | Selector |
 |---|---|
+| A field's error caption (`Input::error(..)`) | `<field id>-error` |
+| An option group's option description | `option-group:<group>:<id>:description` |
 | A button's `.kbd(..)` keycap | `<button id>-key` |
 | A menu row's shortcut | `<row id>-key` |
 | A menu row's check mark | `<row id>-check` |
@@ -185,6 +193,7 @@ one is off by default, so DBFlux draws the same pixels without them.
 | `SelectTrigger` | `SelectTrigger::new(id, label)` | The closed field of a select, drawn by the same code as a standard `Dropdown` trigger: cut-6 field, optional leading icon, truncated label, chevron. It is a button with the caller's click handler, `.disabled(..)`, `.focus_ring(..)` or `.focused(..)`, for a product that opens its own popup. The `Dropdown` entity itself is unchanged. |
 | `Input` | `.padding(x, y)`, `.text_size(..)`, `.line_height(..)` | Replace the inner padding (the height then follows the line), the text size and the line height. With `appearance(false)`, set them to the values of the text the field replaces so nothing moves when the text turns into a field. Without them a bare input keeps gpui-component's size. |
 | `Input` | `.font_weight(..)` | Replaces the text weight, normal in a framed field and medium in a bare one. Set a bare field to normal so it matches text drawn at the regular weight. |
+| `Input` | `.error(Option<impl Into<SharedString>>)` | Reports a validation error: the frame's line becomes the danger role and the message is drawn as a 12 px danger caption one `Spacing::XXS` (6 px) under the field, with the element id `<field id>-error`. The caption is an alert node named by the message, so assistive technology announces it when it appears; the input's own node is untouched, because gpui has no description or invalid state for a node another element builds. The caption sits outside the frame, so the field keeps its size, and a field that fills its row still fills it. `None` draws the field exactly as without the option. |
 | `InputState` | `decorate_input(&state, styled_ranges(ranges, style), cx)` | Styles UTF-8 byte ranges of a single-line field with a `HighlightStyle` (text color, background wash, underline) while it is edited as well as at rest. The ranges follow edits, do not grow when typing at an edge, and are not drawn while the field is masked. The returned `TextDecorationCollection` replaces them with `.set(..)` or removes them with `.clear(..)`; `set_value` removes ranges over the old text, so set them again after it. The product computes the ranges; Bolt never parses the text. A field without decorations renders as before. |
 | `CommandSearch` | `.shrinkable(true)` | The field shrinks below its 420 px width in a narrow title bar, down to `ShellMetrics::COMMAND_SEARCH_MIN_WIDTH`, and the placeholder truncates with an ellipsis. By default it keeps its width and never shrinks. |
 | `EmptyState` | `.primary_action(Button)` | A real button under the sentence for the one thing the region asks for. The key-hint actions stay below it. |
@@ -238,6 +247,55 @@ Its accessibility role is a splitter, oriented across the axis.
 `.value_percent(..)` reports the first pane's share of the split as its value,
 numeric from 0 to 100 and as text (`62%`). DBFlux's sidebar and inspector keep
 their own grips.
+
+### Option group
+
+`OptionGroup::new(group, items, selected, on_change)` is the vertical list of
+mutually-exclusive options a form uses where a segmented control is too narrow:
+each `OptionGroupItem` is a label, an optional description drawn under it as one
+line (12 px, muted, clipped when it is longer) and a per-option `.disabled(..)`. The group draws its own name
+as the radio group, so `group` must be unique in the window; `.aria_label(..)`
+names it for assistive technology, since a radio group has no text of its own.
+
+The indicator reuses the checkbox's geometry: a `Fields::CHECKBOX_SIZE` (16 px)
+box with `ChamferCut::KEYCAP`, the accent fill with a `Fields::RADIO_DOT` (6 px)
+accent-foreground dot when chosen, the inset control line otherwise, and the
+same tint focus ring, drawn outside the accent fill of the chosen option while
+the group holds keyboard focus. Rows take
+`Fields::CHECK_ROW_PADDING_Y` above and below, `Fields::CHECKBOX_GAP` between the
+indicator and the text, and `Fields::CHECK_ROW_LINE_GAP` between the label and
+its description, so an option lines up with a `Checkbox` row above it.
+
+The group is one focusable stop, a radio group whose options are radio buttons
+named by their labels, described by their descriptions, and toggled when chosen;
+while the group holds keyboard focus, the chosen option is the focused node of
+the radio group, so assistive technology follows the choice as it moves. Up and
+Down (and Left and Right) move the choice through the enabled options, reporting
+each one through `on_change`; Space and Enter report the current choice again,
+so an owner that only acts on the reported id keeps working, unless that choice
+is disabled; while nothing is chosen yet (`selected` is an id that matches no
+option, such as an empty string) the first arrow key chooses the first enabled
+option in that direction, so the keyboard can make the first choice; a pointer
+press or the accessibility click action chooses the option it lands on; an arrow
+key that would move past either end is left to the host, so a form can move to
+the next field from there. Disabled options are
+dimmed with `Fields::DISABLED_OPACITY`, are skipped by the arrow keys and answer
+neither the pointer nor an accessibility click.
+
+```rust
+OptionGroup::new(
+    "secret-mode",
+    vec![
+        OptionGroupItem::new("omit", "Leave secrets out")
+            .description("The bundle lists them by name, empty."),
+        OptionGroupItem::new("encrypt", "Encrypt secrets with a passphrase")
+            .description("Values are sealed with a passphrase."),
+    ],
+    mode.clone(),
+    move |id, _, cx| set_mode(id.clone(), cx),
+)
+.aria_label("Secrets in a bundle")
+```
 
 ### Form popovers
 

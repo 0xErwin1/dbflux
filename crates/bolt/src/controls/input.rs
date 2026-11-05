@@ -3,15 +3,15 @@ use std::panic::Location;
 use gpui::prelude::*;
 use gpui::{
     AbsoluteLength, AnyElement, App, Bounds, DefiniteLength, ElementId, Entity, Focusable as _,
-    FontWeight, GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, Pixels,
+    FontWeight, GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, Role,
     SharedString, StyleRefinement, Window, actions, div,
 };
 use gpui_component::input::{Editor as GpuiEditor, EditorState};
 use gpui_component::{ActiveTheme, Sizable};
 
-use crate::primitives::{Chamfer, ChamferRing};
+use crate::primitives::{Chamfer, ChamferRing, Text};
 use crate::selector::id_selector;
-use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes};
+use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes, Spacing};
 
 pub use gpui_component::RopeExt;
 pub use gpui_component::input::{
@@ -64,6 +64,7 @@ pub struct Input {
     text_size: Option<AbsoluteLength>,
     line_height: Option<DefiniteLength>,
     font_weight: Option<FontWeight>,
+    error: Option<SharedString>,
 }
 
 impl Input {
@@ -85,6 +86,7 @@ impl Input {
             text_size: None,
             line_height: None,
             font_weight: None,
+            error: None,
         }
     }
 
@@ -178,6 +180,22 @@ impl Input {
         self
     }
 
+    /// Draws the field frame in the danger color and `error` as a caption one
+    /// helper gap under the field, with element and accessibility id
+    /// `<input id>-error`.
+    ///
+    /// The caption is an alert node named by the message, so assistive
+    /// technology announces it when it appears. The input's own accessibility
+    /// node is untouched: gpui offers no description or invalid state for a
+    /// node another element builds, so the caption carries the announcement.
+    ///
+    /// `None` draws a field without an error, exactly as it is drawn without
+    /// this option at all.
+    pub fn error(mut self, error: Option<impl Into<SharedString>>) -> Self {
+        self.error = error.map(Into::into);
+        self
+    }
+
     /// Marks the input as holding a secret.
     ///
     /// The input gets the password content type, so its value never reaches
@@ -193,6 +211,7 @@ impl Input {
 impl RenderOnce for Input {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let chamfered = self.appearance;
+        let w_full = self.w_full;
 
         let mut input = GpuiInput::new(&self.state)
             .appearance(false)
@@ -236,7 +255,7 @@ impl RenderOnce for Input {
             input = input.line_height(height);
         }
 
-        if self.w_full {
+        if w_full {
             input = input.w_full();
         }
 
@@ -249,6 +268,10 @@ impl RenderOnce for Input {
         }
 
         let selector_id = self.id.clone();
+        let error = self.error;
+        let error_id = selector_id
+            .as_ref()
+            .map(|id| SharedString::from(format!("{id}-error")));
 
         if let Some(id) = self.id {
             input = input.id(id);
@@ -266,32 +289,61 @@ impl RenderOnce for Input {
             input = input.suffix(suffix);
         }
 
-        if !chamfered {
-            return input.into_any_element();
-        }
+        let field = if chamfered {
+            let focused = self
+                .state
+                .read(cx)
+                .focus_handle(cx)
+                .contains_focused(window, cx);
 
-        let focused = self
-            .state
-            .read(cx)
-            .focus_handle(cx)
-            .contains_focused(window, cx);
+            // The frame records the selector: the inner gpui_component input
+            // has no hook for one, and a bare input (`appearance(false)`) gets
+            // no wrapper so its layout stays the host's.
+            div()
+                .when_some(selector_id, |frame, id| {
+                    frame.debug_selector(id_selector(&id))
+                })
+                .relative()
+                .w_full()
+                .child(field_shape(
+                    cx.theme().background,
+                    field_border(error.is_some(), cx),
+                    focused && !self.disabled,
+                    self.disabled,
+                    cx,
+                ))
+                .child(input)
+                .into_any_element()
+        } else {
+            input.into_any_element()
+        };
 
-        // The frame records the selector: the inner gpui_component input has
-        // no hook for one, and a bare input (`appearance(false)`) gets no
-        // wrapper so its layout stays the host's.
+        let Some(error) = error else {
+            return field;
+        };
+
+        // The caption is a sibling of the field, under it, one helper gap
+        // away, so the field keeps the height of a field without one.
+        let caption = match error_id {
+            Some(error_id) => div()
+                .debug_selector(id_selector(&ElementId::from(error_id.clone())))
+                .id(error_id)
+                .role(Role::Alert)
+                .aria_label(error.clone())
+                .child(Text::body(error).font_size(FontSizes::XS).danger())
+                .into_any_element(),
+            None => div()
+                .child(Text::body(error).font_size(FontSizes::XS).danger())
+                .into_any_element(),
+        };
+
         div()
-            .when_some(selector_id, |frame, id| {
-                frame.debug_selector(id_selector(&id))
-            })
-            .relative()
-            .w_full()
-            .child(field_shape(
-                cx.theme().background,
-                focused && !self.disabled,
-                self.disabled,
-                cx,
-            ))
-            .child(input)
+            .flex()
+            .flex_col()
+            .gap(Spacing::XXS)
+            .when(chamfered || w_full, |this| this.w_full())
+            .child(field)
+            .child(caption)
             .into_any_element()
     }
 }
@@ -306,10 +358,26 @@ fn text_weight(chamfered: bool, weight: Option<FontWeight>) -> FontWeight {
     })
 }
 
-/// The chamfered shape behind a text field: `fill` with a 1 px line on the
-/// straight edges, the inset tint focus ring when `focused`, and the rest
-/// fill at `Fields::DISABLED_OPACITY` when `disabled`.
-pub(crate) fn field_shape(fill: Hsla, focused: bool, disabled: bool, cx: &App) -> Chamfer {
+/// Color of a text field's frame line: the danger role while the field reports
+/// an error, the default control edge otherwise.
+pub(crate) fn field_border(error: bool, cx: &App) -> Hsla {
+    if error {
+        cx.theme().danger
+    } else {
+        cx.theme().border
+    }
+}
+
+/// The chamfered shape behind a text field: `fill` with a 1 px `border` line
+/// on the straight edges, the inset tint focus ring when `focused`, and the
+/// rest fill at `Fields::DISABLED_OPACITY` when `disabled`.
+pub(crate) fn field_shape(
+    fill: Hsla,
+    border: Hsla,
+    focused: bool,
+    disabled: bool,
+    cx: &App,
+) -> Chamfer {
     let theme = cx.theme();
     let opacity = if disabled {
         Fields::DISABLED_OPACITY
@@ -319,7 +387,7 @@ pub(crate) fn field_shape(fill: Hsla, focused: bool, disabled: bool, cx: &App) -
 
     let shape = Chamfer::new(ChamferCut::CONTROL)
         .fill(fill.opacity(opacity))
-        .border(theme.border.opacity(opacity));
+        .border(border.opacity(opacity));
 
     if focused {
         shape.ring(ChamferRing::focus(ChromeColors::tint(theme)))
@@ -1119,5 +1187,218 @@ mod tests {
             super::text_weight(true, Some(FontWeight::BOLD)),
             FontWeight::BOLD
         );
+    }
+
+    /// An input whose caller passes an optional error, so the caption takes the
+    /// id derived from the field's.
+    struct ErrorField {
+        state: gpui::Entity<InputState>,
+        error: Option<&'static str>,
+        appearance: bool,
+    }
+
+    impl Render for ErrorField {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let input = Input::new(&self.state)
+                .id("cm-error-field")
+                .appearance(self.appearance)
+                .error(self.error.map(gpui::SharedString::from));
+
+            div().w_full().flex().flex_col().child(input)
+        }
+    }
+
+    fn open_error_field<'a>(
+        error: Option<&'static str>,
+        appearance: bool,
+        cx: &'a mut TestAppContext,
+    ) -> (
+        Arc<crate::accessibility::FrameCapture>,
+        &'a mut VisualTestContext,
+    ) {
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::install(
+                crate::brand::Brand::neutral(),
+                crate::palette::PaletteMode::Dark,
+                crate::density::Density::Default,
+                cx,
+            );
+        });
+
+        let (_view, visual) = cx.add_window_view(move |window, cx| ErrorField {
+            state: cx.new(|cx| InputState::new(window, cx).placeholder("passphrase")),
+            error,
+            appearance,
+        });
+        visual.run_until_parked();
+
+        let capture = crate::accessibility::FrameCapture::observe(visual);
+
+        (capture, visual)
+    }
+
+    fn frame_node<'a>(frame: &'a gpui::AccessibilityFrame, id: &str) -> &'a gpui::FrameNode {
+        frame
+            .nodes()
+            .find(|(_, node)| node.id() == id)
+            .unwrap_or_else(|| panic!("{id} is laid out"))
+            .1
+    }
+
+    #[gpui::test]
+    fn an_error_draws_a_named_caption_under_the_field(cx: &mut TestAppContext) {
+        let (capture, visual) = open_error_field(Some("Passphrases do not match"), true, cx);
+        let frame = capture.frame(visual);
+
+        let caption = crate::accessibility::accessibility_node(&frame, "cm-error-field-error")
+            .expect("the caption is an accessible node");
+        assert_eq!(
+            caption.role(),
+            Role::Alert,
+            "the caption is announced when the error appears"
+        );
+        assert_eq!(caption.label(), Some("Passphrases do not match"));
+
+        let field = frame_node(&frame, "cm-error-field");
+        let caption = frame_node(&frame, "cm-error-field-error");
+        assert_eq!(
+            caption.bounds().top() - field.bounds().bottom(),
+            crate::tokens::Spacing::XXS,
+            "the caption sits one helper gap under the field"
+        );
+    }
+
+    #[gpui::test]
+    fn a_bare_field_draws_its_caption_under_the_text_it_edits(cx: &mut TestAppContext) {
+        let (capture, visual) = open_error_field(Some("Required"), false, cx);
+        let frame = capture.frame(visual);
+
+        let caption = frame_node(&frame, "cm-error-field-error");
+        let input = frame
+            .nodes()
+            .find_map(|(_, node)| {
+                let accessible = frame.accessibility_node(node)?;
+                (accessible.role() == Role::TextInput).then_some(node)
+            })
+            .expect("the bare input is drawn");
+
+        assert!(
+            caption.bounds().top() > input.bounds().bottom(),
+            "the caption sits under the uncovered field"
+        );
+    }
+
+    /// Two bare fields that fill their row, one of them carrying an error.
+    struct WideFields {
+        plain: gpui::Entity<InputState>,
+        errored: gpui::Entity<InputState>,
+    }
+
+    impl Render for WideFields {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(px(320.0))
+                .flex()
+                .flex_col()
+                .child(
+                    div().flex().child(
+                        Input::new(&self.plain)
+                            .id("cm-wide-plain")
+                            .appearance(false)
+                            .w_full(),
+                    ),
+                )
+                .child(
+                    div().flex().child(
+                        Input::new(&self.errored)
+                            .id("cm-wide-errored")
+                            .appearance(false)
+                            .w_full()
+                            .error(Some("Required")),
+                    ),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn an_error_does_not_shrink_a_field_that_fills_its_row(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let capture = Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (_view, visual) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_window);
+            window.refresh();
+            WideFields {
+                plain: cx.new(|cx| InputState::new(window, cx)),
+                errored: cx.new(|cx| InputState::new(window, cx)),
+            }
+        });
+        visual.run_until_parked();
+
+        let frame = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame");
+        let plain = frame_node(&frame, "cm-wide-plain").bounds().size.width;
+        let errored = frame_node(&frame, "cm-wide-errored").bounds().size.width;
+
+        assert_eq!(errored, plain, "the error wrapper fills the row too");
+        assert_eq!(plain, px(320.0));
+    }
+
+    #[gpui::test]
+    fn an_error_leaves_the_field_its_size(cx: &mut TestAppContext) {
+        let without_error = {
+            let (_capture, visual) = open_error_field(None, true, cx);
+            visual
+                .debug_bounds("cm-error-field")
+                .expect("the field is laid out")
+                .size
+        };
+        let with_error = {
+            let (_capture, visual) = open_error_field(Some("Required"), true, cx);
+            visual
+                .debug_bounds("cm-error-field")
+                .expect("the field is laid out")
+                .size
+        };
+
+        assert_eq!(
+            with_error, without_error,
+            "the caption sits outside the frame, so the field keeps its size"
+        );
+    }
+
+    #[gpui::test]
+    fn a_field_without_an_error_draws_no_caption(cx: &mut TestAppContext) {
+        let (capture, visual) = open_error_field(None, true, cx);
+
+        assert!(visual.debug_bounds("cm-error-field").is_some());
+        assert!(visual.debug_bounds("cm-error-field-error").is_none());
+
+        let frame = capture.frame(visual);
+        assert!(
+            frame
+                .nodes()
+                .all(|(_, node)| node.id() != "cm-error-field-error"),
+            "an errorless field draws no caption"
+        );
+    }
+
+    #[gpui::test]
+    fn an_error_frames_the_field_in_the_danger_color(cx: &mut TestAppContext) {
+        use gpui_component::ActiveTheme as _;
+
+        cx.update(gpui_component::init);
+
+        let danger = cx.update(|cx| super::field_border(true, cx));
+        let border = cx.update(|cx| super::field_border(false, cx));
+
+        assert_eq!(danger, cx.update(|cx| cx.theme().danger));
+        assert_eq!(border, cx.update(|cx| cx.theme().border));
+        assert_ne!(danger, border);
     }
 }

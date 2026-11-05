@@ -420,6 +420,13 @@ impl Fields {
     pub const CHECK_MARK: Rems = ui(12.0);
     /// Gap between a checkbox and its label. (10 px)
     pub const CHECKBOX_GAP: Pixels = px(10.0);
+    /// Dot inside a chosen radio indicator, drawn on the accent fill. (6 px)
+    pub const RADIO_DOT: Rems = ui(6.0);
+    /// Vertical padding of a checkbox or option row. (6 px)
+    pub const CHECK_ROW_PADDING_Y: Pixels = px(6.0);
+    /// Gap between the label line of a checkbox or option row and the
+    /// description under it. (3 px)
+    pub const CHECK_ROW_LINE_GAP: Pixels = px(3.0);
 
     /// Vertical padding of a select menu. (8 px)
     pub const MENU_PADDING_Y: Pixels = px(8.0);
