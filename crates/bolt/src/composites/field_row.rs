@@ -13,6 +13,9 @@ use crate::tokens::{Fields, Spacing};
 /// Default label width for horizontal field rows.
 const DEFAULT_LABEL_WIDTH: Pixels = px(140.0);
 
+/// Selector every field row records, so a test can read the row's own box.
+const FIELD_ROW_SELECTOR: &str = "field-row";
+
 /// Render a standard form field row: label on the left, control on the right.
 ///
 /// Returns a `Div` so callers can chain additional GPUI attributes.
@@ -119,12 +122,16 @@ impl FieldRow {
     }
 
     /// Draws the row locked: dimmed at `Fields::DISABLED_OPACITY`, with the
-    /// not-allowed cursor, and covered by a plate that takes the pointer, so
-    /// nothing inside it answers a click. For a control the owner cannot
-    /// accept input for while it works.
+    /// not-allowed cursor, and covered by a plate that hides the row's own
+    /// content from the pointer, so a click on what the row draws does
+    /// nothing.
     ///
-    /// The control keeps its own disabled state: a locked row withholds the
-    /// pointer, it does not reach into what it draws.
+    /// What it blocks is pointer input on the row's content. It does not reach
+    /// into what it draws: a control the row holds keeps its own disabled
+    /// state, and an overlay a control opened — a `Dropdown`'s menu, a popup —
+    /// is drawn outside the row and still takes clicks. A host that locks a row
+    /// around such a control disables it (`Dropdown::set_disabled`) or closes
+    /// the overlay for as long as the row is locked.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
@@ -148,6 +155,7 @@ impl FieldRow {
         } else {
             horizontal_row(label, control, desc, label_width)
         };
+        let row = row.debug_selector(|| FIELD_ROW_SELECTOR.to_string());
 
         if !disabled {
             return row;
@@ -218,8 +226,9 @@ mod tests {
         TestAppContext, VisualTestContext, Window, div,
     };
 
-    use super::{FieldRow, field_row};
+    use super::{DEFAULT_LABEL_WIDTH, FieldRow, field_row};
     use crate::controls::Button;
+    use crate::tokens::Spacing;
 
     struct RowHost {
         clicks: Rc<Cell<usize>>,
@@ -302,6 +311,21 @@ mod tests {
         click_control(window);
 
         assert_eq!(clicks.get(), 1);
+    }
+
+    #[gpui::test]
+    fn a_horizontal_row_starts_its_control_after_the_label_column(cx: &mut TestAppContext) {
+        let (_clicks, window) = open_row(false, true, cx);
+
+        let row = window
+            .debug_bounds("field-row")
+            .expect("the row records its selector");
+        let control = control_bounds(window);
+
+        assert_eq!(
+            control.left() - row.left(),
+            DEFAULT_LABEL_WIDTH + Spacing::MD
+        );
     }
 
     #[gpui::test]

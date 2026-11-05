@@ -89,9 +89,11 @@ impl SegmentedItem {
         self
     }
 
-    /// The tooltip the segment draws: its reason, while it is disabled.
-    fn resolved_tooltip(&self) -> Option<&SharedString> {
-        self.disabled_reason.as_ref().filter(|_| self.disabled)
+    /// The tooltip the segment draws: its reason, while the segment is
+    /// disabled, whether the segment's own flag or the control around it
+    /// disables it.
+    fn resolved_tooltip(&self, disabled: bool) -> Option<&SharedString> {
+        self.disabled_reason.as_ref().filter(|_| disabled)
     }
 }
 
@@ -127,35 +129,44 @@ pub fn stepped_segment<'a>(ids: &[&'a str], active: &str, step: isize) -> Option
     (target != current).then(|| ids[target])
 }
 
-/// The nearest enabled segment `step` places away from `active` in `items`
-/// (negative steps go left), skipping the disabled ones and stopping at
-/// either end. `None` when `active` is not one of `items`, when `step` is
-/// zero, or when every segment between it and that end is disabled.
+/// The enabled segment `step` places away from `active` in `items` (negative
+/// steps go left), counting the enabled segments the way [`stepped_segment`]
+/// counts ids with the disabled ones removed. `None` when `active` is not one
+/// of `items`, when `step` is zero, or when the enabled segments run out in
+/// that direction before the step is spent.
 ///
-/// This is the arrow-key step of a control that draws a disabled segment:
-/// the one [`stepped_segment`] takes, with the disabled segments removed. A
-/// disabled segment that is active steps off to the next enabled one.
+/// A disabled segment costs no step, and an active segment that is disabled
+/// costs none either: from `A` with `B` disabled and `C` and `D` enabled, a
+/// step of two lands on `D`. The step stops rather than clamping onto the last
+/// segment, because there is no segment past the end to land on.
 pub fn stepped_enabled_segment<'a>(
     items: &'a [SegmentedItem],
     active: &str,
     step: isize,
 ) -> Option<&'a str> {
     let current = items.iter().position(|item| item.id.as_ref() == active)?;
+
     if step == 0 {
         return None;
     }
 
+    let mut remaining = step.unsigned_abs();
     let mut index = current;
 
     loop {
-        let next = index.checked_add_signed(step)?;
+        let next = index.checked_add_signed(step.signum())?;
         let item = items.get(next)?;
+        index = next;
 
-        if !item.disabled {
-            return Some(item.id.as_ref());
+        if item.disabled {
+            continue;
         }
 
-        index = next;
+        remaining -= 1;
+
+        if remaining == 0 {
+            return Some(item.id.as_ref());
+        }
     }
 }
 
@@ -197,7 +208,8 @@ impl SegmentBounds {
 ///   `Fields::DISABLED_OPACITY` (fill and content together, like a disabled
 ///   button) with the not-allowed cursor, no hover wash, no click handler and
 ///   a disabled accessibility node. The reason set with
-///   [`SegmentedItem::disabled_reason`] shows as its tooltip.
+///   [`SegmentedItem::disabled_reason`] shows as its tooltip, whether the
+///   segment's own flag or the control around it disables it.
 /// - Semantics: a control named with [`Self::group`] is a radio group
 ///   `segmented-<group>` whose segments are radio buttons
 ///   `segmented-<group>-<id>` (element id and accessibility id, unless the
@@ -373,7 +385,7 @@ impl RenderOnce for SegmentedControl {
             let on_accessible_select = on_select.clone();
             let accessible_label = item.label.clone();
             let count_owner = segment_id.clone();
-            let tooltip = item.resolved_tooltip().cloned();
+            let tooltip = item.resolved_tooltip(disabled).cloned();
 
             let segment_element_id = ElementId::from(segment_id.clone());
             let measured = segment_bounds
@@ -456,7 +468,7 @@ impl RenderOnce for SegmentedControl {
                     )
                 })
                 .when(is_focused, |this| this.child(focus_underline(tint)))
-                .when_some(tooltip.filter(|_| disabled), |segment, tip| {
+                .when_some(tooltip, |segment, tip| {
                     segment.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                 })
                 .when(!disabled, |segment| {
@@ -1096,28 +1108,107 @@ mod tests {
         let disabled = SegmentedItem::new("api", "API docs").disabled_reason(reason.clone());
         assert!(disabled.disabled, "a reason marks the segment disabled");
         assert_eq!(
-            disabled.resolved_tooltip().map(SharedString::as_ref),
+            disabled.resolved_tooltip(true).map(SharedString::as_ref),
             Some(reason.as_ref())
         );
 
         let muted = SegmentedItem::new("api", "API docs").disabled(true);
-        assert_eq!(muted.resolved_tooltip(), None, "no reason, no tooltip");
+        assert_eq!(muted.resolved_tooltip(true), None, "no reason, no tooltip");
 
         let plain = SegmentedItem::new("pdf", "PDF");
-        assert_eq!(plain.resolved_tooltip(), None);
+        assert_eq!(plain.resolved_tooltip(false), None);
 
         let enabled = SegmentedItem::new("api", "API docs")
-            .disabled_reason(reason)
+            .disabled_reason(reason.clone())
             .disabled(false);
         assert_eq!(
-            enabled.resolved_tooltip(),
+            enabled.resolved_tooltip(false),
             None,
             "an enabled one shows none"
+        );
+        assert_eq!(
+            enabled.resolved_tooltip(true).map(SharedString::as_ref),
+            Some(reason.as_ref()),
+            "a locked control dims the segment and still says why"
+        );
+    }
+
+    const REPORT_REASON: &str = "Only a whole collection can be exported";
+
+    struct ReasonedSegments;
+
+    impl Render for ReasonedSegments {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                SegmentedControl::new(
+                    vec![
+                        SegmentedItem::new("pdf", "PDF"),
+                        // The reason is carried, and the segment's own flag is
+                        // clear: the locked control is what disables it.
+                        SegmentedItem::new("api", "API docs")
+                            .disabled_reason(REPORT_REASON)
+                            .disabled(false),
+                    ],
+                    "pdf",
+                    |_, _, _| {},
+                )
+                .group("report")
+                .disabled(true),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn a_locked_control_still_shows_a_segment_reason_on_hover(cx: &mut TestAppContext) {
+        use std::time::Duration;
+
+        use crate::accessibility::{FrameCapture, accessibility_node};
+
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::install(
+                crate::brand::Brand::neutral(),
+                crate::palette::PaletteMode::Dark,
+                crate::density::Density::Default,
+                cx,
+            );
+        });
+
+        let capture = std::sync::Arc::new(FrameCapture::default());
+        let observed = capture.clone();
+        let (_view, window) = cx.add_window_view(move |window, _cx| {
+            window.observe_frames(&observed);
+            window.refresh();
+            ReasonedSegments
+        });
+        window.run_until_parked();
+
+        let segment = window
+            .debug_bounds("segmented-report-api")
+            .expect("the segment is laid out");
+        window.simulate_mouse_move(segment.center(), None, Modifiers::default());
+        window.executor().advance_clock(Duration::from_millis(600));
+        window.run_until_parked();
+
+        let frame = capture.frame(window);
+
+        let (_node, tooltip) = frame
+            .nodes()
+            .find(|(_, node)| node.id() == "tooltip-popup")
+            .expect("hovering a disabled segment draws a tooltip");
+        assert_eq!(
+            accessibility_node(&frame, "tooltip-popup").map(gpui::accesskit::Node::role),
+            Some(Role::Tooltip)
+        );
+        assert_eq!(
+            tooltip.content_text(),
+            REPORT_REASON,
+            "the tooltip says why the segment is disabled"
         );
     }
 
     #[test]
-    fn the_arrow_step_skips_a_disabled_segment() {
+    fn the_arrow_step_counts_enabled_segments() {
         let stepping = |items: &[SegmentedItem], active: &str, step: isize| {
             stepped_enabled_segment(items, active, step).map(str::to_owned)
         };
@@ -1133,9 +1224,9 @@ mod tests {
         assert_eq!(
             stepping(&items, "csv", 1),
             Some("api".to_owned()),
-            "a disabled active segment steps off"
+            "the disabled active segment costs no step"
         );
-        assert_eq!(stepping(&items, "csv", 0), None);
+        assert_eq!(stepping(&items, "json", 0), None);
         assert_eq!(stepping(&items, "missing", 1), None);
 
         let all_disabled = [
@@ -1147,6 +1238,41 @@ mod tests {
             None,
             "nothing enabled to step to"
         );
+    }
+
+    #[test]
+    fn a_step_of_two_lands_two_enabled_segments_away() {
+        let stepping = |items: &[SegmentedItem], active: &str, step: isize| {
+            stepped_enabled_segment(items, active, step).map(str::to_owned)
+        };
+        let items = [
+            SegmentedItem::new("a", "A"),
+            SegmentedItem::new("b", "B").disabled(true),
+            SegmentedItem::new("c", "C"),
+            SegmentedItem::new("d", "D"),
+        ];
+
+        assert_eq!(
+            stepping(&items, "a", 2),
+            Some("d".to_owned()),
+            "B costs no step"
+        );
+        assert_eq!(stepping(&items, "d", -2), Some("a".to_owned()));
+        assert_eq!(
+            stepping(&items, "a", 3),
+            None,
+            "there are only three enabled segments"
+        );
+        assert_eq!(stepping(&items, "c", 2), None);
+
+        assert_eq!(
+            stepping(&items, "b", 1),
+            Some("c".to_owned()),
+            "a disabled active segment starts at C"
+        );
+        assert_eq!(stepping(&items, "b", 2), Some("d".to_owned()));
+        assert_eq!(stepping(&items, "b", -1), Some("a".to_owned()));
+        assert_eq!(stepping(&items, "b", -2), None);
     }
 
     #[test]
