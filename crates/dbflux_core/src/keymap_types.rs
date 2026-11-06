@@ -1664,6 +1664,24 @@ impl ContextId {
         }
     }
 
+    /// The predicate that keeps a binding's key out of a focused text field
+    /// inside this context, for the contexts that hold text fields of their
+    /// own.
+    ///
+    /// A text input binds no printable key itself, so a bare letter bound at
+    /// the window root takes the character before the field ever sees it.
+    /// The keymap answers that by narrowing the binding to `!Input`; `None`
+    /// leaves the binding on the context's default predicate, which is what
+    /// every context without a text field wants.
+    pub fn predicate_outside_input(&self) -> Option<&'static str> {
+        match self {
+            ContextId::Results => Some("Results && !Modal && !Input"),
+            ContextId::Audit => Some("Audit && !Modal && !Input"),
+            ContextId::Inspector => Some("Inspector && !Modal && !Input"),
+            _ => None,
+        }
+    }
+
     /// Whether this context's identifier is set by one element on itself
     /// rather than by a window root for the context owning the keyboard.
     pub fn is_element_context(&self) -> bool {
