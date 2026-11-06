@@ -6,10 +6,11 @@ use aws_sdk_secretsmanager::types::{
     Filter, FilterNameStringType, RotationRulesType, SecretListEntry, Tag,
 };
 use aws_smithy_types::DateTime as SmithyDateTime;
+use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
-    DbError, FormattedError, SecretDetails, SecretListPage, SecretListRequest, SecretRotation,
-    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
-    SecretValue,
+    DbError, FormattedError, SecretDetails, SecretListPage, SecretListRequest, SecretPayload,
+    SecretPutRequest, SecretRotation, SecretStoreCapabilities, SecretStoreDescriptor,
+    SecretStoreSource, SecretSummary, SecretTag, SecretValue, SecretVersionStage,
 };
 
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
@@ -115,6 +116,9 @@ const CURRENT_STAGE: &str = "AWSCURRENT";
 /// omitted from responses in that case.
 const DEFAULT_KMS_KEY: &str = "aws/secretsmanager";
 
+/// Staging label a `Pending` write attaches to the new version.
+const PENDING_STAGE: &str = "AWSPENDING";
+
 pub(crate) struct SecretsManagerStore {
     client: Client,
     config: AwsSecretsProfileConfig,
@@ -132,7 +136,8 @@ impl SecretsManagerStore {
                 SecretStoreCapabilities::VERSIONS
                     | SecretStoreCapabilities::VERSION_LABELS
                     | SecretStoreCapabilities::ROTATION
-                    | SecretStoreCapabilities::SOFT_DELETE,
+                    | SecretStoreCapabilities::SOFT_DELETE
+                    | SecretStoreCapabilities::WRITE,
             ),
         }
     }
@@ -331,6 +336,92 @@ impl SecretStoreSource for SecretsManagerStore {
             )
         })
     }
+
+    /// One `PutSecretValue` call with the new payload, after the checks the
+    /// service does not make.
+    ///
+    /// Secrets another service owns are read only in DBFlux, and AWS does not
+    /// enforce that, so the metadata is asked for first and the write is
+    /// refused with the owning service named. A secret scheduled for deletion
+    /// enforces itself: the service rejects `PutSecretValue` with
+    /// `InvalidRequestException`, which the error formatter already maps.
+    fn put_value(&self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+        self.descriptor.ensure_can_write(&request.name)?;
+
+        let metadata = runtime()
+            .block_on(
+                self.client
+                    .describe_secret()
+                    .secret_id(&request.name)
+                    .send(),
+            )
+            .map_err(|error| self.operation_error(&error, Some(&request.name)))?;
+
+        if let Some(refusal) = managed_write_refusal_for(metadata.owning_service(), &request.name) {
+            return Err(refusal);
+        }
+
+        let mut call = self.client.put_secret_value().secret_id(&request.name);
+        call = match put_payload(&request.payload) {
+            PutPayload::Text(text) => call.secret_string(text),
+            PutPayload::Binary(bytes) => call.secret_binary(Blob::new(bytes)),
+        };
+
+        if let Some(label) = write_stage_label(request.stage) {
+            call = call.version_stages(label);
+        }
+
+        let output = runtime()
+            .block_on(call.send())
+            .map_err(|error| self.operation_error(&error, Some(&request.name)))?;
+
+        Ok(SecretValue {
+            version: output.version_id().map(ToString::to_string),
+            payload: request.payload.clone(),
+        })
+    }
+}
+
+/// The staging label the requested write stage maps to. `None` keeps the
+/// service default, under which a write moves `AWSCURRENT` to the new
+/// version without naming it, the way the console's own edit does.
+pub(crate) fn write_stage_label(stage: Option<SecretVersionStage>) -> Option<&'static str> {
+    match stage {
+        None | Some(SecretVersionStage::Current) => None,
+        Some(SecretVersionStage::Pending) => Some(PENDING_STAGE),
+    }
+}
+
+/// The value fields a `PutSecretValue` call carries, mapped from the seam's
+/// payload. Exactly one is set, like `GetSecretValue`'s answer.
+pub(crate) enum PutPayload {
+    Text(String),
+    Binary(Vec<u8>),
+}
+
+pub(crate) fn put_payload(payload: &SecretPayload) -> PutPayload {
+    match payload {
+        SecretPayload::Text(text) => PutPayload::Text(text.expose_secret().to_owned()),
+        SecretPayload::Binary(bytes) => PutPayload::Binary(bytes.expose_secret().to_vec()),
+    }
+}
+
+/// DBFlux keeps secrets another service owns read only (see
+/// `SecretSummary::is_managed`), and AWS does not enforce it, so a write to
+/// one is refused before the write call, naming the store, the owning
+/// service and the secret. `None` for an unmanaged secret, which the write
+/// proceeds with.
+pub(crate) fn managed_write_refusal_for(owning: Option<&str>, name: &str) -> Option<DbError> {
+    owning.map(|service| managed_write_refusal(service, name))
+}
+
+pub(crate) fn managed_write_refusal(service: &str, name: &str) -> DbError {
+    DbError::PermissionDenied(
+        FormattedError::new(format!(
+            "Secrets Manager secret \"{name}\" is managed by {service} and is read only"
+        ))
+        .with_hint("Its value is maintained by the service that owns it."),
+    )
 }
 
 fn clamp_page_size(page_size: u32) -> i32 {

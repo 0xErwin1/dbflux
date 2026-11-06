@@ -1,5 +1,5 @@
 use dbflux_core::chrono;
-use dbflux_core::secrecy::SecretString;
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     Connection, ConnectionProfile, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError,
     DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
@@ -10,8 +10,9 @@ use dbflux_core::{
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use dbflux_core::{
-    SecretDetails, SecretListPage, SecretListRequest, SecretRotation, SecretStoreCapabilities,
-    SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag, SecretValue,
+    SecretDetails, SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest,
+    SecretRotation, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
+    SecretSummary, SecretTag, SecretValue, SecretVersionStage,
 };
 use dbflux_driver_cloudwatch::CLOUDWATCH_FORM;
 use dbflux_driver_dynamodb::DYNAMODB_FORM;
@@ -84,6 +85,7 @@ struct FakeDriverState {
     refuse_read_only: AtomicBool,
     delete_row_errors: RwLock<Vec<(dbflux_core::Value, String)>>,
     secret_store_calls: Mutex<FakeSecretStoreCalls>,
+    secret_write_errors: RwLock<Vec<(String, String)>>,
     region_switch_enabled: AtomicBool,
     available_regions: RwLock<Vec<String>>,
     region_list_error: RwLock<Option<String>>,
@@ -215,6 +217,17 @@ impl FakeDriver {
         message: impl Into<String>,
     ) -> Self {
         rwlock_write(&self.state.delete_row_errors).push((value, message.into()));
+        self
+    }
+
+    /// Fails `put_value` for the secret `name`, the way a denied IAM
+    /// permission fails a write.
+    pub fn with_secret_write_error(
+        self,
+        name: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        rwlock_write(&self.state.secret_write_errors).push((name.into(), message.into()));
         self
     }
 
@@ -1984,6 +1997,251 @@ mod tests {
         ));
         assert!(connection.execute(&QueryRequest::new("SELECT 1")).is_ok());
     }
+    use dbflux_core::secrecy::ExposeSecret;
+
+    use super::*;
+
+    fn connected() -> (FakeDriver, Box<dyn Connection>) {
+        let driver = FakeDriver::new(DbKind::AwsSecrets);
+        let profile = ConnectionProfile::new_with_driver(
+            "fake-aws-secrets",
+            DbKind::AwsSecrets,
+            "builtin:fake-aws-secrets",
+            DbConfig::default_aws_secrets(),
+        );
+        let connection = driver.connect(&profile).expect("the fake driver connects");
+        (driver, connection)
+    }
+
+    fn exposed_text(value: &SecretValue) -> String {
+        match &value.payload {
+            SecretPayload::Text(text) => text.expose_secret().to_string(),
+            SecretPayload::Binary(_) => panic!("expected a text payload"),
+        }
+    }
+
+    fn exposed_bytes(value: &SecretValue) -> Vec<u8> {
+        match &value.payload {
+            SecretPayload::Binary(bytes) => bytes.expose_secret().to_vec(),
+            SecretPayload::Text(_) => panic!("expected a binary payload"),
+        }
+    }
+
+    /// A write becomes the current version and is recorded as the `secrecy`
+    /// type it traveled in.
+    #[test]
+    fn a_secret_write_is_recorded_and_becomes_the_current_value() {
+        let (driver, connection) = connected();
+        let secrets = connection
+            .secret_store(FAKE_SECRETS_STORE_ID)
+            .expect("the fake secrets store exists");
+
+        let response = secrets
+            .put_value(&SecretPutRequest::text(
+                "prod/notify/webhook-token",
+                "new webhook token",
+            ))
+            .expect("the fake secrets store advertises WRITE");
+
+        assert_eq!(response.version.as_deref(), Some("v-written-1"));
+
+        let calls = driver.secret_store_calls();
+        assert_eq!(calls.put_requests.len(), 1);
+        assert_eq!(calls.put_requests[0].0, FAKE_SECRETS_STORE_ID);
+        assert_eq!(calls.put_requests[0].1.name, "prod/notify/webhook-token");
+        assert_eq!(calls.put_requests[0].1.stage, None);
+        assert!(!format!("{calls:?}").contains("new webhook token"));
+
+        let current = secrets
+            .get_value("prod/notify/webhook-token", None)
+            .expect("the written value is readable");
+        assert_eq!(exposed_text(&current), "new webhook token");
+        assert_eq!(current.version.as_deref(), Some("v-written-1"));
+    }
+
+    #[test]
+    fn a_staged_write_is_recorded_without_moving_the_current_value() {
+        let (driver, connection) = connected();
+        let secrets = connection
+            .secret_store(FAKE_SECRETS_STORE_ID)
+            .expect("the fake secrets store exists");
+
+        let response = secrets
+            .put_value(
+                &SecretPutRequest::text("prod/notify/webhook-token", "pending value")
+                    .with_stage(SecretVersionStage::Pending),
+            )
+            .expect("the fake secrets store advertises WRITE");
+
+        assert_eq!(response.version.as_deref(), Some("v-written-1"));
+        assert_eq!(driver.secret_store_calls().put_requests.len(), 1);
+
+        let current = secrets
+            .get_value("prod/notify/webhook-token", None)
+            .expect("the fake keeps the current value readable");
+        assert_eq!(exposed_text(&current), FAKE_SECRET_PLAINTEXT);
+    }
+
+    #[test]
+    fn a_managed_secret_refuses_the_write_and_keeps_its_value() {
+        let (driver, connection) = connected();
+        let secrets = connection
+            .secret_store(FAKE_SECRETS_STORE_ID)
+            .expect("the fake secrets store exists");
+
+        let error = secrets
+            .put_value(&SecretPutRequest::text("prod/db/master", "replaced"))
+            .expect_err("a managed secret is read only");
+        let rendered = error.to_string();
+        assert!(rendered.contains("rds"), "{rendered}");
+        assert!(rendered.contains("prod/db/master"), "{rendered}");
+        assert!(!rendered.contains("replaced"), "{rendered}");
+        assert!(
+            driver.secret_store_calls().put_requests.is_empty(),
+            "the driver sends no put at all: the refusal precedes the write"
+        );
+
+        let current = secrets
+            .get_value("prod/db/master", None)
+            .expect("the value survived the refused write");
+        assert_ne!(exposed_text(&current), "replaced");
+    }
+
+    #[test]
+    fn a_scheduled_deletion_refuses_the_write() {
+        let (_, connection) = connected();
+        let secrets = connection
+            .secret_store(FAKE_SECRETS_STORE_ID)
+            .expect("the fake secrets store exists");
+
+        let error = secrets
+            .put_value(&SecretPutRequest::text(
+                "prod/deploy/legacy-token",
+                "replaced",
+            ))
+            .expect_err("a deleted secret accepts no writes");
+
+        let rendered = error.to_string();
+        assert!(rendered.contains("deletion"), "{rendered}");
+        assert!(rendered.contains("Secrets Manager"), "{rendered}");
+        assert!(!rendered.contains("replaced"), "{rendered}");
+    }
+
+    #[test]
+    fn a_write_to_a_missing_secret_is_not_found() {
+        let (_, connection) = connected();
+        let secrets = connection
+            .secret_store(FAKE_SECRETS_STORE_ID)
+            .expect("the fake secrets store exists");
+
+        let error = secrets
+            .put_value(&SecretPutRequest::text("prod/missing", "value"))
+            .expect_err("a missing secret accepts no writes");
+
+        assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+    }
+
+    #[test]
+    fn a_write_can_be_told_to_fail() {
+        let driver = FakeDriver::new(DbKind::AwsSecrets)
+            .with_secret_write_error("prod/notify/webhook-token", "put was denied by the fixture");
+        let profile = ConnectionProfile::new_with_driver(
+            "fake-aws-secrets",
+            DbKind::AwsSecrets,
+            "builtin:fake-aws-secrets",
+            DbConfig::default_aws_secrets(),
+        );
+        let connection = driver.connect(&profile).expect("the fake driver connects");
+        let secrets = connection
+            .secret_store(FAKE_SECRETS_STORE_ID)
+            .expect("the fake secrets store exists");
+
+        let error = secrets
+            .put_value(&SecretPutRequest::text(
+                "prod/notify/webhook-token",
+                "replaced",
+            ))
+            .expect_err("the fixture refuses the write");
+
+        assert!(
+            matches!(error, DbError::PermissionDenied(ref formatted) if formatted.message.contains("denied by the fixture")),
+            "{error}"
+        );
+
+        let current = secrets
+            .get_value("prod/notify/webhook-token", None)
+            .expect("the failed write did not change the value");
+        assert_eq!(exposed_text(&current), FAKE_SECRET_PLAINTEXT);
+    }
+
+    #[test]
+    fn a_binary_write_reaches_the_fake_store_as_bytes() {
+        let (_, connection) = connected();
+        let secrets = connection
+            .secret_store(FAKE_SECRETS_STORE_ID)
+            .expect("the fake secrets store exists");
+
+        let response = secrets
+            .put_value(&SecretPutRequest::binary(
+                "prod/tls/signing-key",
+                vec![1, 2, 3],
+            ))
+            .expect("the fake secrets store advertises WRITE");
+
+        assert_eq!(response.version.as_deref(), Some("v-written-1"));
+
+        let current = secrets
+            .get_value("prod/tls/signing-key", None)
+            .expect("the written bytes are readable");
+        assert_eq!(exposed_bytes(&current), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn a_parameter_write_overwrites_and_bumps_the_version() {
+        let (driver, connection) = connected();
+        let parameters = connection
+            .secret_store(FAKE_PARAMETER_STORE_ID)
+            .expect("the fake parameter store exists");
+
+        let response = parameters
+            .put_value(&SecretPutRequest::text(
+                "/app/prod/db/host",
+                "db.new.internal",
+            ))
+            .expect("the fake parameter store advertises WRITE");
+
+        assert_eq!(response.version.as_deref(), Some("4"));
+        assert!(driver.secret_store_calls().put_requests.len() == 1);
+
+        let current = parameters
+            .get_value("/app/prod/db/host", None)
+            .expect("the overwritten value is readable");
+        assert_eq!(exposed_text(&current), "db.new.internal");
+        assert_eq!(current.version.as_deref(), Some("4"));
+    }
+
+    #[test]
+    fn a_parameter_store_refuses_binary_and_pending_writes() {
+        let (_, connection) = connected();
+        let parameters = connection
+            .secret_store(FAKE_PARAMETER_STORE_ID)
+            .expect("the fake parameter store exists");
+
+        let binary = SecretPutRequest::binary("/app/prod/db/host", vec![0]);
+        let Err(DbError::NotSupported(refusal)) = parameters.put_value(&binary) else {
+            panic!("a binary value has no parameter-store shape");
+        };
+        assert!(refusal.contains("Parameter Store"), "{refusal}");
+        assert!(refusal.contains("/app/prod/db/host"), "{refusal}");
+
+        let staged = SecretPutRequest::text("/app/prod/db/host", "db")
+            .with_stage(SecretVersionStage::Pending);
+        let Err(DbError::NotSupported(refusal)) = parameters.put_value(&staged) else {
+            panic!("a pending write has no parameter-store shape");
+        };
+        assert!(refusal.contains("Parameter Store"), "{refusal}");
+        assert!(refusal.contains("/app/prod/db/host"), "{refusal}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1996,6 +2254,10 @@ pub struct FakeSecretStoreCalls {
     pub list_requests: Vec<(String, SecretListRequest)>,
     pub described: Vec<(String, String)>,
     pub value_requests: Vec<(String, String)>,
+    /// Every `put_value` attempt, as `(store_id, request)`. The payload
+    /// travels as the `secrecy` type `SecretPayload`, so it stays redacted in
+    /// `Debug` output.
+    pub put_requests: Vec<(String, SecretPutRequest)>,
 }
 
 /// Id of the fake flat store, shaped like AWS Secrets Manager.
@@ -2017,6 +2279,7 @@ pub const FAKE_SECRET_BINARY: &[u8] = &[0xde, 0xad, 0xbe, 0xef, 0x00, 0x42];
 pub const FAKE_KMS_DENIED_MESSAGE: &str =
     "User is not authorized to perform kms:Decrypt on key alias/app-prod";
 
+#[derive(Clone)]
 enum FakeSecretPayload {
     Text(String),
     Binary(Vec<u8>),
@@ -2024,6 +2287,18 @@ enum FakeSecretPayload {
     Unavailable(&'static str),
 }
 
+impl FakeSecretPayload {
+    /// The stored form of a payload the seam delivered. Values live only in
+    /// the fake's in-memory fixtures, never in a log.
+    fn for_write(payload: &SecretPayload) -> Self {
+        match payload {
+            SecretPayload::Text(text) => Self::Text(text.expose_secret().to_owned()),
+            SecretPayload::Binary(bytes) => Self::Binary(bytes.expose_secret().to_vec()),
+        }
+    }
+}
+
+#[derive(Clone)]
 struct FakeSecret {
     details: SecretDetails,
     payload: FakeSecretPayload,
@@ -2031,10 +2306,14 @@ struct FakeSecret {
 
 /// A deterministic in-memory secret store. A flat store matches its name
 /// filter as a prefix, a hierarchical one as a substring of the full name.
+/// Writes mutate the connection's own copy: a fake connection rebuilt later
+/// sees its fixtures again, while reads and writes through one connection
+/// agree.
 struct FakeSecretStore {
     descriptor: SecretStoreDescriptor,
-    secrets: Vec<FakeSecret>,
+    secrets: RwLock<Vec<FakeSecret>>,
     default_page_size: usize,
+    written_versions: AtomicUsize,
     state: Arc<FakeDriverState>,
 }
 
@@ -2060,14 +2339,15 @@ impl FakeSecretStore {
 
     /// Entries of one listing before paging, and the sub-paths found under
     /// the requested path.
-    fn listing(&self, request: &SecretListRequest) -> (Vec<&FakeSecret>, Vec<String>) {
+    fn listing(&self, request: &SecretListRequest) -> (Vec<FakeSecret>, Vec<String>) {
         let filter = request.name_filter.as_deref();
+        let secrets = rwlock_read(&self.secrets);
 
         if !self.hierarchical() {
-            let entries = self
-                .secrets
+            let entries = secrets
                 .iter()
                 .filter(|secret| self.matches_filter(&secret.details.summary.name, filter))
+                .cloned()
                 .collect();
             return (entries, Vec::new());
         }
@@ -2076,7 +2356,7 @@ impl FakeSecretStore {
         let mut entries = Vec::new();
         let mut child_paths = Vec::new();
 
-        for secret in &self.secrets {
+        for secret in secrets.iter() {
             let name = &secret.details.summary.name;
             let Some(rest) = name.strip_prefix(path.as_str()) else {
                 continue;
@@ -2091,7 +2371,7 @@ impl FakeSecretStore {
                 }
                 _ => {
                     if self.matches_filter(name, filter) {
-                        entries.push(secret);
+                        entries.push(secret.clone());
                     }
                 }
             }
@@ -2100,11 +2380,23 @@ impl FakeSecretStore {
         (entries, child_paths)
     }
 
-    fn find(&self, name: &str) -> Result<&FakeSecret, DbError> {
-        self.secrets
+    /// The stored copy of one secret, cloned so no read lock escapes this
+    /// method.
+    fn find(&self, name: &str) -> Result<FakeSecret, DbError> {
+        rwlock_read(&self.secrets)
             .iter()
             .find(|secret| secret.details.summary.name == name)
+            .cloned()
             .ok_or_else(|| DbError::object_not_found(format!("Secret {name} not found")))
+    }
+
+    /// Deterministic version id of the next flat-store write.
+    fn next_written_version(&self) -> String {
+        let count = self
+            .written_versions
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
+        format!("v-written-{count}")
     }
 }
 
@@ -2112,7 +2404,6 @@ impl SecretStoreSource for FakeSecretStore {
     fn descriptor(&self) -> &SecretStoreDescriptor {
         &self.descriptor
     }
-
     /// Pages by offset: the page token is the index of the first entry of
     /// the next page. Every page repeats the full set of sub-paths, which is
     /// what a real store may do, so callers must merge them.
@@ -2154,7 +2445,7 @@ impl SecretStoreSource for FakeSecretStore {
             .described
             .push((self.descriptor.id.clone(), name.to_string()));
 
-        self.find(name).map(|secret| secret.details.clone())
+        self.find(name).map(|secret| secret.details)
     }
 
     fn get_value(&self, name: &str, _version: Option<&str>) -> Result<SecretValue, DbError> {
@@ -2172,6 +2463,145 @@ impl SecretStoreSource for FakeSecretStore {
             FakeSecretPayload::Unavailable(message) => Err(DbError::query_failed(*message)),
         }
     }
+
+    /// One overwrite, following the rules the real stores keep: secrets
+    /// another service owns are refused before the write (that is a
+    /// DBFlux-side refusal the AWS driver makes too), and everything else is
+    /// handed to the modeled service. The service answers a put on a secret
+    /// scheduled for deletion with the rejection this fake returns, the way
+    /// `Unavailable` answers a read of such a secret; a `Current` write
+    /// becomes the current version, and a `Pending` write moves no current
+    /// value (the fake keeps one version per secret). The write-failure knob
+    /// makes the delivery to the store fail without touching the value.
+    ///
+    /// Only a write the modeled service accepted is recorded: a refused put
+    /// never reaches the store, so `put_requests` lists delivered writes.
+    fn put_value(&self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+        self.descriptor.ensure_can_write(&request.name)?;
+
+        let write_error = rwlock_read(&self.state.secret_write_errors)
+            .iter()
+            .find(|(name, _)| name == &request.name)
+            .map(|(_, message)| message.clone());
+        if let Some(message) = write_error {
+            return Err(DbError::permission_denied(message));
+        }
+
+        let response = if self.hierarchical() {
+            self.put_parameter_value(request)?
+        } else {
+            self.put_secret_value(request)?
+        };
+
+        mutex_lock(&self.state.secret_store_calls)
+            .put_requests
+            .push((self.descriptor.id.clone(), request.clone()));
+
+        Ok(response)
+    }
+}
+
+impl FakeSecretStore {
+    /// The flat store's overwrite: a new version replaces the current value.
+    fn put_secret_value(&self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+        let mut secrets = rwlock_write(&self.secrets);
+        let secret = secrets
+            .iter_mut()
+            .find(|secret| secret.details.summary.name == request.name)
+            .ok_or_else(|| {
+                DbError::object_not_found(format!("Secret {} not found", request.name))
+            })?;
+
+        if let Some(service) = &secret.details.summary.owning_service {
+            return Err(DbError::permission_denied(format!(
+                "Secrets Manager secret \"{}\" is managed by {service} and is read only",
+                request.name
+            )));
+        }
+        if secret.details.summary.deletion_scheduled_for.is_some() {
+            // The service itself rejects a put on a secret pending deletion,
+            // so this answer models the service state, not a local policy —
+            // the same answer `Unavailable` gives a read of such a secret.
+            return Err(DbError::query_failed(
+                "Secrets Manager secret is scheduled for deletion; its value cannot be written",
+            ));
+        }
+
+        let version = self.next_written_version();
+        if request.stage == Some(SecretVersionStage::Pending) {
+            return Ok(SecretValue {
+                version: Some(version),
+                payload: request.payload.clone(),
+            });
+        }
+
+        secret.details.summary.version = Some(version.clone());
+        secret.payload = FakeSecretPayload::for_write(&request.payload);
+
+        Ok(SecretValue {
+            version: Some(version),
+            payload: request.payload.clone(),
+        })
+    }
+
+    /// The hierarchical store's overwrite, shaped like SSM `PutParameter`:
+    /// no staging labels and text values only, and the numeric version moves.
+    fn put_parameter_value(&self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+        if let Some(refusal) = parameter_write_refusal(request) {
+            return Err(refusal);
+        }
+
+        let mut secrets = rwlock_write(&self.secrets);
+        let secret = secrets
+            .iter_mut()
+            .find(|secret| secret.details.summary.name == request.name)
+            .ok_or_else(|| {
+                DbError::object_not_found(format!("Parameter {} not found", request.name))
+            })?;
+
+        let current = secret
+            .details
+            .summary
+            .version
+            .as_deref()
+            .and_then(|version| version.parse::<u64>().ok())
+            .ok_or_else(|| {
+                DbError::query_failed(format!(
+                    "Parameter {} has no version to overwrite",
+                    request.name
+                ))
+            })?;
+        let version = (current.wrapping_add(1)).to_string();
+
+        secret.details.summary.version = Some(version.clone());
+        secret.payload = FakeSecretPayload::for_write(&request.payload);
+
+        Ok(SecretValue {
+            version: Some(version),
+            payload: request.payload.clone(),
+        })
+    }
+}
+
+/// Why this fake parameter store cannot take a write: no staging labels and
+/// text values only, the refusals the AWS driver makes before its call,
+/// worded like the driver's and naming the store and the parameter.
+fn parameter_write_refusal(request: &SecretPutRequest) -> Option<DbError> {
+    let name = &request.name;
+
+    if request.stage == Some(SecretVersionStage::Pending) {
+        return Some(DbError::NotSupported(format!(
+            "Parameter Store has no staging labels; the write to \"{name}\" cannot be staged."
+        )));
+    }
+
+    if matches!(request.payload, SecretPayload::Binary(_)) {
+        return Some(DbError::NotSupported(format!(
+            "Parameter Store stores values as text only; the write to \"{name}\" was refused."
+        )));
+    }
+
+    None
 }
 
 fn fake_time(month: u32, day: u32, hour: u32) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -2209,10 +2639,12 @@ fn fake_secret_stores(state: &Arc<FakeDriverState>) -> Vec<FakeSecretStore> {
                 SecretStoreCapabilities::VERSIONS
                     | SecretStoreCapabilities::VERSION_LABELS
                     | SecretStoreCapabilities::ROTATION
-                    | SecretStoreCapabilities::SOFT_DELETE,
+                    | SecretStoreCapabilities::SOFT_DELETE
+                    | SecretStoreCapabilities::WRITE,
             ),
-            secrets: fake_flat_secrets(),
+            secrets: RwLock::new(fake_flat_secrets()),
             default_page_size: 4,
+            written_versions: AtomicUsize::new(0),
             state: state.clone(),
         },
         FakeSecretStore {
@@ -2221,10 +2653,12 @@ fn fake_secret_stores(state: &Arc<FakeDriverState>) -> Vec<FakeSecretStore> {
                 "Parameter Store",
                 SecretStoreCapabilities::VERSIONS
                     | SecretStoreCapabilities::HIERARCHICAL
-                    | SecretStoreCapabilities::TYPED_VALUES,
+                    | SecretStoreCapabilities::TYPED_VALUES
+                    | SecretStoreCapabilities::WRITE,
             ),
-            secrets: fake_parameters(),
+            secrets: RwLock::new(fake_parameters()),
             default_page_size: 2,
+            written_versions: AtomicUsize::new(0),
             state: state.clone(),
         },
     ]
@@ -2397,3 +2831,4 @@ fn fake_parameters() -> Vec<FakeSecret> {
         ),
     ]
 }
+// ---------------------------------------------------------------------------

@@ -1,11 +1,14 @@
 mod hierarchy;
 
 use aws_sdk_ssm::Client;
-use aws_sdk_ssm::types::{ParameterMetadata, ParameterStringFilter, ResourceTypeForTagging};
+use aws_sdk_ssm::types::{
+    ParameterMetadata, ParameterStringFilter, ParameterType, ResourceTypeForTagging,
+};
+use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
-    DbError, FormattedError, SecretDetails, SecretListPage, SecretListRequest,
-    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
-    SecretValue,
+    DbError, FormattedError, SecretDetails, SecretListPage, SecretListRequest, SecretPayload,
+    SecretPutRequest, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
+    SecretSummary, SecretTag, SecretValue, SecretVersionStage,
 };
 
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
@@ -37,7 +40,8 @@ impl ParameterStore {
                 "Parameter Store",
                 SecretStoreCapabilities::VERSIONS
                     | SecretStoreCapabilities::HIERARCHICAL
-                    | SecretStoreCapabilities::TYPED_VALUES,
+                    | SecretStoreCapabilities::TYPED_VALUES
+                    | SecretStoreCapabilities::WRITE,
             ),
         }
     }
@@ -234,6 +238,153 @@ impl SecretStoreSource for ParameterStore {
                 )
             })
     }
+
+    /// One `PutParameter` call with `Overwrite`, after the checks the shape
+    /// of the store demands.
+    ///
+    /// The call shape comes from [`put_parameter_call`], which decides
+    /// everything from the parameter's metadata alone: the existing type is
+    /// passed explicitly on every overwrite (`String`, `StringList` and
+    /// `SecureString`), so the write never relies on how the service resolves
+    /// an omitted type, and a `SecureString` keeps its KMS key — the write
+    /// re-encrypts, so an unknown key refuses the write instead of silently
+    /// moving the value to the account default key. A missing parameter is
+    /// the service's own `ParameterNotFound`, and a denied `kms:Encrypt`
+    /// fails the call — both through the existing error formatter.
+    fn put_value(&self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+        self.descriptor.ensure_can_write(&request.name)?;
+
+        // The shape refusals come before any call: a staged or binary write
+        // has no parameter-store shape, so the parameter is never asked for.
+        // `put_parameter_call` re-derives the same text, purely.
+        put_text(request)?;
+
+        let metadata = self.describe_metadata(&request.name)?;
+        let call = put_parameter_call(&metadata, request)?;
+
+        let mut fluent = self
+            .client
+            .put_parameter()
+            .name(&request.name)
+            .value(call.value)
+            .overwrite(true)
+            .r#type(call.parameter_type);
+
+        if let Some(key_id) = call.key_id {
+            fluent = fluent.key_id(key_id);
+        }
+
+        let output = runtime()
+            .block_on(fluent.send())
+            .map_err(|error| self.operation_error(&error, Some(&request.name)))?;
+
+        Ok(SecretValue {
+            version: Some(output.version().to_string()),
+            payload: request.payload.clone(),
+        })
+    }
+}
+
+/// The request fields a `PutParameter` overwrite sends, decided from the
+/// parameter's metadata and the put request alone. Deciding them here keeps
+/// the type and key rules unit-testable without an endpoint.
+#[derive(Debug)]
+pub(crate) struct PutParameterCall {
+    pub value: String,
+
+    /// The parameter's existing type, sent explicitly on every overwrite.
+    pub parameter_type: ParameterType,
+
+    /// The KMS key a `SecureString` re-encrypts with, and `None` for every
+    /// other type, which takes none.
+    pub key_id: Option<String>,
+}
+
+/// Builds the `PutParameter` overwrite fields from the parameter's metadata
+/// and the put request, refusing what cannot be sent honestly: a staged or
+/// binary write has no parameter-store shape, an unknown type refuses rather
+/// than guessing, and a `SecureString` without a reported key refuses rather
+/// than re-encrypting under the account default.
+pub(crate) fn put_parameter_call(
+    metadata: &ParameterMetadata,
+    request: &SecretPutRequest,
+) -> Result<PutParameterCall, DbError> {
+    let value = put_text(request)?;
+    let name = &request.name;
+    let parameter_type = overwrite_type(metadata.r#type(), name)?;
+
+    let key_id = if parameter_type == ParameterType::SecureString {
+        Some(existing_key_id(metadata, name)?.to_string())
+    } else {
+        None
+    };
+
+    Ok(PutParameterCall {
+        value,
+        parameter_type,
+        key_id,
+    })
+}
+
+/// The text a `PutParameter` overwrite carries, or the refusal that stops
+/// the write before any call. A staged write has no parameter-store shape,
+/// because the store versions by number instead of staging labels, and a
+/// binary payload has none either, because values are text only. Both
+/// refusals name the store and the parameter, never the value.
+pub(crate) fn put_text(request: &SecretPutRequest) -> Result<String, DbError> {
+    let name = &request.name;
+
+    if request.stage == Some(SecretVersionStage::Pending) {
+        return Err(DbError::NotSupported(format!(
+            "Parameter Store has no staging labels; the write to \"{name}\" cannot be staged."
+        )));
+    }
+
+    match &request.payload {
+        SecretPayload::Text(text) => Ok(text.expose_secret().to_owned()),
+        SecretPayload::Binary(_) => Err(DbError::NotSupported(format!(
+            "Parameter Store stores values as text only; the write to \"{name}\" was refused."
+        ))),
+    }
+}
+
+/// The type an overwrite passes to `PutParameter`: the parameter's existing
+/// type, sent explicitly on every overwrite, so `String`, `StringList` and
+/// `SecureString` all reach the service by name. The SDK's `PutParameter`
+/// model makes the type optional when updating; DBFlux does not rely on how
+/// the service resolves an omitted one. An unknown type refuses rather than
+/// guessing. The refusal names the store and the parameter.
+pub(crate) fn overwrite_type(
+    existing: Option<&ParameterType>,
+    name: &str,
+) -> Result<ParameterType, DbError> {
+    existing.cloned().ok_or_else(|| {
+        DbError::query_failed(format!(
+            "Parameter Store did not report a value type for \"{name}\"; \
+             overwriting it could not send the parameter's type explicitly."
+        ))
+    })
+}
+
+/// The KMS key a `SecureString` overwrite re-encrypts with.
+///
+/// A `SecureString` write re-encrypts the value, so the parameter keeps the
+/// key it is already encrypted with. A parameter whose metadata reports no
+/// key refuses instead: without the key the update would silently move the
+/// value to the account's default key, and changing how a value is
+/// protected is not part of writing it. The refusal names the store and the
+/// parameter.
+pub(crate) fn existing_key_id<'a>(
+    metadata: &'a ParameterMetadata,
+    name: &'a str,
+) -> Result<&'a str, DbError> {
+    metadata.key_id().ok_or_else(|| {
+        DbError::query_failed(format!(
+            "Parameter Store did not report the encryption key of \"{name}\"; \
+             the SecureString's key is unknown and overwriting it would \
+             re-encrypt the value with the account's default key."
+        ))
+    })
 }
 
 fn clamp_page_size(page_size: u32) -> i32 {

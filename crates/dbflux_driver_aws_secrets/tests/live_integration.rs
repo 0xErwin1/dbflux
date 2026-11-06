@@ -14,7 +14,7 @@ use aws_sdk_ssm::types::{ParameterType, Tag as ParameterTag};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     Connection, ConnectionProfile, DbConfig, DbDriver, DbError, DbKind, SecretListRequest,
-    SecretPayload, SecretStoreCapabilities, SecretStoreSource, SecretValue,
+    SecretPayload, SecretPutRequest, SecretStoreCapabilities, SecretStoreSource, SecretValue,
 };
 use dbflux_driver_aws_secrets::{AwsSecretsDriver, PARAMETER_STORE_ID, SECRETS_MANAGER_ID};
 use dbflux_test_support::containers;
@@ -156,6 +156,18 @@ impl Seeder {
         output.version()
     }
 
+    fn delete_secret(&self, name: &str) {
+        self.runtime
+            .block_on(
+                self.secrets
+                    .delete_secret()
+                    .secret_id(name)
+                    .recovery_window_in_days(7)
+                    .send(),
+            )
+            .expect("delete_secret");
+    }
+
     fn tag_parameter(&self, name: &str, key: &str, value: &str) {
         self.runtime
             .block_on(
@@ -213,6 +225,7 @@ fn connection_exposes_secrets_manager_then_parameter_store() -> Result<(), DbErr
                 | SecretStoreCapabilities::VERSION_LABELS
                 | SecretStoreCapabilities::ROTATION
                 | SecretStoreCapabilities::SOFT_DELETE
+                | SecretStoreCapabilities::WRITE
         ));
         assert_eq!(descriptors[1].id, PARAMETER_STORE_ID);
         assert_eq!(descriptors[1].label, "Parameter Store");
@@ -220,6 +233,7 @@ fn connection_exposes_secrets_manager_then_parameter_store() -> Result<(), DbErr
             SecretStoreCapabilities::VERSIONS
                 | SecretStoreCapabilities::HIERARCHICAL
                 | SecretStoreCapabilities::TYPED_VALUES
+                | SecretStoreCapabilities::WRITE
         ));
 
         connection.ping()
@@ -358,6 +372,133 @@ fn secrets_manager_missing_secret_is_object_not_found() -> Result<(), DbError> {
         ));
         assert!(matches!(
             secrets.describe("does-not-exist"),
+            Err(DbError::ObjectNotFound(_))
+        ));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn secrets_manager_put_value_writes_a_new_current_version() -> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        let first = seeder.secret_string("writeable", "first");
+
+        let connection = connect(&endpoint)?;
+        let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
+
+        let response = secrets.put_value(&SecretPutRequest::text("writeable", "second"))?;
+        let new_version = response.version.expect("a put returns the new version id");
+        assert_ne!(new_version, first);
+        let SecretPayload::Text(_) = response.payload else {
+            panic!("a text put stays text");
+        };
+
+        let current = secrets.get_value("writeable", None)?;
+        assert_eq!(text(&current), "second");
+        assert_eq!(current.version.as_deref(), Some(new_version.as_str()));
+
+        let details = secrets.describe("writeable")?;
+        assert_eq!(
+            details.summary.version.as_deref(),
+            Some(new_version.as_str())
+        );
+        assert!(details.version_labels.contains(&"AWSCURRENT".to_string()));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn secrets_manager_put_value_writes_binary() -> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        Seeder::new(&endpoint).secret_binary("binary-writeable", &[1, 2, 3]);
+
+        let connection = connect(&endpoint)?;
+        let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
+
+        let response =
+            secrets.put_value(&SecretPutRequest::binary("binary-writeable", vec![4, 5, 6]))?;
+        let new_version = response
+            .version
+            .clone()
+            .expect("a put returns the new version id");
+
+        let current = secrets.get_value("binary-writeable", None)?;
+        assert!(current.is_binary());
+        let SecretPayload::Binary(bytes) = current.payload else {
+            panic!("expected a binary payload");
+        };
+        assert_eq!(bytes.expose_secret(), &[4, 5, 6]);
+        assert_eq!(Some(new_version), current.version);
+
+        Ok(())
+    })
+}
+
+/// AWS rejects `PutSecretValue` on a secret scheduled for deletion itself,
+/// with `InvalidRequestException`. That code is not in the formatter's
+/// known-code lists, so the driver maps it to `DbError::QueryFailed` —
+/// which is the kind asserted here. LocalStack may answer a different code
+/// for the same situation; then this test fails with the mapped kind in the
+/// message instead of silently passing.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn secrets_manager_put_value_on_a_scheduled_deletion_is_refused() -> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        seeder.secret_string("doomed", "value");
+        seeder.delete_secret("doomed");
+
+        let connection = connect(&endpoint)?;
+        let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
+
+        let error = secrets
+            .put_value(&SecretPutRequest::text("doomed", "replaced"))
+            .expect_err("a deleted secret accepts no writes");
+
+        assert!(matches!(error, DbError::QueryFailed(_)), "{error}");
+        assert!(!error.to_string().contains("replaced"), "{error}");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn parameter_store_put_value_overwrites_and_bumps_the_version() -> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        let first = seeder.parameter("/svc/editable", "first", ParameterType::String);
+        seeder.parameter("/svc/token", "first", ParameterType::SecureString);
+
+        let connection = connect(&endpoint)?;
+        let parameters = store(connection.as_ref(), PARAMETER_STORE_ID);
+
+        let response = parameters.put_value(&SecretPutRequest::text("/svc/editable", "second"))?;
+        assert_eq!(response.version, Some((first + 1).to_string()));
+        let current = parameters.get_value("/svc/editable", None)?;
+        assert_eq!(text(&current), "second");
+
+        let secure = parameters.put_value(&SecretPutRequest::text("/svc/token", "second"))?;
+        assert_eq!(secure.version, Some("2".to_string()));
+        let details = parameters.describe("/svc/token")?;
+        assert_eq!(details.summary.value_type.as_deref(), Some("SecureString"));
+
+        // A comma list keeps its type: the driver sends the existing type
+        // explicitly on every overwrite instead of relying on how the
+        // service resolves an omitted `Type`.
+        seeder.parameter("/svc/list", "a,b", ParameterType::StringList);
+        parameters.put_value(&SecretPutRequest::text("/svc/list", "c,d"))?;
+        let list = parameters.describe("/svc/list")?;
+        assert_eq!(list.summary.value_type.as_deref(), Some("StringList"));
+        assert_eq!(text(&parameters.get_value("/svc/list", None)?), "c,d");
+
+        assert!(matches!(
+            parameters.put_value(&SecretPutRequest::text("/missing", "value")),
             Err(DbError::ObjectNotFound(_))
         ));
 
