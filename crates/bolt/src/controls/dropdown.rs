@@ -22,8 +22,8 @@ use gpui::prelude::*;
 use gpui::{
     Anchor, App, ClickEvent, Context, ElementId, EventEmitter, FocusHandle, FontWeight, Hsla,
     InteractiveElement, IntoElement, ParentElement, Pixels, Render, Role, ScrollHandle,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
-    anchored, canvas, deferred, div, point, px,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Window, anchored, canvas,
+    deferred, div, point, px,
 };
 use gpui_component::{ActiveTheme, IconName};
 
@@ -614,20 +614,6 @@ impl Dropdown {
         cx.notify();
     }
 
-    fn handle_menu_scroll_wheel(
-        &mut self,
-        event: &ScrollWheelEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let delta = event.delta.pixel_delta(px(1.0));
-        if delta.y < px(0.0) {
-            self.select_next_item(cx);
-        } else if delta.y > px(0.0) {
-            self.select_prev_item(cx);
-        }
-    }
-
     pub fn accept_selection(&mut self, cx: &mut Context<Self>) {
         if let Some(index) = self.highlighted_index {
             self.select_item(index, cx);
@@ -905,7 +891,6 @@ impl Dropdown {
             .py(Fields::MENU_PADDING_Y)
             .overflow_y_scroll()
             .track_scroll(&self.menu_scroll_handle)
-            .on_scroll_wheel(cx.listener(Self::handle_menu_scroll_wheel))
             .children(items);
 
         let menu = div()
