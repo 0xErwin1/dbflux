@@ -45,12 +45,14 @@ impl SecretStoreDocument {
     }
 
     /// Lists the current level from its first page. The selection, its
-    /// details and any retrieved value are dropped with the old listing.
+    /// details and any retrieved value are dropped with the old listing, and
+    /// a menu open over it would act on rows that no longer exist.
     pub fn load_first_page(&mut self, cx: &mut Context<Self>) {
         self.selected = None;
         self.details_generation = self.details_generation.wrapping_add(1);
         self.details = DetailsState::Idle;
         self.clear_value();
+        self.drop_context_menu();
 
         let generation = self.listing.begin(true);
         self.spawn_list(generation, None, cx);

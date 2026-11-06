@@ -3510,10 +3510,18 @@ document:
       body: "%{name} belongs to %{service}. %{service} rotates and updates it, so DBFlux shows it read only."
     action:
       copy_resource_id: "Copy ARN"
+    context_menu:
+      copy_name: "Copy name"
+      copy_path: "Copy path"
+      arn_loading: "The ARN arrives with the details…"
+      arn_missing: "The store reports no resource identifier"
+      arn_failed: "The details could not be loaded: %{error}"
     toast:
       value_copied: "Value copied to the clipboard"
       resource_id_copied: "ARN copied to the clipboard"
       error_copied: "Error copied to the clipboard"
+      name_copied: "Name copied to the clipboard"
+      path_copied: "Path copied to the clipboard"
     value:
       title: "Value"
       not_loaded: "Value not loaded"

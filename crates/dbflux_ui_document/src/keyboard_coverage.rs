@@ -722,6 +722,30 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
                 "copies one field of the value; the copy key copies the whole value",
             ),
         ),
+        // The entries of a row's right-click menu, each under its per-action
+        // id: the copies the pane actions `m` reaches (Copy name has no
+        // chord of its own; Copy ARN does, Ctrl+C on the selection), and the
+        // entries the toolbar keys retrieve and refresh.
+        (
+            "secret-menu-retrieve-value-*",
+            KeyboardPath::Command(Command::ToggleValuePanel),
+        ),
+        (
+            "secret-menu-copy-name-*",
+            KeyboardPath::Menu("secret-copy-name"),
+        ),
+        (
+            "secret-menu-copy-arn-*",
+            KeyboardPath::Command(Command::ResultsCopyCell),
+        ),
+        (
+            "secret-menu-copy-path-*",
+            KeyboardPath::Menu("secret-copy-path"),
+        ),
+        (
+            "secret-menu-refresh-*",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
     ],
 };
 

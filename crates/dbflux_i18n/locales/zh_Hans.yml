@@ -3510,10 +3510,18 @@ document:
       body: "%{name} 属于 %{service}。%{service} 负责轮换和更新它，因此 DBFlux 以只读方式显示。"
     action:
       copy_resource_id: "复制 ARN"
+    context_menu:
+      copy_name: "复制名称"
+      copy_path: "复制路径"
+      arn_loading: "ARN 将随详情一起加载…"
+      arn_missing: "存储未报告资源标识符"
+      arn_failed: "无法加载详情：%{error}"
     toast:
       value_copied: "已将值复制到剪贴板"
       resource_id_copied: "已将 ARN 复制到剪贴板"
       error_copied: "已将错误复制到剪贴板"
+      name_copied: "已将名称复制到剪贴板"
+      path_copied: "已将路径复制到剪贴板"
     value:
       title: "值"
       not_loaded: "值未加载"

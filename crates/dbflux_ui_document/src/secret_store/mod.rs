@@ -9,6 +9,7 @@
 //! closes. Behavior that differs between stores follows the store's
 //! `SecretStoreCapabilities`, never a driver id.
 
+mod context_menu;
 mod data;
 mod details;
 mod listing;
@@ -125,6 +126,14 @@ pub struct SecretStoreDocument {
     region_switch_in_flight: bool,
     /// The toolbar region picker, built only when the driver can switch.
     region_dropdown: Option<Entity<Dropdown>>,
+    /// The open right-click menu of the listing, if any.
+    context_menu: Option<context_menu::SecretContextMenu>,
+    /// A chosen menu entry, queued by its click and run on the next render,
+    /// which has the window the action needs.
+    pending_menu_action: Option<context_menu::SecretMenuAction>,
+    /// The focus handle of the open menu's overlay, which takes the keyboard
+    /// while the menu is up.
+    context_menu_focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -274,6 +283,9 @@ impl SecretStoreDocument {
             regions_generation: 0,
             region_switch_in_flight: false,
             region_dropdown,
+            context_menu: None,
+            pending_menu_action: None,
+            context_menu_focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         };
 
@@ -373,6 +385,13 @@ impl SecretStoreDocument {
 
     pub fn set_active_tab(&mut self, active: bool) {
         self.is_active_tab = active;
+
+        // A menu belongs to the document being looked at: a tab that stopped
+        // being active closes it and drops an entry queued but not yet run;
+        // reactivating the same tab keeps what was open.
+        if !active {
+            self.drop_context_menu();
+        }
     }
 
     pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
@@ -381,6 +400,10 @@ impl SecretStoreDocument {
     }
 
     pub fn active_context(&self) -> ContextId {
+        if self.context_menu.is_some() {
+            return ContextId::ContextMenu;
+        }
+
         if self.focus_mode == SecretFocusMode::Search {
             return ContextId::TextInput;
         }
@@ -652,6 +675,35 @@ impl SecretStoreDocument {
         );
     }
 
+    /// Copies the selected secret's name. The one implementation behind the
+    /// context menu's Copy name entry and the pane action `m` reaches.
+    pub fn copy_selected_name(&mut self, cx: &mut Context<Self>) {
+        let Some(name) = self.selected_summary().map(|summary| summary.name.clone()) else {
+            return;
+        };
+
+        cx.write_to_clipboard(ClipboardItem::new_string(name));
+        copied_toast(
+            dbflux_i18n::t!("document.secret_store.toast.name_copied"),
+            cx,
+        );
+    }
+
+    /// Copies the selected sub-path. The one implementation behind the
+    /// context menu's Copy path entry and the pane action `m` reaches.
+    pub fn copy_selected_path(&mut self, cx: &mut Context<Self>) {
+        let Some(SecretRowKey::Path(path)) = self.selected.as_ref() else {
+            return;
+        };
+
+        let path = path.clone();
+        cx.write_to_clipboard(ClipboardItem::new_string(path));
+        copied_toast(
+            dbflux_i18n::t!("document.secret_store.toast.path_copied"),
+            cx,
+        );
+    }
+
     /// Copies the selected secret's provider-wide identifier (an ARN).
     pub fn copy_resource_id(&mut self, cx: &mut Context<Self>) {
         let DetailsState::Loaded(details) = &self.details else {
@@ -776,6 +828,27 @@ impl SecretStoreDocument {
             .icon(AppIcon::RefreshCcw),
         ];
 
+        // Each copy entry names the selection it acts on: Copy name for a
+        // secret, Copy path for a sub-path. The entry is only offered when a
+        // selection of its kind exists.
+        if self.selected_summary().is_some() {
+            actions.push(callback_action(
+                &target,
+                "secret-copy-name",
+                "document.secret_store.context_menu.copy_name",
+                Self::copy_selected_name,
+            ));
+        }
+
+        if matches!(self.selected, Some(SecretRowKey::Path(_))) {
+            actions.push(callback_action(
+                &target,
+                "secret-copy-path",
+                "document.secret_store.context_menu.copy_path",
+                Self::copy_selected_path,
+            ));
+        }
+
         if self.hierarchical() {
             actions.push(
                 command(
@@ -834,6 +907,10 @@ impl SecretStoreDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.context_menu.is_some() {
+            return self.dispatch_menu_command(cmd, window, cx);
+        }
+
         match cmd {
             Command::SelectNext => self.move_selection(1, cx),
             Command::SelectPrev => self.move_selection(-1, cx),
