@@ -1,5 +1,6 @@
 use aws_sdk_secretsmanager::error::{ProvideErrorMetadata, SdkError};
-use dbflux_core::{DbError, FormattedError};
+use dbflux_core::secrecy::ExposeSecret;
+use dbflux_core::{DbError, FormattedError, SecretPayload};
 
 use crate::driver::AwsSecretsProfileConfig;
 
@@ -231,6 +232,94 @@ fn with_target_prefix(target: &ErrorTarget, diagnostic_detail: String) -> String
     }
 
     format!("{fragment}, {diagnostic_detail}")
+}
+
+/// Marker a scrubbed value leaves behind, so the message still shows the
+/// reader that something was removed.
+const REDACTED: &str = "[redacted]";
+
+/// Removes a submitted value from a put error before it reaches the user.
+/// A service message that echoes the submitted value would print the very
+/// secret the write was carrying, so every field a `FormattedError` renders
+/// is scrubbed: the text value verbatim, a binary value as its lossy UTF-8
+/// rendering, the form a service echoing received bytes would produce. An
+/// empty value scrubs nothing, so `replace` cannot mangle the message.
+pub(crate) fn scrub_submitted_value(error: DbError, payload: &SecretPayload) -> DbError {
+    let submitted = match payload {
+        SecretPayload::Text(text) => text.expose_secret().to_owned(),
+        SecretPayload::Binary(bytes) => String::from_utf8_lossy(bytes.expose_secret()).into_owned(),
+    };
+
+    scrub_value_from_message(error, &submitted)
+}
+
+fn scrub_value_from_message(error: DbError, value: &str) -> DbError {
+    if value.is_empty() {
+        return error;
+    }
+
+    let scrub = |formatted: &mut FormattedError| {
+        formatted.message = formatted.message.replace(value, REDACTED);
+        if let Some(detail) = &mut formatted.detail {
+            *detail = detail.replace(value, REDACTED);
+        }
+        if let Some(hint) = &mut formatted.hint {
+            *hint = hint.replace(value, REDACTED);
+        }
+    };
+    let scrub_string = |message: &mut String| *message = message.replace(value, REDACTED);
+
+    match error {
+        DbError::ConnectionFailed(mut formatted) => {
+            scrub(&mut formatted);
+            DbError::ConnectionFailed(formatted)
+        }
+        DbError::QueryFailed(mut formatted) => {
+            scrub(&mut formatted);
+            DbError::QueryFailed(formatted)
+        }
+        DbError::AuthFailed(mut formatted) => {
+            scrub(&mut formatted);
+            DbError::AuthFailed(formatted)
+        }
+        DbError::ConstraintViolation(mut formatted) => {
+            scrub(&mut formatted);
+            DbError::ConstraintViolation(formatted)
+        }
+        DbError::SyntaxError(mut formatted) => {
+            scrub(&mut formatted);
+            DbError::SyntaxError(formatted)
+        }
+        DbError::PermissionDenied(mut formatted) => {
+            scrub(&mut formatted);
+            DbError::PermissionDenied(formatted)
+        }
+        DbError::ObjectNotFound(mut formatted) => {
+            scrub(&mut formatted);
+            DbError::ObjectNotFound(formatted)
+        }
+        DbError::NotSupported(mut message) => {
+            scrub_string(&mut message);
+            DbError::NotSupported(message)
+        }
+        DbError::InvalidProfile(mut message) => {
+            scrub_string(&mut message);
+            DbError::InvalidProfile(message)
+        }
+        DbError::ValueResolutionFailed(mut message) => {
+            scrub_string(&mut message);
+            DbError::ValueResolutionFailed(message)
+        }
+        DbError::Parse(mut message) => {
+            scrub_string(&mut message);
+            DbError::Parse(message)
+        }
+        DbError::Unsupported(mut message) => {
+            scrub_string(&mut message);
+            DbError::Unsupported(message)
+        }
+        other => other,
+    }
 }
 
 /// Maps a formatted error onto the `DbError` that fits a connect or probe

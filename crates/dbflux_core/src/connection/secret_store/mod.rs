@@ -9,7 +9,9 @@
 //! Listing and describing never fetch a value. A value is fetched only by
 //! `SecretStoreSource::get_value`, which the UI calls from an explicit user action
 //! and audits. Values travel as `secrecy` types, so they are redacted from
-//! `Debug` output and zeroed when dropped.
+//! `Debug` output and zeroed when dropped. A value is replaced only by
+//! `SecretStoreSource::put_value`, under the same rules, on stores whose
+//! descriptor advertises `SecretStoreCapabilities::WRITE`.
 //!
 //! Every type here is provider-neutral: no SDK type crosses the seam, so an
 //! external RPC driver can implement it.
@@ -45,6 +47,11 @@ bitflags! {
 
         /// Each entry declares a value type (`SecretSummary::value_type`).
         const TYPED_VALUES = 1 << 5;
+
+        /// Values can be replaced with a new version through
+        /// `SecretStoreSource::put_value`. A store that cannot write does not
+        /// advertise it, and the UI reads its secrets read only.
+        const WRITE = 1 << 6;
     }
 }
 
@@ -76,6 +83,22 @@ impl SecretStoreDescriptor {
 
     pub fn supports(&self, capability: SecretStoreCapabilities) -> bool {
         self.capabilities.contains(capability)
+    }
+
+    /// Refuses when this store cannot write a value: a store that does not
+    /// advertise `WRITE` rejects a put before any call, and
+    /// `SecretStoreSource::put_value` implementations begin with this check.
+    /// The refusal names the secret the caller asked to write, never its
+    /// value.
+    pub fn ensure_can_write(&self, name: &str) -> Result<(), DbError> {
+        if self.supports(SecretStoreCapabilities::WRITE) {
+            return Ok(());
+        }
+
+        Err(DbError::NotSupported(format!(
+            "Secret store \"{}\" ({}) does not support writing values; refused the write to \"{name}\".",
+            self.label, self.id
+        )))
     }
 }
 
@@ -240,11 +263,68 @@ pub struct SecretDetails {
     pub deleted_at: Option<DateTime<Utc>>,
 }
 
-/// A retrieved value.
-#[derive(Debug)]
+/// A retrieved or written value.
+#[derive(Clone, Debug)]
 pub enum SecretPayload {
     Text(SecretString),
     Binary(SecretSlice<u8>),
+}
+
+/// The version stage a value is written to.
+///
+/// What a store does with a stage is its own contract, and neither
+/// capability promises a staged write: a store with movable version labels
+/// stages it (Secrets Manager attaches `AWSPENDING` and moves no current
+/// value), and a store that versions by number has no staging labels and
+/// refuses a `Pending` write before any call, keeping the current value
+/// (Parameter Store).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SecretVersionStage {
+    /// The new version becomes the current one.
+    Current,
+
+    /// The new version is written without moving the current one, for
+    /// stores that stage versions; a store without a staging shape refuses
+    /// it instead of treating it as a `Current` write.
+    Pending,
+}
+
+/// A value to write, as `SecretStoreSource::put_value` receives it. The
+/// payload travels as `secrecy` types, so it is redacted from `Debug` output.
+#[derive(Debug, Clone)]
+pub struct SecretPutRequest {
+    /// Full name of the secret, including any path.
+    pub name: String,
+
+    /// The new value, as text or binary.
+    pub payload: SecretPayload,
+
+    /// Stage the new version is written to. `None` and `Current` make the new
+    /// version the current one.
+    pub stage: Option<SecretVersionStage>,
+}
+
+impl SecretPutRequest {
+    pub fn text(name: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            payload: SecretPayload::Text(SecretString::from(text.into())),
+            stage: None,
+        }
+    }
+
+    pub fn binary(name: impl Into<String>, bytes: Vec<u8>) -> Self {
+        Self {
+            name: name.into(),
+            payload: SecretPayload::Binary(SecretSlice::from(bytes)),
+            stage: None,
+        }
+    }
+
+    pub fn with_stage(mut self, stage: SecretVersionStage) -> Self {
+        self.stage = Some(stage);
+        self
+    }
 }
 
 /// The value of one version of a secret, as `SecretStoreSource::get_value`
@@ -367,6 +447,25 @@ pub trait SecretStoreSource: Send + Sync {
     /// version otherwise. A value the caller may not decrypt or read is an
     /// error (`DbError::PermissionDenied`), never an empty value.
     fn get_value(&self, name: &str, version: Option<&str>) -> Result<SecretValue, DbError>;
+
+    /// Writes `request` as a new version of the secret `request.name` names,
+    /// in the stage `request.stage` asks for, and returns the value as the
+    /// store reports it after the write, with the new version's identifier.
+    ///
+    /// A store that does not advertise `WRITE` refuses before any call, and
+    /// the default refuses too: writing exists only where a store implements
+    /// it. Like `get_value`, a write never logs, formats or stores the value
+    /// outside the `secrecy` types it travels in, and a failure carries the
+    /// store's reason only, never the value.
+    fn put_value(&self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+        self.descriptor().ensure_can_write(&request.name)?;
+
+        Err(DbError::NotSupported(format!(
+            "Secret store \"{}\" does not implement writing values; refused the write to \"{}\".",
+            self.descriptor().id,
+            request.name
+        )))
+    }
 }
 
 #[cfg(test)]

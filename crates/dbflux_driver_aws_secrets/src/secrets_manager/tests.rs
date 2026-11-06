@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use dbflux_core::SecretPayload;
+use dbflux_core::SecretVersionStage;
 use dbflux_core::secrecy::ExposeSecret;
+use dbflux_core::secrecy::SecretSlice;
+use dbflux_core::secrecy::SecretString;
 
 use super::*;
 
@@ -142,6 +145,89 @@ fn an_empty_page_with_a_next_token_keeps_the_listing() {
         true,
         false
     ));
+}
+
+/// A write carries an optional stage; only a staged write names its label
+/// explicitly, and `Current` keeps the service default that moves
+/// `AWSCURRENT` to the new version.
+#[test]
+fn a_write_stage_maps_to_its_service_label() {
+    assert_eq!(write_stage_label(None), None);
+    assert_eq!(write_stage_label(Some(SecretVersionStage::Current)), None);
+    assert_eq!(
+        write_stage_label(Some(SecretVersionStage::Pending)),
+        Some(PENDING_STAGE)
+    );
+}
+
+/// The real Secrets Manager store, built with a client that never reaches
+/// the network in this test: the descriptor is read, not called.
+fn offline_store() -> SecretsManagerStore {
+    let config = aws_sdk_secretsmanager::config::Builder::new()
+        .behavior_version(aws_sdk_secretsmanager::config::BehaviorVersion::latest())
+        .region(aws_sdk_secretsmanager::config::Region::new("us-east-1"))
+        .credentials_provider(aws_sdk_secretsmanager::config::Credentials::new(
+            "test", "test", None, None, "unit",
+        ))
+        .build();
+
+    SecretsManagerStore::new(
+        aws_sdk_secretsmanager::Client::from_conf(config),
+        AwsSecretsProfileConfig {
+            region: "us-east-1".to_string(),
+            profile: None,
+            access_key_id: None,
+            endpoint: None,
+        },
+    )
+}
+
+/// The store behind the real secrets asserts it can take writes through its
+/// own descriptor, not a literal built for the test.
+#[test]
+fn the_real_secrets_manager_store_advertises_write() {
+    assert!(
+        offline_store()
+            .descriptor()
+            .supports(SecretStoreCapabilities::WRITE)
+    );
+}
+
+#[test]
+fn a_payload_maps_onto_the_exclusive_put_fields() {
+    let text = put_payload(&SecretPayload::Text(SecretString::from("hunter2")));
+    assert!(matches!(text, PutPayload::Text(ref value) if value == "hunter2"));
+
+    let bytes = put_payload(&SecretPayload::Binary(SecretSlice::from(vec![0_u8, 1, 2])));
+    assert!(matches!(bytes, PutPayload::Binary(ref value) if value == &vec![0_u8, 1, 2]));
+}
+
+/// A managed secret refuses with the store, the owning service and the
+/// secret named; an unmanaged one does not refuse, so the write proceeds.
+#[test]
+fn a_managed_secret_refuses_and_an_unmanaged_one_proceeds() {
+    let refusal = managed_write_refusal_for(Some("rds"), "prod/db/master")
+        .expect("a managed secret refuses the write");
+
+    match &refusal {
+        DbError::PermissionDenied(formatted) => {
+            assert!(
+                formatted.message.contains("Secrets Manager"),
+                "{}",
+                formatted.message
+            );
+            assert!(formatted.message.contains("rds"), "{}", formatted.message);
+            assert!(
+                formatted.message.contains("prod/db/master"),
+                "{}",
+                formatted.message
+            );
+            assert!(formatted.hint.is_some(), "{}", formatted.message);
+        }
+        other => panic!("expected a permission denial, got {other}"),
+    }
+
+    assert!(managed_write_refusal_for(None, "prod/db/master").is_none());
 }
 
 /// A fallback listing keeps the `Name` filter on every page, so a token of one
