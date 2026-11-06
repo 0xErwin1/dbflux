@@ -67,12 +67,26 @@ impl KeymapLayer {
         self.bind(keys, command);
     }
 
-    /// The default predicate of the binding on `keys`.
+    /// The default predicate of the binding on `keys`: the context's own,
+    /// narrowed by `!Input` for a key a focused text field inside the context
+    /// would receive as typed text.
     pub fn predicate_for(&self, keys: &KeySequence) -> &'static str {
         self.predicates
             .get(keys)
             .copied()
-            .unwrap_or_else(|| self.context.default_predicate())
+            .unwrap_or_else(|| self.default_predicate_for(keys))
+    }
+
+    /// The predicate of a binding that carries no predicate of its own, which
+    /// the binding on `keys` inherits.
+    fn default_predicate_for(&self, keys: &KeySequence) -> &'static str {
+        if prints_text(keys.first()) {
+            if let Some(predicate) = self.context.predicate_outside_input() {
+                return predicate;
+            }
+        }
+
+        self.context.default_predicate()
     }
 
     /// Bindings of this layer in the order their keys were first bound.
@@ -111,16 +125,23 @@ impl KeymapLayer {
                 .get(keys)
                 .map(|command| command.action_id())
                 .unwrap_or_default();
+            let predicate = self.predicate_for(keys);
 
-            if let Some(predicate) = self.predicates.get(keys) {
-                layer.bind_with_predicate(keys.clone(), command, predicate);
-            } else {
-                layer.bind(keys.clone(), command);
-            }
+            layer.bind_with_predicate(keys.clone(), command, predicate);
         }
 
         layer
     }
+}
+
+/// Whether `chord` is a key a focused text field receives as typed text: a
+/// bare printable character or Space, with no Ctrl, Alt or platform modifier.
+/// Those are the keys a binding must not claim while a field has the keyboard;
+/// the arrows, Enter, the function keys and every modified chord are not.
+fn prints_text(chord: &KeyChord) -> bool {
+    let bare = !chord.modifiers.ctrl && !chord.modifiers.alt && !chord.modifiers.platform;
+
+    bare && (chord.key == "space" || chord.key.chars().count() == 1)
 }
 
 /// A borrowed, typed view of one layer of a [`KeymapStack`].

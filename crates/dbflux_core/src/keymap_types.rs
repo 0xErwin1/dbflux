@@ -1639,7 +1639,7 @@ impl ContextId {
             ContextId::Global => "Global && !Modal",
             ContextId::Sidebar => "Sidebar && !Modal",
             ContextId::Editor => "Editor && !Modal",
-            ContextId::Results => "Results && !Input && !Modal",
+            ContextId::Results => "Results && !Modal",
             ContextId::BackgroundTasks => "BackgroundTasks && !Modal",
             ContextId::Audit => "Audit && !Modal",
             ContextId::SchemaViz => "SchemaViz && !Modal",
@@ -1661,6 +1661,24 @@ impl ContextId {
             // hands its commands to the dialog, never to the document behind.
             ContextId::VimNormal => "VimNormal",
             context => context.as_gpui_context(),
+        }
+    }
+
+    /// The predicate that keeps a binding's key out of a focused text field
+    /// inside this context, for the contexts that hold text fields of their
+    /// own.
+    ///
+    /// A text input binds no printable key itself, so a bare letter bound at
+    /// the window root takes the character before the field ever sees it.
+    /// The keymap answers that by narrowing the binding to `!Input`; `None`
+    /// leaves the binding on the context's default predicate, which is what
+    /// every context without a text field wants.
+    pub fn predicate_outside_input(&self) -> Option<&'static str> {
+        match self {
+            ContextId::Results => Some("Results && !Modal && !Input"),
+            ContextId::Audit => Some("Audit && !Modal && !Input"),
+            ContextId::Inspector => Some("Inspector && !Modal && !Input"),
+            _ => None,
         }
     }
 
