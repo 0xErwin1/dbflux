@@ -80,13 +80,10 @@ impl KeymapLayer {
     /// The predicate of a binding that carries no predicate of its own, which
     /// the binding on `keys` inherits.
     fn default_predicate_for(&self, keys: &KeySequence) -> &'static str {
-        if prints_text(keys.first()) {
-            if let Some(predicate) = self.context.predicate_outside_input() {
-                return predicate;
-            }
+        match self.context.predicate_outside_input() {
+            Some(predicate) if prints_text(keys.first()) => predicate,
+            _ => self.context.default_predicate(),
         }
-
-        self.context.default_predicate()
     }
 
     /// Bindings of this layer in the order their keys were first bound.
