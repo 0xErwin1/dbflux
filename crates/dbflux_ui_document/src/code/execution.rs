@@ -843,6 +843,7 @@ impl CodeDocument {
             connection_id: conn_id,
             context: session_context.clone(),
             exec_ctx: exec_ctx.clone(),
+            language: self.effective_language().clone(),
         };
 
         if on_session {
@@ -1993,6 +1994,9 @@ impl CodeDocument {
                     this.pending.load_all_rows = Some(grid.entity_id());
                     cx.notify();
                 }
+                DataGridEvent::NextRowsRequested => {
+                    this.fetch_next_rows(grid, cx);
+                }
                 DataGridEvent::ApplyVisualQuery(_)
                 | DataGridEvent::ClearVisualQuery
                 | DataGridEvent::OpenEditorWithContent { .. } => {
@@ -2057,6 +2061,7 @@ impl CodeDocument {
         LimitedRowActions {
             count: reads && *language == QueryLanguage::Sql,
             load_all: reads,
+            next_rows: reads,
         }
     }
 
@@ -2120,7 +2125,7 @@ impl CodeDocument {
             dbflux_core::count_query_from_sql(&query),
             origin.context.database.clone(),
             &origin.exec_ctx,
-            self.effective_language().clone(),
+            origin.language.clone(),
             count_row_limit,
         );
         let task = self.execute_in_result_context(origin.context, request, cx);
@@ -2151,6 +2156,60 @@ impl CodeDocument {
                                     dbflux_i18n::t!("document.code.execution.count_rows_failed"),
                                 )
                                 .with_cause(error),
+                                cx,
+                            );
+                        }
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Fetches the next editor-row-limit rows of the query behind a result tab
+    /// and appends them, where the query ran.
+    ///
+    /// Runs the query again with a limit one page higher and keeps
+    /// the rows past the loaded ones, so every page re-reads the earlier ones.
+    /// Drivers have no shared offset; move to cursor or `OFFSET` paging if
+    /// deep scrolling gets slow.
+    fn fetch_next_rows(&mut self, grid: Entity<DataGridPanel>, cx: &mut Context<Self>) {
+        let Some((query, origin)) = self.result_tab_query(&grid, cx) else {
+            grid.update(cx, |grid, cx| grid.next_rows_failed(cx));
+            return;
+        };
+
+        let generation = grid.read(cx).result_generation();
+        let page = self.app_state.read(cx).general_settings().editor_row_limit;
+        let limit = grid.read(cx).loaded_row_count().saturating_add(page);
+        let row_limit = enforces_request_row_limit(origin.context.root.as_ref()).then_some(limit);
+        let request = query_request_for_execution(
+            query,
+            origin.context.database.clone(),
+            &origin.exec_ctx,
+            origin.language.clone(),
+            row_limit,
+        );
+        let task = self.execute_in_result_context(origin.context, request, cx);
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                grid.update(cx, |grid, cx| {
+                    if grid.result_generation() != generation {
+                        return;
+                    }
+                    match result {
+                        Ok(result) => grid.append_next_rows(result, cx),
+                        Err(error) => {
+                            grid.next_rows_failed(cx);
+                            dbflux_ui_base::user_error::report_error(
+                                dbflux_ui_base::user_error::UserFacingError::new(
+                                    dbflux_ui_base::user_error::ErrorKind::Driver,
+                                    dbflux_i18n::t!("document.code.execution.next_rows_failed"),
+                                )
+                                .with_cause(error.to_string()),
                                 cx,
                             );
                         }

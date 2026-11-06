@@ -502,12 +502,14 @@ pub(super) struct LoadAllRows {
     pub(super) origin: ResultOrigin,
 }
 
-/// The connection, database and execution context a query result came from.
+/// The connection, database, execution context and language a query result
+/// came from.
 #[derive(Clone)]
 pub(super) struct ResultOrigin {
     connection_id: Uuid,
     context: ExecutionSessionContext,
     exec_ctx: ExecutionContext,
+    language: QueryLanguage,
 }
 
 /// The result-tab collection and its selection cursor.
