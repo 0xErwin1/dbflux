@@ -272,15 +272,20 @@ pub enum SecretPayload {
 
 /// The version stage a value is written to.
 ///
-/// Stores stage versions differently: one without `VERSION_LABELS` treats
-/// every write as `Current`.
+/// What a store does with a stage is its own contract, and neither
+/// capability promises a staged write: a store with movable version labels
+/// stages it (Secrets Manager attaches `AWSPENDING` and moves no current
+/// value), and a store that versions by number has no staging labels and
+/// refuses a `Pending` write before any call, keeping the current value
+/// (Parameter Store).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SecretVersionStage {
     /// The new version becomes the current one.
     Current,
 
-    /// The new version is written without moving the current one, for stores
-    /// whose versions carry movable labels.
+    /// The new version is written without moving the current one, for
+    /// stores that stage versions; a store without a staging shape refuses
+    /// it instead of treating it as a `Current` write.
     Pending,
 }
 

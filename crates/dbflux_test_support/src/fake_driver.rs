@@ -1,5 +1,5 @@
 use dbflux_core::chrono;
-use dbflux_core::secrecy::{ExposeSecret, SecretString};
+use dbflux_core::secrecy::{ExposeSecret, SecretSlice, SecretString};
 use dbflux_core::{
     Connection, ConnectionProfile, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError,
     DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
@@ -2242,6 +2242,118 @@ mod tests {
         assert!(refusal.contains("Parameter Store"), "{refusal}");
         assert!(refusal.contains("/app/prod/db/host"), "{refusal}");
     }
+
+    /// A pending write keeps its payload under its own version id: the
+    /// version answers by id, the current value is untouched, and the
+    /// summary still names the current version.
+    #[test]
+    fn a_pending_written_version_answers_by_its_version_id() {
+        let (_, connection) = connected();
+        let secrets = connection
+            .secret_store(FAKE_SECRETS_STORE_ID)
+            .expect("the fake secrets store exists");
+
+        let response = secrets
+            .put_value(
+                &SecretPutRequest::text("prod/notify/webhook-token", "pending value")
+                    .with_stage(SecretVersionStage::Pending),
+            )
+            .expect("the fake secrets store advertises WRITE");
+        let pending = response.version.expect("a put returns the version id");
+
+        let staged = secrets
+            .get_value("prod/notify/webhook-token", Some(&pending))
+            .expect("the pending version is readable by its id");
+        assert_eq!(exposed_text(&staged), "pending value");
+        assert_eq!(staged.version.as_deref(), Some(pending.as_str()));
+
+        let current = secrets
+            .get_value("prod/notify/webhook-token", None)
+            .expect("the current value is readable");
+        assert_eq!(exposed_text(&current), FAKE_SECRET_PLAINTEXT);
+    }
+
+    /// Every written version keeps its payload: after two `Current` writes
+    /// the first written version still answers by its id with its own
+    /// value, and the current one with the latest.
+    #[test]
+    fn every_written_version_keeps_its_payload() {
+        let (_, connection) = connected();
+        let secrets = connection
+            .secret_store(FAKE_SECRETS_STORE_ID)
+            .expect("the fake secrets store exists");
+
+        let first = secrets
+            .put_value(&SecretPutRequest::text(
+                "prod/notify/webhook-token",
+                "first write",
+            ))
+            .expect("the first write lands")
+            .version
+            .expect("a version id");
+        let second = secrets
+            .put_value(&SecretPutRequest::text(
+                "prod/notify/webhook-token",
+                "second write",
+            ))
+            .expect("the second write lands")
+            .version
+            .expect("a version id");
+
+        let earlier = secrets
+            .get_value("prod/notify/webhook-token", Some(&first))
+            .expect("the earlier written version is readable");
+        assert_eq!(exposed_text(&earlier), "first write");
+        assert_eq!(earlier.version.as_deref(), Some(first.as_str()));
+
+        let current = secrets
+            .get_value("prod/notify/webhook-token", None)
+            .expect("the current value is readable");
+        assert_eq!(exposed_text(&current), "second write");
+        assert_eq!(current.version.as_deref(), Some(second.as_str()));
+    }
+
+    /// A version the fake never stored is not found: `get_value` answers
+    /// with the version asked for or reports it missing, never with
+    /// whatever was written last.
+    #[test]
+    fn an_unknown_version_is_not_found() {
+        let (_, connection) = connected();
+        let secrets = connection
+            .secret_store(FAKE_SECRETS_STORE_ID)
+            .expect("the fake secrets store exists");
+
+        let error = secrets
+            .get_value("prod/notify/webhook-token", Some("v-written-999"))
+            .expect_err("an unknown version is not found");
+        assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+    }
+
+    /// An overwrite does not clear a decrypt denial: read authorization is
+    /// independent of the stored value, so the write succeeds and the read
+    /// still fails the way it did before.
+    #[test]
+    fn an_overwrite_keeps_an_existing_decrypt_denial() {
+        let (_, connection) = connected();
+        let parameters = connection
+            .secret_store(FAKE_PARAMETER_STORE_ID)
+            .expect("the fake parameter store exists");
+
+        let response = parameters
+            .put_value(&SecretPutRequest::text("/app/prod/db/password", "rotated"))
+            .expect("the overwrite lands");
+        assert_eq!(response.version.as_deref(), Some("4"));
+
+        let error = parameters
+            .get_value("/app/prod/db/password", None)
+            .expect_err("the denial survives the overwrite");
+        match &error {
+            DbError::PermissionDenied(formatted) => {
+                assert_eq!(formatted.message, FAKE_KMS_DENIED_MESSAGE);
+            }
+            other => panic!("expected the decrypt denial, got {other:?}"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2283,8 +2395,6 @@ pub const FAKE_KMS_DENIED_MESSAGE: &str =
 enum FakeSecretPayload {
     Text(String),
     Binary(Vec<u8>),
-    Denied(&'static str),
-    Unavailable(&'static str),
 }
 
 impl FakeSecretPayload {
@@ -2298,10 +2408,27 @@ impl FakeSecretPayload {
     }
 }
 
+/// Why a read of a secret fails, as its fixture models the service state or
+/// a policy: independently of the value a write stores. A decrypt denial is
+/// about the caller's authorization, so an overwrite does not clear it.
+#[derive(Clone)]
+enum FakeSecretReadFailure {
+    Denied(&'static str),
+    Unavailable(&'static str),
+}
+
 #[derive(Clone)]
 struct FakeSecret {
     details: SecretDetails,
-    payload: FakeSecretPayload,
+    /// The payload each version carries: the fixture seeds one entry keyed
+    /// by the summary's version, and every accepted write adds its own, so
+    /// a written version answers by its id for `Pending` and `Current`
+    /// alike.
+    versions: Vec<(String, FakeSecretPayload)>,
+    /// Why a read of this secret fails, decided at fixture time and never
+    /// changed by a write: read authorization is independent of the stored
+    /// value.
+    read_failure: Option<FakeSecretReadFailure>,
 }
 
 /// A deterministic in-memory secret store. A flat store matches its name
@@ -2448,20 +2575,41 @@ impl SecretStoreSource for FakeSecretStore {
         self.find(name).map(|secret| secret.details)
     }
 
-    fn get_value(&self, name: &str, _version: Option<&str>) -> Result<SecretValue, DbError> {
+    fn get_value(&self, name: &str, version: Option<&str>) -> Result<SecretValue, DbError> {
         mutex_lock(&self.state.secret_store_calls)
             .value_requests
             .push((self.descriptor.id.clone(), name.to_string()));
 
         let secret = self.find(name)?;
-        let version = secret.details.summary.version.clone();
 
-        match &secret.payload {
-            FakeSecretPayload::Text(text) => Ok(SecretValue::text(version, text.clone())),
-            FakeSecretPayload::Binary(bytes) => Ok(SecretValue::binary(version, bytes.clone())),
-            FakeSecretPayload::Denied(message) => Err(DbError::permission_denied(*message)),
-            FakeSecretPayload::Unavailable(message) => Err(DbError::query_failed(*message)),
+        if let Some(failure) = &secret.read_failure {
+            return match failure {
+                FakeSecretReadFailure::Denied(message) => Err(DbError::permission_denied(*message)),
+                FakeSecretReadFailure::Unavailable(message) => {
+                    Err(DbError::query_failed(*message))
+                }
+            };
         }
+
+        // The version asked for, or the current one when none was named.
+        let requested = version
+            .map(ToString::to_string)
+            .or_else(|| secret.details.summary.version.clone());
+
+        secret
+            .versions
+            .iter()
+            .find(|(id, _)| Some(id) == requested.as_ref())
+            .map(|(id, payload)| SecretValue {
+                version: Some(id.clone()),
+                payload: payload_value(id, payload),
+            })
+            .ok_or_else(|| {
+                DbError::object_not_found(format!(
+                    "Secret {name} has no version {}",
+                    requested.as_deref().unwrap_or("<none>")
+                ))
+            })
     }
 
     /// One overwrite, following the rules the real stores keep: secrets
@@ -2528,15 +2676,15 @@ impl FakeSecretStore {
         }
 
         let version = self.next_written_version();
-        if request.stage == Some(SecretVersionStage::Pending) {
-            return Ok(SecretValue {
-                version: Some(version),
-                payload: request.payload.clone(),
-            });
+        // A write keeps its payload under its own version id, whatever the
+        // stage: a `Current` write moves the summary's current version to it,
+        // a `Pending` write moves nothing. Earlier versions stay readable.
+        secret
+            .versions
+            .push((version.clone(), FakeSecretPayload::for_write(&request.payload)));
+        if request.stage != Some(SecretVersionStage::Pending) {
+            secret.details.summary.version = Some(version.clone());
         }
-
-        secret.details.summary.version = Some(version.clone());
-        secret.payload = FakeSecretPayload::for_write(&request.payload);
 
         Ok(SecretValue {
             version: Some(version),
@@ -2573,13 +2721,25 @@ impl FakeSecretStore {
             })?;
         let version = (current.wrapping_add(1)).to_string();
 
+        // The stored value changes; the read authorization does not. A
+        // denial that was there before the write is there after it.
         secret.details.summary.version = Some(version.clone());
-        secret.payload = FakeSecretPayload::for_write(&request.payload);
+        secret
+            .versions
+            .push((version.clone(), FakeSecretPayload::for_write(&request.payload)));
 
         Ok(SecretValue {
             version: Some(version),
             payload: request.payload.clone(),
         })
+    }
+}
+
+/// The `SecretValue` payload form of a stored version.
+fn payload_value(version: &str, payload: &FakeSecretPayload) -> SecretPayload {
+    match payload {
+        FakeSecretPayload::Text(text) => SecretPayload::Text(SecretString::from(text.clone())),
+        FakeSecretPayload::Binary(bytes) => SecretPayload::Binary(SecretSlice::from(bytes.clone())),
     }
 }
 
@@ -2617,6 +2777,17 @@ fn fake_secret(
     details: impl FnOnce(SecretDetails) -> SecretDetails,
     payload: FakeSecretPayload,
 ) -> FakeSecret {
+    let mut summary = summary;
+    let version = summary
+        .version
+        .clone()
+        .unwrap_or_else(|| "v-current".to_string());
+    // Every stored secret has a current version, so the summary and the
+    // version store agree even when the fixture named no version.
+    if summary.version.is_none() {
+        summary.version = Some(version.clone());
+    }
+
     let base = SecretDetails {
         resource_id: Some(format!("arn:fake:secret:{}", summary.name)),
         created: fake_time(1, 10, 8),
@@ -2626,7 +2797,17 @@ fn fake_secret(
 
     FakeSecret {
         details: details(base),
-        payload,
+        versions: vec![(version, payload)],
+        read_failure: None,
+    }
+}
+
+/// Marks a secret whose reads fail the way its fixture models the service
+/// state or a policy — independently of any value a write later stores.
+fn failing_reads(secret: FakeSecret, failure: FakeSecretReadFailure) -> FakeSecret {
+    FakeSecret {
+        read_failure: Some(failure),
+        ..secret
     }
 }
 
@@ -2715,18 +2896,21 @@ fn fake_flat_secrets() -> Vec<FakeSecret> {
             },
             FakeSecretPayload::Text(r#"{"username":"admin","password":"managed-pass"}"#.into()),
         ),
-        fake_secret(
-            SecretSummary {
-                description: Some("Legacy deploy token".to_string()),
-                last_changed: fake_time(7, 15, 9),
-                deletion_scheduled_for: fake_time(11, 1, 0),
-                ..SecretSummary::new("prod/deploy/legacy-token")
-            },
-            |details| SecretDetails {
-                deleted_at: fake_time(10, 2, 0),
-                ..details
-            },
-            FakeSecretPayload::Unavailable("The secret is scheduled for deletion"),
+        failing_reads(
+            fake_secret(
+                SecretSummary {
+                    description: Some("Legacy deploy token".to_string()),
+                    last_changed: fake_time(7, 15, 9),
+                    deletion_scheduled_for: fake_time(11, 1, 0),
+                    ..SecretSummary::new("prod/deploy/legacy-token")
+                },
+                |details| SecretDetails {
+                    deleted_at: fake_time(10, 2, 0),
+                    ..details
+                },
+                FakeSecretPayload::Text("legacy-token-value".to_string()),
+            ),
+            FakeSecretReadFailure::Unavailable("The secret is scheduled for deletion"),
         ),
         fake_secret(
             SecretSummary {
@@ -2793,11 +2977,14 @@ fn fake_parameters() -> Vec<FakeSecret> {
             "Standard",
             FakeSecretPayload::Text("db.prod.internal".to_string()),
         ),
-        fake_parameter(
-            "/app/prod/db/password",
-            "SecureString",
-            "Standard",
-            FakeSecretPayload::Denied(FAKE_KMS_DENIED_MESSAGE),
+        failing_reads(
+            fake_parameter(
+                "/app/prod/db/password",
+                "SecureString",
+                "Standard",
+                FakeSecretPayload::Text("unreadable-vault-value".to_string()),
+            ),
+            FakeSecretReadFailure::Denied(FAKE_KMS_DENIED_MESSAGE),
         ),
         fake_parameter(
             "/app/prod/db/port",

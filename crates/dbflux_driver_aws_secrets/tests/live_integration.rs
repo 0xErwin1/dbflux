@@ -15,6 +15,7 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     Connection, ConnectionProfile, DbConfig, DbDriver, DbError, DbKind, SecretListRequest,
     SecretPayload, SecretPutRequest, SecretStoreCapabilities, SecretStoreSource, SecretValue,
+    SecretVersionStage,
 };
 use dbflux_driver_aws_secrets::{AwsSecretsDriver, PARAMETER_STORE_ID, SECRETS_MANAGER_ID};
 use dbflux_test_support::containers;
@@ -406,6 +407,48 @@ fn secrets_manager_put_value_writes_a_new_current_version() -> Result<(), DbErro
             Some(new_version.as_str())
         );
         assert!(details.version_labels.contains(&"AWSCURRENT".to_string()));
+
+        Ok(())
+    })
+}
+
+/// A staged write adds a version carrying `AWSPENDING` without moving the
+/// current one: the previous version is still what `GetSecretValue` answers
+/// by default, and the new one answers by its version id.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn secrets_manager_put_value_to_a_pending_stage_moves_no_current_version() -> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        let first = seeder.secret_string("staged", "first");
+
+        let connection = connect(&endpoint)?;
+        let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
+
+        let response = secrets.put_value(
+            &SecretPutRequest::text("staged", "second").with_stage(SecretVersionStage::Pending),
+        )?;
+        let pending = response.version.expect("a put returns the new version id");
+        assert_ne!(pending, first);
+
+        // The current version is untouched by a pending write.
+        let current = secrets.get_value("staged", None)?;
+        assert_eq!(text(&current), "first");
+        assert_eq!(current.version.as_deref(), Some(first.as_str()));
+
+        // The new version answers by its version id and carries the
+        // pending label, while the secret's current version stays the first.
+        let staged = secrets.get_value("staged", Some(&pending))?;
+        assert_eq!(text(&staged), "second");
+        assert_eq!(staged.version.as_deref(), Some(pending.as_str()));
+
+        let details = secrets.describe("staged")?;
+        assert!(
+            details.version_labels.contains(&"AWSPENDING".to_string()),
+            "version labels must name the pending write: {:?}",
+            details.version_labels
+        );
+        assert_eq!(details.summary.version.as_deref(), Some(first.as_str()));
 
         Ok(())
     })

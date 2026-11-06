@@ -16,6 +16,7 @@ use dbflux_core::{
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
 use crate::error_formatter::{
     ErrorTarget, classify_connection_error, classify_operation_error, format_service_error,
+    scrub_submitted_value,
 };
 
 /// Descriptor id of the Secrets Manager store.
@@ -371,9 +372,14 @@ impl SecretStoreSource for SecretsManagerStore {
             call = call.version_stages(label);
         }
 
-        let output = runtime()
-            .block_on(call.send())
-            .map_err(|error| self.operation_error(&error, Some(&request.name)))?;
+        let output = runtime().block_on(call.send()).map_err(|error| {
+            // The service may echo the submitted value in its own
+            // message; a put error never carries it onward.
+            scrub_submitted_value(
+                self.operation_error(&error, Some(&request.name)),
+                &request.payload,
+            )
+        })?;
 
         Ok(SecretValue {
             version: output.version_id().map(ToString::to_string),

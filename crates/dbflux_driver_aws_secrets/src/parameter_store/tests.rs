@@ -5,8 +5,14 @@ use dbflux_core::{
 };
 
 use super::hierarchy::{group_level, normalize_path, path_filter_value};
-use super::{ParameterStore, existing_key_id, overwrite_type, put_parameter_call, put_text};
+use super::{
+    ParameterStore, existing_key_id, find_parameter_on_pages, overwrite_type, put_parameter_call,
+    put_text,
+};
 use crate::driver::AwsSecretsProfileConfig;
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 fn group(path: &str, names: &[&str]) -> (Vec<String>, Vec<String>) {
     let items = names.iter().map(|name| name.to_string()).collect();
@@ -70,6 +76,92 @@ fn names_outside_the_path_are_dropped() {
 
     assert!(entries.is_empty());
     assert!(child_paths.is_empty());
+}
+
+// --- Reading a parameter's metadata across pages ---
+
+/// A canned `DescribeParameters` listing: each call answers the next page
+/// and records the token it was asked with, the way a paged service would.
+fn paged_fetch(
+    pages: Vec<Vec<ParameterMetadata>>,
+    received_tokens: Rc<RefCell<Vec<Option<String>>>>,
+) -> impl FnMut(Option<String>) -> Result<(Vec<ParameterMetadata>, Option<String>), DbError> {
+    let mut next_page = 0;
+    move |token| {
+        received_tokens.borrow_mut().push(token);
+        let page = pages.get(next_page).cloned().unwrap_or_default();
+        next_page += 1;
+        let next_token = (next_page < pages.len()).then(|| format!("token-{}", next_page - 1));
+        Ok((page, next_token))
+    }
+}
+
+fn parameter_named(name: &str) -> ParameterMetadata {
+    ParameterMetadata::builder().name(name).build()
+}
+
+/// The parameter the listing names is answered with, wherever its page sits.
+#[test]
+fn a_metadata_read_walks_pages_until_it_finds_the_parameter() {
+    let tokens = Rc::new(RefCell::new(Vec::new()));
+    let found = find_parameter_on_pages(
+        "/app/prod/db/password",
+        paged_fetch(
+            vec![
+                vec![parameter_named("/app/prod/db/host")],
+                vec![parameter_named("/app/prod/db/password")],
+                vec![parameter_named("/app/prod/db/port")],
+            ],
+            tokens.clone(),
+        ),
+    )
+    .expect("the listing is walked")
+    .expect("the parameter sits on a later page");
+    assert_eq!(found.name(), Some("/app/prod/db/password"));
+
+    // The walk asked page two with the token page one carried, not with an
+    // empty request that would answer the first page again.
+    assert_eq!(
+        tokens.borrow().as_slice(),
+        [None, Some("token-0".to_string())]
+    );
+}
+
+/// A parameter on no page is absent: the walk ends when a page without the
+/// parameter also ends the listing, and the caller turns that into the
+/// not-found error.
+#[test]
+fn a_metadata_read_of_an_absent_parameter_walks_the_whole_listing() {
+    let tokens = Rc::new(RefCell::new(Vec::new()));
+    let absent = find_parameter_on_pages(
+        "/app/prod/db/missing",
+        paged_fetch(
+            vec![
+                vec![parameter_named("/app/prod/db/host")],
+                vec![parameter_named("/app/prod/db/port")],
+            ],
+            tokens.clone(),
+        ),
+    )
+    .expect("the listing is walked");
+    assert!(absent.is_none());
+    // Two pages: the second page ends the listing, so the walk stops there.
+    assert_eq!(
+        tokens.borrow().as_slice(),
+        [None, Some("token-0".to_string())]
+    );
+}
+
+/// A fetch that fails fails the read: the walk never turns a service error
+/// into a missing parameter.
+#[test]
+fn a_failing_page_fails_the_metadata_read() {
+    let error = find_parameter_on_pages("/app/prod/db/host", |_token| {
+        Err(DbError::query_failed("DescribeParameters is denied"))
+    })
+    .expect_err("a service error propagates");
+
+    assert!(error.to_string().contains("denied"), "{error}");
 }
 
 /// The real Parameter Store with a client that never reaches the network in
@@ -156,6 +248,7 @@ fn a_put_parameter_call_carries_the_existing_type_and_key() {
     let string_list = ParameterMetadata::builder()
         .name("/app/prod/db/hosts")
         .r#type(ParameterType::StringList)
+        .data_type("text")
         .build();
     let call = put_parameter_call(&string_list, &request).expect("a StringList overwrite");
     assert_eq!(call.parameter_type, ParameterType::StringList);
@@ -165,6 +258,7 @@ fn a_put_parameter_call_carries_the_existing_type_and_key() {
     let keyed = ParameterMetadata::builder()
         .name("/app/prod/db/password")
         .r#type(ParameterType::SecureString)
+        .data_type("text")
         .key_id("alias/app-prod")
         .build();
     let password = SecretPutRequest::text("/app/prod/db/password", "rotated");
@@ -175,13 +269,44 @@ fn a_put_parameter_call_carries_the_existing_type_and_key() {
     let unkeyed = ParameterMetadata::builder()
         .name("/app/prod/db/password")
         .r#type(ParameterType::SecureString)
+        .data_type("text")
         .build();
     let error = put_parameter_call(&unkeyed, &password)
         .expect_err("an unkeyed SecureString refuses the overwrite");
     let rendered = error.to_string();
     assert!(rendered.contains("Parameter Store"), "{rendered}");
     assert!(rendered.contains("/app/prod/db/password"), "{rendered}");
-    assert!(!rendered.contains("a,b"), "{rendered}");
+    // The value the refused write carried must never surface in its error.
+    assert!(!rendered.contains("rotated"), "{rendered}");
+}
+
+/// The data type travels with the type: the overwrite sends the parameter's
+/// existing `DataType` explicitly, so the service never applies its own
+/// default, and a parameter whose metadata reports no data type refuses
+/// rather than letting the service default it. The refusal names the store
+/// and the parameter.
+#[test]
+fn an_overwrite_carries_the_existing_data_type_and_refuses_when_it_is_unknown() {
+    let request = SecretPutRequest::text("/app/prod/db/host", "db.prod.internal");
+
+    let typed = ParameterMetadata::builder()
+        .name("/app/prod/db/host")
+        .r#type(ParameterType::String)
+        .data_type("text")
+        .build();
+    let call = put_parameter_call(&typed, &request).expect("a typed overwrite");
+    assert_eq!(call.data_type, "text");
+
+    let untyped = ParameterMetadata::builder()
+        .name("/app/prod/db/host")
+        .r#type(ParameterType::String)
+        .build();
+    let error = put_parameter_call(&untyped, &request)
+        .expect_err("a parameter without a reported data type refuses the overwrite");
+    let rendered = error.to_string();
+    assert!(rendered.contains("Parameter Store"), "{rendered}");
+    assert!(rendered.contains("/app/prod/db/host"), "{rendered}");
+    assert!(!rendered.contains("db.prod.internal"), "{rendered}");
 }
 
 /// The store behind the real parameter asserts it can take writes through

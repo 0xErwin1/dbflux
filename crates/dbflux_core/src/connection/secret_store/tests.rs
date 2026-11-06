@@ -220,6 +220,12 @@ fn a_put_request_redacts_its_value_from_debug() {
     for rendered in [format!("{request:?}"), format!("{binary:?}")] {
         assert!(!rendered.contains("hunter2"), "{rendered}");
     }
+    // A binary payload must not leak as its decimal byte array either.
+    let decimal_bytes = format!("{:?}", "hunter2".as_bytes());
+    assert!(
+        !format!("{binary:?}").contains(&decimal_bytes),
+        "{decimal_bytes}"
+    );
     assert!(format!("{request:?}").contains("prod/api/credentials"));
     assert_eq!(request.stage, Some(SecretVersionStage::Pending));
 }

@@ -14,6 +14,7 @@ use dbflux_core::{
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
 use crate::error_formatter::{
     ErrorTarget, classify_connection_error, classify_operation_error, format_service_error,
+    scrub_submitted_value,
 };
 
 use hierarchy::{group_level, normalize_path, path_filter_value};
@@ -81,27 +82,31 @@ impl ParameterStore {
     }
 
     fn describe_metadata(&self, name: &str) -> Result<ParameterMetadata, DbError> {
-        let output = runtime()
-            .block_on(
-                self.client
-                    .describe_parameters()
-                    .parameter_filters(string_filter("Name", "Equals", name)?)
-                    .send(),
-            )
-            .map_err(|error| self.operation_error(&error, Some(name)))?;
-
-        output
-            .parameters()
-            .iter()
-            .find(|parameter| parameter.name() == Some(name))
-            .cloned()
-            .ok_or_else(|| {
-                DbError::ObjectNotFound(
-                    FormattedError::new(format!("Parameter \"{name}\" was not found"))
-                        .with_hint("Check the parameter name, including its leading path.")
-                        .with_detail(self.config.diagnostic_detail()),
+        let filter = string_filter("Name", "Equals", name)?;
+        let mut fetch_page = |token: Option<String>| {
+            let output = runtime()
+                .block_on(
+                    self.client
+                        .describe_parameters()
+                        .parameter_filters(filter.clone())
+                        .set_next_token(token)
+                        .send(),
                 )
-            })
+                .map_err(|error| self.operation_error(&error, Some(name)))?;
+
+            Ok((
+                output.parameters().to_vec(),
+                output.next_token().map(ToString::to_string),
+            ))
+        };
+
+        find_parameter_on_pages(name, &mut fetch_page)?.ok_or_else(|| {
+            DbError::ObjectNotFound(
+                FormattedError::new(format!("Parameter \"{name}\" was not found"))
+                    .with_hint("Check the parameter name, including its leading path.")
+                    .with_detail(self.config.diagnostic_detail()),
+            )
+        })
     }
 
     fn tags(&self, name: &str) -> Result<Vec<SecretTag>, DbError> {
@@ -246,11 +251,13 @@ impl SecretStoreSource for ParameterStore {
     /// everything from the parameter's metadata alone: the existing type is
     /// passed explicitly on every overwrite (`String`, `StringList` and
     /// `SecureString`), so the write never relies on how the service resolves
-    /// an omitted type, and a `SecureString` keeps its KMS key — the write
-    /// re-encrypts, so an unknown key refuses the write instead of silently
-    /// moving the value to the account default key. A missing parameter is
-    /// the service's own `ParameterNotFound`, and a denied `kms:Encrypt`
-    /// fails the call — both through the existing error formatter.
+    /// an omitted type, and likewise the existing data type, so the service
+    /// never applies its own default. A `SecureString` keeps its KMS key —
+    /// the write re-encrypts, so an unknown key refuses the write instead of
+    /// silently moving the value to the account default key. A missing
+    /// parameter is the service's own `ParameterNotFound`, and a denied
+    /// `kms:Encrypt` fails the call — both through the existing error
+    /// formatter.
     fn put_value(&self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
         self.descriptor.ensure_can_write(&request.name)?;
 
@@ -268,15 +275,21 @@ impl SecretStoreSource for ParameterStore {
             .name(&request.name)
             .value(call.value)
             .overwrite(true)
-            .r#type(call.parameter_type);
+            .r#type(call.parameter_type)
+            .data_type(call.data_type);
 
         if let Some(key_id) = call.key_id {
             fluent = fluent.key_id(key_id);
         }
 
-        let output = runtime()
-            .block_on(fluent.send())
-            .map_err(|error| self.operation_error(&error, Some(&request.name)))?;
+        let output = runtime().block_on(fluent.send()).map_err(|error| {
+            // The service may echo the submitted value in its own
+            // message; a put error never carries it onward.
+            scrub_submitted_value(
+                self.operation_error(&error, Some(&request.name)),
+                &request.payload,
+            )
+        })?;
 
         Ok(SecretValue {
             version: Some(output.version().to_string()),
@@ -298,13 +311,17 @@ pub(crate) struct PutParameterCall {
     /// The KMS key a `SecureString` re-encrypts with, and `None` for every
     /// other type, which takes none.
     pub key_id: Option<String>,
+
+    /// The parameter's existing data type, sent explicitly on every
+    /// overwrite, so the service never applies its own default.
+    pub data_type: String,
 }
 
 /// Builds the `PutParameter` overwrite fields from the parameter's metadata
 /// and the put request, refusing what cannot be sent honestly: a staged or
-/// binary write has no parameter-store shape, an unknown type refuses rather
-/// than guessing, and a `SecureString` without a reported key refuses rather
-/// than re-encrypting under the account default.
+/// binary write has no parameter-store shape, an unknown type or data type
+/// refuses rather than guessing, and a `SecureString` without a reported key
+/// refuses rather than re-encrypting under the account default.
 pub(crate) fn put_parameter_call(
     metadata: &ParameterMetadata,
     request: &SecretPutRequest,
@@ -312,6 +329,7 @@ pub(crate) fn put_parameter_call(
     let value = put_text(request)?;
     let name = &request.name;
     let parameter_type = overwrite_type(metadata.r#type(), name)?;
+    let data_type = overwrite_data_type(metadata.data_type(), name)?;
 
     let key_id = if parameter_type == ParameterType::SecureString {
         Some(existing_key_id(metadata, name)?.to_string())
@@ -322,6 +340,7 @@ pub(crate) fn put_parameter_call(
     Ok(PutParameterCall {
         value,
         parameter_type,
+        data_type,
         key_id,
     })
 }
@@ -366,6 +385,20 @@ pub(crate) fn overwrite_type(
     })
 }
 
+/// The data type an overwrite passes to `PutParameter`: the parameter's
+/// existing data type, sent explicitly on every overwrite, so the service
+/// never applies its own default to a value that arrives without one. A
+/// parameter whose metadata reports no data type refuses rather than letting
+/// the service default it. The refusal names the store and the parameter.
+pub(crate) fn overwrite_data_type(existing: Option<&str>, name: &str) -> Result<String, DbError> {
+    existing.map(ToString::to_string).ok_or_else(|| {
+        DbError::query_failed(format!(
+            "Parameter Store did not report a data type for \"{name}\"; \
+             overwriting it could not send the parameter's data type explicitly."
+        ))
+    })
+}
+
 /// The KMS key a `SecureString` overwrite re-encrypts with.
 ///
 /// A `SecureString` write re-encrypts the value, so the parameter keeps the
@@ -385,6 +418,40 @@ pub(crate) fn existing_key_id<'a>(
              re-encrypt the value with the account's default key."
         ))
     })
+}
+
+/// Walks the pages a `DescribeParameters` listing is split into, looking for
+/// the parameter named `name`. The fetcher sends one page: it receives the
+/// page token to ask with (`None` for the first page) and answers with that
+/// page's parameters and the token of the next page, or `None` when the
+/// listing ended. A filtered listing is paged by the service too, so a
+/// parameter that is not on the first page is still on a later one; the walk
+/// ends only when a page without the parameter also ends the listing, and
+/// then the parameter is absent.
+pub(crate) fn find_parameter_on_pages<F>(
+    name: &str,
+    mut fetch_page: F,
+) -> Result<Option<ParameterMetadata>, DbError>
+where
+    F: FnMut(Option<String>) -> Result<(Vec<ParameterMetadata>, Option<String>), DbError>,
+{
+    let mut token = None;
+    loop {
+        let (parameters, next_token) = fetch_page(token)?;
+
+        if let Some(found) = parameters
+            .iter()
+            .find(|parameter| parameter.name() == Some(name))
+            .cloned()
+        {
+            return Ok(Some(found));
+        }
+
+        match next_token {
+            Some(next) => token = Some(next),
+            None => return Ok(None),
+        }
+    }
 }
 
 fn clamp_page_size(page_size: u32) -> i32 {
