@@ -845,24 +845,9 @@ impl Render for SecretStoreDocument {
 
         // A menu entry chosen by click is queued and runs here, which has
         // the window the actions' focus changes need.
-        if let Some((action, target)) = self.pending_menu_action.take() {
-            self.run_menu_action(action, target, window, cx);
+        if let Some(action) = self.pending_menu_action.take() {
+            self.run_menu_action(action, window, cx);
         }
-
-        // The menu anchors at the secondary click, which arrives in window
-        // coordinates; this probe keeps the document's own origin so the
-        // popup can be placed inside it.
-        let origin_probe = cx.entity().clone();
-        let origin_canvas = canvas(
-            move |bounds, _, cx| {
-                origin_probe.update(cx, |this, _| {
-                    this.panel_origin = bounds.origin;
-                });
-            },
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .size_full();
 
         let listing = div()
             .flex_1()
@@ -881,7 +866,6 @@ impl Render for SecretStoreDocument {
             .size_full()
             .flex()
             .bg(cx.theme().popover)
-            .child(origin_canvas)
             .child(listing)
             .child(self.render_details_pane(cx));
 
@@ -899,12 +883,7 @@ impl Render for SecretStoreDocument {
         }
 
         if let Some(menu) = self.context_menu.as_ref() {
-            let element = context_menu::render_context_menu(
-                menu,
-                &self.context_menu_focus,
-                self.panel_origin,
-                cx,
-            );
+            let element = context_menu::render_context_menu(menu, &self.context_menu_focus, cx);
 
             root = root.child(element);
         }

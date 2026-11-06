@@ -3515,6 +3515,7 @@ document:
       copy_path: "경로 복사"
       arn_loading: "ARN은 상세 정보와 함께 로드됩니다…"
       arn_missing: "스토어가 리소스 식별자를 보고하지 않습니다"
+      arn_failed: "상세 정보를 로드하지 못했습니다: %{error}"
     toast:
       value_copied: "값을 클립보드에 복사했습니다"
       resource_id_copied: "ARN을 클립보드에 복사했습니다"

@@ -3515,6 +3515,7 @@ document:
       copy_path: "Copy path"
       arn_loading: "The ARN arrives with the details…"
       arn_missing: "The store reports no resource identifier"
+      arn_failed: "The details could not be loaded: %{error}"
     toast:
       value_copied: "Value copied to the clipboard"
       resource_id_copied: "ARN copied to the clipboard"

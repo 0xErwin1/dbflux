@@ -10,20 +10,18 @@
 //! the value pane is deliberately scoped to this tab.
 
 use super::{DetailsState, SecretRowKey, SecretStoreDocument, copied_toast};
-use dbflux_app::keymap::Command;
-use dbflux_components::composites::{MenuItem, render_menu_items};
+use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::composites::{MenuItem, render_menu_container, render_menu_item};
 use dbflux_components::icons::AppIcon;
 use dbflux_core::chrono::{DateTime, Local, Utc};
 use gpui::*;
-use gpui_component::ActiveTheme;
 
 /// One open menu: the row it acts on, where it opened, its entries and the
 /// keyboard highlight. Entries are rebuilt on every render, so an item
 /// disabled by an in-flight describe re-enables without reopening the menu.
 pub(super) struct SecretContextMenu {
     pub target: SecretRowKey,
-    /// The secondary click's position in window coordinates; converted to
-    /// document coordinates at render time via `panel_origin`.
+    /// The secondary click's position in window coordinates.
     pub position: Point<Pixels>,
     pub items: Vec<SecretMenuItem>,
     pub selected_index: usize,
@@ -33,6 +31,9 @@ pub(super) struct SecretMenuItem {
     pub action: SecretMenuAction,
     pub label: SharedString,
     pub icon: AppIcon,
+    /// The hint the shared chrome draws, resolved from the keymap; `None`
+    /// for actions a chord does not reach.
+    pub shortcut: Option<SharedString>,
     /// Why the entry cannot run, drawn under the label. A disabled entry
     /// never copies or fetches nothing silently.
     pub detail: Option<SharedString>,
@@ -48,9 +49,35 @@ pub(super) enum SecretMenuAction {
     Refresh,
 }
 
+impl SecretMenuAction {
+    /// The panel id that names the entry's element, one action to one id, so
+    /// the coverage registry can give each row its own keyboard path.
+    fn panel_id(self) -> &'static str {
+        match self {
+            SecretMenuAction::RetrieveValue => "secret-menu-retrieve-value",
+            SecretMenuAction::CopyName => "secret-menu-copy-name",
+            SecretMenuAction::CopyArn => "secret-menu-copy-arn",
+            SecretMenuAction::CopyPath => "secret-menu-copy-path",
+            SecretMenuAction::Refresh => "secret-menu-refresh",
+        }
+    }
+}
+
 /// A deletion date the way the listing's badge spells it.
 fn short_date(date: DateTime<Utc>) -> String {
     date.with_timezone(&Local).format("%Y-%m-%d").to_string()
+}
+
+/// The hint a menu row shows, formatted like the other keycaps in the app,
+/// resolved from the effective keymap the way the data table's rows do it.
+fn menu_shortcut(command: Command) -> Option<SharedString> {
+    dbflux_ui_base::keymap::effective_keymap()
+        .chord_for_command(ContextId::Results, command)
+        .map(|chord| {
+            dbflux_ui_base::keymap::chord_display_parts(chord)
+                .join(" ")
+                .into()
+        })
 }
 
 impl SecretMenuItem {
@@ -59,9 +86,15 @@ impl SecretMenuItem {
             action,
             label,
             icon,
+            shortcut: None,
             detail: None,
             disabled: false,
         }
+    }
+
+    fn with_shortcut(mut self, command: Command) -> Self {
+        self.shortcut = menu_shortcut(command);
+        self
     }
 
     fn disabled_with_reason(mut self, reason: SharedString) -> Self {
@@ -78,7 +111,14 @@ impl SecretStoreDocument {
     pub(super) fn build_menu_items(&self, target: &SecretRowKey) -> Vec<SecretMenuItem> {
         match target {
             SecretRowKey::Secret(name) => {
-                let mut items = vec![self.retrieve_item(name), self.copy_name_item()];
+                let mut items = vec![
+                    self.retrieve_item(name),
+                    SecretMenuItem::new(
+                        SecretMenuAction::CopyName,
+                        dbflux_i18n::t!("document.secret_store.context_menu.copy_name").into(),
+                        AppIcon::Copy,
+                    ),
+                ];
 
                 if !self.hierarchical() {
                     items.push(self.copy_arn_item());
@@ -86,7 +126,19 @@ impl SecretStoreDocument {
 
                 items
             }
-            SecretRowKey::Path(_) => vec![self.copy_path_item(), self.refresh_item()],
+            SecretRowKey::Path(_) => vec![
+                SecretMenuItem::new(
+                    SecretMenuAction::CopyPath,
+                    dbflux_i18n::t!("document.secret_store.context_menu.copy_path").into(),
+                    AppIcon::Copy,
+                ),
+                SecretMenuItem::new(
+                    SecretMenuAction::Refresh,
+                    dbflux_i18n::t!("document.secret_store.toolbar.refresh").into(),
+                    AppIcon::RefreshCcw,
+                )
+                .with_shortcut(Command::RefreshSchema),
+            ],
             SecretRowKey::LoadMore => Vec::new(),
         }
     }
@@ -118,21 +170,16 @@ impl SecretStoreDocument {
             action: SecretMenuAction::RetrieveValue,
             label: dbflux_i18n::t!("document.secret_store.value.retrieve").into(),
             icon: AppIcon::Eye,
+            shortcut: menu_shortcut(Command::ToggleValuePanel),
             detail,
             disabled,
         }
     }
 
-    fn copy_name_item(&self) -> SecretMenuItem {
-        SecretMenuItem::new(
-            SecretMenuAction::CopyName,
-            dbflux_i18n::t!("document.secret_store.context_menu.copy_name").into(),
-            AppIcon::Copy,
-        )
-    }
-
     /// Copy ARN is only meaningful once the describe delivered the resource
-    /// identifier; otherwise it stays disabled and names what is missing.
+    /// identifier. Until then it stays disabled and names what is missing —
+    /// an identifier still arriving is not the same as a describe that
+    /// failed, and a failure is said the way the value section says its own.
     fn copy_arn_item(&self) -> SecretMenuItem {
         let known = matches!(
             &self.details,
@@ -147,11 +194,16 @@ impl SecretStoreDocument {
             );
         }
 
-        let reason = match &self.details {
+        let reason: SharedString = match &self.details {
             DetailsState::Loaded(_) => {
-                dbflux_i18n::t!("document.secret_store.context_menu.arn_missing")
+                dbflux_i18n::t!("document.secret_store.context_menu.arn_missing").into()
             }
-            _ => dbflux_i18n::t!("document.secret_store.context_menu.arn_loading"),
+            DetailsState::Failed(error) => dbflux_i18n::t!(
+                "document.secret_store.context_menu.arn_failed",
+                error = error.as_str()
+            )
+            .into(),
+            _ => dbflux_i18n::t!("document.secret_store.context_menu.arn_loading").into(),
         };
 
         SecretMenuItem::new(
@@ -159,23 +211,7 @@ impl SecretStoreDocument {
             dbflux_i18n::t!("document.secret_store.action.copy_resource_id").into(),
             AppIcon::Copy,
         )
-        .disabled_with_reason(reason.into())
-    }
-
-    fn copy_path_item(&self) -> SecretMenuItem {
-        SecretMenuItem::new(
-            SecretMenuAction::CopyPath,
-            dbflux_i18n::t!("document.secret_store.context_menu.copy_path").into(),
-            AppIcon::Copy,
-        )
-    }
-
-    fn refresh_item(&self) -> SecretMenuItem {
-        SecretMenuItem::new(
-            SecretMenuAction::Refresh,
-            dbflux_i18n::t!("document.secret_store.toolbar.refresh").into(),
-            AppIcon::RefreshCcw,
-        )
+        .disabled_with_reason(reason)
     }
 
     /// Opens the menu for the right-clicked row. The row is selected first,
@@ -213,6 +249,19 @@ impl SecretStoreDocument {
             self.focus_handle.focus(window, cx);
             cx.notify();
         }
+    }
+
+    /// Drops the menu and a queued entry without a window at hand: the
+    /// places that replay the listing (a refresh, a region switch, a tab
+    /// that stopped being active) clear the state they made stale, and the
+    /// next activation of the document gives the keyboard back.
+    pub(super) fn drop_context_menu(&mut self) {
+        if self.context_menu.take().is_some() {
+            self.focus_mode = super::SecretFocusMode::Table;
+            self.pending_menu_action = None;
+        }
+
+        self.pending_menu_action = None;
     }
 
     /// The menu owns the keyboard while it is up: a command it does not bind
@@ -255,9 +304,22 @@ impl SecretStoreDocument {
                     clippy::indexing_slicing,
                     reason = "selected_index starts at 0 on open and the MenuUp/MenuDown arms keep it modulo menu.items.len(), which this dispatch does not re-check"
                 )]
-                if let Some(menu) = self.context_menu.take() {
-                    let action = menu.items[menu.selected_index].action;
-                    self.run_menu_action(action, menu.target, window, cx);
+                let selected = self.context_menu.as_ref().map(|menu| {
+                    (
+                        menu.items[menu.selected_index].action,
+                        menu.items[menu.selected_index].disabled,
+                    )
+                });
+
+                match selected {
+                    // A disabled entry stays put: the menu keeps the
+                    // keyboard and runs nothing, so an action the document
+                    // blocks never runs from the menu.
+                    Some((_, true)) => {}
+                    Some((action, false)) => {
+                        self.run_menu_action(action, window, cx);
+                    }
+                    None => {}
                 }
 
                 true
@@ -271,11 +333,12 @@ impl SecretStoreDocument {
     }
 
     /// Runs a menu entry and closes the menu. Every action already exists as
-    /// a toolbar or footer-key action; the menu only dispatches to it.
+    /// a toolbar, footer-key or pane action; the menu only dispatches to it,
+    /// so the copy actions the pane menu reaches have exactly one
+    /// implementation.
     pub(super) fn run_menu_action(
         &mut self,
         action: SecretMenuAction,
-        target: SecretRowKey,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -283,25 +346,9 @@ impl SecretStoreDocument {
 
         match action {
             SecretMenuAction::RetrieveValue => self.retrieve_selected_value(cx),
-            SecretMenuAction::CopyName => {
-                if let SecretRowKey::Secret(name) = target {
-                    cx.write_to_clipboard(ClipboardItem::new_string(name));
-                    copied_toast(
-                        dbflux_i18n::t!("document.secret_store.toast.name_copied"),
-                        cx,
-                    );
-                }
-            }
+            SecretMenuAction::CopyName => self.copy_selected_name(cx),
             SecretMenuAction::CopyArn => self.copy_resource_id(cx),
-            SecretMenuAction::CopyPath => {
-                if let SecretRowKey::Path(path) = target {
-                    cx.write_to_clipboard(ClipboardItem::new_string(path));
-                    copied_toast(
-                        dbflux_i18n::t!("document.secret_store.toast.path_copied"),
-                        cx,
-                    );
-                }
-            }
+            SecretMenuAction::CopyPath => self.copy_selected_path(cx),
             SecretMenuAction::Refresh => self.refresh(cx),
         }
 
@@ -311,44 +358,87 @@ impl SecretStoreDocument {
     }
 }
 
-use dbflux_ui_base::keymap;
-
 /// The menu's entries as the shared chrome draws them: label, icon, the
-/// reason line of a disabled entry, and the disabled state itself.
-fn shared_menu_items(menu: &SecretContextMenu) -> Vec<MenuItem> {
-    menu.items
-        .iter()
-        .map(|item| {
-            let entry = MenuItem::new(item.label.clone()).icon(item.icon);
+/// shortcut hint, the reason line of a disabled entry, and the disabled
+/// state itself.
+fn shared_menu_item(item: &SecretMenuItem) -> MenuItem {
+    let mut entry = MenuItem::new(item.label.clone()).icon(item.icon);
 
-            let entry = match &item.detail {
-                Some(detail) => entry.detail(detail.clone()),
-                None => entry,
-            };
+    if let Some(shortcut) = &item.shortcut {
+        entry = entry.shortcut(shortcut.clone());
+    }
 
-            if item.disabled {
-                entry.disabled()
-            } else {
-                entry
-            }
-        })
-        .collect()
+    if let Some(detail) = &item.detail {
+        entry = entry.detail(detail.clone());
+    }
+
+    if item.disabled {
+        entry.disabled()
+    } else {
+        entry
+    }
 }
 
-/// The deferred menu panel at the secondary click's position, and the
-/// overlay that dismisses it on any click outside. Mirrors the key-value
-/// document's menu: the overlay takes the keyboard while the menu is up, so
-/// the keymap's menu keys (and Escape) arrive here first, and a chosen entry
-/// is queued and run on the next render, which has the window the action
-/// needs.
+/// The menu's rows, each under a per-action element id so the coverage
+/// registry can name the keyboard path of that one entry, wired to the
+/// queue-and-run click and the hover cursor.
+fn menu_panel(menu: &SecretContextMenu, cx: &mut Context<SecretStoreDocument>) -> Div {
+    let click_entity = cx.entity().downgrade();
+    let hover_entity = cx.entity().downgrade();
+
+    let rows: Vec<_> = menu
+        .items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let action = item.action;
+            let shared = shared_menu_item(item);
+            let click_entity = click_entity.clone();
+            let hover_entity = hover_entity.clone();
+
+            render_menu_item(
+                action.panel_id(),
+                &shared,
+                index,
+                menu.selected_index == index,
+                move |_, _, cx| {
+                    if let Some(doc) = click_entity.upgrade() {
+                        doc.update(cx, |this, cx| {
+                            this.context_menu = None;
+                            this.pending_menu_action = Some(action);
+                            cx.notify();
+                        });
+                    }
+                },
+                move |cx| {
+                    if let Some(doc) = hover_entity.upgrade() {
+                        doc.update(cx, |this, cx| {
+                            if let Some(menu) = this.context_menu.as_mut()
+                                && menu.selected_index != index
+                            {
+                                menu.selected_index = index;
+                                cx.notify();
+                            }
+                        });
+                    }
+                },
+                cx,
+            )
+        })
+        .collect();
+
+    render_menu_container(rows, cx)
+}
+
+/// The menu panel inside the window-fitted anchor: the panel positions
+/// itself at the secondary click's window coordinates and stays inside the
+/// window near the edges.
 pub(super) fn render_context_menu(
     menu: &SecretContextMenu,
     menu_focus: &FocusHandle,
-    panel_origin: Point<Pixels>,
     cx: &mut Context<SecretStoreDocument>,
 ) -> impl IntoElement {
-    let menu_x = menu.position.x - panel_origin.x;
-    let menu_y = menu.position.y - panel_origin.y;
+    use dbflux_ui_base::keymap;
 
     deferred(
         div()
@@ -382,60 +472,22 @@ pub(super) fn render_context_menu(
                     this.close_context_menu(window, cx);
                 }),
             )
+            // The panel anchors at the secondary click's window coordinates
+            // and stays inside the window near the edges.
             .child(
-                div()
-                    .absolute()
-                    .left(menu_x)
-                    .top(menu_y)
-                    .occlude()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                        cx.stop_propagation();
-                    })
-                    .on_mouse_down(MouseButton::Right, |_, _, cx| {
-                        cx.stop_propagation();
-                    })
-                    .child(menu_panel(menu, cx)),
+                anchored().position(menu.position).snap_to_window().child(
+                    div()
+                        .id("secret-context-menu")
+                        .occlude()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .on_mouse_down(MouseButton::Right, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .child(menu_panel(menu, cx)),
+                ),
             ),
     )
     .with_priority(1)
-}
-
-/// The menu's rows, wired to the queue-and-run click and the hover cursor.
-fn menu_panel(menu: &SecretContextMenu, cx: &mut Context<SecretStoreDocument>) -> Div {
-    let actions: Vec<SecretMenuAction> = menu.items.iter().map(|item| item.action).collect();
-    let target = menu.target.clone();
-    let click_entity = cx.entity().downgrade();
-    let hover_entity = cx.entity().downgrade();
-
-    render_menu_items(
-        "secret-context-menu",
-        &shared_menu_items(menu),
-        Some(menu.selected_index),
-        move |index, cx| {
-            let Some(action) = actions.get(index).copied() else {
-                return;
-            };
-
-            if let Some(doc) = click_entity.upgrade() {
-                doc.update(cx, |this, cx| {
-                    this.context_menu = None;
-                    this.pending_menu_action = Some((action, target.clone()));
-                    cx.notify();
-                });
-            }
-        },
-        move |index, cx| {
-            if let Some(doc) = hover_entity.upgrade() {
-                doc.update(cx, |this, cx| {
-                    if let Some(menu) = this.context_menu.as_mut()
-                        && menu.selected_index != index
-                    {
-                        menu.selected_index = index;
-                        cx.notify();
-                    }
-                });
-            }
-        },
-        cx,
-    )
 }

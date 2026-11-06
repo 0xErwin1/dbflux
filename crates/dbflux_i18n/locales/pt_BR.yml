@@ -3515,6 +3515,7 @@ document:
       copy_path: "Copiar caminho"
       arn_loading: "O ARN chega com os detalhes…"
       arn_missing: "O armazenamento não informa um identificador de recurso"
+      arn_failed: "Não foi possível carregar os detalhes: %{error}"
     toast:
       value_copied: "Valor copiado para a área de transferência"
       resource_id_copied: "ARN copiado para a área de transferência"

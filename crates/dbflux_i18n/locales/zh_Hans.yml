@@ -3515,6 +3515,7 @@ document:
       copy_path: "复制路径"
       arn_loading: "ARN 将随详情一起加载…"
       arn_missing: "存储未报告资源标识符"
+      arn_failed: "无法加载详情：%{error}"
     toast:
       value_copied: "已将值复制到剪贴板"
       resource_id_copied: "已将 ARN 复制到剪贴板"

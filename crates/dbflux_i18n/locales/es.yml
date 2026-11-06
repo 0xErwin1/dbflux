@@ -3515,6 +3515,7 @@ document:
       copy_path: "Copiar ruta"
       arn_loading: "El ARN llega con los detalles…"
       arn_missing: "El almacén no informa de un identificador de recurso"
+      arn_failed: "No se pudieron cargar los detalles: %{error}"
     toast:
       value_copied: "Valor copiado al portapapeles"
       resource_id_copied: "ARN copiado al portapapeles"
