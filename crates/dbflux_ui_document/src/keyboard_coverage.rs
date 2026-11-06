@@ -722,6 +722,12 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
                 "copies one field of the value; the copy key copies the whole value",
             ),
         ),
+        // The entries of a row's right-click menu: while it is up the menu
+        // owns the keyboard, and MenuSelect runs the highlighted entry.
+        (
+            "secret-context-menu-item-*",
+            KeyboardPath::Command(Command::MenuSelect),
+        ),
     ],
 };
 

@@ -9,6 +9,7 @@
 //! closes. Behavior that differs between stores follows the store's
 //! `SecretStoreCapabilities`, never a driver id.
 
+mod context_menu;
 mod data;
 mod details;
 mod listing;
@@ -125,6 +126,18 @@ pub struct SecretStoreDocument {
     region_switch_in_flight: bool,
     /// The toolbar region picker, built only when the driver can switch.
     region_dropdown: Option<Entity<Dropdown>>,
+    /// The origin of the document inside its window, kept by a render-pass
+    /// probe so the context menu can anchor a window-coordinate position in
+    /// the document.
+    panel_origin: Point<Pixels>,
+    /// The open right-click menu of the listing, if any.
+    context_menu: Option<context_menu::SecretContextMenu>,
+    /// A chosen menu entry, queued by its click and run on the next render,
+    /// which has the window the action needs.
+    pending_menu_action: Option<(context_menu::SecretMenuAction, SecretRowKey)>,
+    /// The focus handle of the open menu's overlay, which takes the keyboard
+    /// while the menu is up.
+    context_menu_focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -274,6 +287,10 @@ impl SecretStoreDocument {
             regions_generation: 0,
             region_switch_in_flight: false,
             region_dropdown,
+            panel_origin: Point::default(),
+            context_menu: None,
+            pending_menu_action: None,
+            context_menu_focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         };
 
@@ -381,6 +398,10 @@ impl SecretStoreDocument {
     }
 
     pub fn active_context(&self) -> ContextId {
+        if self.context_menu.is_some() {
+            return ContextId::ContextMenu;
+        }
+
         if self.focus_mode == SecretFocusMode::Search {
             return ContextId::TextInput;
         }
@@ -834,6 +855,10 @@ impl SecretStoreDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.context_menu.is_some() {
+            return self.dispatch_menu_command(cmd, window, cx);
+        }
+
         match cmd {
             Command::SelectNext => self.move_selection(1, cx),
             Command::SelectPrev => self.move_selection(-1, cx),

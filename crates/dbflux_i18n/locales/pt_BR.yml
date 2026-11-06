@@ -3510,10 +3510,17 @@ document:
       body: "%{name} pertence a %{service}. %{service} faz a rotação e a atualização, então o DBFlux o mostra somente leitura."
     action:
       copy_resource_id: "Copiar ARN"
+    context_menu:
+      copy_name: "Copiar nome"
+      copy_path: "Copiar caminho"
+      arn_loading: "O ARN chega com os detalhes…"
+      arn_missing: "O armazenamento não informa um identificador de recurso"
     toast:
       value_copied: "Valor copiado para a área de transferência"
       resource_id_copied: "ARN copiado para a área de transferência"
       error_copied: "Erro copiado para a área de transferência"
+      name_copied: "Nome copiado para a área de transferência"
+      path_copied: "Caminho copiado para a área de transferência"
     value:
       title: "Valor"
       not_loaded: "Valor não carregado"

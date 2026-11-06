@@ -1682,3 +1682,344 @@ fn a_discovery_result_from_a_replaced_connection_is_dropped(cx: &mut TestAppCont
     assert!(text.contains(CURRENT_REGION), "{text}");
     assert!(!text.contains("mars-north-1"), "{text}");
 }
+
+// -- Row context menu ------------------------------------------------------
+
+impl Opened<'_> {
+    /// Presses the secondary button on the rendered element `element_id`, the
+    /// way a user right-clicks a row.
+    fn right_click(&mut self, element_id: &str) {
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
+        let frame = capture.frame(self.window);
+
+        let bounds = frame
+            .nodes()
+            .find(|(_, node)| node.id() == element_id)
+            .map(|(_, node)| node.bounds())
+            .unwrap_or_else(|| panic!("`{element_id}` is drawn"));
+
+        self.window.simulate_event(gpui::MouseDownEvent {
+            position: bounds.center(),
+            modifiers: gpui::Modifiers::default(),
+            button: gpui::MouseButton::Right,
+            click_count: 1,
+            first_mouse: false,
+        });
+        self.window.run_until_parked();
+    }
+
+    /// Left-clicks the drawn menu entry `item_id`.
+    fn click_menu_item(&mut self, item_id: &str) {
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
+        let bounds = capture
+            .frame(self.window)
+            .nodes()
+            .find(|(_, node)| node.id() == item_id)
+            .map(|(_, node)| node.bounds())
+            .unwrap_or_else(|| panic!("`{item_id}` is drawn"));
+
+        self.window
+            .simulate_click(bounds.center(), gpui::Modifiers::default());
+        self.window.run_until_parked();
+    }
+
+    /// The open menu's entries as `SecretMenuAction` names, empty when no
+    /// menu is open.
+    fn menu_actions(&mut self) -> Vec<String> {
+        self.read(|doc| {
+            doc.context_menu
+                .as_ref()
+                .map(|menu| {
+                    menu.items
+                        .iter()
+                        .map(|item| format!("{:?}", item.action))
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+    }
+
+    /// The pane actions' ids, the menu entries the coverage test supplies.
+    fn pane_action_ids(&mut self) -> Vec<String> {
+        self.window.update(|_, cx| {
+            self.doc
+                .read(cx)
+                .pane_actions(&self.doc)
+                .into_iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        })
+    }
+
+    /// A fresh accessibility frame of the current render.
+    fn observe_frame(&mut self) -> gpui::AccessibilityFrame {
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
+        capture.frame(self.window)
+    }
+}
+
+/// Right-clicking a secret row opens the menu anchored at the pointer, the
+/// row becomes the selection, and the menu holds the read-only items only:
+/// the write path does not exist yet, so no edit action may appear.
+#[gpui::test]
+fn a_secondary_click_opens_a_secret_row_menu(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+
+    opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
+
+    assert_eq!(
+        opened.read(|doc| doc.selected().cloned()),
+        Some(SecretRowKey::Secret(KEY_VALUE_SECRET.to_string())),
+        "the right-clicked row becomes the selection"
+    );
+    assert_eq!(
+        opened.menu_actions(),
+        vec!["RetrieveValue", "CopyName", "CopyArn"],
+        "the menu lists the read-only items"
+    );
+
+    let text = opened.rendered_text();
+    for label in ["Retrieve value", "Copy name", "Copy ARN"] {
+        assert!(text.contains(label), "{label} missing: {text}");
+    }
+}
+
+/// A secret managed by another service and a secret with a scheduled
+/// deletion offer the same read-only items; nothing implies an edit.
+#[gpui::test]
+fn restricted_secrets_offer_the_same_read_only_items(cx: &mut TestAppContext) {
+    for name in [MANAGED_SECRET, PENDING_DELETION_SECRET] {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+
+        opened.right_click(&format!("secret-row-{name}"));
+
+        assert!(
+            opened.read(|doc| matches!(
+                doc.selected(),
+                Some(SecretRowKey::Secret(selected)) if selected == name
+            )),
+            "{name} becomes the selection"
+        );
+        assert_eq!(
+            opened.menu_actions(),
+            vec!["RetrieveValue", "CopyName", "CopyArn"],
+            "{name} offers the same read-only items"
+        );
+    }
+}
+
+/// A secret whose deletion is scheduled cannot be retrieved (the document
+/// blocks it), so its Retrieve value entry is disabled and says why instead
+/// of copying or fetching nothing.
+#[gpui::test]
+fn a_secret_pending_deletion_keeps_retrieve_value_disabled(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+
+    opened.right_click(&format!("secret-row-{PENDING_DELETION_SECRET}"));
+
+    let detail = opened.read(|doc| {
+        doc.context_menu
+            .as_ref()
+            .expect("menu open")
+            .items
+            .first()
+            .map(|item| (item.disabled, item.detail.clone()))
+            .expect("Retrieve value is the first entry")
+    });
+    assert!(
+        detail.0,
+        "Retrieve value is disabled while deletion is pending"
+    );
+    let detail = detail.1.unwrap_or_default();
+    assert!(
+        detail.contains("2026"),
+        "the reason names the scheduled deletion: {detail}"
+    );
+    assert!(
+        opened.rendered_text().contains("Deletion scheduled"),
+        "the frame shows the reason"
+    );
+
+    // A normal secret keeps the entry enabled.
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
+    assert!(
+        !opened.read(|doc| doc
+            .context_menu
+            .as_ref()
+            .expect("menu open")
+            .items
+            .first()
+            .map(|item| item.disabled)
+            .expect("Retrieve value is the first entry")),
+        "Retrieve value is enabled for a normal secret"
+    );
+}
+
+/// A parameter row under a path offers Copy name and Retrieve value.
+#[gpui::test]
+fn a_parameter_row_offers_copy_name_and_retrieve_value(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+
+    opened.right_click("secret-row-/app/prod/region");
+
+    assert_eq!(
+        opened.menu_actions(),
+        vec!["RetrieveValue", "CopyName"],
+        "a parameter row offers Copy name and Retrieve value"
+    );
+    let text = opened.rendered_text();
+    assert!(text.contains("Copy name"), "{text}");
+    assert!(text.contains("Retrieve value"), "{text}");
+    assert!(
+        !text.contains("Copy ARN"),
+        "parameters carry no ARN item: {text}"
+    );
+}
+
+/// A path row offers Copy path and Refresh.
+#[gpui::test]
+fn a_path_row_offers_copy_path_and_refresh(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+
+    opened.right_click("secret-path-row-/app/prod/db/");
+
+    assert_eq!(
+        opened.read(|doc| doc.selected().cloned()),
+        Some(SecretRowKey::Path("/app/prod/db/".to_string())),
+        "the right-clicked path becomes the selection"
+    );
+    assert_eq!(
+        opened.menu_actions(),
+        vec!["CopyPath", "Refresh"],
+        "a path row offers Copy path and Refresh"
+    );
+    let text = opened.rendered_text();
+    assert!(text.contains("Copy path"), "{text}");
+    assert!(text.contains("Refresh"), "{text}");
+}
+
+/// Choosing a menu item runs it through the actions the toolbar and the
+/// footer keys already use, and closes the menu.
+#[gpui::test]
+fn choosing_a_menu_item_runs_it_and_closes_the_menu(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+
+    opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
+
+    // Copy name is the second entry of the menu.
+    opened.click_menu_item("secret-context-menu-item-1");
+
+    assert_eq!(opened.clipboard(), Some(KEY_VALUE_SECRET.to_string()));
+    assert!(
+        !opened.rendered_text().contains("Copy name"),
+        "the menu closed after the choice"
+    );
+}
+
+/// Copy path copies the path, from the path row's own menu.
+#[gpui::test]
+fn copy_path_copies_the_right_clicked_path(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+
+    opened.right_click("secret-path-row-/app/prod/db/");
+    opened.click_menu_item("secret-context-menu-item-0");
+
+    assert_eq!(opened.clipboard(), Some("/app/prod/db/".to_string()));
+}
+
+/// The menu closes on Escape and on a click outside, and a menu open over
+/// the listing never swallows a later left click that should reach it.
+#[gpui::test]
+fn escape_and_a_click_outside_close_the_menu(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
+    assert!(
+        !opened.menu_actions().is_empty(),
+        "the menu is open before it closes"
+    );
+
+    assert!(opened.command(Command::Cancel));
+    assert!(
+        !opened.rendered_text().contains("Copy name"),
+        "Escape closes the menu"
+    );
+
+    opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
+    let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
+    let frame = capture.frame(opened.window);
+    let outside = frame
+        .nodes()
+        .find(|(_, node)| node.id() == "secret-refresh")
+        .map(|(_, node)| node.bounds())
+        .expect("the refresh control is drawn");
+    opened.window.simulate_event(gpui::MouseDownEvent {
+        position: outside.center(),
+        modifiers: gpui::Modifiers::default(),
+        button: gpui::MouseButton::Left,
+        click_count: 1,
+        first_mouse: false,
+    });
+    opened.window.run_until_parked();
+
+    assert!(
+        !opened.rendered_text().contains("Copy name"),
+        "a click outside closes the menu"
+    );
+}
+
+/// The keyboard owns the menu: MenuSelect runs the highlighted entry
+/// through the same action a click would, and MenuDown moves the highlight.
+#[gpui::test]
+fn the_keyboard_runs_the_menu(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
+
+    // Retrieve value is the first entry: selecting it right away retrieves.
+    assert!(opened.command(Command::MenuSelect));
+    assert!(
+        opened.read(|doc| matches!(doc.value(), ValueState::Loading))
+            || opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))),
+        "MenuSelect on the highlighted Retrieve value retrieves"
+    );
+    assert!(
+        !opened.rendered_text().contains("Copy name"),
+        "the menu closed after the choice"
+    );
+
+    // Reopened, MenuDown moves the highlight to the next entry.
+    opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
+    assert!(opened.command(Command::MenuDown));
+    assert_eq!(
+        opened.read(|doc| doc.context_menu.as_ref().expect("menu open").selected_index),
+        1
+    );
+}
+
+/// Menu entries of both rows have a keyboard path: the coverage check runs
+/// while each menu is open, so the new entries fail until they are listed.
+#[gpui::test]
+fn the_right_click_menu_items_are_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::SECRET_STORE;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+    let mut secrets = open(cx, FAKE_SECRETS_STORE_ID, None);
+    secrets.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(secrets.pane_action_ids())
+        .assert_covered(&secrets.observe_frame());
+    assert!(
+        checked.iter().any(|id| id == "secret-context-menu-item-0"),
+        "{checked:?}"
+    );
+
+    let mut parameters = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+    parameters.right_click("secret-path-row-/app/prod/db/");
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(parameters.pane_action_ids())
+        .assert_covered(&parameters.observe_frame());
+    assert!(
+        checked.iter().any(|id| id == "secret-context-menu-item-0"),
+        "{checked:?}"
+    );
+}

@@ -3,7 +3,7 @@
 //! lives in `details.rs`.
 
 use super::listing::{PathMode, child_path_label, path_segments, relative_name};
-use super::{RegionListState, SecretFocusMode, SecretRowKey, SecretStoreDocument};
+use super::{RegionListState, SecretFocusMode, SecretRowKey, SecretStoreDocument, context_menu};
 use crate::chrome::{
     connection_segment, document_bar, document_footer, footer_item, footer_key_hint, search_field,
 };
@@ -519,6 +519,7 @@ impl SecretStoreDocument {
         let foreground = theme.foreground;
         let lock_color = theme.warning;
         let row = SecretRowKey::Secret(summary.name.clone());
+        let menu_row = row.clone();
 
         let display_name = if self.path_mode == PathMode::Tree {
             relative_name(&summary.name, self.path.as_deref()).to_string()
@@ -535,6 +536,14 @@ impl SecretStoreDocument {
                 this.select_row(row.clone(), cx);
                 cx.emit(DocumentEvent::RequestFocus);
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    cx.emit(DocumentEvent::RequestFocus);
+                    this.open_context_menu(menu_row.clone(), event.position, window, cx);
+                }),
+            )
             .child(name);
 
         let last_changed = summary
@@ -601,6 +610,7 @@ impl SecretStoreDocument {
         let folder_color = cx.theme().muted_foreground;
         let row = SecretRowKey::Path(path.to_string());
         let open = path.to_string();
+        let menu_row = row.clone();
 
         self.row_frame(format!("secret-path-row-{path}").into(), selected, cx)
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
@@ -611,6 +621,14 @@ impl SecretStoreDocument {
                 }
                 cx.emit(DocumentEvent::RequestFocus);
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    cx.emit(DocumentEvent::RequestFocus);
+                    this.open_context_menu(menu_row.clone(), event.position, window, cx);
+                }),
+            )
             .child(Self::row_name(
                 AppIcon::Folder,
                 folder_color,
@@ -825,24 +843,72 @@ impl Render for SecretStoreDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_value_inputs(window, cx);
 
-        div()
+        // A menu entry chosen by click is queued and runs here, which has
+        // the window the actions' focus changes need.
+        if let Some((action, target)) = self.pending_menu_action.take() {
+            self.run_menu_action(action, target, window, cx);
+        }
+
+        // The menu anchors at the secondary click, which arrives in window
+        // coordinates; this probe keeps the document's own origin so the
+        // popup can be placed inside it.
+        let origin_probe = cx.entity().clone();
+        let origin_canvas = canvas(
+            move |bounds, _, cx| {
+                origin_probe.update(cx, |this, _| {
+                    this.panel_origin = bounds.origin;
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
+
+        let listing = div()
+            .flex_1()
+            .min_w(SecretStoreMetrics::LISTING_MIN_WIDTH)
+            .overflow_hidden()
+            .h_full()
+            .flex()
+            .flex_col()
+            .child(self.render_toolbar(cx))
+            .child(self.render_header(cx))
+            .child(self.render_rows(cx))
+            .child(self.render_footer(cx));
+
+        let mut root = div()
             .track_focus(&self.focus_handle)
             .size_full()
             .flex()
             .bg(cx.theme().popover)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(SecretStoreMetrics::LISTING_MIN_WIDTH)
-                    .overflow_hidden()
-                    .h_full()
-                    .flex()
-                    .flex_col()
-                    .child(self.render_toolbar(cx))
-                    .child(self.render_header(cx))
-                    .child(self.render_rows(cx))
-                    .child(self.render_footer(cx)),
-            )
-            .child(self.render_details_pane(cx))
+            .child(origin_canvas)
+            .child(listing)
+            .child(self.render_details_pane(cx));
+
+        // The menu draws above the document and rebuilds its entries each
+        // frame, so a disabled Copy ARN re-enables once the describe that
+        // the right-click itself triggered lands.
+        let rebuild = self.context_menu.as_ref().map(|menu| menu.target.clone());
+
+        if let Some(target) = rebuild {
+            let items = self.build_menu_items(&target);
+
+            if let Some(menu) = self.context_menu.as_mut() {
+                menu.items = items;
+            }
+        }
+
+        if let Some(menu) = self.context_menu.as_ref() {
+            let element = context_menu::render_context_menu(
+                menu,
+                &self.context_menu_focus,
+                self.panel_origin,
+                cx,
+            );
+
+            root = root.child(element);
+        }
+
+        root
     }
 }
