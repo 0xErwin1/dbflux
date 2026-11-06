@@ -2602,7 +2602,7 @@ impl SecretStoreSource for FakeSecretStore {
             .find(|(id, _)| Some(id) == requested.as_ref())
             .map(|(id, payload)| SecretValue {
                 version: Some(id.clone()),
-                payload: payload_value(id, payload),
+                payload: payload_value(payload),
             })
             .ok_or_else(|| {
                 DbError::object_not_found(format!(
@@ -2736,7 +2736,7 @@ impl FakeSecretStore {
 }
 
 /// The `SecretValue` payload form of a stored version.
-fn payload_value(version: &str, payload: &FakeSecretPayload) -> SecretPayload {
+fn payload_value(payload: &FakeSecretPayload) -> SecretPayload {
     match payload {
         FakeSecretPayload::Text(text) => SecretPayload::Text(SecretString::from(text.clone())),
         FakeSecretPayload::Binary(bytes) => SecretPayload::Binary(SecretSlice::from(bytes.clone())),
