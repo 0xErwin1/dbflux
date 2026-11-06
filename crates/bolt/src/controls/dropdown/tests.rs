@@ -764,3 +764,175 @@ mod menu_ids {
         assert_eq!(selected, Some(1), "clicking the row by its id selects it");
     }
 }
+
+/// A wheel over an open menu whose rows overflow `Fields::MENU_MAX_HEIGHT`:
+/// the rows scroll natively and the keyboard highlight stays where the keys
+/// left it. The event goes through GPUI's own pipeline (`simulate_event`),
+/// so the test keeps failing if the menu grows a wheel handler again — that
+/// handler advanced the highlight a row and re-anchored it with
+/// `scroll_to_item(FirstVisible)` on the same element, which pinned the
+/// highlight to its viewport position while the rows streamed past.
+mod menu_scroll {
+    use super::super::{Dropdown, DropdownItem};
+    use crate::tokens::Fields;
+    use gpui::{
+        AppContext as _, Context, Entity, IntoElement, Modifiers, ParentElement as _, Pixels,
+        Render, ScrollDelta, ScrollWheelEvent, Styled as _, TestAppContext, TouchPhase,
+        VisualTestContext, Window, div, point, px,
+    };
+
+    const DROPDOWN_ID: &str = "scroll-dropdown";
+
+    /// Rows past the ones the menu shows, so the scrollable overflow is
+    /// several whole rows and a wheel notch lands strictly inside it.
+    const EXTRA_ROWS: usize = 8;
+
+    /// How many rows the wheel carries: two, so the assertion is about the
+    /// direction of the scroll and not the exact tracking of one notch.
+    const WHEEL_ROWS: f32 = 2.0;
+
+    /// A selector under the dropdown's id. `debug_bounds` takes a
+    /// `&'static str`, and the id the test asserts on is built from the
+    /// dropdown's own id rather than written out, so it leaks this one
+    /// string.
+    fn selector(suffix: &str) -> &'static str {
+        Box::leak(format!("{DROPDOWN_ID}{suffix}").into_boxed_str())
+    }
+
+    /// The item count that overflows the menu: the rows that fit inside
+    /// `MENU_MAX_HEIGHT` once its own padding is subtracted, plus the extra
+    /// rows that make it scrollable by whole rows.
+    fn menu_item_count(rem_size: Pixels) -> usize {
+        let row_height = Fields::MENU_ROW_HEIGHT.to_pixels(rem_size);
+        let usable = Fields::MENU_MAX_HEIGHT - 2.0 * Fields::MENU_PADDING_Y;
+        let fitted = (usable / row_height).floor() as usize;
+        fitted + EXTRA_ROWS
+    }
+
+    struct Overflow<'a> {
+        dropdown: Entity<Dropdown>,
+        item_count: usize,
+        row_height: Pixels,
+        window: &'a mut VisualTestContext,
+    }
+
+    impl Overflow<'_> {
+        fn highlight(&mut self) -> Option<usize> {
+            self.window
+                .update(|_, cx| self.dropdown.read(cx).highlighted_index())
+        }
+
+        /// The vertical offset of the scrolling rows column. Scrolling the
+        /// content down (a wheel with a negative y delta) takes the offset
+        /// negative.
+        fn rows_offset(&mut self) -> Pixels {
+            self.window
+                .update(|_, cx| self.dropdown.read(cx).menu_scroll_handle.offset().y)
+        }
+
+        /// A real wheel event, delivered through GPUI's event pipeline to
+        /// the center of the rows column.
+        fn wheel(&mut self) {
+            let position = self
+                .window
+                .debug_bounds(selector("-menu-rows"))
+                .expect("the rows column is laid out")
+                .center();
+            let rows = point(px(0.0), -(WHEEL_ROWS * self.row_height));
+            self.window.simulate_event(ScrollWheelEvent {
+                position,
+                delta: ScrollDelta::Pixels(rows),
+                modifiers: Modifiers::none(),
+                touch_phase: TouchPhase::Moved,
+            });
+            self.window.run_until_parked();
+        }
+    }
+
+    struct Host {
+        dropdown: Entity<Dropdown>,
+        item_count: usize,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.dropdown.clone())
+        }
+    }
+
+    fn open_overflowing(cx: &mut TestAppContext) -> Overflow<'_> {
+        cx.update(gpui_component::init);
+
+        let (host, window) = cx.add_window_view(|window, cx| {
+            let rem_size = window.rem_size();
+            let item_count = menu_item_count(rem_size);
+            let dropdown = cx.new(|_cx| {
+                Dropdown::new(DROPDOWN_ID).items(
+                    (0..item_count)
+                        .map(|index| DropdownItem::new(format!("Row {index}")))
+                        .collect(),
+                )
+            });
+            Host {
+                dropdown,
+                item_count,
+            }
+        });
+        window.run_until_parked();
+
+        let (dropdown, item_count) =
+            host.read_with(window, |host, _cx| (host.dropdown.clone(), host.item_count));
+        window.update(|_, cx| dropdown.update(cx, |dropdown, cx| dropdown.open(cx)));
+        window.run_until_parked();
+
+        let row_height =
+            window.update(|window, _| Fields::MENU_ROW_HEIGHT.to_pixels(window.rem_size()));
+        Overflow {
+            dropdown,
+            item_count,
+            row_height,
+            window,
+        }
+    }
+
+    #[gpui::test]
+    fn a_wheel_over_the_rows_scrolls_the_menu_without_moving_the_highlight(
+        cx: &mut TestAppContext,
+    ) {
+        let mut overflow = open_overflowing(cx);
+
+        // The overflow is real before anything is asserted about scrolling:
+        // the last row is drawn below the bottom of the clipped rows column.
+        let item_count = overflow.item_count;
+        let rows = overflow
+            .window
+            .debug_bounds(selector("-menu-rows"))
+            .expect("the rows column is laid out");
+        let last_row = overflow
+            .window
+            .debug_bounds(selector(&format!("-item-{}", overflow.item_count - 1)))
+            .expect("the last row is laid out");
+        assert!(
+            last_row.bottom() > rows.bottom(),
+            "the {item_count} rows overflow the {rows:?} menu: last {last_row:?}"
+        );
+
+        let before = overflow.rows_offset();
+        assert_eq!(before, px(0.0), "an opened menu starts at its first row");
+        let highlight = overflow.highlight();
+        assert_eq!(highlight, Some(0));
+
+        overflow.wheel();
+
+        let after = overflow.rows_offset();
+        assert!(
+            after < before,
+            "the wheel scrolled the rows down: {before} -> {after}"
+        );
+        assert_eq!(
+            overflow.highlight(),
+            Some(0),
+            "the wheel did not move the highlight"
+        );
+    }
+}
