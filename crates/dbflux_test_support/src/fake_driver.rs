@@ -2585,9 +2585,7 @@ impl SecretStoreSource for FakeSecretStore {
         if let Some(failure) = &secret.read_failure {
             return match failure {
                 FakeSecretReadFailure::Denied(message) => Err(DbError::permission_denied(*message)),
-                FakeSecretReadFailure::Unavailable(message) => {
-                    Err(DbError::query_failed(*message))
-                }
+                FakeSecretReadFailure::Unavailable(message) => Err(DbError::query_failed(*message)),
             };
         }
 
@@ -2679,9 +2677,10 @@ impl FakeSecretStore {
         // A write keeps its payload under its own version id, whatever the
         // stage: a `Current` write moves the summary's current version to it,
         // a `Pending` write moves nothing. Earlier versions stay readable.
-        secret
-            .versions
-            .push((version.clone(), FakeSecretPayload::for_write(&request.payload)));
+        secret.versions.push((
+            version.clone(),
+            FakeSecretPayload::for_write(&request.payload),
+        ));
         if request.stage != Some(SecretVersionStage::Pending) {
             secret.details.summary.version = Some(version.clone());
         }
@@ -2724,9 +2723,10 @@ impl FakeSecretStore {
         // The stored value changes; the read authorization does not. A
         // denial that was there before the write is there after it.
         secret.details.summary.version = Some(version.clone());
-        secret
-            .versions
-            .push((version.clone(), FakeSecretPayload::for_write(&request.payload)));
+        secret.versions.push((
+            version.clone(),
+            FakeSecretPayload::for_write(&request.payload),
+        ));
 
         Ok(SecretValue {
             version: Some(version),
