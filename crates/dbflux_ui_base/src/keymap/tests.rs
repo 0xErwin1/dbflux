@@ -322,6 +322,45 @@ fn results_layer_binds_shift_s_to_find_similar_rows() {
     );
 }
 
+/// A text field inside a results document keeps every printable key the
+/// Results layer binds. Only the reported field routes itself to
+/// `ContextId::TextInput`, so the layer's own predicate has to keep the
+/// letters out of the way: `r` renames a row and `t` cycles the view, but a
+/// focused filter, sort, projection or builder-rail field types them.
+#[test]
+fn results_layer_letters_are_typed_in_a_focused_field() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]);
+    let grid = element_stack(root.clone(), &[]);
+    let field = element_stack(root, &["Input"]);
+
+    for (keys, command) in [
+        ("r", Command::Rename),
+        ("t", Command::CycleDocumentView),
+        ("o", Command::ResultsAddRow),
+        ("y", Command::ResultsCopyRow),
+        ("i", Command::ToggleRecordView),
+        ("v", Command::ToggleValuePanel),
+        ("x", Command::Delete),
+        ("space", Command::ExpandCollapse),
+    ] {
+        let in_grid = top_action(&keymap, keys, &grid)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the results grid"));
+        assert!(
+            runs_command(in_grid.as_ref(), command),
+            "`{keys}` must run {command:?} in the results grid"
+        );
+
+        let in_field = top_action(&keymap, keys, &field);
+        assert!(
+            in_field
+                .as_ref()
+                .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+            "`{keys}` is typed text in a focused results field"
+        );
+    }
+}
+
 /// `space` in the Results layer must resolve to `ExpandCollapse`, matching
 /// the Sidebar layer's binding, so the object browser's "Space
 /// preview"/"Space properties" footer hints are actually live.

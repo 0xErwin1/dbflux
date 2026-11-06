@@ -1639,7 +1639,7 @@ impl ContextId {
             ContextId::Global => "Global && !Modal",
             ContextId::Sidebar => "Sidebar && !Modal",
             ContextId::Editor => "Editor && !Modal",
-            ContextId::Results => "Results && !Modal",
+            ContextId::Results => "Results && !Input && !Modal",
             ContextId::BackgroundTasks => "BackgroundTasks && !Modal",
             ContextId::Audit => "Audit && !Modal",
             ContextId::SchemaViz => "SchemaViz && !Modal",
