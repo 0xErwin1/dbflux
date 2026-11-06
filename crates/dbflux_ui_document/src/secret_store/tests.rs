@@ -2250,9 +2250,11 @@ fn the_menu_opens_at_the_click_and_stays_inside_the_window(cx: &mut TestAppConte
     // A click near the bottom-right corner: the anchor must fit the window
     // instead of drawing off it.
     assert!(opened.command(Command::Cancel));
+    // A click six pixels inside the corner, not a layout size: no token
+    // describes a pointer position.
     let corner = gpui::point(
-        viewport.width - gpui::px(6.0),
-        viewport.height - gpui::px(6.0),
+        viewport.width - gpui::px(6.0), // guardrail-allow: pointer position, not spacing
+        viewport.height - gpui::px(6.0), // guardrail-allow: pointer position, not spacing
     );
     opened.open_menu_at(SecretRowKey::Secret(KEY_VALUE_SECRET.to_string()), corner);
 
