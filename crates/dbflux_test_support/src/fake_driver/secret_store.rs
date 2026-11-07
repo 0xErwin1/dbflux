@@ -425,10 +425,14 @@ impl FakeSecretStore {
             version.clone(),
             FakeSecretPayload::for_write(&request.payload),
         ));
+        for entry in secret.history.iter_mut() {
+            entry.is_current = false;
+        }
         secret.history.insert(
             0,
             SecretVersionInfo {
                 modified_by: Some(FAKE_WRITER.to_string()),
+                is_current: true,
                 ..written_version(&version, Vec::new())
             },
         );
@@ -451,6 +455,7 @@ fn written_version(id: &str, labels: Vec<String>) -> SecretVersionInfo {
         labels,
         created: fake_time(11, 7, 12),
         modified_by: None,
+        is_current: false,
     }
 }
 
@@ -460,6 +465,7 @@ fn written_version(id: &str, labels: Vec<String>) -> SecretVersionInfo {
 fn move_current_label(history: &mut Vec<SecretVersionInfo>, version: &str) {
     for entry in history.iter_mut() {
         entry.labels.retain(|label| label != "AWSPREVIOUS");
+        entry.is_current = false;
 
         for label in entry.labels.iter_mut() {
             if label == "AWSCURRENT" {
@@ -468,7 +474,13 @@ fn move_current_label(history: &mut Vec<SecretVersionInfo>, version: &str) {
         }
     }
 
-    history.insert(0, written_version(version, vec!["AWSCURRENT".to_string()]));
+    history.insert(
+        0,
+        SecretVersionInfo {
+            is_current: true,
+            ..written_version(version, vec!["AWSCURRENT".to_string()])
+        },
+    );
 }
 
 /// Every label in use, sorted, like the real store's `describe`.
@@ -548,6 +560,7 @@ fn fake_secret(
         labels: Vec::new(),
         created: details.created,
         modified_by: details.last_changed_by.clone(),
+        is_current: true,
     }];
 
     FakeSecret {
@@ -570,7 +583,14 @@ fn with_history(
             .iter()
             .map(|(info, payload)| (info.id.clone(), payload.clone()))
             .collect(),
-        history: history.into_iter().map(|(info, _)| info).collect(),
+        history: history
+            .into_iter()
+            .enumerate()
+            .map(|(index, (info, _))| SecretVersionInfo {
+                is_current: index == 0,
+                ..info
+            })
+            .collect(),
         ..secret
     }
 }
@@ -586,6 +606,7 @@ fn history_row(
         labels: labels.iter().map(ToString::to_string).collect(),
         created,
         modified_by: modified_by.map(ToString::to_string),
+        is_current: false,
     }
 }
 

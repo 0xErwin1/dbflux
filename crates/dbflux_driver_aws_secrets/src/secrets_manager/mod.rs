@@ -573,9 +573,12 @@ pub(crate) fn versions_from_entries(entries: &[SecretVersionsListEntry]) -> Vec<
     let mut versions: Vec<SecretVersionInfo> = entries
         .iter()
         .filter_map(|entry| {
+            let labels = entry.version_stages().to_vec();
+
             Some(SecretVersionInfo {
                 id: entry.version_id()?.to_string(),
-                labels: entry.version_stages().to_vec(),
+                is_current: labels.iter().any(|stage| stage == CURRENT_STAGE),
+                labels,
                 created: entry.created_date().and_then(smithy_datetime_to_chrono),
                 modified_by: None,
             })

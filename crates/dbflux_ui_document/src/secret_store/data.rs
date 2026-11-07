@@ -20,10 +20,6 @@ use gpui::Context;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// The staging label a store with movable labels keeps on its current
-/// version.
-const CURRENT_LABEL: &str = "AWSCURRENT";
-
 impl SecretStoreDocument {
     pub(crate) fn connection(&self, cx: &Context<Self>) -> Option<Arc<dyn Connection>> {
         self.app_state
@@ -371,9 +367,8 @@ impl SecretStoreDocument {
     }
 
     /// The version the store serves as the selected secret's current value:
-    /// the describe's, else the one the history marks (the row holding the
-    /// current label, or the highest number on a store without labels), else
-    /// the listing's.
+    /// the describe's, else the one the history marks current, else the
+    /// listing's.
     pub(crate) fn current_version_id(&self) -> Option<&str> {
         let described = match &self.details {
             DetailsState::Loaded(details) => details.summary.version.as_deref(),
@@ -393,20 +388,10 @@ impl SecretStoreDocument {
             return None;
         };
 
-        let row = if self.store.supports(SecretStoreCapabilities::VERSION_LABELS) {
-            versions
-                .iter()
-                .find(|version| version.labels.iter().any(|label| label == CURRENT_LABEL))
-        } else {
-            versions
-                .iter()
-                .filter_map(|version| Some((version.id.parse::<u64>().ok()?, version)))
-                .max_by_key(|(number, _)| *number)
-                .map(|(_, version)| version)
-                .or_else(|| versions.first())
-        };
-
-        row.map(|version| version.id.as_str())
+        versions
+            .iter()
+            .find(|version| version.is_current)
+            .map(|version| version.id.as_str())
     }
 
     pub(crate) fn is_current_version(&self, version: &str) -> bool {

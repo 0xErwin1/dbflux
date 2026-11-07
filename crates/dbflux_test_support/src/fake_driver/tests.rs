@@ -970,3 +970,60 @@ fn a_second_pending_write_moves_the_pending_label() {
     assert_eq!(holders, ["v-written-2"]);
     assert_eq!(versions.len(), 5);
 }
+
+fn current_ids(versions: &[dbflux_core::SecretVersionInfo]) -> Vec<&str> {
+    versions
+        .iter()
+        .filter(|version| version.is_current)
+        .map(|version| version.id.as_str())
+        .collect()
+}
+
+#[test]
+fn the_history_marks_exactly_one_current_version_across_writes() {
+    let (_driver, connection) = connected();
+    let flat = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake flat store exists");
+    let parameters = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+    let name = "prod/api/credentials";
+    let parameter = "/app/prod/db/host";
+
+    assert_eq!(
+        current_ids(&flat.list_versions(name).unwrap()),
+        ["v-current"]
+    );
+    assert_eq!(
+        current_ids(&parameters.list_versions(parameter).unwrap()),
+        ["3"]
+    );
+
+    let mut pending = SecretPutRequest::text(name, "staged value");
+    pending.stage = Some(dbflux_core::SecretVersionStage::Pending);
+    flat.put_value(&pending).expect("a staged write");
+    assert_eq!(
+        current_ids(&flat.list_versions(name).unwrap()),
+        ["v-current"],
+        "a pending write moves no current version"
+    );
+
+    let written = flat
+        .put_value(&SecretPutRequest::text(name, "new current"))
+        .expect("a current write")
+        .version
+        .expect("version");
+    assert_eq!(
+        current_ids(&flat.list_versions(name).unwrap()),
+        [written.as_str()]
+    );
+
+    parameters
+        .put_value(&SecretPutRequest::text(parameter, "db2"))
+        .expect("a parameter write");
+    assert_eq!(
+        current_ids(&parameters.list_versions(parameter).unwrap()),
+        ["4"]
+    );
+}
