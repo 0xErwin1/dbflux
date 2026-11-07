@@ -496,6 +496,22 @@ jobs:
         if: needs.changes.outputs.rust != 'false'
         run: cargo check -p gpui-mcp-server --locked
 
+      # libduckdb-sys unpacks its bundled sources into target/duckdb-sources/<key>
+      # and marks a finished tree with `.complete`. A cache restored from an
+      # older key can carry that directory without the marker, and the build
+      # script then fails renaming its fresh tree onto it (DirectoryNotEmpty).
+      # A tree without the marker is unusable by definition, so drop it.
+      - name: Drop unfinished DuckDB source trees
+        if: needs.changes.outputs.rust != 'false'
+        shell: bash
+        run: |
+          for tree in target/duckdb-sources/*/; do
+            if [ -d "$tree" ] && [ ! -f "$tree.complete" ]; then
+              echo "removing unfinished $tree"
+              rm -rf "$tree"
+            fi
+          done
+
       # The DuckDB driver links a bundled C++ engine and relies on its file lock
       # and on native paths, which `cargo check` compiles but never exercises.
       # Its unit tests need no service, so they run on both platforms; the
