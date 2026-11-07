@@ -348,7 +348,10 @@ use dbflux_core::secrecy::ExposeSecret;
 use super::*;
 
 fn connected() -> (FakeDriver, Box<dyn Connection>) {
-    let driver = FakeDriver::new(DbKind::AwsSecrets);
+    connected_with(FakeDriver::new(DbKind::AwsSecrets))
+}
+
+fn connected_with(driver: FakeDriver) -> (FakeDriver, Box<dyn Connection>) {
     let profile = ConnectionProfile::new_with_driver(
         "fake-aws-secrets",
         DbKind::AwsSecrets,
@@ -810,6 +813,54 @@ fn a_write_adds_the_new_version_at_the_top_of_the_history() {
     assert_eq!(versions[0].labels, ["AWSCURRENT"]);
     assert_eq!(versions[1].labels, ["AWSPREVIOUS"]);
     assert!(versions[2].labels.is_empty());
+}
+
+#[test]
+fn a_value_request_records_the_version_it_asked_for() {
+    let (driver, connection) = connected();
+    let secrets = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake secrets store exists");
+
+    secrets
+        .get_value("prod/api/credentials", None)
+        .expect("the current value");
+    secrets
+        .get_value("prod/api/credentials", Some("v-previous"))
+        .expect("an older version");
+
+    assert_eq!(
+        driver.secret_store_calls().value_version_requests,
+        [
+            (
+                FAKE_SECRETS_STORE_ID.to_string(),
+                "prod/api/credentials".to_string(),
+                None
+            ),
+            (
+                FAKE_SECRETS_STORE_ID.to_string(),
+                "prod/api/credentials".to_string(),
+                Some("v-previous".to_string())
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_configured_history_failure_fails_only_that_secrets_listing() {
+    let driver = FakeDriver::new(DbKind::AwsSecrets)
+        .with_secret_versions_error("prod/api/credentials", "not authorized");
+    let (_driver, connection) = connected_with(driver);
+    let secrets = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake secrets store exists");
+
+    assert!(matches!(
+        secrets.list_versions("prod/api/credentials"),
+        Err(DbError::PermissionDenied(_))
+    ));
+    assert!(secrets.list_versions("prod/db/master").is_ok());
+    assert!(secrets.get_value("prod/api/credentials", None).is_ok());
 }
 
 #[test]

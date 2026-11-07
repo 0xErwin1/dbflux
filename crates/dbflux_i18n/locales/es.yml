@@ -3501,7 +3501,24 @@ document:
       created: "Creado"
       last_changed: "Último cambio"
       last_retrieved: "Última obtención"
-      versions: "Versiones"
+    versions:
+      title: "Versiones"
+      history_title: "Historial"
+      count:
+        one: "%{count} versión"
+        many: "%{count} versiones"
+      column:
+        version: "Versión"
+        labels: "Etiquetas de etapa"
+        created: "Creada"
+      no_labels: "sin etiquetas"
+      history_version: "v%{id}"
+      loading: "Cargando las versiones…"
+      failed: "No se pudieron cargar las versiones"
+      retrieve: "Obtener la versión %{version}"
+      back_to_current: "Volver a la actual"
+      shown: "Mostrando la versión %{version}"
+      not_current: "No es la versión actual. La obtención se audita, el valor no."
     tags:
       title: "Etiquetas"
       none: "Sin etiquetas"

@@ -6,6 +6,9 @@ pub struct FakeSecretStoreCalls {
     pub list_requests: Vec<(String, SecretListRequest)>,
     pub described: Vec<(String, String)>,
     pub value_requests: Vec<(String, String)>,
+    /// Every `get_value` call, as `(store_id, name, version)`: the version
+    /// the caller asked for, `None` for the current value.
+    pub value_version_requests: Vec<(String, String, Option<String>)>,
     /// Every `put_value` attempt, accepted or not, as `(store_id, name)`. A
     /// refused write must not reach the store, so a test watches this list
     /// and never the payload.
@@ -233,6 +236,13 @@ impl SecretStoreSource for FakeSecretStore {
         mutex_lock(&self.state.secret_store_calls)
             .value_requests
             .push((self.descriptor.id.clone(), name.to_string()));
+        mutex_lock(&self.state.secret_store_calls)
+            .value_version_requests
+            .push((
+                self.descriptor.id.clone(),
+                name.to_string(),
+                version.map(ToString::to_string),
+            ));
 
         let secret = self.find(name)?;
 
@@ -270,6 +280,14 @@ impl SecretStoreSource for FakeSecretStore {
         mutex_lock(&self.state.secret_store_calls)
             .version_listings
             .push((self.descriptor.id.clone(), name.to_string()));
+
+        let failure = rwlock_read(&self.state.secret_version_errors)
+            .iter()
+            .find(|(failing, _)| failing == name)
+            .map(|(_, message)| message.clone());
+        if let Some(message) = failure {
+            return Err(DbError::permission_denied(message));
+        }
 
         self.find(name).map(|secret| secret.history)
     }

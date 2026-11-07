@@ -3,9 +3,10 @@
 
 use super::render::{UNKNOWN, format_optional_time, listing_shortcut};
 use super::value::{MASK, RetrievedValue, ValueContent, ValueFailure, ValueView};
-use super::{DetailsState, SecretRowKey, SecretStoreDocument, ValueState};
+use super::{DetailsState, SecretRowKey, SecretStoreDocument, ValueState, VersionsState};
 use crate::buckets_table::format_bytes;
 use dbflux_app::keymap::Command;
+use dbflux_components::composites::ListRow;
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::fonts;
 use dbflux_components::icons::AppIcon;
@@ -16,7 +17,9 @@ use dbflux_components::primitives::{
 use dbflux_components::tokens::{
     ChamferCut, ChromeColors, DocumentMetrics, SecretStoreMetrics, ui,
 };
-use dbflux_core::{SecretDetails, SecretRotation, SecretStoreCapabilities, SecretSummary};
+use dbflux_core::{
+    SecretDetails, SecretRotation, SecretStoreCapabilities, SecretSummary, SecretVersionInfo,
+};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -29,6 +32,37 @@ pub(super) const VIEWER_VISIBLE_LINES: f32 = 14.0;
 
 /// Width of the viewer's line-number gutter: three digits at the editor size.
 const VIEWER_GUTTER_WIDTH: Rems = ui(28.0);
+
+/// Columns of the staged versions table. The artboard's 150 px version and
+/// created columns are narrower here: the details pane is one column wide.
+const VERSION_ID_WIDTH: Rems = ui(80.0);
+const VERSION_CREATED_WIDTH: Rems = ui(118.0);
+const HISTORY_VERSION_WIDTH: Rems = ui(44.0);
+const VERSION_HEADER_HEIGHT: Rems = ui(30.0);
+const VERSION_ROW_HEIGHT: Rems = ui(40.0);
+const HISTORY_ROW_HEIGHT: Rems = ui(30.0);
+const VERSION_HEADER_FONT: Rems = ui(11.5);
+const VERSION_ROW_FONT: Rems = ui(12.5);
+
+/// Gap between the label chips of one version, as the artboard sets it.
+const LABEL_CHIP_GAP: Pixels = px(6.0); // guardrail-allow: artboard 02 spacing between staging label chips, no token carries 6 px here
+
+/// Characters of a version id the table shows before the ellipsis.
+const VERSION_ID_CHARS: usize = 8;
+
+/// `a41c09e2-…` as `a41c09e2…`: the first characters of an id longer than the
+/// column, so ids that differ late stay distinguishable by the row, not the
+/// text.
+pub(super) fn short_version_id(id: &str) -> String {
+    let mut chars = id.chars();
+    let head: String = chars.by_ref().take(VERSION_ID_CHARS).collect();
+
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
 
 fn section_title(title: String, cx: &App) -> Div {
     div()
@@ -76,19 +110,6 @@ fn detail_row(label: String, value: String, cx: &App) -> AnyElement {
 
 fn or_unknown(value: Option<&str>) -> String {
     value.map_or_else(|| UNKNOWN.to_string(), str::to_string)
-}
-
-/// "4 · AWSCURRENT, AWSPREVIOUS": the version count and the labels.
-fn versions_label(details: &SecretDetails) -> String {
-    let count = details.version_count.map(|count| count.to_string());
-    let labels = (!details.version_labels.is_empty()).then(|| details.version_labels.join(", "));
-
-    match (count, labels) {
-        (Some(count), Some(labels)) => format!("{count} · {labels}"),
-        (Some(count), None) => count,
-        (None, Some(labels)) => labels,
-        (None, None) => UNKNOWN.to_string(),
-    }
 }
 
 /// The last change, with the principal that made it when the store reports
@@ -167,6 +188,7 @@ impl SecretStoreDocument {
         match &self.details {
             DetailsState::Loaded(details) => {
                 sections.push(self.render_metadata_section(details, cx).into_any_element());
+                sections.extend(self.render_versions_section(cx));
 
                 if self.store.supports(SecretStoreCapabilities::ROTATION) {
                     sections.push(render_rotation_section(details, cx).into_any_element());
@@ -298,19 +320,205 @@ impl SecretStoreDocument {
             ));
         }
 
-        if self.store.supports(SecretStoreCapabilities::VERSIONS) && !typed {
-            rows.push(detail_row(
-                label("document.secret_store.details.versions"),
-                versions_label(details),
-                cx,
-            ));
-        }
-
         section(
             dbflux_i18n::t!("document.secret_store.details.title"),
             rows,
             cx,
         )
+    }
+
+    /// The version history: a table of versions with their staging labels
+    /// and creation date on a store with labels, a list of versions with the
+    /// principal and date on one without. `None` while there is nothing to
+    /// show: before the load starts, and on a store without versions.
+    fn render_versions_section(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let staged = self.store.supports(SecretStoreCapabilities::VERSION_LABELS);
+
+        let title = if staged {
+            dbflux_i18n::t!("document.secret_store.versions.title")
+        } else {
+            dbflux_i18n::t!("document.secret_store.versions.history_title")
+        };
+
+        let mut header = div()
+            .flex()
+            .items_center()
+            .gap(DocumentMetrics::GAP)
+            .child(section_title(title, cx))
+            .child(div().flex_1());
+
+        let body: AnyElement = match &self.versions {
+            VersionsState::Idle | VersionsState::NotSupported => return None,
+            VersionsState::Loading => {
+                Text::caption(dbflux_i18n::t!("document.secret_store.versions.loading"))
+                    .muted_foreground()
+                    .into_any_element()
+            }
+            VersionsState::Failed(reason) => BannerBlock::new(
+                BannerVariant::Danger,
+                dbflux_i18n::t!("document.secret_store.versions.failed"),
+            )
+            .with_body(reason.clone())
+            .into_any_element(),
+            VersionsState::Loaded(versions) => {
+                header = header.child(Badge::new(
+                    versions_count_label(versions.len()),
+                    BadgeTone::Neutral,
+                ));
+
+                self.render_versions_rows(versions, staged, cx)
+                    .into_any_element()
+            }
+        };
+
+        Some(
+            div()
+                .id("secret-versions")
+                .flex()
+                .flex_col()
+                .gap(SecretStoreMetrics::ROW_GAP)
+                .child(header)
+                .child(body)
+                .into_any_element(),
+        )
+    }
+
+    fn render_versions_rows(
+        &self,
+        versions: &[SecretVersionInfo],
+        staged: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let shown = match self.value {
+            ValueState::Loading | ValueState::Loaded(_) => self
+                .value_version
+                .as_deref()
+                .or_else(|| self.current_version_id()),
+            _ => None,
+        };
+
+        let rows: Vec<AnyElement> = versions
+            .iter()
+            .enumerate()
+            .map(|(index, version)| {
+                let selected = shown == Some(version.id.as_str());
+                self.render_version_row(index, version, staged, selected, cx)
+            })
+            .collect();
+
+        div()
+            .flex()
+            .flex_col()
+            .when(staged, |table| table.child(versions_table_header(cx)))
+            .children(rows)
+    }
+
+    /// One version: clicking it retrieves that version's value. The row
+    /// shows metadata only, never a value.
+    fn render_version_row(
+        &self,
+        index: usize,
+        version: &SecretVersionInfo,
+        staged: bool,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let strong = ChromeColors::strong(theme);
+        let family = fonts::editor_family(cx);
+        let created = format_optional_time(version.created);
+
+        let row = ListRow::new(SharedString::from(format!("secret-version-row-{index}")))
+            .selected(selected)
+            .build(cx)
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(DocumentMetrics::GAP)
+            .text_size(VERSION_ROW_FONT)
+            .border_b_1()
+            .border_color(theme.table_row_border)
+            .on_click(cx.listener(move |this, _, _, cx| this.activate_version(index, cx)));
+
+        let cell = |text: String, width: Rems, color: Hsla| {
+            div()
+                .w(width)
+                .flex_shrink_0()
+                .truncate()
+                .font_family(family.clone())
+                .text_color(color)
+                .child(text)
+        };
+
+        if !staged {
+            let author = version
+                .modified_by
+                .clone()
+                .unwrap_or_else(|| UNKNOWN.to_string());
+
+            return row
+                .h(HISTORY_ROW_HEIGHT)
+                .child(cell(
+                    dbflux_i18n::t!(
+                        "document.secret_store.versions.history_version",
+                        id = version.id.as_str()
+                    ),
+                    HISTORY_VERSION_WIDTH,
+                    strong,
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(family.clone())
+                        .text_size(DocumentMetrics::TABLE_META_FONT)
+                        .text_color(muted)
+                        .child(author),
+                )
+                .child(
+                    cell(created, VERSION_CREATED_WIDTH, muted)
+                        .text_size(DocumentMetrics::TABLE_META_FONT),
+                )
+                .into_any_element();
+        }
+
+        let current = self.is_current_version(&version.id);
+        let labels = if version.labels.is_empty() {
+            div().child(
+                Text::caption(dbflux_i18n::t!("document.secret_store.versions.no_labels"))
+                    .muted_foreground(),
+            )
+        } else {
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(LABEL_CHIP_GAP)
+                .children(version.labels.iter().map(|label| {
+                    Badge::new(
+                        label.clone(),
+                        if current {
+                            BadgeTone::Success
+                        } else {
+                            BadgeTone::Neutral
+                        },
+                    )
+                }))
+        };
+
+        row.h(VERSION_ROW_HEIGHT)
+            .child(cell(
+                short_version_id(&version.id),
+                VERSION_ID_WIDTH,
+                strong,
+            ))
+            .child(div().flex_1().min_w_0().child(labels))
+            .child(
+                cell(created, VERSION_CREATED_WIDTH, muted)
+                    .text_size(DocumentMetrics::TABLE_META_FONT),
+            )
+            .into_any_element()
     }
 
     fn render_value_section(
@@ -352,7 +560,31 @@ impl SecretStoreDocument {
             .flex_col()
             .gap(SecretStoreMetrics::ROW_GAP)
             .child(header)
+            .when_some(self.value_version.clone(), |section, version| {
+                section.child(self.render_version_banner(version, cx))
+            })
             .child(body)
+    }
+
+    /// Says which version the value section shows when it is not the
+    /// current one, with the one action that goes back.
+    fn render_version_banner(&self, version: String, cx: &mut Context<Self>) -> BannerBlock {
+        let back = Button::new(
+            "secret-version-back-to-current",
+            dbflux_i18n::t!("document.secret_store.versions.back_to_current"),
+        )
+        .icon(AppIcon::RotateCcw)
+        .tab_stop(false)
+        .on_click(cx.listener(|this, _, _, cx| this.back_to_current_version(cx)));
+
+        BannerBlock::new(
+            BannerVariant::Info,
+            dbflux_i18n::t!("document.secret_store.versions.shown", version = version),
+        )
+        .with_body(dbflux_i18n::t!(
+            "document.secret_store.versions.not_current"
+        ))
+        .with_actions(back)
     }
 
     /// "Retrieved 14:02 · audited" once a value is shown.
@@ -917,6 +1149,51 @@ fn render_value_failed(failure: &ValueFailure, cx: &mut Context<SecretStoreDocum
                 "document.secret_store.value.metadata_loaded"
             ))
             .muted_foreground(),
+        )
+}
+
+/// "1 version" or "N versions".
+fn versions_count_label(count: usize) -> String {
+    let key = if count == 1 {
+        "document.secret_store.versions.count.one"
+    } else {
+        "document.secret_store.versions.count.many"
+    };
+
+    dbflux_i18n::t!(key, count = count)
+}
+
+/// The column titles of the staged table: Version, Staging labels, Created.
+fn versions_table_header(cx: &App) -> Div {
+    let theme = cx.theme();
+
+    div()
+        .flex()
+        .items_center()
+        .gap(DocumentMetrics::GAP)
+        .h(VERSION_HEADER_HEIGHT)
+        .border_b_1()
+        .border_color(theme.border)
+        .text_size(VERSION_HEADER_FONT)
+        .text_color(theme.muted_foreground)
+        .child(
+            div()
+                .w(VERSION_ID_WIDTH)
+                .flex_shrink_0()
+                .child(dbflux_i18n::t!(
+                    "document.secret_store.versions.column.version"
+                )),
+        )
+        .child(div().flex_1().min_w_0().child(dbflux_i18n::t!(
+            "document.secret_store.versions.column.labels"
+        )))
+        .child(
+            div()
+                .w(VERSION_CREATED_WIDTH)
+                .flex_shrink_0()
+                .child(dbflux_i18n::t!(
+                    "document.secret_store.versions.column.created"
+                )),
         )
 }
 

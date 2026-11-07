@@ -728,6 +728,16 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
             "secret-value-editor-discard",
             KeyboardPath::Menu("secret-editor-discard"),
         ),
+        // The version history: each row retrieves its version, and Back to
+        // current replaces a historical value; both are pane actions.
+        (
+            "secret-version-row-*",
+            KeyboardPath::Menu("secret-version-retrieve-*"),
+        ),
+        (
+            "secret-version-back-to-current",
+            KeyboardPath::Menu("secret-version-current"),
+        ),
         (
             "secret-value-copy-*",
             KeyboardPath::MouseOnly(
