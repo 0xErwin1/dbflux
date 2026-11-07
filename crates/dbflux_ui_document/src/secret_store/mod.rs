@@ -43,6 +43,7 @@ use dbflux_core::{
 };
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 use uuid::Uuid;
 
@@ -968,6 +969,24 @@ impl SecretStoreDocument {
 
     // -- Command dispatch ------------------------------------------------
 
+    /// The `e` key: `start_value_edit` returns without a word when the
+    /// connection is gone, which for a key press would read as a dead key,
+    /// so that case is reported the way a save without a connection is.
+    fn edit_value_from_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.connection(cx).is_none() {
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::User,
+                    dbflux_i18n::t!("document.secret_store.error.connection_unavailable"),
+                ),
+                cx,
+            );
+            return;
+        }
+
+        self.start_value_edit(window, cx);
+    }
+
     pub fn dispatch_command(
         &mut self,
         cmd: Command,
@@ -993,7 +1012,7 @@ impl SecretStoreDocument {
             Command::CycleDocumentView if self.hierarchical() => self.toggle_path_mode(cx),
             Command::ColumnLeft if self.hierarchical() => self.navigate_up(cx),
             Command::ResultsNextPage => self.load_more(cx),
-            Command::EditValue if self.can_edit_value() => self.start_value_edit(window, cx),
+            Command::EditValue if self.can_edit_value() => self.edit_value_from_key(window, cx),
             Command::RefreshSchema => self.refresh(cx),
             Command::FocusSearch | Command::FocusToolbar => self.focus_search(window, cx),
             Command::Cancel => {

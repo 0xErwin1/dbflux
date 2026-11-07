@@ -17,6 +17,7 @@ use std::rc::Rc;
 
 mod close_flush;
 mod document_focus;
+mod secret_edit;
 
 fn new_workspace(
     cx: &mut TestAppContext,

@@ -402,7 +402,7 @@ A read-only delete does not change the clipboard.
 | `/` | Focus search/filter |
 | `x` | Delete row |
 | `r` | Rename / edit |
-| `e` | Edit the value of the selected secret in the AWS Secrets document |
+| `e` | Edit the value of the selected secret in the AWS Secrets document, once its value has been retrieved and only when it can be edited (plaintext, not managed by another service, not scheduled for deletion, in a store that accepts writes) |
 | `o` | Add row |
 | `y` | Copy row |
 | `i` | Toggle the record view (one row, field per line) |

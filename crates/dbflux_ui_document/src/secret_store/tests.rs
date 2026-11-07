@@ -4100,14 +4100,27 @@ fn the_edit_value_command_falls_through_when_nothing_can_be_edited(cx: &mut Test
     assert!(!opened.read(|doc| doc.is_editing_value()));
 }
 
-/// The row menu's Edit value entry draws the `e` keycap the keymap binds.
+/// The row menu's Edit value entry draws the `e` keycap the keymap binds:
+/// the stored hint and a rendered node that holds exactly that text, which
+/// the frame does not contain before the menu opens.
 #[gpui::test]
 fn the_row_menu_draws_the_e_keycap_on_edit_value(cx: &mut TestAppContext) {
     use super::context_menu::SecretMenuAction;
 
+    fn keycaps(opened: &mut Opened<'_>) -> usize {
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
+        let frame = capture.frame(opened.window);
+        frame
+            .nodes()
+            .filter(|(_, node)| node.content_text() == "e")
+            .count()
+    }
+
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
     opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    let before = keycaps(&mut opened);
+
     opened.right_click(&format!("secret-row-{PLAINTEXT_SECRET}"));
 
     let shortcut = opened.read(|doc| {
@@ -4124,4 +4137,40 @@ fn the_row_menu_draws_the_e_keycap_on_edit_value(cx: &mut TestAppContext) {
     });
 
     assert_eq!(shortcut.as_deref(), Some("e"));
+    assert_eq!(
+        keycaps(&mut opened),
+        before + 1,
+        "the menu draws one more `e` keycap"
+    );
+}
+
+/// An `e` press that can edit but has no connection to edit through is not
+/// swallowed: it is reported with the same wording a save without a
+/// connection uses, and opens nothing.
+#[gpui::test]
+fn the_edit_value_command_reports_a_missing_connection(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+
+    let profile_id = opened.read(|doc| doc.profile_id);
+    opened.update(|doc, cx| {
+        doc.app_state.update(cx, |state, _| {
+            state.connections_mut().remove(&profile_id);
+        });
+    });
+    assert!(opened.read(|doc| doc.can_edit_value()));
+    assert!(opened.reported_errors().is_empty());
+
+    assert!(opened.command(Command::EditValue));
+
+    assert!(!opened.read(|doc| doc.is_editing_value()));
+    let reported = opened.reported_errors();
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert!(
+        reported[0].1.contains(&dbflux_i18n::t!(
+            "document.secret_store.error.connection_unavailable"
+        )),
+        "{reported:?}"
+    );
 }
