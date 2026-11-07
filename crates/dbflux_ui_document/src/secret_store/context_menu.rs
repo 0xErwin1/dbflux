@@ -4,10 +4,14 @@
 //! entry dispatches through the actions the toolbar, the footer keys and the
 //! pane actions already use — the menu adds no logic of its own.
 //!
-//! The menu lists read-only actions only. Any write action (Edit value,
-//! Rotate now, Edit tags, Delete) waits until the write path exists
-//! (issue #1270), and "Open in tab" waits for a per-secret document target:
-//! the value pane is deliberately scoped to this tab.
+//! The menu entries dispatch through the actions the details pane and the
+//! pane actions already use — the menu adds no logic of its own. Edit value
+//! is the one write-shaped entry: it opens the details pane's editor for a
+//! value that can be edited, the same `start_value_edit` the button calls.
+//! The rest of the write surface (Rotate now, Edit tags, Delete) waits
+//! until the write path grows it (issue #1270), and "Open in tab" waits for
+//! a per-secret document target: the value pane is deliberately scoped to
+//! this tab.
 
 use super::{DetailsState, SecretRowKey, SecretStoreDocument, copied_toast};
 use dbflux_app::keymap::{Command, ContextId};
@@ -43,6 +47,7 @@ pub(super) struct SecretMenuItem {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SecretMenuAction {
     RetrieveValue,
+    EditValue,
     CopyName,
     CopyArn,
     CopyPath,
@@ -55,6 +60,7 @@ impl SecretMenuAction {
     fn panel_id(self) -> &'static str {
         match self {
             SecretMenuAction::RetrieveValue => "secret-menu-retrieve-value",
+            SecretMenuAction::EditValue => "secret-menu-edit-value",
             SecretMenuAction::CopyName => "secret-menu-copy-name",
             SecretMenuAction::CopyArn => "secret-menu-copy-arn",
             SecretMenuAction::CopyPath => "secret-menu-copy-path",
@@ -122,6 +128,20 @@ impl SecretStoreDocument {
 
                 if !self.hierarchical() {
                     items.push(self.copy_arn_item());
+                }
+
+                // The design's Edit value entry: offered for a value that
+                // can be edited, dispatching to the editor the details pane
+                // already opens. The menu is built from the selected row's
+                // state, which is the state the editor opens on. It carries
+                // no keycap: the design's `e` chord is not bound in this
+                // layer, and a hint that binds nothing would lie.
+                if self.can_edit_value() {
+                    items.push(SecretMenuItem::new(
+                        SecretMenuAction::EditValue,
+                        dbflux_i18n::t!("document.secret_store.edit.open").into(),
+                        AppIcon::Pencil,
+                    ));
                 }
 
                 items
@@ -224,6 +244,14 @@ impl SecretStoreDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A menu opened over another row would first select it, which is a
+        // move the unsaved-edits guard refuses: opening the menu on a target
+        // it cannot act on would offer entries for a secret the user is
+        // leaving behind.
+        if self.selected.as_ref() != Some(&row) && self.block_unsaved_value_edits(cx) {
+            return;
+        }
+
         self.select_row(row.clone(), cx);
 
         let items = self.build_menu_items(&row);
@@ -345,6 +373,12 @@ impl SecretStoreDocument {
         self.context_menu = None;
 
         match action {
+            SecretMenuAction::EditValue => {
+                // The editor takes the keyboard when it opens; the common
+                // refocus below would take it straight back.
+                self.start_value_edit(window, cx);
+                return;
+            }
             SecretMenuAction::RetrieveValue => self.retrieve_selected_value(cx),
             SecretMenuAction::CopyName => self.copy_selected_name(cx),
             SecretMenuAction::CopyArn => self.copy_resource_id(cx),

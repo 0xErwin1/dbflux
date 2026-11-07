@@ -3554,6 +3554,18 @@ document:
       metadata_loaded: "Metadatos cargados · solo falló el valor"
       deletion_scheduled: "Eliminación programada para el %{date}"
       deletion_scheduled_body: "Su valor no se puede obtener hasta que se restaure."
+
+    edit:
+      open: "Editar valor"
+      save: "Guardar como nueva versión"
+      discard: "Descartar"
+      hint: "Guardar escribe una nueva versión y la convierte en la actual. El texto se guarda tal cual se escribe aquí."
+      invalid_json: "El valor almacenado era JSON y el texto editado no es JSON válido: %{error}"
+      unsaved_block: "%{name} tiene cambios sin guardar. Guárdalos o descártalos primero."
+      connection_replaced: "La conexión se reemplazó mientras se editaba el valor. Descarta el editor y vuelve a obtener el valor antes de guardar."
+      refused_managed: "El valor de %{name} lo gestiona %{service}, por lo que no se puede editar."
+      refused_deletion: "Hay una eliminación programada para %{name}, así que su valor no se puede editar hasta que se restaure."
+      change_summary: "Cambios de valor sin guardar"
 document_tree:
   search_placeholder: Buscar…
   view:

@@ -91,6 +91,29 @@ pub enum SecretWriteOutcome<'a> {
     Failed { message: &'a str },
 }
 
+/// Which of the seam's three failing outcomes a [`SecretWriteFailure`]
+/// carries. The caller maps its report on this verdict, never on the error
+/// variant: a refusal is a decision, a store failure is a transient error,
+/// and a landed write whose audit row was lost is neither — it must not be
+/// presented as something to retry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SecretWriteFailureKind {
+    /// A gate refused the write before the store was called: the
+    /// connection's resolved mutation policy, or the store's own write
+    /// capability.
+    Refused,
+
+    /// The store failed the write. The submitted value does not exist
+    /// anywhere it did not before.
+    StoreFailed,
+
+    /// The store accepted the write, but the audit event could not be
+    /// recorded. The write stands — the value cannot be un-written — and a
+    /// retry would write a second version while still not repairing the
+    /// audit; see the module documentation for the tradeoff.
+    AuditLost,
+}
+
 /// Performs one governed secret write against `store`.
 ///
 /// The failure side of one governed write.
@@ -110,6 +133,10 @@ pub struct SecretWriteFailure {
     /// failure; a refusal, or an audit event the sink refused after a landed
     /// write, carries none, because no failure event was recorded.
     pub correlation_id: Option<Uuid>,
+
+    /// Which failing outcome this is, as the seam classified it. The caller
+    /// maps its report on this verdict, never on the error variant.
+    pub kind: SecretWriteFailureKind,
 }
 
 impl std::fmt::Display for SecretWriteFailure {
@@ -170,6 +197,7 @@ pub fn put_secret_value(
         return Err(SecretWriteFailure {
             error: DbError::permission_denied(message),
             correlation_id: None,
+            kind: SecretWriteFailureKind::Refused,
         });
     }
 
@@ -186,6 +214,7 @@ pub fn put_secret_value(
         return Err(SecretWriteFailure {
             error,
             correlation_id: None,
+            kind: SecretWriteFailureKind::Refused,
         });
     }
 
@@ -211,6 +240,7 @@ pub fn put_secret_value(
                             request.name, descriptor.label, error
                         )),
                         correlation_id: None,
+                        kind: SecretWriteFailureKind::AuditLost,
                     })
                 }
             }
@@ -236,6 +266,7 @@ pub fn put_secret_value(
             Err(SecretWriteFailure {
                 error,
                 correlation_id,
+                kind: SecretWriteFailureKind::StoreFailed,
             })
         }
     }
