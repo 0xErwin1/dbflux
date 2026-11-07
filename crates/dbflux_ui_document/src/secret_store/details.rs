@@ -1,7 +1,6 @@
 //! The details pane of `SecretStoreDocument`: the selected secret's value
 //! section, its details, its rotation and its tags.
 
-use super::editor::EditMode;
 use super::render::{UNKNOWN, format_optional_time, listing_shortcut};
 use super::value::{MASK, RetrievedValue, ValueContent, ValueFailure, ValueView};
 use super::{DetailsState, SecretRowKey, SecretStoreDocument, ValueState};
@@ -21,7 +20,6 @@ use dbflux_core::{SecretDetails, SecretRotation, SecretStoreCapabilities, Secret
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::input::Textarea;
 use gpui_component::scroll::{ScrollableElement, Scrollbar};
 
 /// Lines the multi-line viewer keeps visible before it scrolls, so the
@@ -29,7 +27,7 @@ use gpui_component::scroll::{ScrollableElement, Scrollbar};
 pub(super) const VIEWER_VISIBLE_LINES: f32 = 14.0;
 
 /// Width of the viewer's line-number gutter: three digits at the editor size.
-const VIEWER_GUTTER_WIDTH: Rems = ui(28.0);
+pub(super) const VIEWER_GUTTER_WIDTH: Rems = ui(28.0);
 
 fn section_title(title: String, cx: &App) -> Div {
     div()
@@ -689,185 +687,6 @@ impl SecretStoreDocument {
                 )
             })
     }
-
-    /// The Formatted / Raw switch of a value stored as JSON.
-    fn render_edit_mode_toggle(
-        &self,
-        mode: EditMode,
-        disabled: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let entity = cx.entity().downgrade();
-        let active = match mode {
-            EditMode::Formatted => "formatted",
-            EditMode::Raw => "raw",
-        };
-
-        SegmentedControl::new(
-            vec![
-                SegmentedItem::new(
-                    "formatted",
-                    dbflux_i18n::t!("document.secret_store.edit.mode.formatted"),
-                ),
-                SegmentedItem::new(
-                    "raw",
-                    dbflux_i18n::t!("document.secret_store.edit.mode.raw"),
-                ),
-            ],
-            active,
-            move |id, window, cx| {
-                let mode = if id.as_ref() == "raw" {
-                    EditMode::Raw
-                } else {
-                    EditMode::Formatted
-                };
-
-                if let Some(doc) = entity.upgrade() {
-                    doc.update(cx, |doc, cx| doc.set_edit_mode(mode, window, cx));
-                }
-            },
-        )
-        .group("secret-editor-mode")
-        .disabled(disabled)
-        .into_any_element()
-    }
-
-    /// The editor of a plaintext value: the stored text in a multi-line
-    /// editor, a hint, and Save and Discard. The editor element itself is
-    /// marked redacted — rendered-frame observers withhold its text and its
-    /// accesskit node carries no value — and its container is also hidden
-    /// from the accessibility tree, so neither the accessibility tree nor
-    /// the rendered frame holds any of the text; the buttons sit outside the
-    /// hidden boundary, because their labels carry no value.
-    fn render_value_editor(&self, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme();
-        let foreground = theme.foreground;
-        let fill = theme.popover;
-        let border = theme.border;
-        let muted = theme.muted_foreground;
-
-        let Some(edit) = &self.value_edit else {
-            return div();
-        };
-
-        let unchanged = !edit.is_changed(cx);
-        let saving = edit.saving;
-        let editor = edit.editor.clone();
-        let mode = self.edit_mode();
-        let gutter = render_editor_gutter(&editor, muted, cx);
-        let hint_key = match mode {
-            Some(EditMode::Formatted) => "document.secret_store.edit.hint_formatted",
-            _ => "document.secret_store.edit.hint",
-        };
-        let toggle = mode.map(|mode| self.render_edit_mode_toggle(mode, saving, cx));
-
-        div()
-            .flex()
-            .flex_col()
-            .gap(SecretStoreMetrics::ROW_GAP)
-            .when_some(toggle, |editor_block, toggle| {
-                editor_block.child(div().flex().justify_end().child(toggle))
-            })
-            .child(
-                div()
-                    .relative()
-                    .px(DocumentMetrics::DETAIL_BLOCK_PADDING_X)
-                    .py(DocumentMetrics::DETAIL_BLOCK_PADDING_Y)
-                    .font_family(fonts::editor_family(cx))
-                    .text_size(DocumentMetrics::DETAIL_BLOCK_FONT)
-                    .line_height(relative(DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT))
-                    .text_color(foreground)
-                    .child(Chamfer::new(ChamferCut::INPUT).fill(fill).border(border))
-                    .child(
-                        div().flex().child(gutter).child(
-                            div()
-                                .id("secret-value-editor")
-                                .flex_1()
-                                .min_w_0()
-                                .aria_hidden(true)
-                                .frame_redacted(true)
-                                .child(
-                                    Textarea::new(&editor)
-                                        .redacted(true)
-                                        .appearance(false)
-                                        .bordered(false)
-                                        .w_full(),
-                                ),
-                        ),
-                    ),
-            )
-            .child(Text::caption(dbflux_i18n::t!(hint_key)).muted_foreground())
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap(DocumentMetrics::GAP)
-                    .child(
-                        Button::new(
-                            "secret-value-editor-discard",
-                            dbflux_i18n::t!("document.secret_store.edit.discard"),
-                        )
-                        .tab_stop(false)
-                        .disabled(saving)
-                        .on_click(cx.listener(|this, _, _, cx| this.discard_value_edit(cx))),
-                    )
-                    .child(
-                        Button::new(
-                            "secret-value-editor-save",
-                            dbflux_i18n::t!("document.secret_store.edit.save"),
-                        )
-                        .primary()
-                        .tab_stop(false)
-                        .disabled(unchanged || saving)
-                        .on_click(cx.listener(|this, _, _, cx| this.save_value_edit(cx))),
-                    ),
-            )
-    }
-}
-
-/// The line-number gutter beside the editor. It numbers the editor's own
-/// lines, so it grows and shrinks as the user types, and follows the
-/// editor's vertical scroll so each number stays beside its line. The editor
-/// does not wrap, which keeps one number per row. The gutter holds only
-/// digits and is hidden from the accessibility tree.
-fn render_editor_gutter(
-    editor: &Entity<gpui_component::input::TextareaState>,
-    color: Hsla,
-    cx: &App,
-) -> Stateful<Div> {
-    let state = editor.read(cx);
-    let lines = state.value().split('\n').count();
-    let offset = state.scroll_offset().y;
-    let line_height = state.line_height().unwrap_or_else(|| {
-        fonts::ui_px(cx, DocumentMetrics::DETAIL_BLOCK_FONT)
-            * DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT
-    });
-
-    div()
-        .id("secret-value-editor-gutter")
-        .relative()
-        .flex_shrink_0()
-        .w(VIEWER_GUTTER_WIDTH)
-        .overflow_hidden()
-        .aria_hidden(true)
-        .text_color(color)
-        .child(
-            div()
-                .absolute()
-                .top(offset)
-                .left_0()
-                .w_full()
-                .flex()
-                .flex_col()
-                .children((0..lines).map(|index| {
-                    div()
-                        .id(SharedString::from(format!(
-                            "secret-value-editor-line-{index}"
-                        )))
-                        .h(line_height)
-                        .child((index + 1).to_string())
-                })),
-        )
 }
 
 /// The reveal and copy buttons of one value field, shared by the single-line

@@ -4401,3 +4401,316 @@ mod editor_layout {
         assert_eq!(opened.edit_mode(), Some(EditMode::Formatted));
     }
 }
+
+// -- Value editor: artboard 06 chrome ---------------------------------------
+
+mod editor_chrome {
+    use super::*;
+    use crate::secret_store::editor::EditMode;
+
+    const THREE: &str = "alpha-77b1\nbeta-77b1\ngamma-77b1";
+
+    impl Opened<'_> {
+        fn edit_text(&mut self, stored: &str, edited: &str) {
+            self.select(PLAINTEXT_SECRET);
+            self.show_value(stored);
+            self.start_edit();
+            self.set_editor_text(edited);
+        }
+
+        fn rect(&mut self, suffix: &str) -> gpui::Bounds<gpui::Pixels> {
+            let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
+            let frame = capture.frame(self.window);
+
+            frame
+                .nodes()
+                .find(|(_, node)| node.path().ends_with(suffix))
+                .map(|(_, node)| node.bounds())
+                .unwrap_or_else(|| panic!("{suffix} is rendered"))
+        }
+
+        fn exists(&mut self, suffix: &str) -> bool {
+            self.rendered_paths()
+                .iter()
+                .any(|path| path.ends_with(suffix))
+        }
+
+        fn footer_text(&mut self) -> String {
+            let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
+            let frame = capture.frame(self.window);
+
+            frame
+                .nodes()
+                .filter(|(_, node)| node.path().contains("secret-value-editor-footer"))
+                .map(|(_, node)| node.content_text())
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+    }
+
+    #[gpui::test]
+    fn gutter_numbers_are_right_aligned(cx: &mut TestAppContext) {
+        let text = (0..12)
+            .map(|i| format!("l{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(&text, &text);
+
+        let one = opened.rect("secret-value-editor-line-0-number");
+        let ten = opened.rect("secret-value-editor-line-9-number");
+
+        assert!(
+            (one.right() - ten.right()).abs() < gpui::px(0.5),
+            "{one:?} vs {ten:?}"
+        );
+        assert!(ten.size.width > one.size.width);
+    }
+
+    #[gpui::test]
+    fn changed_lines_get_a_marker_and_unchanged_ones_do_not(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, THREE);
+        assert!(
+            !opened.exists("-marker"),
+            "an untouched value has no marker"
+        );
+
+        opened.set_editor_text("alpha-77b1\nbeta-CHANGED\ngamma-77b1");
+        assert!(opened.exists("secret-value-editor-line-1-marker"));
+        assert!(!opened.exists("secret-value-editor-line-0-marker"));
+        assert!(!opened.exists("secret-value-editor-line-2-marker"));
+
+        // An inserted line is the only one marked, not every line after it.
+        opened.set_editor_text("alpha-77b1\nNEW\nbeta-77b1\ngamma-77b1");
+        assert!(opened.exists("secret-value-editor-line-1-marker"));
+        assert!(!opened.exists("secret-value-editor-line-2-marker"));
+        assert!(!opened.exists("secret-value-editor-line-3-marker"));
+    }
+
+    #[gpui::test]
+    fn the_modified_chip_follows_the_edit(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, THREE);
+        assert!(!opened.exists("secret-value-editor-modified"));
+
+        opened.set_editor_text("alpha-77b1\nbeta-77b1");
+        assert!(opened.exists("secret-value-editor-modified"));
+        assert!(opened.rendered_text().contains("modified"));
+    }
+
+    #[gpui::test]
+    fn the_header_row_holds_the_toggle_discard_and_save(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(r#"{"a":{"b":1}}"#, r#"{"a":{"b":2}}"#);
+
+        let editor = opened.rect("secret-value-editor");
+        let toggle = opened.rect("segmented-secret-editor-mode");
+        let discard = opened.rect("secret-value-editor-discard");
+        let save = opened.rect("secret-value-editor-save");
+
+        for control in [toggle, discard, save] {
+            assert!(
+                control.bottom() <= editor.top(),
+                "{control:?} above {editor:?}"
+            );
+        }
+        // The details pane is narrower than the artboard's tab, so the
+        // controls wrap, but Discard and Save stay together, in that order,
+        // and never above the toggle.
+        assert!((discard.center().y - save.center().y).abs() < gpui::px(4.)); // guardrail-allow: test tolerance, not spacing
+        assert!(discard.right() <= save.left());
+        assert!(toggle.top() <= discard.top());
+    }
+
+    #[gpui::test]
+    fn save_shows_the_keycap_of_a_bound_chord_only(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, "x");
+
+        let context = opened.read(|doc| doc.active_context());
+        let bound =
+            dbflux_ui_base::effective_keymap().shortcut_for_command(context, Command::SaveQuery);
+        let bound = bound.expect("Save is bound where the editor dispatches it");
+
+        assert!(
+            opened
+                .rendered_text()
+                .to_lowercase()
+                .contains(&bound.to_lowercase()),
+            "{bound}"
+        );
+        assert!(opened.command(Command::SaveQuery), "the chord runs Save");
+    }
+
+    /// Ctrl S has to resolve to Save in the context the document reports
+    /// while its editor holds the keyboard; in the Results context it is
+    /// unbound, which is why Save never answered the chord before.
+    #[gpui::test]
+    fn ctrl_s_resolves_to_save_in_the_editor_context(cx: &mut TestAppContext) {
+        use dbflux_app::keymap::{ContextId, KeyChord, Modifiers};
+
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, "changed");
+
+        let keymap = dbflux_ui_base::effective_keymap();
+        let context = opened.read(|doc| doc.active_context());
+        assert_eq!(context, ContextId::TextInput);
+
+        let save = KeyChord::new("s", Modifiers::primary());
+        assert_eq!(keymap.resolve(context, &save), Some(Command::SaveQuery));
+        assert_eq!(
+            keymap.resolve(ContextId::Results, &save),
+            None,
+            "the bug: Results never bound Save"
+        );
+
+        // The command the chord resolves to saves.
+        assert!(opened.command(Command::SaveQuery));
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), "changed".to_string())]
+        );
+    }
+
+    /// While the editor holds the keyboard its text keys are text: bare
+    /// letters resolve to no command, so `e`, `j` and `k` insert, and Escape
+    /// still leaves the editor.
+    #[gpui::test]
+    fn editor_keys_stay_text_and_escape_leaves(cx: &mut TestAppContext) {
+        use dbflux_app::keymap::{KeyChord, Modifiers};
+
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text("", "");
+        let keymap = dbflux_ui_base::effective_keymap();
+        let context = opened.read(|doc| doc.active_context());
+
+        for key in ["e", "j", "k"] {
+            assert_eq!(
+                keymap.resolve(context, &KeyChord::new(key, Modifiers::none())),
+                None,
+                "{key} must not be a command while editing"
+            );
+        }
+        assert_eq!(
+            keymap.resolve(context, &KeyChord::new("escape", Modifiers::none())),
+            Some(Command::Cancel)
+        );
+
+        opened.window.simulate_input("ejk");
+        opened.window.run_until_parked();
+        assert_eq!(opened.editor_text(), "ejk");
+        assert!(opened.read(|doc| doc.is_editing_value()));
+
+        assert!(opened.command(Command::Cancel), "Escape leaves the editor");
+        let context = opened.read(|doc| doc.active_context());
+        assert_eq!(context, dbflux_app::keymap::ContextId::Results);
+        assert!(
+            opened.read(|doc| doc.is_editing_value()),
+            "leaving is not discarding"
+        );
+    }
+
+    #[gpui::test]
+    fn the_footer_reports_the_edit_without_its_text(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(PLAINTEXT_SECRET);
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        let version = opened
+            .read(|doc| match &doc.value {
+                ValueState::Loaded(value) => value.version.clone(),
+                _ => None,
+            })
+            .expect("the fixture reports a version");
+        opened.start_edit();
+        opened.set_editor_text("abc\ndef");
+
+        let footer = opened.footer_text();
+        assert!(footer.contains("UTF-8"), "{footer}");
+        assert!(footer.contains("7 B"), "bytes Save would write: {footer}");
+        assert!(footer.contains(&version), "{footer}");
+        assert!(footer.contains("2 lines changed"), "{footer}");
+        assert!(
+            footer.contains("Ln 1, Col 1") || footer.contains("Ln 2, Col"),
+            "{footer}"
+        );
+        assert!(
+            !footer.contains("abc") && !footer.contains("def"),
+            "{footer}"
+        );
+
+        opened.set_editor_text("abc\ndef");
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        opened.window.update(|window, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_cursor_position(lsp_types::Position::new(1, 2), window, cx)
+            });
+        });
+        opened.window.run_until_parked();
+        assert!(opened.footer_text().contains("Ln 2, Col 3"));
+    }
+
+    /// Find opens the component's panel over the text and leaves the value
+    /// out of the accessibility tree and the rendered frame.
+    #[gpui::test]
+    fn find_opens_the_panel_without_exposing_the_value(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, THREE);
+        let before = opened.rendered_paths().len();
+
+        let doc = opened.doc.clone();
+        opened
+            .window
+            .update(|window, cx| doc.update(cx, |doc, cx| doc.find_in_value(window, cx)));
+        opened.window.run_until_parked();
+
+        let after = opened.rendered_paths();
+        assert!(after.len() > before, "the find panel was drawn");
+        let text = opened.accessibility_update_text();
+        assert!(!text.contains("alpha-77b1"), "{text}");
+        assert!(opened.exists("secret-value-editor-find"));
+    }
+
+    #[gpui::test]
+    fn the_footer_counts_a_single_changed_line_in_the_singular(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, "alpha-77b1\nbeta-X\ngamma-77b1");
+        assert!(opened.footer_text().contains("1 line changed"));
+    }
+
+    #[gpui::test]
+    fn chrome_exposes_no_value_to_the_accessibility_tree(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(
+            r#"{"a":{"k":"alpha-77b1"}}"#,
+            r#"{"a":{"k":"alpha-77b1"},"b":"beta-77b1"}"#,
+        );
+
+        for mode in [EditMode::Formatted, EditMode::Raw] {
+            let doc = opened.doc.clone();
+            opened
+                .window
+                .update(|window, cx| doc.update(cx, |doc, cx| doc.set_edit_mode(mode, window, cx)));
+            opened.window.run_until_parked();
+
+            let text = opened.accessibility_update_text();
+            assert!(
+                !text.contains("alpha-77b1") && !text.contains("beta-77b1"),
+                "{text}"
+            );
+            assert!(text.contains("modified"), "the chip is announced: {text}");
+            assert!(text.contains("UTF-8"), "the footer is announced: {text}");
+
+            let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
+            let frame = capture.frame(opened.window);
+            // `aria_hidden` on the gutter removes its whole subtree (numbers
+            // and markers) from the accessibility tree.
+            let gutter_hidden = frame
+                .nodes()
+                .filter(|(_, node)| node.path().ends_with("secret-value-editor-gutter"))
+                .filter_map(|(_, node)| frame.accessibility_node(node))
+                .any(|accessible| accessible.is_hidden());
+            assert!(gutter_hidden, "gutter and markers stay out of the tree");
+        }
+    }
+}

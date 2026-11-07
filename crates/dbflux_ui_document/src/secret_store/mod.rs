@@ -51,6 +51,9 @@ use uuid::Uuid;
 pub enum SecretFocusMode {
     Table,
     Search,
+    /// The value editor holds the keyboard: chords resolve as in a text
+    /// buffer, where Save is bound.
+    Editor,
 }
 
 /// One row of the listing.
@@ -423,7 +426,9 @@ impl SecretStoreDocument {
             return ContextId::ContextMenu;
         }
 
-        if self.focus_mode == SecretFocusMode::Search {
+        if self.focus_mode == SecretFocusMode::Search
+            || (self.focus_mode == SecretFocusMode::Editor && self.value_edit.is_some())
+        {
             return ContextId::TextInput;
         }
 
@@ -930,6 +935,22 @@ impl SecretStoreDocument {
                     },
                 )
                 .enabled(self.can_toggle_edit_mode()),
+            );
+        }
+
+        if self.is_editing_value() {
+            let target = target.clone();
+            actions.push(
+                crate::pane::PaneAction::callback(
+                    "secret-editor-find",
+                    dbflux_i18n::t!("document.secret_store.edit.find"),
+                    move |window, cx| {
+                        if let Some(doc) = target.upgrade() {
+                            doc.update(cx, |doc, cx| doc.find_in_value(window, cx));
+                        }
+                    },
+                )
+                .icon(AppIcon::Search),
             );
         }
 

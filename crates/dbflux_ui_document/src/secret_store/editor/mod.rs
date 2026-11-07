@@ -70,9 +70,11 @@ use gpui_component::input::TextareaState;
 use uuid::Uuid;
 
 pub(crate) mod json_layout;
+mod line_diff;
+mod view;
 
 use super::write::{SecretWriteFailure, SecretWriteFailureKind, put_secret_value};
-use super::{DetailsState, SecretRowKey, SecretStoreDocument, ValueState};
+use super::{DetailsState, SecretFocusMode, SecretRowKey, SecretStoreDocument, ValueState};
 use crate::object_text::db_error_to_user_facing;
 use crate::types::DocumentState;
 
@@ -145,7 +147,7 @@ impl ValueEditState {
 
     /// What Formatted shows for the stored text: a single-line value
     /// indented, a multi-line one in its own layout.
-    fn formatted_baseline(&self) -> String {
+    pub(super) fn formatted_baseline(&self) -> String {
         formatted_layout(self.original.expose_secret(), self.stored_is_json)
     }
 
@@ -258,7 +260,21 @@ impl SecretStoreDocument {
         cx.notify();
     }
 
-    /// Switches to the other mode, for the key and the pane action.
+    /// Opens the editor component's find panel over the text. The panel is
+    /// owned by `gpui-component` and reachable only through its `Search`
+    /// action, so the button focuses the editor first and then dispatches the
+    /// action its `ctrl-f` / `cmd-f` binding raises.
+    pub fn find_in_value(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(edit) = &self.value_edit else {
+            return;
+        };
+
+        edit.editor.update(cx, |state, cx| state.focus(window, cx));
+        window.dispatch_action(Box::new(gpui_component::input::Search), cx);
+        cx.notify();
+    }
+
+    /// Switches to the other mode, for the pane action.
     pub fn cycle_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let next = match self.edit_mode() {
             Some(EditMode::Formatted) => EditMode::Raw,
@@ -324,12 +340,21 @@ impl SecretStoreDocument {
         let editor = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx)
                 .auto_grow(2, super::details::VIEWER_VISIBLE_LINES as usize)
-                .soft_wrap(true);
+                .soft_wrap(false)
+                .searchable(true);
             state.set_value(&opening, window, cx);
             state
         });
         editor.update(cx, |state, cx| state.focus(window, cx));
-        let observer = cx.observe(&editor, |_, _, cx| cx.notify());
+        let observer = cx.observe(&editor, |this, _, cx| {
+            // Typing means the editor holds the keyboard, which is the
+            // context its chords (Save) resolve in.
+            if this.value_edit.is_some() {
+                this.focus_mode = SecretFocusMode::Editor;
+            }
+            cx.notify();
+        });
+        self.focus_mode = SecretFocusMode::Editor;
 
         self.value_edit = Some(ValueEditState {
             original: SecretString::from(stored),

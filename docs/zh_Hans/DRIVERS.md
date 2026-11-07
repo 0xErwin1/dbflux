@@ -31,7 +31,7 @@
 | TursoDB | 关系型 | SQL | 认证令牌、视图、索引、外键、CHECK/唯一约束、预编译语句、插入/更新/删除、分页、排序、筛选、CSV/JSON 导出、事务、事务性 DDL、多语句 | 走 HTTP 的远程 Turso / libSQL（`libsql://`，本地 `sqld` 用 `http://`）；交互式事务在每个文档独立的服务端流上运行；不支持查询取消、SSH 隧道、副本或切换数据库。 |
 | DuckDB | 关系型 | SQL | 多数据库、schema、视图、索引、外键、CHECK/唯一约束、预编译语句、带 RETURNING 的插入/更新/删除、分页、排序、筛选、CSV/JSON 导出、事务、事务性 DDL、查询取消、行数限制、只读强制、多语句 | 嵌入式文件或内存数据库；连接时挂载 DuckLake 目录；同一文件只能由一个进程以写模式打开；不支持语句超时。 |
 | Amazon S3 | 对象存储 | Custom("S3") | 认证（profile/SSO 或静态凭据、自定义端点）、存储桶浏览、分页的对象导航、预览、完整 CRUD、预签名 URL | 兼容 S3（Cloudflare R2、MinIO）；不支持分段上传/传输面板，不支持内嵌 PDF 查看器，不支持生命周期/ACL 管理或 S3 Select。 |
-| AWS Secrets | 密钥存储 | Custom("AWS Secrets") | 认证（profile/SSO 或静态凭据、自定义端点）、一个连接内的 Secrets Manager 与 Parameter Store、支持按名称搜索的分页列表、参数路径层级、详情、显式读取值 | 只读（不支持创建、编辑、删除、恢复、版本或轮换）；每个连接一个区域；LocalStack 不遵循 Parameter Store 的分页大小。 |
+| AWS Secrets | 密钥存储 | Custom("AWS Secrets") | 认证（profile/SSO 或静态凭据、自定义端点）、一个连接内的 Secrets Manager 与 Parameter Store、支持按名称搜索的分页列表、参数路径层级、详情、显式读取值 | 可编辑值并保存为新版本（暂不支持创建、删除、恢复、版本历史或轮换）；每个连接一个区域；LocalStack 不遵循 Parameter Store 的分页大小。 |
 
 ## 各驱动程序概要
 
@@ -93,7 +93,7 @@ AWS CloudWatch Logs 驱动程序，通过 `StartQuery` 执行查询，时间范�
 
 ### AWS Secrets
 
-面向 AWS Secrets Manager 与 Systems Manager Parameter Store 的密钥存储驱动程序，通过 AWS 配置文件/SSO 或静态凭据进行身份验证，并支持可选的端点覆盖。一个连接会在侧边栏中同时显示两个存储库。列表在服务端分页并支持按名称搜索，Parameter Store 路径按层级逐级浏览。列表和详情面板从不读取值：只有当用户执行 Retrieve value 时才会读取值，并记录一条不含该值的审计事件。键值 JSON 密钥以表格显示，其他文本以纯文本显示，二进制密钥以 base64 显示，由其他服务拥有的密钥标记为只读。缺少 `kms:Decrypt` 权限时会报告错误，绝不会返回空值。此版本为只读。参见 [`crates/dbflux_driver_aws_secrets/README.md`](../crates/dbflux_driver_aws_secrets/README.md)。
+面向 AWS Secrets Manager 与 Systems Manager Parameter Store 的密钥存储驱动程序，通过 AWS 配置文件/SSO 或静态凭据进行身份验证，并支持可选的端点覆盖。一个连接会在侧边栏中同时显示两个存储库。列表在服务端分页并支持按名称搜索，Parameter Store 路径按层级逐级浏览。列表和详情面板从不读取值：只有当用户执行 Retrieve value 时才会读取值，并记录一条不含该值的审计事件。键值 JSON 密钥以表格显示，其他文本以纯文本显示，二进制密钥以 base64 显示，由其他服务拥有的密钥标记为只读。缺少 `kms:Decrypt` 权限时会报告错误，绝不会返回空值。纯文本值可通过 Edit value（详情面板按钮、行的右键菜单，或在选中行上按 `e`）编辑并保存为新版本。保存走受管控的写入路径：拒绝只读或需要审批的连接，并记录一条不含该值的审计事件。以 JSON 存储的值以缩进的 Formatted 模式打开，可切换到 Raw；保存会写入当前编辑模式的文本，原本为单行的值会还原为单行，且不再是有效 JSON 的文本会被拒绝。编辑器显示行号、标出已更改的行，并在页脚显示大小、版本、已更改行数和光标位置。键值和二进制值保持只读视图。参见 [`crates/dbflux_driver_aws_secrets/README.md`](../crates/dbflux_driver_aws_secrets/README.md)。
 
 ## 外部 RPC 驱动程序
 
