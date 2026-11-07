@@ -1,0 +1,855 @@
+//! Independent verification probes for the governed write seam, adopted
+//! from the review that found the gaps they probe: the scrub's variant
+//! coverage, the base64 echo of a binary payload, the store's write
+//! capability, and an audit sink that refuses its event after the write
+//! landed. They run beside the module's own tests and are kept as
+//! regression probes for those findings.
+//
+// The probes hand `put_secret_value`-shaped closures to a stub store and
+// mirror its `StoreSource::put_value`-shaped results, which trips lints
+// written for boundary code; the assertions, not the shapes, are what these
+// probes verify.
+#![allow(clippy::result_large_err)]
+#![allow(clippy::redundant_closure)]
+
+use super::super::encode_base64;
+use super::super::value::{RetrievalTarget, value_retrieval_event};
+use super::super::write::{
+    SECRET_VALUE_WRITE_FAILED_ACTION, SECRET_VALUE_WRITE_REFUSED_ACTION,
+    SECRET_VALUE_WRITTEN_ACTION, SecretWriteFailure, SecretWriteOutcome, WriteTarget,
+    put_secret_value, secret_write_event,
+};
+use dbflux_core::observability::{EventCategory, EventRecord, EventSink, EventSinkError};
+use dbflux_core::secrecy::ExposeSecret;
+use dbflux_core::{
+    DbError, MutationPolicy, ReadOnlyReason, SecretDetails, SecretListPage, SecretListRequest,
+    SecretPayload, SecretPutRequest, SecretStoreCapabilities, SecretStoreDescriptor,
+    SecretStoreSource, SecretValue, SecretVersionStage,
+};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use uuid::Uuid;
+
+type Behaviour = Box<dyn Fn(&SecretPutRequest) -> Result<SecretValue, DbError> + Send + Sync>;
+
+struct ProbeStore {
+    descriptor: SecretStoreDescriptor,
+    calls: AtomicUsize,
+    behaviour: Behaviour,
+}
+
+impl ProbeStore {
+    fn new(behaviour: Behaviour) -> Self {
+        Self {
+            descriptor: SecretStoreDescriptor::new(
+                "probe",
+                "Probe",
+                SecretStoreCapabilities::WRITE,
+            ),
+            calls: AtomicUsize::new(0),
+            behaviour,
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::Relaxed)
+    }
+}
+
+impl SecretStoreSource for ProbeStore {
+    fn descriptor(&self) -> &SecretStoreDescriptor {
+        &self.descriptor
+    }
+    fn list(&self, _request: &SecretListRequest) -> Result<SecretListPage, DbError> {
+        Err(DbError::NotSupported("unused".into()))
+    }
+    fn describe(&self, _name: &str) -> Result<SecretDetails, DbError> {
+        Err(DbError::NotSupported("unused".into()))
+    }
+    fn get_value(&self, _name: &str, _version: Option<&str>) -> Result<SecretValue, DbError> {
+        Err(DbError::NotSupported("unused".into()))
+    }
+    fn put_value(&self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        (self.behaviour)(request)
+    }
+}
+
+#[derive(Default)]
+struct Sink(Mutex<Vec<EventRecord>>);
+
+impl Sink {
+    fn events(&self) -> Vec<EventRecord> {
+        match self.0.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+    fn actions(&self) -> Vec<String> {
+        self.events()
+            .into_iter()
+            .map(|event| event.action)
+            .collect()
+    }
+}
+
+impl EventSink for Sink {
+    fn record(&self, event: EventRecord) -> Result<EventRecord, EventSinkError> {
+        match self.0.lock() {
+            Ok(mut guard) => guard.push(event.clone()),
+            Err(poisoned) => poisoned.into_inner().push(event.clone()),
+        }
+        Ok(event)
+    }
+}
+
+const PROFILE: Uuid = Uuid::from_u128(0xfeed);
+
+fn run(
+    store: &ProbeStore,
+    sink: &Sink,
+    policy: MutationPolicy,
+    reason: Option<ReadOnlyReason>,
+    request: &SecretPutRequest,
+) -> Result<SecretValue, SecretWriteFailure> {
+    put_secret_value(store, PROFILE, "aws_secrets", policy, reason, sink, request)
+}
+
+fn succeed(request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+    Ok(SecretValue {
+        version: Some("v-probe-1".to_string()),
+        payload: request.payload.clone(),
+    })
+}
+
+fn payload_text(request: &SecretPutRequest) -> String {
+    match &request.payload {
+        SecretPayload::Text(t) => t.expose_secret().to_owned(),
+        SecretPayload::Binary(b) => String::from_utf8_lossy(b.expose_secret()).into_owned(),
+    }
+}
+
+/// G1/S1: exactly one event per path, never zero, never two.
+#[test]
+fn probe_exactly_one_event_per_path() {
+    let request = SecretPutRequest::text("prod/token", "probe-value-1");
+
+    let store = ProbeStore::new(Box::new(|request| succeed(request)));
+    let sink = Sink::default();
+    run(
+        &store,
+        &sink,
+        MutationPolicy::ReadOnly,
+        Some(ReadOnlyReason::ProfileSetting),
+        &request,
+    )
+    .expect_err("a read-only profile refuses");
+    assert_eq!(
+        sink.actions(),
+        vec![SECRET_VALUE_WRITE_REFUSED_ACTION.to_string()]
+    );
+    assert_eq!(store.calls(), 0, "read-only reached the store");
+
+    let store = ProbeStore::new(Box::new(|request| succeed(request)));
+    let sink = Sink::default();
+    run(
+        &store,
+        &sink,
+        MutationPolicy::ApprovalRequired,
+        None,
+        &request,
+    )
+    .expect_err("an approval-required profile refuses");
+    assert_eq!(
+        sink.actions(),
+        vec![SECRET_VALUE_WRITE_REFUSED_ACTION.to_string()]
+    );
+    assert_eq!(store.calls(), 0, "approval-required reached the store");
+
+    let store = ProbeStore::new(Box::new(|request| succeed(request)));
+    let sink = Sink::default();
+    run(&store, &sink, MutationPolicy::Allowed, None, &request).expect("success");
+    assert_eq!(
+        sink.actions(),
+        vec![SECRET_VALUE_WRITTEN_ACTION.to_string()]
+    );
+    assert_eq!(store.calls(), 1);
+
+    let store = ProbeStore::new(Box::new(|r| {
+        Err(DbError::permission_denied(format!("denied {}", r.name)))
+    }));
+    let sink = Sink::default();
+    run(&store, &sink, MutationPolicy::Allowed, None, &request).expect_err("failure");
+    assert_eq!(
+        sink.actions(),
+        vec![SECRET_VALUE_WRITE_FAILED_ACTION.to_string()]
+    );
+    assert_eq!(store.calls(), 1);
+}
+
+/// G2/S2: a refusal returns before the store is called, for both policies.
+#[test]
+fn probe_refusals_never_call_the_store() {
+    let request = SecretPutRequest::text("prod/token", "probe-value-2");
+    for policy in [MutationPolicy::ReadOnly, MutationPolicy::ApprovalRequired] {
+        let store = ProbeStore::new(Box::new(|request| succeed(request)));
+        let sink = Sink::default();
+        let error = run(
+            &store,
+            &sink,
+            policy,
+            Some(ReadOnlyReason::ServerEnforced),
+            &request,
+        )
+        .expect_err("refused");
+        assert_eq!(store.calls(), 0, "{policy:?} called the store");
+        assert!(
+            matches!(error.error, DbError::PermissionDenied(_)),
+            "{policy:?}: {error:?}"
+        );
+    }
+}
+
+/// G4: refusals are non-retriable permission denials, worded distinctly.
+#[test]
+fn probe_refusals_are_permission_denied_not_transient() {
+    let request = SecretPutRequest::text("prod/token", "probe-value-3");
+    let store = ProbeStore::new(Box::new(|request| succeed(request)));
+
+    let sink = Sink::default();
+    let read_only = run(
+        &store,
+        &sink,
+        MutationPolicy::ReadOnly,
+        Some(ReadOnlyReason::ProfileSetting),
+        &request,
+    )
+    .expect_err("read-only");
+    let approval = run(
+        &store,
+        &sink,
+        MutationPolicy::ApprovalRequired,
+        None,
+        &request,
+    )
+    .expect_err("approval");
+
+    let (DbError::PermissionDenied(read_only_refusal), DbError::PermissionDenied(approval_refusal)) =
+        (&read_only.error, &approval.error)
+    else {
+        panic!("refusals are not PermissionDenied: {read_only:?} / {approval:?}");
+    };
+    assert!(
+        !read_only_refusal.retriable,
+        "read-only refusal marked retriable"
+    );
+    assert!(
+        !approval_refusal.retriable,
+        "approval refusal marked retriable"
+    );
+    assert!(
+        read_only_refusal.message.contains("read-only"),
+        "{}",
+        read_only_refusal.message
+    );
+    assert!(
+        approval_refusal.message.contains("approval"),
+        "{}",
+        approval_refusal.message
+    );
+    assert_ne!(
+        read_only_refusal.message, approval_refusal.message,
+        "refusals are not distinguishable"
+    );
+    // Refusals record no failure event, so no correlation id travels with
+    // them.
+    assert!(read_only.correlation_id.is_none(), "{read_only:?}");
+    assert!(approval.correlation_id.is_none(), "{approval:?}");
+
+    let events = sink.events();
+    assert_eq!(events.len(), 2);
+    for event in &events {
+        assert_eq!(event.action, SECRET_VALUE_WRITE_REFUSED_ACTION);
+    }
+    let reasons: Vec<String> = events
+        .iter()
+        .map(|e| {
+            let details: serde_json::Value =
+                serde_json::from_str(e.details_json.as_deref().expect("details")).expect("json");
+            details["reason"].as_str().unwrap_or_default().to_string()
+        })
+        .collect();
+    assert_eq!(
+        reasons,
+        vec!["read_only".to_string(), "approval_required".to_string()]
+    );
+}
+
+/// G3: a text failure echoing the value is scrubbed in the error and the audit.
+#[test]
+fn probe_text_failure_is_scrubbed() {
+    let request = SecretPutRequest::text("prod/token", "probe-value-4");
+    let store = ProbeStore::new(Box::new(|r| {
+        Err(DbError::query_failed(format!(
+            "the service rejected the value {}",
+            payload_text(r)
+        )))
+    }));
+    let sink = Sink::default();
+    let error = run(&store, &sink, MutationPolicy::Allowed, None, &request).expect_err("failed");
+    let message = error.to_string();
+    assert!(!message.contains("probe-value-4"), "{message}");
+    assert!(message.contains("[redacted]"), "{message}");
+    assert_eq!(sink.events().len(), 1);
+    assert!(!format!("{:?}", sink.events()).contains("probe-value-4"));
+}
+
+/// G3 boundary: an empty value scrubs nothing and does not mangle the message.
+#[test]
+fn probe_empty_value_keeps_the_message() {
+    let request = SecretPutRequest::text("prod/token", "");
+    let store = ProbeStore::new(Box::new(|_| {
+        Err(DbError::NotSupported("the store refused the write".into()))
+    }));
+    let sink = Sink::default();
+    let error = run(&store, &sink, MutationPolicy::Allowed, None, &request).expect_err("failed");
+    assert_eq!(
+        error.to_string(),
+        "Operation not supported: the store refused the write"
+    );
+}
+
+/// G3 gap probe: a binary value echoed as base64 by a store is not scrubbed.
+#[test]
+fn probe_binary_failure_echoed_as_base64_is_scrubbed() {
+    let request = SecretPutRequest::binary("prod/blob", vec![0xff, 0x00, 0x41, 0x42, 0x43]);
+    let encoded = encode_base64(match &request.payload {
+        SecretPayload::Binary(b) => b.expose_secret(),
+        _ => unreachable!(),
+    });
+    let echoed = encoded.clone();
+    let store = ProbeStore::new(Box::new(move |_| {
+        Err(DbError::query_failed(format!("bad blob {echoed}")))
+    }));
+    let sink = Sink::default();
+    let error = run(&store, &sink, MutationPolicy::Allowed, None, &request).expect_err("failed");
+    assert!(
+        !error.to_string().contains(&encoded),
+        "binary value reached the caller as base64: {error}"
+    );
+}
+
+/// G3 gap probe: an `IoError` carrying the value is not scrubbed at all.
+#[test]
+fn probe_io_error_carrying_the_value_is_scrubbed() {
+    let request = SecretPutRequest::text("prod/token", "probe-value-5");
+    let store = ProbeStore::new(Box::new(|r| {
+        Err(DbError::IoError(std::io::Error::other(format!(
+            "socket write failed for {}",
+            payload_text(r)
+        ))))
+    }));
+    let sink = Sink::default();
+    let error = run(&store, &sink, MutationPolicy::Allowed, None, &request).expect_err("failed");
+    assert!(!error.to_string().contains("probe-value-5"), "{error}");
+    let events = sink.events();
+    assert_eq!(events.len(), 1);
+    assert!(
+        !events[0]
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("probe-value-5"),
+        "audit error_message leaked: {:?}",
+        events[0].error_message
+    );
+}
+
+/// G6: the write event matches the retrieval event's shape and validates.
+#[test]
+fn probe_write_event_matches_retrieval_shape_and_validates() {
+    let write_target = WriteTarget {
+        profile_id: PROFILE,
+        driver_id: "aws_secrets",
+        store_id: "aws-secrets-manager",
+        store_label: "Secrets Manager",
+        name: "prod/token",
+    };
+    let read_target = RetrievalTarget {
+        profile_id: PROFILE,
+        driver_id: "aws_secrets",
+        store_id: "aws-secrets-manager",
+        store_label: "Secrets Manager",
+        name: "prod/token",
+    };
+
+    let written = secret_write_event(
+        &write_target,
+        SecretWriteOutcome::Written {
+            version: Some("v-9"),
+            stage: SecretVersionStage::Current,
+        },
+    );
+    let read = value_retrieval_event(&read_target, Some("v-9"), None);
+
+    assert_eq!(written.category, read.category);
+    assert_eq!(written.actor_id, read.actor_id);
+    assert_eq!(written.object_type, read.object_type);
+    assert_eq!(written.object_id, read.object_id);
+    assert_eq!(written.connection_id, read.connection_id);
+    assert_eq!(written.driver_id, read.driver_id);
+    assert_eq!(written.source_id, read.source_id);
+    assert_eq!(written.actor_type, read.actor_type);
+
+    let details: serde_json::Value =
+        serde_json::from_str(written.details_json.as_deref().expect("details")).expect("json");
+    assert_eq!(details["version"], serde_json::json!("v-9"));
+
+    for outcome in [
+        SecretWriteOutcome::Written {
+            version: Some("v-9"),
+            stage: SecretVersionStage::Pending,
+        },
+        SecretWriteOutcome::Refused {
+            reason: "approval_required",
+        },
+        SecretWriteOutcome::Failed {
+            message: "denied by the service",
+        },
+    ] {
+        let event = secret_write_event(&write_target, outcome);
+        dbflux_audit::AuditService::validate_event(&event).expect("valid event");
+        assert_eq!(event.category, EventCategory::SecretStore);
+        assert!(!event.summary.is_empty());
+    }
+}
+
+/// G5: a store that advertises no `WRITE` capability is refused before any
+/// call, audited once as a refusal for `store_not_writable` — the failed
+/// action never appears, and the store's own forgetful gate is irrelevant.
+#[test]
+fn probe_a_store_without_write_capability_is_refused_before_any_call() {
+    struct ReadOnlyStore(AtomicUsize);
+    impl SecretStoreSource for ReadOnlyStore {
+        fn descriptor(&self) -> &SecretStoreDescriptor {
+            static DESCRIPTOR: std::sync::OnceLock<SecretStoreDescriptor> =
+                std::sync::OnceLock::new();
+            DESCRIPTOR.get_or_init(|| {
+                SecretStoreDescriptor::new("ro", "RO", SecretStoreCapabilities::empty())
+            })
+        }
+        fn list(&self, _request: &SecretListRequest) -> Result<SecretListPage, DbError> {
+            Err(DbError::NotSupported("unused".into()))
+        }
+        fn describe(&self, _name: &str) -> Result<SecretDetails, DbError> {
+            Err(DbError::NotSupported("unused".into()))
+        }
+        fn get_value(&self, _name: &str, _version: Option<&str>) -> Result<SecretValue, DbError> {
+            Err(DbError::NotSupported("unused".into()))
+        }
+        fn put_value(&self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            succeed(request)
+        }
+    }
+
+    let store = ReadOnlyStore(AtomicUsize::new(0));
+    let sink = Sink::default();
+    let request = SecretPutRequest::text("prod/token", "probe-value-6");
+
+    put_secret_value(
+        &store,
+        PROFILE,
+        "probe",
+        MutationPolicy::Allowed,
+        None,
+        &sink,
+        &request,
+    )
+    .expect_err("a store that advertises no WRITE capability refuses");
+
+    assert_eq!(
+        store.0.load(Ordering::Relaxed),
+        0,
+        "the seam called put_value on a store that advertises no WRITE capability"
+    );
+
+    let events = sink.events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(
+        events[0].action, SECRET_VALUE_WRITE_REFUSED_ACTION,
+        "the capability refusal is audited as a refusal, not a failure: {events:?}"
+    );
+    assert_ne!(
+        events[0].action, SECRET_VALUE_WRITE_FAILED_ACTION,
+        "the capability refusal is audited as a refusal, not a failure: {events:?}"
+    );
+    let details: serde_json::Value =
+        serde_json::from_str(events[0].details_json.as_deref().expect("details"))
+            .expect("details_json is valid JSON");
+    assert_eq!(
+        details["reason"],
+        serde_json::json!("store_not_writable"),
+        "{details}"
+    );
+}
+
+/// G1: a sink that refuses the event must not swallow a write the store
+/// accepted, nor misreport it: the store was called once, the message says
+/// the write landed, and the error is not retriable — a retry would only
+/// write a second version.
+#[test]
+fn probe_a_refusing_sink_reports_that_the_write_landed() {
+    struct RefusingSink;
+    impl EventSink for RefusingSink {
+        fn record(&self, _event: EventRecord) -> Result<EventRecord, EventSinkError> {
+            Err(EventSinkError::Storage("audit store is closed".into()))
+        }
+    }
+
+    let store = ProbeStore::new(Box::new(|request| succeed(request)));
+    let request = SecretPutRequest::text("prod/token", "probe-value-7");
+
+    let error = put_secret_value(
+        &store,
+        PROFILE,
+        "aws_secrets",
+        MutationPolicy::Allowed,
+        None,
+        &RefusingSink,
+        &request,
+    )
+    .expect_err("the unaudited write must reach the caller");
+
+    assert_eq!(
+        store.calls(),
+        1,
+        "the write must not be aborted because the sink failed"
+    );
+
+    let message = error.to_string();
+    assert!(message.contains("landed"), "{message}");
+    assert!(!message.contains("probe-value-7"), "{message}");
+
+    let DbError::QueryFailed(formatted) = &error.error else {
+        panic!("the unaudited write is not a plain operation failure: {error:?}");
+    };
+    assert!(
+        !formatted.retriable,
+        "the audit-loss message presented itself as retryable"
+    );
+}
+
+/// The value the sweep submits: stated in Rust source, the verbatim string
+/// carries a backslash, a quote, a tab and a newline, so a JSON-escaped
+/// echo differs from the verbatim form in four places.
+const SWEEP_VALUE: &str = "sweep\\-value with\"quotes\" and\ttabs and\nnewlines";
+
+/// The JSON-escaped form of a value, without its surrounding quotes: what a
+/// serializer writes for it inside a JSON body.
+fn json_escaped(value: &str) -> String {
+    let quoted = serde_json::to_string(value).expect("a &str always serializes");
+    quoted[1..quoted.len() - 1].to_string()
+}
+
+/// One sweep case: a store whose write fails with a `DbError` carrying the
+/// sweep value in every field a rendered message can reach.
+type SweepCase = (&'static str, Behaviour);
+
+/// Builds one sweep case per message-carrying `DbError` variant.
+fn sweep_cases() -> Vec<SweepCase> {
+    // One formatted error carrying the value in every field a rendered
+    // message can reach, including `location.schema`.
+    let formatted = || {
+        dbflux_core::FormattedError::new(format!("rejected {SWEEP_VALUE}"))
+            .with_detail(format!("detail {SWEEP_VALUE}"))
+            .with_hint(format!("hint {SWEEP_VALUE}"))
+            .with_code(format!("SQLSTATE:{SWEEP_VALUE}"))
+            .with_location(dbflux_core::ErrorLocation {
+                schema: Some(format!("schema_{SWEEP_VALUE}")),
+                table: Some(format!("table_{SWEEP_VALUE}")),
+                column: Some(format!("column_{SWEEP_VALUE}")),
+                constraint: Some(format!("constraint_{SWEEP_VALUE}")),
+            })
+    };
+
+    vec![
+        (
+            "ConnectionFailed",
+            Box::new(move |_| Err(DbError::ConnectionFailed(formatted()))),
+        ),
+        (
+            "QueryFailed",
+            Box::new(move |_| Err(DbError::QueryFailed(formatted()))),
+        ),
+        (
+            "AuthFailed",
+            Box::new(move |_| Err(DbError::AuthFailed(formatted()))),
+        ),
+        (
+            "ConstraintViolation",
+            Box::new(move |_| Err(DbError::ConstraintViolation(formatted()))),
+        ),
+        (
+            "SyntaxError",
+            Box::new(move |_| Err(DbError::SyntaxError(formatted()))),
+        ),
+        (
+            "PermissionDenied",
+            Box::new(move |_| Err(DbError::PermissionDenied(formatted()))),
+        ),
+        (
+            "ObjectNotFound",
+            Box::new(move |_| Err(DbError::ObjectNotFound(formatted()))),
+        ),
+        (
+            "NotSupported",
+            Box::new(move |_| Err(DbError::NotSupported(format!("refused {SWEEP_VALUE}")))),
+        ),
+        (
+            "InvalidProfile",
+            Box::new(move |_| Err(DbError::InvalidProfile(format!("malformed {SWEEP_VALUE}")))),
+        ),
+        (
+            "ValueResolutionFailed",
+            Box::new(move |_| {
+                Err(DbError::ValueResolutionFailed(format!(
+                    "unresolved {SWEEP_VALUE}"
+                )))
+            }),
+        ),
+        (
+            "Parse",
+            Box::new(move |_| Err(DbError::Parse(format!("unparsed {SWEEP_VALUE}")))),
+        ),
+        (
+            "Unsupported",
+            Box::new(move |_| Err(DbError::Unsupported(format!("unsupported {SWEEP_VALUE}")))),
+        ),
+        (
+            "IoError",
+            Box::new(move |_| {
+                Err(DbError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("io failed {SWEEP_VALUE}"),
+                )))
+            }),
+        ),
+    ]
+}
+
+/// Runs one sweep case through the seam and asserts what every variant
+/// shares: the value is gone from the surfaced message, the marker is
+/// there, and exactly one failure event with a scrubbed `error_message` was
+/// recorded. Returns the failure for the per-kind checks.
+fn assert_sweep_case(label: &'static str, behaviour: Behaviour) -> SecretWriteFailure {
+    let store = ProbeStore::new(behaviour);
+    let sink = Sink::default();
+    let request = SecretPutRequest::text("prod/token", SWEEP_VALUE);
+    let escaped = json_escaped(SWEEP_VALUE);
+
+    let failure = run(&store, &sink, MutationPolicy::Allowed, None, &request).expect_err(label);
+
+    // Neither the verbatim value nor the form a serializer would echo it in
+    // reaches the caller, and the marker shows something was removed.
+    let message = failure.to_string();
+    assert!(!message.contains(SWEEP_VALUE), "{label}: {message}");
+    assert!(!message.contains(&escaped), "{label}: {message}");
+    assert!(message.contains("[redacted]"), "{label}: {message}");
+
+    let events = sink.events();
+    assert_eq!(events.len(), 1, "{label}");
+    let recorded = events[0].error_message.as_deref().unwrap_or_default();
+    assert!(!recorded.contains(SWEEP_VALUE), "{label}: {recorded}");
+    assert!(!recorded.contains(&escaped), "{label}: {recorded}");
+
+    failure
+}
+
+/// G3, exhaustive: every message-carrying `DbError` variant is scrubbed of
+/// the submitted value in every field a rendered message reaches —
+/// including `location.schema`, which `to_display_string` does not render —
+/// an `io::Error` keeps its kind, and the message-less variants pass
+/// through untouched.
+#[test]
+fn every_db_error_variant_is_scrubbed_and_io_keeps_its_kind() {
+    for (label, behaviour) in sweep_cases() {
+        let failure = assert_sweep_case(label, behaviour);
+
+        // The `FormattedError` variants keep every field scrubbed in place,
+        // even the ones `to_display_string` does not render.
+        if let Some(scrubbed) = failure.error.formatted() {
+            for field in [
+                scrubbed.message.as_str(),
+                scrubbed.detail.as_deref().unwrap_or_default(),
+                scrubbed.hint.as_deref().unwrap_or_default(),
+                scrubbed.code.as_deref().unwrap_or_default(),
+            ] {
+                assert!(!field.contains("sweep"), "{label}: {field}");
+                assert!(
+                    field.contains("[redacted]") || field.is_empty(),
+                    "{label}: {field}"
+                );
+            }
+            let location = scrubbed
+                .location
+                .as_ref()
+                .expect("the echo filled the location");
+            for field in [
+                &location.schema,
+                &location.table,
+                &location.column,
+                &location.constraint,
+            ] {
+                let field = field
+                    .as_deref()
+                    .expect("the echo filled every location field");
+                assert!(!field.contains("sweep"), "{label}: {field}");
+                assert!(field.contains("[redacted]"), "{label}: {field}");
+            }
+        }
+
+        // The rebuilt `io::Error` keeps its kind.
+        if let DbError::IoError(io) = &failure.error {
+            assert_eq!(
+                io.kind(),
+                std::io::ErrorKind::PermissionDenied,
+                "{label}: the io::Error kind was lost in the scrub"
+            );
+        }
+    }
+
+    // The message-less variants cannot carry a value and pass through
+    // untouched.
+    let timeout = ProbeStore::new(Box::new(|_request| Err(DbError::Timeout)));
+    let error = run(
+        &timeout,
+        &Sink::default(),
+        MutationPolicy::Allowed,
+        None,
+        &SecretPutRequest::text("prod/token", SWEEP_VALUE),
+    )
+    .expect_err("timeout");
+    assert!(matches!(error.error, DbError::Timeout), "{error:?}");
+
+    let cancelled = ProbeStore::new(Box::new(|_request| Err(DbError::Cancelled)));
+    let error = run(
+        &cancelled,
+        &Sink::default(),
+        MutationPolicy::Allowed,
+        None,
+        &SecretPutRequest::text("prod/token", SWEEP_VALUE),
+    )
+    .expect_err("cancelled");
+    assert!(matches!(error.error, DbError::Cancelled), "{error:?}");
+}
+
+/// G1: a refusing sink must not distort the outcomes it did not prevent: a
+/// policy refusal, a capability refusal and a store failure each return
+/// their own operation error unchanged, none panics, and the store is
+/// reached exactly when it may be.
+#[test]
+fn probe_a_refusing_sink_keeps_every_other_outcome_intact() {
+    struct ReadOnlyStore(AtomicUsize);
+    impl SecretStoreSource for ReadOnlyStore {
+        fn descriptor(&self) -> &SecretStoreDescriptor {
+            static DESCRIPTOR: std::sync::OnceLock<SecretStoreDescriptor> =
+                std::sync::OnceLock::new();
+            DESCRIPTOR.get_or_init(|| {
+                SecretStoreDescriptor::new("ro", "RO", SecretStoreCapabilities::empty())
+            })
+        }
+        fn list(&self, _request: &SecretListRequest) -> Result<SecretListPage, DbError> {
+            Err(DbError::NotSupported("unused".into()))
+        }
+        fn describe(&self, _name: &str) -> Result<SecretDetails, DbError> {
+            Err(DbError::NotSupported("unused".into()))
+        }
+        fn get_value(&self, _name: &str, _version: Option<&str>) -> Result<SecretValue, DbError> {
+            Err(DbError::NotSupported("unused".into()))
+        }
+        fn put_value(&self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            succeed(request)
+        }
+    }
+
+    struct RefusingSink;
+    impl EventSink for RefusingSink {
+        fn record(&self, _event: EventRecord) -> Result<EventRecord, EventSinkError> {
+            Err(EventSinkError::Storage("audit store is closed".into()))
+        }
+    }
+
+    let request = SecretPutRequest::text("prod/token", "probe-value-8");
+
+    // A policy refusal surfaces with its own message, before any call.
+    let store = ProbeStore::new(Box::new(|request| succeed(request)));
+    let refusal = put_secret_value(
+        &store,
+        PROFILE,
+        "aws_secrets",
+        MutationPolicy::ReadOnly,
+        Some(ReadOnlyReason::ProfileSetting),
+        &RefusingSink,
+        &request,
+    )
+    .expect_err("the policy refusal surfaces");
+    assert!(
+        matches!(refusal.error, DbError::PermissionDenied(_)),
+        "{refusal:?}"
+    );
+    assert!(refusal.to_string().contains("read-only"), "{refusal}");
+    assert_eq!(store.calls(), 0);
+
+    // A capability refusal surfaces with the store-level message.
+    let read_only_store = ReadOnlyStore(AtomicUsize::new(0));
+    let refusal = put_secret_value(
+        &read_only_store,
+        PROFILE,
+        "probe",
+        MutationPolicy::Allowed,
+        None,
+        &RefusingSink,
+        &request,
+    )
+    .expect_err("the capability refusal surfaces");
+    assert!(
+        matches!(refusal.error, DbError::NotSupported(_)),
+        "{refusal:?}"
+    );
+    assert!(
+        refusal
+            .to_string()
+            .contains("does not support writing values"),
+        "{refusal}"
+    );
+    assert_eq!(
+        read_only_store.0.load(Ordering::Relaxed),
+        0,
+        "the capability refusal reached the store"
+    );
+
+    // A store failure surfaces with the store's own message, once.
+    let store = ProbeStore::new(Box::new(|request| {
+        Err(DbError::permission_denied(format!(
+            "denied {}",
+            request.name
+        )))
+    }));
+    let failure = put_secret_value(
+        &store,
+        PROFILE,
+        "aws_secrets",
+        MutationPolicy::Allowed,
+        None,
+        &RefusingSink,
+        &request,
+    )
+    .expect_err("the store failure surfaces");
+    assert!(
+        failure.to_string().contains("denied prod/token"),
+        "{failure}"
+    );
+    assert_eq!(store.calls(), 1);
+}
