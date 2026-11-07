@@ -4064,3 +4064,64 @@ fn a_failing_write_returns_the_correlation_id_its_audit_event_recorded() {
         event.correlation_id
     );
 }
+
+// -- The `e` chord ------------------------------------------------------------
+
+/// `e` is the keyboard path of Edit value: with a plaintext value loaded it
+/// opens the editor on the stored text.
+#[gpui::test]
+fn the_edit_value_command_opens_the_editor_on_the_stored_text(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+
+    assert!(opened.command(Command::EditValue));
+
+    assert!(opened.read(|doc| doc.is_editing_value()));
+    assert_eq!(opened.editor_text(), FAKE_SECRET_PLAINTEXT);
+}
+
+/// With nothing editable the command falls through and opens nothing: the
+/// value is not loaded, or the secret is managed by another service.
+#[gpui::test]
+fn the_edit_value_command_falls_through_when_nothing_can_be_edited(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+
+    opened.select(PLAINTEXT_SECRET);
+    assert!(
+        !opened.command(Command::EditValue),
+        "the value is not loaded"
+    );
+    assert!(!opened.read(|doc| doc.is_editing_value()));
+
+    opened.select(MANAGED_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    assert!(!opened.command(Command::EditValue), "the secret is managed");
+    assert!(!opened.read(|doc| doc.is_editing_value()));
+}
+
+/// The row menu's Edit value entry draws the `e` keycap the keymap binds.
+#[gpui::test]
+fn the_row_menu_draws_the_e_keycap_on_edit_value(cx: &mut TestAppContext) {
+    use super::context_menu::SecretMenuAction;
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.right_click(&format!("secret-row-{PLAINTEXT_SECRET}"));
+
+    let shortcut = opened.read(|doc| {
+        doc.context_menu
+            .as_ref()
+            .expect("menu open")
+            .items
+            .iter()
+            .find(|item| matches!(item.action, SecretMenuAction::EditValue))
+            .expect("the Edit value entry")
+            .shortcut
+            .as_ref()
+            .map(|text| text.to_string())
+    });
+
+    assert_eq!(shortcut.as_deref(), Some("e"));
+}

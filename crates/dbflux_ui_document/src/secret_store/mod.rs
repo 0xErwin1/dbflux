@@ -919,19 +919,20 @@ impl SecretStoreDocument {
         // the window the editor's state is built with.
         if self.can_edit_value() {
             let target = target.clone();
-            actions.push(
-                crate::pane::PaneAction::callback(
-                    "secret-edit-value",
-                    dbflux_i18n::t!("document.secret_store.edit.open"),
-                    move |window, cx| {
-                        if let Some(doc) = target.upgrade() {
-                            doc.update(cx, |doc, cx| doc.start_value_edit(window, cx));
-                        }
-                    },
-                )
-                .icon(AppIcon::Pencil)
-                .enabled(self.can_edit_value()),
-            );
+            let mut edit_value = crate::pane::PaneAction::callback(
+                "secret-edit-value",
+                dbflux_i18n::t!("document.secret_store.edit.open"),
+                move |window, cx| {
+                    if let Some(doc) = target.upgrade() {
+                        doc.update(cx, |doc, cx| doc.start_value_edit(window, cx));
+                    }
+                },
+            )
+            .icon(AppIcon::Pencil)
+            .enabled(self.can_edit_value());
+            edit_value.shortcut =
+                dbflux_ui_base::keymap::shortcut_label(ContextId::Results, Command::EditValue);
+            actions.push(edit_value);
         }
 
         // The region picker and the retry of a failed listing are clickable
@@ -992,6 +993,7 @@ impl SecretStoreDocument {
             Command::CycleDocumentView if self.hierarchical() => self.toggle_path_mode(cx),
             Command::ColumnLeft if self.hierarchical() => self.navigate_up(cx),
             Command::ResultsNextPage => self.load_more(cx),
+            Command::EditValue if self.can_edit_value() => self.start_value_edit(window, cx),
             Command::RefreshSchema => self.refresh(cx),
             Command::FocusSearch | Command::FocusToolbar => self.focus_search(window, cx),
             Command::Cancel => {

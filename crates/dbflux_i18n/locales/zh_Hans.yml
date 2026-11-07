@@ -4462,6 +4462,7 @@ settings:
       toggle_console: 显示或隐藏控制台
       load_more: 加载更多
       edit_expiry: 编辑过期时间…
+      edit_value: 编辑值
       copy_preview: 复制预览
       import_items: "导入…"
       import_from_client: "从其他客户端导入…"

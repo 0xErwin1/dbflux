@@ -179,9 +179,11 @@ impl Workspace {
             | Command::ResizePanelWider
             | Command::ResizePanelShorter
             | Command::ResizePanelTaller
-            // So do the pagination and expiry of a key-value browser.
+            // So do the pagination and expiry of a key-value browser, and the
+            // value editor of the secret store.
             | Command::LoadMore
-            | Command::EditExpiry => Some(
+            | Command::EditExpiry
+            | Command::EditValue => Some(
                 self.tab_manager
                     .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
             ),

@@ -3082,3 +3082,13 @@ fn persisted_identifiers_round_trip_through_their_storage_forms() {
         "a stored row keeps rebinding the same binding"
     );
 }
+
+#[test]
+fn test_results_e_edits_the_value() {
+    let keymap = default_keymap();
+
+    assert_eq!(
+        keymap.resolve(ContextId::Results, &KeyChord::new("e", Modifiers::none())),
+        Some(Command::EditValue)
+    );
+}

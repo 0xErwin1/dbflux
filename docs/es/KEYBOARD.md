@@ -421,6 +421,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `/`                                           | Enfocar búsqueda/filtro                    |
 | `x`                                           | Eliminar fila                              |
 | `r`                                           | Renombrar / editar                         |
+| `e`                                           | Editar el valor del secreto seleccionado en el documento de AWS Secrets |
 | `o`                                           | Añadir fila                                |
 | `y`                                           | Copiar fila                                |
 | `i`                                           | Alternar la vista de registro (una fila)   |
