@@ -494,6 +494,12 @@ pub trait SecretStoreSource: Send + Sync {
     /// store answers with. Never fetches a value: a row carries metadata
     /// only, and each `id` is read through `get_value`.
     ///
+    /// A store's history call may return values to the SDK anyway: Parameter
+    /// Store's `GetParameterHistory` carries each version's value even with
+    /// decryption off, in plaintext for `String` and `StringList`. An
+    /// implementation never reads, stores, logs or formats them; it maps
+    /// each entry to metadata and drops the rest.
+    ///
     /// Stores advertising `VERSIONS` implement it; the default refuses
     /// instead of answering an empty history.
     fn list_versions(&self, name: &str) -> Result<Vec<SecretVersionInfo>, DbError> {

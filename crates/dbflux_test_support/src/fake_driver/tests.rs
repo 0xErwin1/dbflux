@@ -61,36 +61,37 @@ fn redis_metadata_matches_the_real_driver_read_only_contract() {
 
 #[test]
 fn execute_uses_configured_outcome_and_records_stats() {
+    let matching =
+        dbflux_core::QueryResult::text("matching".to_string(), std::time::Duration::ZERO);
+    let fallback = dbflux_core::QueryResult::text("default".to_string(), std::time::Duration::ZERO);
+
     let driver = FakeDriver::new(DbKind::Postgres)
         .with_query_error("SELECT boom", "boom")
-        .with_default_result(dbflux_core::QueryResult::text(
-            "ok".to_string(),
-            std::time::Duration::ZERO,
-        ));
+        .with_default_result(fallback);
 
-    driver.set_query_outcome(
-        "SELECT 1",
-        FakeQueryOutcome::success(dbflux_core::QueryResult::table(
-            vec![],
-            vec![],
-            None,
-            std::time::Duration::ZERO,
-        )),
-    );
+    driver.set_query_outcome("SELECT 1", FakeQueryOutcome::success(matching));
 
     let profile = ConnectionProfile::new("fake", DbConfig::default_postgres());
     let connection = driver
         .connect(&profile)
         .expect("fake connection should work");
 
-    let query_ok = connection.execute(&QueryRequest::new("SELECT 1"));
-    assert!(query_ok.is_ok());
+    let matched = connection
+        .execute(&QueryRequest::new("SELECT 1"))
+        .expect("the configured query should succeed");
+    assert_eq!(matched.text_body.as_deref(), Some("matching"));
+
+    let unmatched = connection
+        .execute(&QueryRequest::new("SELECT 2"))
+        .expect("an unmatched query should use the default result");
+    assert_eq!(unmatched.text_body.as_deref(), Some("default"));
 
     let query_err = connection.execute(&QueryRequest::new("SELECT boom"));
     assert!(matches!(query_err, Err(DbError::QueryFailed(_))));
 
     let stats = driver.stats();
-    assert_eq!(stats.executed_requests.len(), 2);
+    assert_eq!(stats.executed_requests.len(), 3);
+    assert_eq!(stats.executed_requests[1].sql, "SELECT 2");
 }
 
 #[test]
@@ -304,6 +305,30 @@ fn fake_with_read_only_enforcement_declares_it_and_runs_the_request() {
         driver.stats().executed_requests[0].read_only,
         ReadOnlyEnforcement::Required
     );
+}
+
+#[test]
+fn enforcement_after_refusal_clears_the_refusal() {
+    let driver = FakeDriver::new(DbKind::Postgres)
+        .with_read_only_refusal()
+        .with_read_only_enforcement();
+    let connection = connect_postgres(&driver);
+
+    assert!(connection.metadata().enforces_read_only());
+    assert!(connection.execute(&read_only_request()).is_ok());
+}
+
+#[test]
+fn refusal_after_enforcement_refuses() {
+    let driver = FakeDriver::new(DbKind::Postgres)
+        .with_read_only_enforcement()
+        .with_read_only_refusal();
+    let connection = connect_postgres(&driver);
+
+    assert!(matches!(
+        connection.execute(&read_only_request()),
+        Err(DbError::NotSupported(_))
+    ));
 }
 
 #[test]
@@ -734,6 +759,14 @@ fn every_listed_version_id_fetches_its_own_value() {
             .get_value("prod/api/credentials", Some(&version.id))
             .expect("a listed id is a selector get_value accepts");
         assert_eq!(value.version.as_deref(), Some(version.id.as_str()));
+
+        let seeded = match version.id.as_str() {
+            "v-current" => FAKE_SECRET_PASSWORD,
+            "v-previous" => "fake-previous-2b8d",
+            "v-oldest" => "fake-oldest-90e1",
+            other => panic!("unexpected version {other}"),
+        };
+        assert!(exposed_text(&value).contains(seeded), "{}", version.id);
     }
 }
 
@@ -786,7 +819,10 @@ fn listing_the_versions_of_a_missing_secret_is_not_found() {
         .secret_store(FAKE_SECRETS_STORE_ID)
         .expect("the fake secrets store exists");
 
-    assert!(secrets.list_versions("prod/nope").is_err());
+    assert!(matches!(
+        secrets.list_versions("prod/nope"),
+        Err(dbflux_core::DbError::ObjectNotFound(_))
+    ));
 }
 
 #[test]
@@ -823,6 +859,39 @@ fn a_pending_write_updates_the_details_and_the_history_but_not_the_current_versi
         .get_value("prod/api/credentials", Some("v-written-1"))
         .expect("the staged version is readable by id");
     assert_eq!(exposed_text(&staged), "staged value");
+}
+
+#[test]
+fn a_filtered_path_listing_only_includes_branches_with_a_matching_descendant() {
+    let (_driver, connection) = connected();
+    let parameters = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    let page = parameters
+        .list(&SecretListRequest {
+            name_filter: Some("endpoint".to_string()),
+            ..SecretListRequest::default()
+        })
+        .expect("the filtered listing succeeds");
+
+    assert!(page.entries.is_empty());
+    assert_eq!(page.child_paths, vec!["/shared/".to_string()]);
+}
+
+#[test]
+fn a_page_token_at_the_end_of_the_index_range_is_an_error_not_an_overflow() {
+    let (_driver, connection) = connected();
+    let secrets = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake flat store exists");
+
+    let result = secrets.list(&SecretListRequest {
+        page_token: Some(usize::MAX.to_string()),
+        ..SecretListRequest::default()
+    });
+
+    assert!(matches!(result, Err(DbError::QueryFailed(_))));
 }
 
 #[test]

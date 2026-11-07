@@ -6,8 +6,8 @@ use dbflux_core::{
 
 use super::hierarchy::{group_level, normalize_path, path_filter_value};
 use super::{
-    ParameterStore, existing_key_id, find_parameter_on_pages, overwrite_type, page_versions,
-    put_parameter_call, put_text, sort_newest_first,
+    ParameterStore, existing_key_id, find_parameter_on_pages, list_versions_on_pages,
+    overwrite_type, page_versions, put_parameter_call, put_text, sort_newest_first,
 };
 use crate::driver::AwsSecretsProfileConfig;
 
@@ -484,4 +484,29 @@ fn a_history_id_is_the_selector_get_value_builds() {
         format!("/app/prod/db/password:{}", versions[0].id),
         "/app/prod/db/password:7"
     );
+}
+
+#[test]
+fn history_paging_forwards_the_token_and_keeps_the_later_pages() {
+    let tokens = std::cell::RefCell::new(Vec::new());
+
+    let versions = list_versions_on_pages(|token| {
+        tokens.borrow_mut().push(token.clone());
+        Ok(match token.as_deref() {
+            None => (
+                page_versions(&[history_entry(1, &[], Some(1_000), None)]).collect(),
+                Some("page-2".to_string()),
+            ),
+            Some(_) => (
+                page_versions(&[history_entry(2, &["prod"], Some(2_000), None)]).collect(),
+                None,
+            ),
+        })
+    })
+    .expect("both pages are read");
+
+    assert_eq!(*tokens.borrow(), [None, Some("page-2".to_string())]);
+    let ids: Vec<&str> = versions.iter().map(|version| version.id.as_str()).collect();
+    assert_eq!(ids, ["2", "1"]);
+    assert!(!format!("{versions:?}").contains(HISTORY_SENTINEL));
 }

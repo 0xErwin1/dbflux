@@ -10,9 +10,10 @@ pub struct FakeSecretStoreCalls {
     /// refused write must not reach the store, so a test watches this list
     /// and never the payload.
     pub put_attempts: Vec<(String, String)>,
-    /// Every `put_value` attempt, as `(store_id, request)`. The payload
-    /// travels as the `secrecy` type `SecretPayload`, so it stays redacted in
-    /// `Debug` output.
+    /// Only the `put_value` requests the store accepted, as
+    /// `(store_id, request)`; rejected attempts are in `put_attempts`. The
+    /// payload travels as the `secrecy` type `SecretPayload`, so it stays
+    /// redacted in `Debug` output.
     pub put_requests: Vec<(String, SecretPutRequest)>,
     /// Every `list_versions` call, as `(store_id, name)`.
     pub version_listings: Vec<(String, String)>,
@@ -142,7 +143,7 @@ impl FakeSecretStore {
             match rest.split_once('/') {
                 Some((segment, _)) if !request.recursive => {
                     let child = format!("{path}{segment}/");
-                    if !child_paths.contains(&child) {
+                    if self.matches_filter(name, filter) && !child_paths.contains(&child) {
                         child_paths.push(child);
                     }
                 }
@@ -202,7 +203,10 @@ impl SecretStoreSource for FakeSecretStore {
             .map_or(self.default_page_size, |size| size as usize)
             .clamp(1, self.default_page_size);
 
-        let end = (start + page_size).min(entries.len());
+        let end = start
+            .checked_add(page_size)
+            .ok_or_else(|| DbError::query_failed(format!("Page token {start} is out of range")))?
+            .min(entries.len());
         let page: Vec<SecretSummary> = entries
             .get(start..end)
             .unwrap_or_default()
@@ -239,7 +243,6 @@ impl SecretStoreSource for FakeSecretStore {
             };
         }
 
-        // The version asked for, or the current one when none was named.
         let requested = version
             .map(ToString::to_string)
             .or_else(|| secret.details.summary.version.clone());

@@ -343,30 +343,23 @@ impl SecretStoreSource for SecretsManagerStore {
     /// version with no staging label is still a version of the secret. Every
     /// page is followed, and the metadata is mapped page by page.
     fn list_versions(&self, name: &str) -> Result<Vec<SecretVersionInfo>, DbError> {
-        let mut entries = Vec::new();
-        let mut token: Option<String> = None;
-
-        loop {
+        list_versions_on_pages(|token| {
             let output = runtime()
                 .block_on(
                     self.client
                         .list_secret_version_ids()
                         .secret_id(name)
                         .include_deprecated(true)
-                        .set_next_token(token.take())
+                        .set_next_token(token)
                         .send(),
                 )
                 .map_err(|error| self.operation_error(&error, Some(name)))?;
 
-            entries.extend_from_slice(output.versions());
-
-            match output.next_token() {
-                Some(next) => token = Some(next.to_string()),
-                None => break,
-            }
-        }
-
-        Ok(versions_from_entries(&entries))
+            Ok((
+                output.versions().to_vec(),
+                output.next_token().map(ToString::to_string),
+            ))
+        })
     }
 
     /// One `PutSecretValue` call with the new payload, after the checks the
@@ -545,6 +538,30 @@ pub(crate) fn rotation_schedule(rules: &RotationRulesType) -> Option<String> {
     rules
         .automatically_after_days()
         .map(|days| format!("rate({days} days)"))
+}
+
+/// Walks every page of a `ListSecretVersionIds` listing. The fetcher sends
+/// one page: it receives the token to ask with (`None` for the first page)
+/// and answers with that page's entries and the next token, or `None` when
+/// the listing ended.
+pub(crate) fn list_versions_on_pages<F>(
+    mut fetch_page: F,
+) -> Result<Vec<SecretVersionInfo>, DbError>
+where
+    F: FnMut(Option<String>) -> Result<(Vec<SecretVersionsListEntry>, Option<String>), DbError>,
+{
+    let mut entries = Vec::new();
+    let mut token = None;
+
+    loop {
+        let (page, next_token) = fetch_page(token)?;
+        entries.extend(page);
+
+        match next_token {
+            Some(next) => token = Some(next),
+            None => return Ok(versions_from_entries(&entries)),
+        }
+    }
 }
 
 /// The history rows of `ListSecretVersionIds` entries, newest first by

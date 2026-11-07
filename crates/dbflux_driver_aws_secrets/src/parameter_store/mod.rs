@@ -251,31 +251,25 @@ impl SecretStoreSource for ParameterStore {
     /// [`SecretVersionInfo`] right away and the SDK entries, and the values
     /// in them, are dropped before the next page is requested.
     fn list_versions(&self, name: &str) -> Result<Vec<SecretVersionInfo>, DbError> {
-        let mut versions = Vec::new();
-        let mut token: Option<String> = None;
-
-        loop {
+        list_versions_on_pages(|token| {
             let output = runtime()
                 .block_on(
                     self.client
                         .get_parameter_history()
                         .name(name)
                         .with_decryption(false)
-                        .set_next_token(token.take())
+                        .set_next_token(token)
                         .send(),
                 )
                 .map_err(|error| self.operation_error(&error, Some(name)))?;
 
-            versions.extend(page_versions(output.parameters()));
-
-            match output.next_token() {
-                Some(next) => token = Some(next.to_string()),
-                None => break,
-            }
-        }
-
-        sort_newest_first(&mut versions);
-        Ok(versions)
+            // Mapped before the next page is asked for, so the SDK entries
+            // and the values in them are dropped with this closure call.
+            Ok((
+                page_versions(output.parameters()).collect(),
+                output.next_token().map(ToString::to_string),
+            ))
+        })
     }
 
     /// One `PutParameter` call with `Overwrite`, after the checks the shape
@@ -501,6 +495,34 @@ pub(crate) fn page_versions(
             .and_then(smithy_datetime_to_chrono),
         modified_by: entry.last_modified_user().map(ToString::to_string),
     })
+}
+
+/// Walks every page of a `GetParameterHistory` listing. The fetcher sends
+/// one page: it receives the token to ask with (`None` for the first page)
+/// and answers with that page's rows, already mapped to metadata, and the
+/// next token, or `None` when the listing ended. Rows are returned newest
+/// version first.
+pub(crate) fn list_versions_on_pages<F>(
+    mut fetch_page: F,
+) -> Result<Vec<SecretVersionInfo>, DbError>
+where
+    F: FnMut(Option<String>) -> Result<(Vec<SecretVersionInfo>, Option<String>), DbError>,
+{
+    let mut versions = Vec::new();
+    let mut token = None;
+
+    loop {
+        let (page, next_token) = fetch_page(token)?;
+        versions.extend(page);
+
+        match next_token {
+            Some(next) => token = Some(next),
+            None => {
+                sort_newest_first(&mut versions);
+                return Ok(versions);
+            }
+        }
+    }
 }
 
 /// Parameter versions are numbered, so the highest number is the newest.

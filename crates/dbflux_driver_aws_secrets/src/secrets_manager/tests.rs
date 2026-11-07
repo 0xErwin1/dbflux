@@ -327,3 +327,24 @@ fn tied_creation_dates_keep_the_service_order() {
     let ids: Vec<&str> = versions.iter().map(|version| version.id.as_str()).collect();
     assert_eq!(ids, ["v-first", "v-second"]);
 }
+
+#[test]
+fn version_paging_forwards_the_token_and_keeps_the_later_pages() {
+    let tokens = std::cell::RefCell::new(Vec::new());
+
+    let versions = list_versions_on_pages(|token| {
+        tokens.borrow_mut().push(token.clone());
+        Ok(match token.as_deref() {
+            None => (
+                vec![version_entry("v-new", &["AWSCURRENT"], Some(3_000))],
+                Some("page-2".to_string()),
+            ),
+            Some(_) => (vec![version_entry("v-old", &[], Some(1_000))], None),
+        })
+    })
+    .expect("both pages are read");
+
+    assert_eq!(*tokens.borrow(), [None, Some("page-2".to_string())]);
+    let ids: Vec<&str> = versions.iter().map(|version| version.id.as_str()).collect();
+    assert_eq!(ids, ["v-new", "v-old"]);
+}
