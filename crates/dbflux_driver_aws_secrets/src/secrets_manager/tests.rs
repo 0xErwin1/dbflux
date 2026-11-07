@@ -486,3 +486,67 @@ fn only_a_secret_that_is_not_scheduled_can_be_scheduled_and_only_a_scheduled_one
     assert!(error.to_string().contains("not scheduled"), "{error}");
     assert!(error.to_string().contains("prod/api"), "{error}");
 }
+
+const LAMBDA: &str = "arn:aws:lambda:eu-west-1:441012345678:function:rotate";
+
+#[test]
+fn enabling_rotation_keeps_the_function_the_secret_has_and_needs_one_otherwise() {
+    let update = SecretRotationUpdate::enable("prod/api", "rate(30 days)").with_window("4h");
+
+    let plan = plan_rotation_update(&update, false, Some(LAMBDA)).expect("a function exists");
+    assert_eq!(
+        plan,
+        RotationPlan::Enable {
+            schedule: "rate(30 days)".to_string(),
+            window: Some("4h".to_string()),
+            function: None,
+        }
+    );
+
+    let error = plan_rotation_update(&update, false, None).expect_err("no function anywhere");
+    assert!(error.to_string().contains("rotation function"), "{error}");
+
+    let plan = plan_rotation_update(&update.with_function(LAMBDA), false, None)
+        .expect("the update names one");
+    assert!(matches!(
+        plan,
+        RotationPlan::Enable { function: Some(function), .. } if function == LAMBDA
+    ));
+}
+
+#[test]
+fn an_invalid_rotation_update_is_refused_before_a_plan_exists() {
+    let update = SecretRotationUpdate::enable("prod/api", "every month");
+
+    let error = plan_rotation_update(&update, true, Some(LAMBDA)).expect_err("invalid schedule");
+
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+}
+
+#[test]
+fn rotation_is_turned_off_only_when_it_is_on() {
+    let update = SecretRotationUpdate::disable("prod/api");
+
+    assert_eq!(
+        plan_rotation_update(&update, true, Some(LAMBDA)).expect("on"),
+        RotationPlan::Disable
+    );
+
+    let error = plan_rotation_update(&update, false, Some(LAMBDA)).expect_err("already off");
+    assert!(error.to_string().contains("not enabled"), "{error}");
+}
+
+#[test]
+fn rotating_now_needs_rotation_enabled_with_a_function() {
+    ensure_rotatable(Some(true), Some(LAMBDA), "prod/api").expect("enabled");
+
+    for (enabled, function) in [(Some(false), Some(LAMBDA)), (None, None)] {
+        let error = ensure_rotatable(enabled, function, "prod/api")
+            .expect_err("rotation is not enabled; rotating would switch it on");
+        assert!(error.to_string().contains("not enabled"), "{error}");
+        assert!(error.to_string().contains("prod/api"), "{error}");
+    }
+
+    let error = ensure_rotatable(Some(true), None, "prod/api").expect_err("no function");
+    assert!(error.to_string().contains("rotation function"), "{error}");
+}

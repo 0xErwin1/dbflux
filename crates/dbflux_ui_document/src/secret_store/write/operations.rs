@@ -5,7 +5,7 @@
 
 use dbflux_core::{
     SecretDeleteRequest, SecretDeletion, SecretRollback, SecretRollbackRequest,
-    SecretStoreCapabilities,
+    SecretRotationStart, SecretRotationUpdate, SecretStoreCapabilities,
 };
 
 use dbflux_core::DbError;
@@ -166,6 +166,90 @@ pub fn restore_secret(context: &WriteContext<'_>, name: &str) -> Result<(), Secr
             submitted: None,
             details: serde_json::Map::new(),
             call: Box::new(|store| store.restore_secret(name)),
+            landed: Box::new(|_: &()| serde_json::Map::new()),
+        },
+    )
+}
+
+/// Starts a rotation of `name` now through the governed path:
+/// classification `Write`, capabilities `WRITE` and `ROTATION`.
+///
+/// # Errors
+///
+/// A [`SecretWriteFailure`]: a refusal before any store call (policy or
+/// capability), the store's failure (including a secret whose rotation is
+/// not enabled), or the audit failure after a rotation that started.
+#[allow(clippy::result_large_err)] // `DbError` is the crate's error type
+pub fn rotate_secret_now(
+    context: &WriteContext<'_>,
+    name: &str,
+) -> Result<SecretRotationStart, SecretWriteFailure> {
+    govern(
+        context,
+        Attempt {
+            operation: SecretOperation::RotateNow,
+            name,
+            invalid: None,
+            submitted: None,
+            details: serde_json::Map::new(),
+            call: Box::new(|store| store.rotate_now(name)),
+            landed: Box::new(|start: &SecretRotationStart| {
+                let mut fields = serde_json::Map::new();
+                if let Some(version) = &start.version {
+                    fields.insert(
+                        "version".to_string(),
+                        serde_json::Value::String(version.clone()),
+                    );
+                }
+                fields
+            }),
+        },
+    )
+}
+
+/// Applies a rotation edit through the governed path: classification
+/// `Write`, capabilities `WRITE` and `ROTATION`. The schedule, window and
+/// function are validated before any call, and the audit event records the
+/// settings it applied — none of them is a secret value.
+///
+/// # Errors
+///
+/// A [`SecretWriteFailure`]: a refusal before any store call (policy,
+/// capability, or a schedule, window or function the service would
+/// reject), the store's failure, or the audit failure after an edit that
+/// landed.
+#[allow(clippy::result_large_err)] // `DbError` is the crate's error type
+pub fn update_secret_rotation(
+    context: &WriteContext<'_>,
+    update: &SecretRotationUpdate,
+) -> Result<(), SecretWriteFailure> {
+    let mut details = serde_json::Map::new();
+    details.insert(
+        "enabled".to_string(),
+        serde_json::Value::Bool(update.enabled),
+    );
+    for (key, value) in [
+        ("schedule", &update.schedule),
+        ("window", &update.window),
+        ("function", &update.function),
+    ] {
+        if let Some(value) = value {
+            details.insert(key.to_string(), serde_json::Value::String(value.clone()));
+        }
+    }
+
+    govern(
+        context,
+        Attempt {
+            operation: SecretOperation::EditRotation,
+            name: &update.name,
+            invalid: update
+                .validate()
+                .err()
+                .map(|error| ("invalid_request", error)),
+            submitted: None,
+            details,
+            call: Box::new(|store| store.update_rotation(update)),
             landed: Box::new(|_: &()| serde_json::Map::new()),
         },
     )

@@ -10,8 +10,9 @@ use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
     DbError, FormattedError, SecretDeleteRequest, SecretDeletion, SecretDetails, SecretListPage,
     SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
-    SecretRotation, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
-    SecretSummary, SecretTag, SecretValue, SecretVersionInfo, SecretVersionStage,
+    SecretRotation, SecretRotationStart, SecretRotationUpdate, SecretStoreCapabilities,
+    SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag, SecretValue,
+    SecretVersionInfo, SecretVersionStage,
 };
 
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
@@ -523,6 +524,96 @@ impl SecretStoreSource for SecretsManagerStore {
         Ok(deletion_from_date(output.deletion_date()))
     }
 
+    /// One `RotateSecret` call that rotates now with the rotation already
+    /// configured, only on a secret whose rotation is enabled and has a
+    /// function. The service runs the function asynchronously: the answer
+    /// names the version the rotation created, and the value changes when
+    /// the function finishes.
+    fn rotate_now(&self, name: &str) -> Result<SecretRotationStart, DbError> {
+        self.descriptor.ensure_can(
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::ROTATION,
+            "rotate",
+            name,
+        )?;
+
+        let metadata = self.describe_unmanaged(name)?;
+        ensure_rotatable(
+            metadata.rotation_enabled(),
+            metadata.rotation_lambda_arn(),
+            name,
+        )?;
+
+        let output = runtime()
+            .block_on(
+                self.client
+                    .rotate_secret()
+                    .secret_id(name)
+                    .rotate_immediately(true)
+                    .send(),
+            )
+            .map_err(|error| self.operation_error(&error, Some(name)))?;
+
+        Ok(SecretRotationStart {
+            version: output.version_id().map(ToString::to_string),
+        })
+    }
+
+    /// Turns automatic rotation on with `RotateSecret` — rules and function
+    /// set, `RotateImmediately` false so editing never rotates — or off with
+    /// `CancelRotateSecret`.
+    fn update_rotation(&self, update: &SecretRotationUpdate) -> Result<(), DbError> {
+        self.descriptor.ensure_can(
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::ROTATION,
+            "edit the rotation of",
+            &update.name,
+        )?;
+        update.validate()?;
+
+        let metadata = self.describe_unmanaged(&update.name)?;
+        let plan = plan_rotation_update(
+            update,
+            metadata.rotation_enabled() == Some(true),
+            metadata.rotation_lambda_arn(),
+        )?;
+
+        match plan {
+            RotationPlan::Enable {
+                schedule,
+                window,
+                function,
+            } => {
+                let rules = RotationRulesType::builder()
+                    .schedule_expression(schedule)
+                    .set_duration(window)
+                    .build();
+
+                runtime()
+                    .block_on(
+                        self.client
+                            .rotate_secret()
+                            .secret_id(&update.name)
+                            .rotate_immediately(false)
+                            .rotation_rules(rules)
+                            .set_rotation_lambda_arn(function)
+                            .send(),
+                    )
+                    .map_err(|error| self.operation_error(&error, Some(&update.name)))?;
+            }
+            RotationPlan::Disable => {
+                runtime()
+                    .block_on(
+                        self.client
+                            .cancel_rotate_secret()
+                            .secret_id(&update.name)
+                            .send(),
+                    )
+                    .map_err(|error| self.operation_error(&error, Some(&update.name)))?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// One `RestoreSecret` call, which cancels a scheduled deletion. A
     /// secret another service owns is refused; one that is not scheduled
     /// for deletion is rejected by the service itself.
@@ -562,6 +653,81 @@ pub(crate) fn deletion_window(request: &SecretDeleteRequest) -> Result<i64, DbEr
              without recovery."
         ))),
     }
+}
+
+/// What a rotation edit sends.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RotationPlan {
+    /// `RotateSecret` with rules and without rotating now. `function` is
+    /// `None` when the secret keeps the one it has.
+    Enable {
+        schedule: String,
+        window: Option<String>,
+        function: Option<String>,
+    },
+
+    /// `CancelRotateSecret`.
+    Disable,
+}
+
+/// Decides a rotation edit from the update and the secret's current
+/// rotation, refusing before any call what the service would reject or
+/// what would not change anything: an invalid update, enabling with no
+/// function anywhere, and turning off rotation that is already off.
+pub(crate) fn plan_rotation_update(
+    update: &SecretRotationUpdate,
+    enabled: bool,
+    existing_function: Option<&str>,
+) -> Result<RotationPlan, DbError> {
+    update.validate()?;
+
+    if !update.enabled {
+        if !enabled {
+            return Err(DbError::query_failed(format!(
+                "Rotation of \"{}\" is not enabled, so there is nothing to turn off",
+                update.name
+            )));
+        }
+
+        return Ok(RotationPlan::Disable);
+    }
+
+    if update.function.is_none() && existing_function.is_none() {
+        return Err(DbError::query_failed(format!(
+            "Rotation of \"{}\" needs a rotation function, and the secret has none",
+            update.name
+        )));
+    }
+
+    Ok(RotationPlan::Enable {
+        schedule: update.schedule.clone().unwrap_or_default(),
+        window: update.window.clone(),
+        function: update.function.clone(),
+    })
+}
+
+/// Refuses rotating now unless rotation is enabled with a function.
+/// `RotateSecret` also switches automatic rotation on for the secret, so
+/// calling it on one with rotation off would enable it as a side effect;
+/// the driver refuses instead and the user turns rotation on by editing it.
+pub(crate) fn ensure_rotatable(
+    enabled: Option<bool>,
+    function: Option<&str>,
+    name: &str,
+) -> Result<(), DbError> {
+    if enabled != Some(true) {
+        return Err(DbError::query_failed(format!(
+            "Rotation of \"{name}\" is not enabled; enable it before rotating"
+        )));
+    }
+
+    if function.is_none() {
+        return Err(DbError::query_failed(format!(
+            "Secrets Manager secret \"{name}\" has no rotation function to run"
+        )));
+    }
+
+    Ok(())
 }
 
 /// Refuses scheduling the deletion of a secret whose deletion is already

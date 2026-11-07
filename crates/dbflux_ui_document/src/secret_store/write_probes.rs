@@ -14,19 +14,15 @@
 
 use super::super::encode_base64;
 use super::super::value::{RetrievalTarget, value_retrieval_event};
-use super::super::write::{
-    SECRET_VALUE_WRITE_FAILED_ACTION, SECRET_VALUE_WRITE_REFUSED_ACTION,
-    SECRET_VALUE_WRITTEN_ACTION, SecretOperation, SecretWriteFailure, SecretWriteFailureKind,
-    SecretWriteOutcome, WriteContext, WriteTarget, delete_secret, put_secret_value, restore_secret,
-    roll_back_secret, secret_write_event,
-};
+// Every governed entry point, descriptor and action name the seam exports.
+use super::super::write::*;
 use dbflux_core::observability::{EventCategory, EventRecord, EventSink, EventSinkError};
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
     DbError, MutationPolicy, ReadOnlyReason, SecretDeleteRequest, SecretDeletion, SecretDetails,
     SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback,
-    SecretRollbackRequest, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
-    SecretValue, SecretVersionStage,
+    SecretRollbackRequest, SecretRotationStart, SecretRotationUpdate, SecretStoreCapabilities,
+    SecretStoreDescriptor, SecretStoreSource, SecretValue, SecretVersionStage,
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -939,6 +935,15 @@ impl SecretStoreSource for OperationStore {
     fn restore_secret(&self, _name: &str) -> Result<(), DbError> {
         self.answer()
     }
+    fn rotate_now(&self, _name: &str) -> Result<SecretRotationStart, DbError> {
+        self.answer()?;
+        Ok(SecretRotationStart {
+            version: Some("v-rotated".to_string()),
+        })
+    }
+    fn update_rotation(&self, _update: &SecretRotationUpdate) -> Result<(), DbError> {
+        self.answer()
+    }
 }
 
 fn operation_cases() -> Vec<OperationCase> {
@@ -979,6 +984,26 @@ fn operation_cases() -> Vec<OperationCase> {
                     &SecretDeleteRequest::irreversible("/app/prod/db/host", "/app/prod/db/host"),
                 )
                 .map(|_| ())
+            }),
+            values: Vec::new(),
+        },
+        OperationCase {
+            label: "rotate now",
+            operation: SecretOperation::RotateNow,
+            name: "prod/api/credentials",
+            run: Box::new(|context| rotate_secret_now(context, "prod/api/credentials").map(|_| ())),
+            values: Vec::new(),
+        },
+        OperationCase {
+            label: "edit rotation",
+            operation: SecretOperation::EditRotation,
+            name: "prod/api/credentials",
+            run: Box::new(|context| {
+                update_secret_rotation(
+                    context,
+                    &SecretRotationUpdate::enable("prod/api/credentials", "rate(30 days)")
+                        .with_window("4h"),
+                )
             }),
             values: Vec::new(),
         },
@@ -1041,6 +1066,16 @@ fn every_operation_pins_its_classification_and_capabilities() {
             SecretOperation::Restore,
             dbflux_core::ExecutionClassification::Write,
             write | SecretStoreCapabilities::SOFT_DELETE,
+        ),
+        (
+            SecretOperation::RotateNow,
+            dbflux_core::ExecutionClassification::Write,
+            write | SecretStoreCapabilities::ROTATION,
+        ),
+        (
+            SecretOperation::EditRotation,
+            dbflux_core::ExecutionClassification::Write,
+            write | SecretStoreCapabilities::ROTATION,
         ),
     ] {
         assert_eq!(operation.classification(), classification, "{operation:?}");
@@ -1398,4 +1433,81 @@ fn a_scheduled_delete_records_its_window_and_an_irreversible_one_says_so() {
     let details = details_of(&sink.events()[0]);
     assert_eq!(details["irreversible"], true);
     assert_eq!(details["classification"], "admin_destructive");
+}
+
+#[test]
+fn a_rotation_edit_the_service_would_reject_is_refused_before_any_call() {
+    for update in [
+        SecretRotationUpdate::enable("prod/api/credentials", "every month"),
+        SecretRotationUpdate::enable("prod/api/credentials", "rate(30 days)").with_window("90m"),
+        SecretRotationUpdate::enable("prod/api/credentials", "rate(30 days)")
+            .with_function("rotate-fn"),
+        SecretRotationUpdate {
+            schedule: Some("rate(30 days)".to_string()),
+            ..SecretRotationUpdate::disable("prod/api/credentials")
+        },
+    ] {
+        let store = OperationStore::new(SecretOperation::EditRotation.required_capabilities());
+        let sink = Sink::default();
+
+        let failure = update_secret_rotation(
+            &context(&store, &sink, MutationPolicy::Allowed, None),
+            &update,
+        )
+        .expect_err("an invalid edit refuses");
+
+        assert_eq!(failure.kind, SecretWriteFailureKind::Refused, "{update:?}");
+        assert!(
+            matches!(failure.error, DbError::ConstraintViolation(_)),
+            "{failure:?}"
+        );
+        assert_eq!(store.calls(), 0, "{update:?}");
+        let events = sink.events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(details_of(&events[0])["reason"], "invalid_request");
+    }
+}
+
+#[test]
+fn a_rotation_edit_records_the_settings_it_applied() {
+    let store = OperationStore::new(SecretOperation::EditRotation.required_capabilities());
+    let sink = Sink::default();
+    let lambda = "arn:aws:lambda:eu-west-1:441012345678:function:rotate";
+
+    update_secret_rotation(
+        &context(&store, &sink, MutationPolicy::Allowed, None),
+        &SecretRotationUpdate::enable("prod/api/credentials", "rate(30 days)")
+            .with_window("4h")
+            .with_function(lambda),
+    )
+    .expect("applied");
+    let details = details_of(&sink.events()[0]);
+    assert_eq!(details["enabled"], true);
+    assert_eq!(details["schedule"], "rate(30 days)");
+    assert_eq!(details["window"], "4h");
+    assert_eq!(details["function"], lambda);
+
+    let sink = Sink::default();
+    update_secret_rotation(
+        &context(&store, &sink, MutationPolicy::Allowed, None),
+        &SecretRotationUpdate::disable("prod/api/credentials"),
+    )
+    .expect("applied");
+    let details = details_of(&sink.events()[0]);
+    assert_eq!(details["enabled"], false);
+    assert!(details.get("schedule").is_none());
+}
+
+#[test]
+fn a_started_rotation_records_the_version_it_created() {
+    let store = OperationStore::new(SecretOperation::RotateNow.required_capabilities());
+    let sink = Sink::default();
+
+    rotate_secret_now(
+        &context(&store, &sink, MutationPolicy::Allowed, None),
+        "prod/api/credentials",
+    )
+    .expect("started");
+
+    assert_eq!(details_of(&sink.events()[0])["version"], "v-rotated");
 }

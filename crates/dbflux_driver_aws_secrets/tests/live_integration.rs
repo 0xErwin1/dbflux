@@ -15,8 +15,8 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     Connection, ConnectionProfile, DEFAULT_RECOVERY_WINDOW_DAYS, DbConfig, DbDriver, DbError,
     DbKind, SecretDeleteRequest, SecretListRequest, SecretPayload, SecretPutRequest,
-    SecretRollbackRequest, SecretStoreCapabilities, SecretStoreSource, SecretValue,
-    SecretVersionStage,
+    SecretRollbackRequest, SecretRotationUpdate, SecretStoreCapabilities, SecretStoreSource,
+    SecretValue, SecretVersionStage,
 };
 use dbflux_driver_aws_secrets::{AwsSecretsDriver, PARAMETER_STORE_ID, SECRETS_MANAGER_ID};
 use dbflux_test_support::containers;
@@ -1023,6 +1023,50 @@ fn parameter_store_delete_needs_the_exact_name_and_removes_the_parameter() -> Re
             )),
             Err(DbError::ObjectNotFound(_))
         ));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn secrets_manager_rotation_edits_that_would_fail_are_refused_before_the_call()
+-> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        seeder.secret_string("never-rotated", "value");
+
+        let connection = connect(&endpoint)?;
+        let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
+
+        let error = secrets
+            .update_rotation(&SecretRotationUpdate::enable(
+                "never-rotated",
+                "every month",
+            ))
+            .expect_err("an invalid schedule");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+
+        let error = secrets
+            .update_rotation(&SecretRotationUpdate::enable(
+                "never-rotated",
+                "rate(30 days)",
+            ))
+            .expect_err("a secret with no rotation function needs one");
+        assert!(error.to_string().contains("rotation function"), "{error}");
+
+        let error = secrets
+            .update_rotation(&SecretRotationUpdate::disable("never-rotated"))
+            .expect_err("rotation is not on");
+        assert!(error.to_string().contains("not enabled"), "{error}");
+
+        assert!(
+            secrets
+                .describe("never-rotated")?
+                .summary
+                .rotation
+                .is_none()
+        );
 
         Ok(())
     })

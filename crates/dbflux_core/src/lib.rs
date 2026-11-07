@@ -96,8 +96,10 @@ pub use connection::secret_store::{
     DEFAULT_RECOVERY_WINDOW_DAYS, MAX_RECOVERY_WINDOW_DAYS, MIN_RECOVERY_WINDOW_DAYS,
     SecretDeleteRequest, SecretDeletion, SecretDetails, SecretListPage, SecretListRequest,
     SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest, SecretRotation,
-    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
-    SecretValue, SecretVersionInfo, SecretVersionStage,
+    SecretRotationStart, SecretRotationUpdate, SecretStoreCapabilities, SecretStoreDescriptor,
+    SecretStoreSource, SecretSummary, SecretTag, SecretValue, SecretVersionInfo,
+    SecretVersionStage, validate_rotation_function, validate_rotation_schedule,
+    validate_rotation_window,
 };
 
 pub use connection::dump_analysis::{

@@ -49,7 +49,9 @@ use crate::labels::mutation_read_only_error;
 mod operations;
 mod scrub;
 
-pub use operations::{delete_secret, restore_secret, roll_back_secret};
+pub use operations::{
+    delete_secret, restore_secret, roll_back_secret, rotate_secret_now, update_secret_rotation,
+};
 use scrub::scrub_submitted_value;
 
 /// Audit action of a governed write that the store accepted.
@@ -88,6 +90,11 @@ pub enum SecretOperation {
     DeleteIrreversible,
     /// Cancelling a scheduled deletion (`SecretStoreSource::restore_secret`).
     Restore,
+    /// Starting a rotation now (`SecretStoreSource::rotate_now`).
+    RotateNow,
+    /// Turning automatic rotation on or off
+    /// (`SecretStoreSource::update_rotation`).
+    EditRotation,
 }
 
 /// The three audit actions of one operation: the store accepted it, a gate
@@ -99,161 +106,217 @@ pub struct OperationActions {
     pub failed: &'static str,
 }
 
+/// Everything that differs between operations, in one row each. The text
+/// templates take `{name}`, `{store}` and, for `audit_lost`, `{error}`.
+struct OperationSpec {
+    classification: ExecutionClassification,
+    actions: OperationActions,
+
+    /// Every capability the store must advertise: `WRITE`, plus the ones
+    /// the operation itself needs.
+    required: SecretStoreCapabilities,
+
+    /// The operation as a verb phrase, in capability refusals.
+    verb: &'static str,
+
+    /// The operation as a noun phrase naming the secret, in policy refusals.
+    subject: &'static str,
+
+    done_summary: &'static str,
+    refused_summary: &'static str,
+    failed_summary: &'static str,
+
+    /// What landed, and why retrying it would not repair the audit trail.
+    audit_lost: &'static str,
+}
+
 impl SecretOperation {
-    /// The classification the policy evaluates the operation under.
-    ///
-    /// A recoverable deletion is `Destructive`; a deletion with no way back
-    /// is `AdminDestructive`, the class of dropping a table. Everything
-    /// that keeps the data recoverable is a `Write`.
-    pub const fn classification(self) -> ExecutionClassification {
+    const fn spec(self) -> OperationSpec {
+        let write = SecretStoreCapabilities::WRITE;
+
         match self {
-            Self::PutValue | Self::RollBack | Self::Restore => ExecutionClassification::Write,
-            Self::DeleteScheduled => ExecutionClassification::Destructive,
-            Self::DeleteIrreversible => ExecutionClassification::AdminDestructive,
+            Self::PutValue => OperationSpec {
+                classification: ExecutionClassification::Write,
+                actions: OperationActions {
+                    done: SECRET_VALUE_WRITTEN_ACTION,
+                    refused: SECRET_VALUE_WRITE_REFUSED_ACTION,
+                    failed: SECRET_VALUE_WRITE_FAILED_ACTION,
+                },
+                required: write,
+                verb: "write",
+                subject: "write to \"{name}\"",
+                done_summary: "Wrote a new version of {name} to {store}",
+                refused_summary: "Refused the write to {name} in {store}",
+                failed_summary: "Could not write the value of {name} to {store}",
+                audit_lost: "The write to \"{name}\" landed in {store}, but its audit event could \
+                             not be recorded ({error}). The value cannot be un-written; do not \
+                             retry the write to repair the audit trail.",
+            },
+            Self::RollBack => OperationSpec {
+                classification: ExecutionClassification::Write,
+                actions: OperationActions {
+                    done: "secret_rolled_back",
+                    refused: "secret_rollback_refused",
+                    failed: "secret_rollback_failed",
+                },
+                required: write.union(SecretStoreCapabilities::VERSION_LABELS),
+                verb: "roll back",
+                subject: "roll back of \"{name}\"",
+                done_summary: "Rolled back {name} in {store}",
+                refused_summary: "Refused to roll back {name} in {store}",
+                failed_summary: "Could not roll back {name} in {store}",
+                audit_lost: "The roll back of \"{name}\" landed in {store}, but its audit event \
+                             could not be recorded ({error}). Rolling forward again would move the \
+                             labels a second time and still not repair the audit; do not retry the \
+                             roll back.",
+            },
+            // A recoverable deletion is `Destructive`.
+            Self::DeleteScheduled => OperationSpec {
+                classification: ExecutionClassification::Destructive,
+                actions: OperationActions {
+                    done: "secret_delete_scheduled",
+                    refused: "secret_delete_refused",
+                    failed: "secret_delete_failed",
+                },
+                required: write
+                    .union(SecretStoreCapabilities::DELETE)
+                    .union(SecretStoreCapabilities::SOFT_DELETE),
+                verb: "delete",
+                subject: "deletion of \"{name}\"",
+                done_summary: "Scheduled the deletion of {name} in {store}",
+                refused_summary: "Refused to delete {name} in {store}",
+                failed_summary: "Could not delete {name} in {store}",
+                audit_lost: "The deletion of \"{name}\" landed in {store} and is scheduled, but \
+                             its audit event could not be recorded ({error}). Restore the secret \
+                             to cancel it; do not retry the deletion to repair the audit trail.",
+            },
+            // A deletion with no way back is `AdminDestructive`, the class
+            // of dropping a table.
+            Self::DeleteIrreversible => OperationSpec {
+                classification: ExecutionClassification::AdminDestructive,
+                actions: OperationActions {
+                    done: "secret_deleted",
+                    refused: "secret_delete_refused",
+                    failed: "secret_delete_failed",
+                },
+                required: write.union(SecretStoreCapabilities::DELETE),
+                verb: "delete",
+                subject: "deletion of \"{name}\"",
+                done_summary: "Deleted {name} from {store}",
+                refused_summary: "Refused to delete {name} in {store}",
+                failed_summary: "Could not delete {name} in {store}",
+                audit_lost: "The deletion of \"{name}\" landed in {store} and cannot be undone, \
+                             but its audit event could not be recorded ({error}). Do not retry \
+                             the deletion to repair the audit trail.",
+            },
+            Self::Restore => OperationSpec {
+                classification: ExecutionClassification::Write,
+                actions: OperationActions {
+                    done: "secret_restored",
+                    refused: "secret_restore_refused",
+                    failed: "secret_restore_failed",
+                },
+                required: write.union(SecretStoreCapabilities::SOFT_DELETE),
+                verb: "restore",
+                subject: "restore of \"{name}\"",
+                done_summary: "Restored {name} in {store}",
+                refused_summary: "Refused to restore {name} in {store}",
+                failed_summary: "Could not restore {name} in {store}",
+                audit_lost: "The restore of \"{name}\" landed in {store}, but its audit event \
+                             could not be recorded ({error}). Do not retry the restore to repair \
+                             the audit trail.",
+            },
+            Self::RotateNow => OperationSpec {
+                classification: ExecutionClassification::Write,
+                actions: OperationActions {
+                    done: "secret_rotation_started",
+                    refused: "secret_rotate_refused",
+                    failed: "secret_rotate_failed",
+                },
+                required: write.union(SecretStoreCapabilities::ROTATION),
+                verb: "rotate",
+                subject: "rotation of \"{name}\"",
+                done_summary: "Started a rotation of {name} in {store}",
+                refused_summary: "Refused to rotate {name} in {store}",
+                failed_summary: "Could not rotate {name} in {store}",
+                audit_lost: "The rotation of \"{name}\" landed in {store} and has started, but its audit event \
+                             could not be recorded ({error}). Do not start it again to repair the \
+                             audit trail: that would create a second version.",
+            },
+            Self::EditRotation => OperationSpec {
+                classification: ExecutionClassification::Write,
+                actions: OperationActions {
+                    done: "secret_rotation_updated",
+                    refused: "secret_rotation_update_refused",
+                    failed: "secret_rotation_update_failed",
+                },
+                required: write.union(SecretStoreCapabilities::ROTATION),
+                verb: "edit the rotation of",
+                subject: "rotation edit of \"{name}\"",
+                done_summary: "Updated the rotation of {name} in {store}",
+                refused_summary: "Refused to update the rotation of {name} in {store}",
+                failed_summary: "Could not update the rotation of {name} in {store}",
+                audit_lost: "The rotation edit of \"{name}\" landed in {store}, but its audit \
+                             event could not be recorded ({error}). Do not repeat the edit to \
+                             repair the audit trail.",
+            },
         }
     }
 
+    /// The classification the policy evaluates the operation under.
+    pub const fn classification(self) -> ExecutionClassification {
+        self.spec().classification
+    }
+
     pub const fn actions(self) -> OperationActions {
-        match self {
-            Self::PutValue => OperationActions {
-                done: SECRET_VALUE_WRITTEN_ACTION,
-                refused: SECRET_VALUE_WRITE_REFUSED_ACTION,
-                failed: SECRET_VALUE_WRITE_FAILED_ACTION,
-            },
-            Self::RollBack => OperationActions {
-                done: "secret_rolled_back",
-                refused: "secret_rollback_refused",
-                failed: "secret_rollback_failed",
-            },
-            Self::DeleteScheduled => OperationActions {
-                done: "secret_delete_scheduled",
-                refused: "secret_delete_refused",
-                failed: "secret_delete_failed",
-            },
-            Self::DeleteIrreversible => OperationActions {
-                done: "secret_deleted",
-                refused: "secret_delete_refused",
-                failed: "secret_delete_failed",
-            },
-            Self::Restore => OperationActions {
-                done: "secret_restored",
-                refused: "secret_restore_refused",
-                failed: "secret_restore_failed",
-            },
-        }
+        self.spec().actions
     }
 
     /// Every capability the store must advertise: `WRITE`, plus the ones
     /// the operation itself needs.
     pub const fn required_capabilities(self) -> SecretStoreCapabilities {
-        let write = SecretStoreCapabilities::WRITE;
-
-        match self {
-            Self::PutValue => write,
-            Self::RollBack => write.union(SecretStoreCapabilities::VERSION_LABELS),
-            Self::DeleteScheduled => write
-                .union(SecretStoreCapabilities::DELETE)
-                .union(SecretStoreCapabilities::SOFT_DELETE),
-            Self::DeleteIrreversible => write.union(SecretStoreCapabilities::DELETE),
-            Self::Restore => write.union(SecretStoreCapabilities::SOFT_DELETE),
-        }
+        self.spec().required
     }
 
-    /// The operation as a verb phrase, in refusal messages.
-    const fn verb(self) -> &'static str {
-        match self {
-            Self::PutValue => "write",
-            Self::RollBack => "roll back",
-            Self::DeleteScheduled | Self::DeleteIrreversible => "delete",
-            Self::Restore => "restore",
-        }
+    fn verb(self) -> &'static str {
+        self.spec().verb
     }
 
-    /// The operation as a noun phrase naming the secret, in policy refusals.
     fn subject(self, name: &str) -> String {
-        match self {
-            Self::PutValue => format!("write to \"{name}\""),
-            Self::RollBack => format!("roll back of \"{name}\""),
-            Self::DeleteScheduled | Self::DeleteIrreversible => {
-                format!("deletion of \"{name}\"")
-            }
-            Self::Restore => format!("restore of \"{name}\""),
-        }
+        self.spec().subject.replace("{name}", name)
     }
 
     fn done_summary(self, target: &WriteTarget<'_>) -> String {
-        let (name, store) = (target.name, target.store_label);
-
-        match self {
-            Self::PutValue => format!("Wrote a new version of {name} to {store}"),
-            Self::RollBack => format!("Rolled back {name} in {store}"),
-            Self::DeleteScheduled => format!("Scheduled the deletion of {name} in {store}"),
-            Self::DeleteIrreversible => format!("Deleted {name} from {store}"),
-            Self::Restore => format!("Restored {name} in {store}"),
-        }
+        fill(self.spec().done_summary, target)
     }
 
     fn refused_summary(self, target: &WriteTarget<'_>) -> String {
-        let (name, store) = (target.name, target.store_label);
-
-        match self {
-            Self::PutValue => format!("Refused the write to {name} in {store}"),
-            Self::RollBack => format!("Refused to roll back {name} in {store}"),
-            Self::DeleteScheduled | Self::DeleteIrreversible => {
-                format!("Refused to delete {name} in {store}")
-            }
-            Self::Restore => format!("Refused to restore {name} in {store}"),
-        }
+        fill(self.spec().refused_summary, target)
     }
 
     fn failed_summary(self, target: &WriteTarget<'_>) -> String {
-        let (name, store) = (target.name, target.store_label);
-
-        match self {
-            Self::PutValue => format!("Could not write the value of {name} to {store}"),
-            Self::RollBack => format!("Could not roll back {name} in {store}"),
-            Self::DeleteScheduled | Self::DeleteIrreversible => {
-                format!("Could not delete {name} in {store}")
-            }
-            Self::Restore => format!("Could not restore {name} in {store}"),
-        }
+        fill(self.spec().failed_summary, target)
     }
 
-    /// The audit-loss message of an operation the store accepted: what
-    /// landed, and why retrying it would not repair the trail.
     fn audit_lost_message(
         self,
         name: &str,
         store_label: &str,
         error: &dyn std::fmt::Display,
     ) -> String {
-        match self {
-            Self::PutValue => format!(
-                "The write to \"{name}\" landed in {store_label}, but its audit event could not be \
-                 recorded ({error}). The value cannot be un-written; do not retry the write \
-                 to repair the audit trail."
-            ),
-            Self::RollBack => format!(
-                "The roll back of \"{name}\" landed in {store_label}, but its audit event could \
-                 not be recorded ({error}). Rolling forward again would move the labels a second \
-                 time and still not repair the audit; do not retry the roll back."
-            ),
-            Self::DeleteScheduled => format!(
-                "The deletion of \"{name}\" landed in {store_label} and is scheduled, but its \
-                 audit event could not be recorded ({error}). Restore the secret to cancel it; \
-                 do not retry the deletion to repair the audit trail."
-            ),
-            Self::DeleteIrreversible => format!(
-                "The deletion of \"{name}\" landed in {store_label} and cannot be undone, but its \
-                 audit event could not be recorded ({error}). Do not retry the deletion to \
-                 repair the audit trail."
-            ),
-            Self::Restore => format!(
-                "The restore of \"{name}\" landed in {store_label}, but its audit event could not \
-                 be recorded ({error}). Do not retry the restore to repair the audit trail."
-            ),
-        }
+        self.spec()
+            .audit_lost
+            .replace("{name}", name)
+            .replace("{store}", store_label)
+            .replace("{error}", &error.to_string())
     }
+}
+
+/// Fills `{name}` and `{store}` of a summary template from the target.
+fn fill(template: &str, target: &WriteTarget<'_>) -> String {
+    template
+        .replace("{name}", target.name)
+        .replace("{store}", target.store_label)
 }
 
 /// Who and what a write was for, as the audit event records it. Mirrors

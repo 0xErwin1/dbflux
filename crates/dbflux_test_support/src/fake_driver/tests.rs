@@ -1304,3 +1304,238 @@ fn each_store_refuses_the_deletion_it_does_not_offer() {
             .is_ok()
     );
 }
+
+// --- Rotation ---
+
+const FAKE_LAMBDA: &str = "arn:aws:lambda:eu-west-1:441012345678:function:rotate-credentials";
+
+#[test]
+fn rotating_now_creates_a_version_that_becomes_current_and_stamps_the_rotation() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let started = store
+        .rotate_now("prod/api/credentials")
+        .expect("rotation is enabled on this secret");
+
+    let version = started.version.expect("the rotation creates a version");
+    let versions = store
+        .list_versions("prod/api/credentials")
+        .expect("history");
+    assert_eq!(
+        labels_of(&versions),
+        vec![
+            (version.clone(), vec!["AWSCURRENT".to_string()]),
+            ("v-current".to_string(), vec!["AWSPREVIOUS".to_string()]),
+            ("v-previous".to_string(), Vec::new()),
+            ("v-oldest".to_string(), Vec::new()),
+        ],
+        "the new version replaced AWSCURRENT, and no label is left on AWSPENDING"
+    );
+
+    let details = store.describe("prod/api/credentials").expect("describe");
+    assert_eq!(details.summary.version.as_deref(), Some(version.as_str()));
+    assert_eq!(details.version_count, Some(4));
+    let rotation = details.summary.rotation.expect("rotation state");
+    assert!(rotation.enabled);
+    assert_eq!(rotation.schedule.as_deref(), Some("rate(30 days)"));
+    let last = rotation.last_rotated.expect("stamped");
+    let next = rotation.next_rotation.expect("rescheduled");
+    assert_eq!((next - last).num_days(), 30);
+    assert!(last > chrono::Utc::now() - chrono::Duration::days(3650));
+
+    assert!(store.get_value("prod/api/credentials", None).is_ok());
+    assert_eq!(driver.secret_store_calls().mutations.len(), 1);
+}
+
+#[test]
+fn rotating_now_is_refused_unless_rotation_is_enabled_and_changes_nothing() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let error = store
+        .rotate_now("prod/notify/webhook-token")
+        .expect_err("rotation was never configured");
+    assert!(error.to_string().contains("not enabled"), "{error}");
+
+    let error = store
+        .rotate_now("prod/db/master")
+        .expect_err("a managed secret is read only");
+    assert!(matches!(error, DbError::PermissionDenied(_)), "{error}");
+
+    let error = store.rotate_now("prod/missing").expect_err("missing");
+    assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+
+    assert_eq!(
+        store
+            .list_versions("prod/notify/webhook-token")
+            .expect("history")
+            .len(),
+        1
+    );
+    assert!(driver.secret_store_calls().mutations.is_empty());
+
+    let error = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("store")
+        .rotate_now("/app/prod/db/host")
+        .expect_err("a parameter does not rotate");
+    assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+}
+
+#[test]
+fn editing_rotation_turns_it_off_and_on_without_rotating() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    store
+        .update_rotation(&SecretRotationUpdate::disable("prod/api/credentials"))
+        .expect("disable");
+    let rotation = store
+        .describe("prod/api/credentials")
+        .expect("describe")
+        .summary
+        .rotation
+        .expect("rotation state");
+    assert!(!rotation.enabled);
+    assert!(rotation.next_rotation.is_none(), "nothing is scheduled");
+
+    // Off, so rotating now is refused rather than switching it back on.
+    assert!(store.rotate_now("prod/api/credentials").is_err());
+
+    store
+        .update_rotation(
+            &SecretRotationUpdate::enable("prod/api/credentials", "rate(7 days)")
+                .with_window("2h")
+                .with_function(FAKE_LAMBDA),
+        )
+        .expect("enable with new settings");
+    let rotation = store
+        .describe("prod/api/credentials")
+        .expect("describe")
+        .summary
+        .rotation
+        .expect("rotation state");
+    assert!(rotation.enabled);
+    assert_eq!(rotation.schedule.as_deref(), Some("rate(7 days)"));
+    assert_eq!(rotation.window.as_deref(), Some("2h"));
+    assert_eq!(rotation.function.as_deref(), Some(FAKE_LAMBDA));
+    assert!(rotation.next_rotation.is_some());
+
+    // Editing the configuration rotates nothing: still the original three
+    // versions.
+    assert_eq!(
+        store
+            .list_versions("prod/api/credentials")
+            .expect("history")
+            .len(),
+        3
+    );
+    assert_eq!(driver.secret_store_calls().mutations.len(), 2);
+}
+
+#[test]
+fn enabling_rotation_on_a_secret_without_a_function_needs_one() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let error = store
+        .update_rotation(&SecretRotationUpdate::enable(
+            "prod/notify/webhook-token",
+            "rate(30 days)",
+        ))
+        .expect_err("no rotation function is configured");
+    assert!(error.to_string().contains("function"), "{error}");
+    assert!(driver.secret_store_calls().mutations.is_empty());
+
+    store
+        .update_rotation(
+            &SecretRotationUpdate::enable("prod/notify/webhook-token", "rate(30 days)")
+                .with_function(FAKE_LAMBDA),
+        )
+        .expect("a function makes it valid");
+    let rotation = store
+        .describe("prod/notify/webhook-token")
+        .expect("describe")
+        .summary
+        .rotation
+        .expect("rotation state");
+    assert!(rotation.enabled);
+    assert!(store.rotate_now("prod/notify/webhook-token").is_ok());
+}
+
+#[test]
+fn an_invalid_rotation_edit_and_a_pointless_disable_are_refused() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let error = store
+        .update_rotation(&SecretRotationUpdate::enable(
+            "prod/api/credentials",
+            "every month",
+        ))
+        .expect_err("a schedule the service rejects");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+
+    let error = store
+        .update_rotation(&SecretRotationUpdate::disable("prod/notify/webhook-token"))
+        .expect_err("rotation is not on");
+    assert!(error.to_string().contains("not enabled"), "{error}");
+
+    let error = store
+        .update_rotation(&SecretRotationUpdate::disable("prod/db/master"))
+        .expect_err("managed");
+    assert!(matches!(error, DbError::PermissionDenied(_)), "{error}");
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+#[test]
+fn a_cron_schedule_is_rescheduled_a_day_out_and_an_hourly_one_by_its_hours() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    for (schedule, hours) in [("cron(0 16 1 * ? *)", 24), ("rate(6 hours)", 6)] {
+        store
+            .update_rotation(&SecretRotationUpdate::enable(
+                "prod/api/credentials",
+                schedule,
+            ))
+            .expect("enable");
+        let next = store
+            .describe("prod/api/credentials")
+            .expect("describe")
+            .summary
+            .rotation
+            .expect("rotation")
+            .next_rotation
+            .expect("scheduled");
+
+        let started = store.rotate_now("prod/api/credentials").expect("rotate");
+        assert!(started.version.is_some());
+        let rotation = store
+            .describe("prod/api/credentials")
+            .expect("describe")
+            .summary
+            .rotation
+            .expect("rotation");
+        let last = rotation.last_rotated.expect("stamped");
+        assert_eq!(
+            (rotation.next_rotation.expect("next") - last).num_hours(),
+            hours
+        );
+        assert_eq!((next - last).num_hours(), hours, "{schedule}");
+    }
+}

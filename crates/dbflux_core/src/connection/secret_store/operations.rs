@@ -158,3 +158,218 @@ pub struct SecretDeletion {
     /// took effect at once.
     pub deletion_scheduled_for: Option<chrono::DateTime<chrono::Utc>>,
 }
+
+/// The change a rotation edit asks for: turn automatic rotation on with a
+/// schedule, or turn it off.
+///
+/// Enabling needs a schedule; the window and the function are optional
+/// because a store keeps the ones already configured. Disabling carries no
+/// settings, so a request cannot both turn rotation off and describe how it
+/// runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretRotationUpdate {
+    /// Full name of the secret, including any path.
+    pub name: String,
+
+    /// Whether automatic rotation is on after the change.
+    pub enabled: bool,
+
+    /// Schedule expression: `rate(N days)`, `rate(N hours)` or `cron(...)`.
+    pub schedule: Option<String>,
+
+    /// Rotation window in whole hours, for example `4h`.
+    pub window: Option<String>,
+
+    /// The function that rotates the secret, as the store identifies it.
+    pub function: Option<String>,
+}
+
+impl SecretRotationUpdate {
+    pub fn enable(name: impl Into<String>, schedule: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            enabled: true,
+            schedule: Some(schedule.into()),
+            window: None,
+            function: None,
+        }
+    }
+
+    pub fn disable(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            enabled: false,
+            schedule: None,
+            window: None,
+            function: None,
+        }
+    }
+
+    pub fn with_window(mut self, window: impl Into<String>) -> Self {
+        self.window = Some(window.into());
+        self
+    }
+
+    pub fn with_function(mut self, function: impl Into<String>) -> Self {
+        self.function = Some(function.into());
+        self
+    }
+
+    /// Refuses what the service would reject, before any call: enabling
+    /// without a valid schedule, a malformed window or function, and a
+    /// disable that carries settings.
+    pub fn validate(&self) -> Result<(), DbError> {
+        let refuse = |reason: String| {
+            DbError::constraint_violation(format!(
+                "The rotation of \"{}\" was not changed: {reason}",
+                self.name
+            ))
+        };
+
+        if !self.enabled {
+            if self.schedule.is_some() || self.window.is_some() || self.function.is_some() {
+                return Err(refuse(
+                    "turning rotation off takes no schedule, window or function.".to_string(),
+                ));
+            }
+
+            return Ok(());
+        }
+
+        let Some(schedule) = &self.schedule else {
+            return Err(refuse("turning rotation on needs a schedule.".to_string()));
+        };
+        validate_rotation_schedule(schedule).map_err(refuse)?;
+
+        if let Some(window) = &self.window {
+            validate_rotation_window(window).map_err(refuse)?;
+        }
+        if let Some(function) = &self.function {
+            validate_rotation_function(function).map_err(refuse)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// What starting a rotation reports.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecretRotationStart {
+    /// The version the rotation creates, when the store reports it.
+    pub version: Option<String>,
+}
+
+const SCHEDULE_FORMAT: &str = "A rotation schedule is `rate(N days)`, `rate(N hours)` with N of 4 or more, \
+     or a six-field `cron(...)` expression.";
+
+/// Checks a rotation schedule the way the service parses it, so a schedule
+/// it would reject is refused before the call. `rate(N unit)` takes a
+/// positive whole N, the singular unit for 1 and the plural otherwise, in
+/// days or in hours with N of 4 or more (the shortest period rotation
+/// accepts). `cron(...)` takes six space-separated fields of cron
+/// characters. The error names the accepted forms.
+pub fn validate_rotation_schedule(schedule: &str) -> Result<(), String> {
+    let invalid = || format!("\"{schedule}\" is not a valid schedule. {SCHEDULE_FORMAT}");
+
+    if let Some(inner) = schedule
+        .strip_prefix("rate(")
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        let fields: Vec<&str> = inner.split(' ').collect();
+        let [count, unit] = fields.as_slice() else {
+            return Err(invalid());
+        };
+        let Some(count) = parse_positive(count) else {
+            return Err(invalid());
+        };
+
+        let (singular, plural, minimum) = match *unit {
+            "day" | "days" => ("day", "days", 1),
+            "hour" | "hours" => ("hour", "hours", 4),
+            _ => return Err(invalid()),
+        };
+        let expected = if count == 1 { singular } else { plural };
+
+        return if *unit == expected && count >= minimum {
+            Ok(())
+        } else {
+            Err(invalid())
+        };
+    }
+
+    if let Some(inner) = schedule
+        .strip_prefix("cron(")
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        let fields: Vec<&str> = inner.split(' ').collect();
+        let well_formed = fields.len() == 6
+            && fields.iter().all(|field| {
+                !field.is_empty()
+                    && field
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "*?,-/#".contains(c))
+            });
+
+        return if well_formed { Ok(()) } else { Err(invalid()) };
+    }
+
+    Err(invalid())
+}
+
+/// Checks a rotation window: whole hours, `1h` to `24h`.
+pub fn validate_rotation_window(window: &str) -> Result<(), String> {
+    let hours = window.strip_suffix('h').and_then(parse_positive);
+
+    match hours {
+        Some(1..=24) => Ok(()),
+        _ => Err(format!(
+            "\"{window}\" is not a valid rotation window. A window is whole hours from `1h` to `24h`."
+        )),
+    }
+}
+
+/// Checks that a rotation function is a Lambda function ARN:
+/// `arn:<partition>:lambda:<region>:<12-digit account>:function:<name>`,
+/// with an optional version or alias after the name.
+pub fn validate_rotation_function(function: &str) -> Result<(), String> {
+    let parts: Vec<&str> = function.split(':').collect();
+    let well_formed = match parts.as_slice() {
+        [
+            "arn",
+            partition,
+            "lambda",
+            region,
+            account,
+            "function",
+            name,
+            rest @ ..,
+        ] => {
+            partition.starts_with("aws")
+                && !region.is_empty()
+                && account.len() == 12
+                && account.chars().all(|c| c.is_ascii_digit())
+                && !name.is_empty()
+                && rest.len() <= 1
+                && rest.iter().all(|qualifier| !qualifier.is_empty())
+        }
+        _ => false,
+    };
+
+    if well_formed {
+        Ok(())
+    } else {
+        Err(format!(
+            "\"{function}\" is not a Lambda function ARN \
+             (`arn:aws:lambda:<region>:<account>:function:<name>`)."
+        ))
+    }
+}
+
+/// A whole number of at least 1, from digits only: no sign, no fraction.
+fn parse_positive(text: &str) -> Option<u32> {
+    if text.is_empty() || !text.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+
+    text.parse::<u32>().ok().filter(|value| *value > 0)
+}

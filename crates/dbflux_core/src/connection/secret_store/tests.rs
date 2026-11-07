@@ -381,3 +381,151 @@ fn the_defaults_refuse_a_delete_and_a_restore_instead_of_succeeding_silently() {
         .expect_err("an unimplemented restore must refuse");
     assert!(put_refusal_message(error).contains("prod/api/credentials"));
 }
+
+// --- Rotation ---
+
+const LAMBDA: &str = "arn:aws:lambda:eu-west-1:441012345678:function:SecretsManagerRDSRotation";
+
+#[test]
+fn a_rotation_schedule_is_a_rate_or_a_cron_expression() {
+    for valid in [
+        "rate(1 day)",
+        "rate(30 days)",
+        "rate(4 hours)",
+        "rate(12 hours)",
+        "cron(0 16 1,15 * ? *)",
+        "cron(0/15 8-17 ? * MON-FRI *)",
+        "cron(0 12 L * ? *)",
+    ] {
+        validate_rotation_schedule(valid).unwrap_or_else(|error| panic!("{valid}: {error}"));
+    }
+
+    for invalid in [
+        "",
+        "30 days",
+        "rate()",
+        "rate(30)",
+        "rate(0 days)",
+        "rate(-1 days)",
+        "rate(1 days)",
+        "rate(2 day)",
+        "rate(3 hours)",
+        "rate(30 weeks)",
+        "rate(30 days",
+        "rate(30  days extra)",
+        "rate(1.5 days)",
+        " rate(30 days)",
+        "rate(30 days) ",
+        "cron(0 16 1,15 * ?)",
+        "cron(0 16 1,15 * ? * *)",
+        "cron(0 16 1,15 * ? $)",
+        "cron()",
+        "RATE(30 days)",
+    ] {
+        let error = validate_rotation_schedule(invalid)
+            .expect_err("a schedule the service would reject is refused locally");
+        assert!(error.contains("rate("), "{invalid:?}: {error}");
+    }
+}
+
+#[test]
+fn a_rotation_window_is_whole_hours_up_to_a_day() {
+    for valid in ["1h", "4h", "24h"] {
+        validate_rotation_window(valid).unwrap_or_else(|error| panic!("{valid}: {error}"));
+    }
+
+    for invalid in ["", "0h", "25h", "4", "4H", "4 h", "90m", "-1h", "1.5h", "h"] {
+        validate_rotation_window(invalid).expect_err(invalid);
+    }
+}
+
+#[test]
+fn a_rotation_function_is_a_lambda_function_arn() {
+    for valid in [
+        LAMBDA,
+        "arn:aws:lambda:eu-west-1:441012345678:function:rotate:live",
+        "arn:aws-us-gov:lambda:us-gov-west-1:441012345678:function:rotate",
+    ] {
+        validate_rotation_function(valid).unwrap_or_else(|error| panic!("{valid}: {error}"));
+    }
+
+    for invalid in [
+        "",
+        "rotate-api-credentials",
+        "arn:aws:s3:::bucket",
+        "arn:aws:lambda:eu-west-1:441012345678:layer:rotate:1",
+        "arn:aws:lambda:eu-west-1:441012345678:function:",
+        "arn:aws:lambda::441012345678:function:rotate",
+        "arn:aws:lambda:eu-west-1:44101:function:rotate",
+        "arn:aws:sns:eu-west-1:441012345678:function:rotate",
+    ] {
+        validate_rotation_function(invalid).expect_err(invalid);
+    }
+}
+
+#[test]
+fn enabling_rotation_needs_a_valid_schedule_and_checks_every_field_it_carries() {
+    SecretRotationUpdate::enable("prod/api", "rate(30 days)")
+        .with_window("4h")
+        .with_function(LAMBDA)
+        .validate()
+        .expect("a complete update");
+
+    SecretRotationUpdate::enable("prod/api", "cron(0 16 1 * ? *)")
+        .validate()
+        .expect("the window and the function are optional");
+
+    for update in [
+        SecretRotationUpdate::enable("prod/api", "every month"),
+        SecretRotationUpdate::enable("prod/api", "rate(30 days)").with_window("90m"),
+        SecretRotationUpdate::enable("prod/api", "rate(30 days)").with_function("rotate-fn"),
+        SecretRotationUpdate {
+            schedule: None,
+            ..SecretRotationUpdate::enable("prod/api", "rate(30 days)")
+        },
+    ] {
+        let error = update.validate().expect_err("an invalid update is refused");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+        assert!(error.to_string().contains("prod/api"), "{error}");
+    }
+}
+
+#[test]
+fn disabling_rotation_carries_no_schedule() {
+    SecretRotationUpdate::disable("prod/api")
+        .validate()
+        .expect("a bare disable");
+
+    for update in [
+        SecretRotationUpdate {
+            schedule: Some("rate(30 days)".to_string()),
+            ..SecretRotationUpdate::disable("prod/api")
+        },
+        SecretRotationUpdate::disable("prod/api").with_window("4h"),
+        SecretRotationUpdate::disable("prod/api").with_function(LAMBDA),
+    ] {
+        let error = update
+            .validate()
+            .expect_err("a disable with settings is refused");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    }
+}
+
+#[test]
+fn the_defaults_refuse_a_rotation_instead_of_succeeding_silently() {
+    let store = DefaultOnlyStore(descriptor_with(
+        SecretStoreCapabilities::WRITE | SecretStoreCapabilities::ROTATION,
+    ));
+
+    let error = store
+        .rotate_now("prod/api/credentials")
+        .expect_err("an unimplemented rotation must refuse");
+    let message = put_refusal_message(error);
+    assert!(message.contains("test-store"), "{message}");
+    assert!(message.contains("prod/api/credentials"), "{message}");
+
+    let error = store
+        .update_rotation(&SecretRotationUpdate::disable("prod/api/credentials"))
+        .expect_err("an unimplemented edit must refuse");
+    assert!(put_refusal_message(error).contains("prod/api/credentials"));
+}

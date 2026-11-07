@@ -28,6 +28,8 @@ mod operations;
 pub use operations::{
     DEFAULT_RECOVERY_WINDOW_DAYS, MAX_RECOVERY_WINDOW_DAYS, MIN_RECOVERY_WINDOW_DAYS,
     SecretDeleteRequest, SecretDeletion, SecretRollback, SecretRollbackRequest,
+    SecretRotationStart, SecretRotationUpdate, validate_rotation_function,
+    validate_rotation_schedule, validate_rotation_window,
 };
 
 bitflags! {
@@ -584,6 +586,21 @@ pub trait SecretStoreSource: Send + Sync {
     /// implement it; the default refuses.
     fn restore_secret(&self, name: &str) -> Result<(), DbError> {
         refuse_unimplemented(self.descriptor(), "restoring secrets", name)
+    }
+
+    /// Starts a rotation of `name` now, with the rotation already
+    /// configured on the secret. A secret whose rotation is not enabled is
+    /// refused rather than having it switched on as a side effect. Stores
+    /// advertising `ROTATION` and `WRITE` implement it; the default refuses.
+    fn rotate_now(&self, name: &str) -> Result<SecretRotationStart, DbError> {
+        refuse_unimplemented(self.descriptor(), "rotating secrets", name)
+    }
+
+    /// Turns automatic rotation on with `update`'s schedule, window and
+    /// function, or off, without rotating the secret now. Stores
+    /// advertising `ROTATION` and `WRITE` implement it; the default refuses.
+    fn update_rotation(&self, update: &SecretRotationUpdate) -> Result<(), DbError> {
+        refuse_unimplemented(self.descriptor(), "editing rotation", &update.name)
     }
 }
 

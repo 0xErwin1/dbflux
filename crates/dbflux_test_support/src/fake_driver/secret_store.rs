@@ -33,6 +33,8 @@ pub enum FakeSecretMutation {
     RollBack(SecretRollbackRequest),
     Delete(SecretDeleteRequest),
     Restore { name: String },
+    RotateNow { name: String },
+    UpdateRotation(SecretRotationUpdate),
 }
 
 /// Id of the fake flat store, shaped like AWS Secrets Manager.
@@ -475,6 +477,158 @@ impl SecretStoreSource for FakeSecretStore {
         self.accept_mutation(mutation);
         Ok(())
     }
+
+    /// Starts a rotation of a secret whose rotation is enabled and has a
+    /// function, the way the service runs one: a version is staged
+    /// `AWSPENDING`, the function fills it, and `AWSCURRENT` moves to it
+    /// with the old current becoming `AWSPREVIOUS`. The fake cannot run a
+    /// function, so the new version carries a copy of the current value.
+    /// The rotation is stamped and the next one scheduled.
+    fn rotate_now(&self, name: &str) -> Result<SecretRotationStart, DbError> {
+        let mutation = FakeSecretMutation::RotateNow {
+            name: name.to_string(),
+        };
+        self.begin_mutation(
+            mutation.clone(),
+            name,
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::ROTATION,
+            "rotate",
+        )?;
+
+        let version = {
+            let mut stored = rwlock_write(&self.secrets);
+            let secret = find_mut(&mut stored, name, "Secret")?;
+            refuse_unwritable(secret, name)?;
+
+            let rotation = secret
+                .details
+                .summary
+                .rotation
+                .clone()
+                .filter(|rotation| rotation.enabled && rotation.function.is_some())
+                .ok_or_else(|| {
+                    DbError::query_failed(format!(
+                        "Rotation of \"{name}\" is not enabled; enable it before rotating"
+                    ))
+                })?;
+
+            let current = secret.details.summary.version.clone().unwrap_or_default();
+            let payload = secret
+                .versions
+                .iter()
+                .find(|(id, _)| *id == current)
+                .map(|(_, payload)| payload.clone())
+                .ok_or_else(|| DbError::query_failed("The secret has no current value"))?;
+
+            let version = self.next_written_version();
+            secret.versions.push((version.clone(), payload));
+            move_current_label(&mut secret.history, &version);
+            secret.details.summary.version = Some(version.clone());
+            secret.details.summary.last_changed = fake_now();
+            secret.details.version_count = u32::try_from(secret.history.len()).ok();
+            secret.details.version_labels = distinct_labels(&secret.history);
+            secret.details.summary.rotation = Some(SecretRotation {
+                last_rotated: fake_now(),
+                next_rotation: next_rotation_after(fake_now(), rotation.schedule.as_deref()),
+                ..rotation
+            });
+
+            version
+        };
+
+        self.accept_mutation(mutation);
+        Ok(SecretRotationStart {
+            version: Some(version),
+        })
+    }
+
+    /// Turns rotation on with the new settings, keeping the window and the
+    /// function the secret already has when the update names none, or off.
+    /// Nothing is rotated.
+    fn update_rotation(&self, update: &SecretRotationUpdate) -> Result<(), DbError> {
+        let mutation = FakeSecretMutation::UpdateRotation(update.clone());
+        self.begin_mutation(
+            mutation.clone(),
+            &update.name,
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::ROTATION,
+            "edit rotation",
+        )?;
+        update.validate()?;
+
+        {
+            let mut stored = rwlock_write(&self.secrets);
+            let secret = find_mut(&mut stored, &update.name, "Secret")?;
+            refuse_unwritable(secret, &update.name)?;
+
+            let existing = secret.details.summary.rotation.clone();
+            let rotation = if update.enabled {
+                let existing = existing.unwrap_or_default();
+                let function = update
+                    .function
+                    .clone()
+                    .or(existing.function.clone())
+                    .ok_or_else(|| {
+                        DbError::query_failed(format!(
+                            "Rotation of \"{}\" needs a rotation function",
+                            update.name
+                        ))
+                    })?;
+
+                SecretRotation {
+                    enabled: true,
+                    schedule: update.schedule.clone(),
+                    window: update.window.clone().or(existing.window),
+                    function: Some(function),
+                    last_rotated: existing.last_rotated,
+                    next_rotation: next_rotation_after(fake_now(), update.schedule.as_deref()),
+                }
+            } else {
+                let existing = existing
+                    .filter(|rotation| rotation.enabled)
+                    .ok_or_else(|| {
+                        DbError::query_failed(format!(
+                            "Rotation of \"{}\" is not enabled",
+                            update.name
+                        ))
+                    })?;
+
+                SecretRotation {
+                    enabled: false,
+                    next_rotation: None,
+                    ..existing
+                }
+            };
+            secret.details.summary.rotation = Some(rotation);
+        }
+
+        self.accept_mutation(mutation);
+        Ok(())
+    }
+}
+
+/// When the next rotation falls after `from`, for the schedules the fake
+/// understands: `rate(N days)` and `rate(N hours)` exactly, and a day for a
+/// `cron(...)` expression, which the fake does not evaluate.
+fn next_rotation_after(
+    from: Option<chrono::DateTime<chrono::Utc>>,
+    schedule: Option<&str>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let from = from?;
+    let schedule = schedule?;
+
+    let Some((count, unit)) = schedule
+        .strip_prefix("rate(")
+        .and_then(|inner| inner.strip_suffix(')'))
+        .and_then(|inner| inner.split_once(' '))
+    else {
+        return Some(from + chrono::Duration::days(1));
+    };
+    let count = count.parse::<i64>().ok()?;
+
+    Some(match unit {
+        "hour" | "hours" => from + chrono::Duration::hours(count),
+        _ => from + chrono::Duration::days(count),
+    })
 }
 
 /// The stored secret `name`, or the not-found answer of the service.
