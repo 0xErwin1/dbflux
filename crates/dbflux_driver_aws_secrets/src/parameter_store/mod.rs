@@ -7,9 +7,10 @@ use aws_sdk_ssm::types::{
 };
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
-    DbError, FormattedError, SecretDetails, SecretListPage, SecretListRequest, SecretPayload,
-    SecretPutRequest, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
-    SecretSummary, SecretTag, SecretValue, SecretVersionInfo, SecretVersionStage,
+    DbError, FormattedError, SecretDeleteRequest, SecretDeletion, SecretDetails, SecretListPage,
+    SecretListRequest, SecretPayload, SecretPutRequest, SecretStoreCapabilities,
+    SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag, SecretValue,
+    SecretVersionInfo, SecretVersionStage,
 };
 
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
@@ -43,7 +44,8 @@ impl ParameterStore {
                 SecretStoreCapabilities::VERSIONS
                     | SecretStoreCapabilities::HIERARCHICAL
                     | SecretStoreCapabilities::TYPED_VALUES
-                    | SecretStoreCapabilities::WRITE,
+                    | SecretStoreCapabilities::WRITE
+                    | SecretStoreCapabilities::DELETE,
             ),
         }
     }
@@ -323,6 +325,40 @@ impl SecretStoreSource for ParameterStore {
             version: Some(output.version().to_string()),
             payload: request.payload.clone(),
         })
+    }
+
+    /// One `DeleteParameter` call, which cannot be undone: the parameter
+    /// and its history are gone. It is made only after the exact name was
+    /// typed back, whatever the caller checked before.
+    fn delete_secret(&self, request: &SecretDeleteRequest) -> Result<SecretDeletion, DbError> {
+        self.descriptor.ensure_can(
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::DELETE,
+            "delete",
+            request.name(),
+        )?;
+        let name = confirmed_deletion_name(request)?;
+
+        runtime()
+            .block_on(self.client.delete_parameter().name(name).send())
+            .map_err(|error| self.operation_error(&error, Some(name)))?;
+
+        Ok(SecretDeletion::default())
+    }
+}
+
+/// The parameter a `DeleteParameter` call deletes, once the request is one
+/// Parameter Store can honor: it has no recovery window, so a scheduled
+/// deletion is refused, and the irreversible one is refused unless the name
+/// was typed back exactly. Both refusals come before any call.
+pub(crate) fn confirmed_deletion_name(request: &SecretDeleteRequest) -> Result<&str, DbError> {
+    match request {
+        SecretDeleteRequest::Scheduled { name, .. } => Err(DbError::NotSupported(format!(
+            "Parameter Store has no recovery window; refused to schedule the deletion of \"{name}\"."
+        ))),
+        SecretDeleteRequest::Irreversible { name, .. } => {
+            request.validate()?;
+            Ok(name)
+        }
     }
 }
 

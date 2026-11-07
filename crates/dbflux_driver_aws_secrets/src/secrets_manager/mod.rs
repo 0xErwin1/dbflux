@@ -8,10 +8,10 @@ use aws_sdk_secretsmanager::types::{
 use aws_smithy_types::DateTime as SmithyDateTime;
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
-    DbError, FormattedError, SecretDetails, SecretListPage, SecretListRequest, SecretPayload,
-    SecretPutRequest, SecretRollback, SecretRollbackRequest, SecretRotation,
-    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
-    SecretValue, SecretVersionInfo, SecretVersionStage,
+    DbError, FormattedError, SecretDeleteRequest, SecretDeletion, SecretDetails, SecretListPage,
+    SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
+    SecretRotation, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
+    SecretSummary, SecretTag, SecretValue, SecretVersionInfo, SecretVersionStage,
 };
 
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
@@ -139,7 +139,8 @@ impl SecretsManagerStore {
                     | SecretStoreCapabilities::VERSION_LABELS
                     | SecretStoreCapabilities::ROTATION
                     | SecretStoreCapabilities::SOFT_DELETE
-                    | SecretStoreCapabilities::WRITE,
+                    | SecretStoreCapabilities::WRITE
+                    | SecretStoreCapabilities::DELETE,
             ),
         }
     }
@@ -490,6 +491,114 @@ impl SecretStoreSource for SecretsManagerStore {
             current_version: plan.to_version,
             previous_version: Some(plan.from_version),
         })
+    }
+
+    /// One `DeleteSecret` call with the recovery window, never with
+    /// `ForceDeleteWithoutRecovery`. A secret another service owns is
+    /// refused naming the owner; one already scheduled is rejected by the
+    /// service itself.
+    fn delete_secret(&self, request: &SecretDeleteRequest) -> Result<SecretDeletion, DbError> {
+        self.descriptor.ensure_can(
+            SecretStoreCapabilities::WRITE
+                | SecretStoreCapabilities::DELETE
+                | SecretStoreCapabilities::SOFT_DELETE,
+            "delete",
+            request.name(),
+        )?;
+        let days = deletion_window(request)?;
+
+        let metadata = self.describe_unmanaged(request.name())?;
+        ensure_not_scheduled(metadata.deleted_date(), request.name())?;
+
+        let output = runtime()
+            .block_on(
+                self.client
+                    .delete_secret()
+                    .secret_id(request.name())
+                    .recovery_window_in_days(days)
+                    .send(),
+            )
+            .map_err(|error| self.operation_error(&error, Some(request.name())))?;
+
+        Ok(deletion_from_date(output.deletion_date()))
+    }
+
+    /// One `RestoreSecret` call, which cancels a scheduled deletion. A
+    /// secret another service owns is refused; one that is not scheduled
+    /// for deletion is rejected by the service itself.
+    fn restore_secret(&self, name: &str) -> Result<(), DbError> {
+        self.descriptor.ensure_can(
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::SOFT_DELETE,
+            "restore",
+            name,
+        )?;
+
+        let metadata = self.describe_unmanaged(name)?;
+        ensure_scheduled(metadata.deleted_date(), name)?;
+
+        runtime()
+            .block_on(self.client.restore_secret().secret_id(name).send())
+            .map_err(|error| self.operation_error(&error, Some(name)))?;
+
+        Ok(())
+    }
+}
+
+/// The recovery window a `DeleteSecret` call carries. Secrets Manager
+/// deletes with a recovery window only: the service's
+/// `ForceDeleteWithoutRecovery` is never sent, so an irreversible request
+/// is refused, whatever it confirms.
+pub(crate) fn deletion_window(request: &SecretDeleteRequest) -> Result<i64, DbError> {
+    match request {
+        SecretDeleteRequest::Scheduled {
+            recovery_window_days,
+            ..
+        } => {
+            request.validate()?;
+            Ok(i64::from(*recovery_window_days))
+        }
+        SecretDeleteRequest::Irreversible { name, .. } => Err(DbError::NotSupported(format!(
+            "Secrets Manager deletes with a recovery window only; refused to delete \"{name}\" \
+             without recovery."
+        ))),
+    }
+}
+
+/// Refuses scheduling the deletion of a secret whose deletion is already
+/// scheduled, so the recovery window of the first request is not silently
+/// replaced.
+pub(crate) fn ensure_not_scheduled(
+    deleted: Option<&SmithyDateTime>,
+    name: &str,
+) -> Result<(), DbError> {
+    match deleted {
+        Some(_) => Err(DbError::query_failed(format!(
+            "Secrets Manager secret \"{name}\" is already scheduled for deletion"
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// Refuses restoring a secret that is not scheduled for deletion, so the
+/// answer does not depend on how an endpoint treats a restore with nothing
+/// to restore.
+pub(crate) fn ensure_scheduled(
+    deleted: Option<&SmithyDateTime>,
+    name: &str,
+) -> Result<(), DbError> {
+    match deleted {
+        Some(_) => Ok(()),
+        None => Err(DbError::query_failed(format!(
+            "Secrets Manager secret \"{name}\" is not scheduled for deletion"
+        ))),
+    }
+}
+
+/// The outcome of `DeleteSecret`: the date the service says the deletion
+/// takes effect.
+pub(crate) fn deletion_from_date(date: Option<&SmithyDateTime>) -> SecretDeletion {
+    SecretDeletion {
+        deletion_scheduled_for: date.and_then(smithy_datetime_to_chrono),
     }
 }
 

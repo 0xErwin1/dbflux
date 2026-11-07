@@ -1,12 +1,14 @@
 use aws_sdk_ssm::config::{BehaviorVersion, Builder as ConfigBuilder, Credentials, Region};
 use aws_sdk_ssm::types::{ParameterMetadata, ParameterType};
 use dbflux_core::{
-    DbError, SecretPutRequest, SecretStoreCapabilities, SecretStoreSource, SecretVersionStage,
+    DbError, SecretDeleteRequest, SecretPutRequest, SecretStoreCapabilities, SecretStoreSource,
+    SecretVersionStage,
 };
 
 use super::hierarchy::{group_level, normalize_path, path_filter_value};
 use super::{
-    ParameterStore, existing_key_id, find_parameter_on_pages, list_versions_on_pages,
+    ParameterStore, confirmed_deletion_name, existing_key_id, find_parameter_on_pages,
+    list_versions_on_pages,
     overwrite_type, page_versions, put_parameter_call, put_text, sort_newest_first,
 };
 use crate::driver::AwsSecretsProfileConfig;
@@ -509,4 +511,35 @@ fn history_paging_forwards_the_token_and_keeps_the_later_pages() {
     let ids: Vec<&str> = versions.iter().map(|version| version.id.as_str()).collect();
     assert_eq!(ids, ["2", "1"]);
     assert!(!format!("{versions:?}").contains(HISTORY_SENTINEL));
+}
+
+#[test]
+fn a_parameter_is_deleted_only_with_its_exact_name_typed_back() {
+    let request = SecretDeleteRequest::irreversible("/app/prod/db/host", "/app/prod/db/host");
+    let confirmed = confirmed_deletion_name(&request).expect("the exact name confirms");
+    assert_eq!(confirmed, "/app/prod/db/host");
+
+    for typed in [
+        "",
+        "/app/prod/db/hos",
+        "/APP/PROD/DB/HOST",
+        "/app/prod/db/host ",
+    ] {
+        let error = confirmed_deletion_name(&SecretDeleteRequest::irreversible(
+            "/app/prod/db/host",
+            typed,
+        ))
+        .expect_err("anything but the exact name is refused before the call");
+
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    }
+}
+
+#[test]
+fn a_parameter_has_no_recovery_window_to_schedule() {
+    let error = confirmed_deletion_name(&SecretDeleteRequest::scheduled("/app/prod/db/host", 30))
+        .expect_err("Parameter Store deletes at once");
+
+    assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+    assert!(error.to_string().contains("/app/prod/db/host"), "{error}");
 }

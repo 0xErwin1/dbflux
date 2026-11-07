@@ -49,7 +49,7 @@ use crate::labels::mutation_read_only_error;
 mod operations;
 mod scrub;
 
-pub use operations::roll_back_secret;
+pub use operations::{delete_secret, restore_secret, roll_back_secret};
 use scrub::scrub_submitted_value;
 
 /// Audit action of a governed write that the store accepted.
@@ -81,6 +81,13 @@ pub enum SecretOperation {
     /// Moving the current stage to an earlier version
     /// (`SecretStoreSource::roll_back`).
     RollBack,
+    /// Deleting behind a recovery window, which the secret can be restored
+    /// from (`SecretDeleteRequest::Scheduled`).
+    DeleteScheduled,
+    /// Deleting with no way back (`SecretDeleteRequest::Irreversible`).
+    DeleteIrreversible,
+    /// Cancelling a scheduled deletion (`SecretStoreSource::restore_secret`).
+    Restore,
 }
 
 /// The three audit actions of one operation: the store accepted it, a gate
@@ -94,9 +101,15 @@ pub struct OperationActions {
 
 impl SecretOperation {
     /// The classification the policy evaluates the operation under.
+    ///
+    /// A recoverable deletion is `Destructive`; a deletion with no way back
+    /// is `AdminDestructive`, the class of dropping a table. Everything
+    /// that keeps the data recoverable is a `Write`.
     pub const fn classification(self) -> ExecutionClassification {
         match self {
-            Self::PutValue | Self::RollBack => ExecutionClassification::Write,
+            Self::PutValue | Self::RollBack | Self::Restore => ExecutionClassification::Write,
+            Self::DeleteScheduled => ExecutionClassification::Destructive,
+            Self::DeleteIrreversible => ExecutionClassification::AdminDestructive,
         }
     }
 
@@ -112,17 +125,37 @@ impl SecretOperation {
                 refused: "secret_rollback_refused",
                 failed: "secret_rollback_failed",
             },
+            Self::DeleteScheduled => OperationActions {
+                done: "secret_delete_scheduled",
+                refused: "secret_delete_refused",
+                failed: "secret_delete_failed",
+            },
+            Self::DeleteIrreversible => OperationActions {
+                done: "secret_deleted",
+                refused: "secret_delete_refused",
+                failed: "secret_delete_failed",
+            },
+            Self::Restore => OperationActions {
+                done: "secret_restored",
+                refused: "secret_restore_refused",
+                failed: "secret_restore_failed",
+            },
         }
     }
 
-    /// Every capability the store must advertise: `WRITE`, plus the one
+    /// Every capability the store must advertise: `WRITE`, plus the ones
     /// the operation itself needs.
     pub const fn required_capabilities(self) -> SecretStoreCapabilities {
+        let write = SecretStoreCapabilities::WRITE;
+
         match self {
-            Self::PutValue => SecretStoreCapabilities::WRITE,
-            Self::RollBack => {
-                SecretStoreCapabilities::WRITE.union(SecretStoreCapabilities::VERSION_LABELS)
-            }
+            Self::PutValue => write,
+            Self::RollBack => write.union(SecretStoreCapabilities::VERSION_LABELS),
+            Self::DeleteScheduled => write
+                .union(SecretStoreCapabilities::DELETE)
+                .union(SecretStoreCapabilities::SOFT_DELETE),
+            Self::DeleteIrreversible => write.union(SecretStoreCapabilities::DELETE),
+            Self::Restore => write.union(SecretStoreCapabilities::SOFT_DELETE),
         }
     }
 
@@ -131,6 +164,8 @@ impl SecretOperation {
         match self {
             Self::PutValue => "write",
             Self::RollBack => "roll back",
+            Self::DeleteScheduled | Self::DeleteIrreversible => "delete",
+            Self::Restore => "restore",
         }
     }
 
@@ -139,42 +174,48 @@ impl SecretOperation {
         match self {
             Self::PutValue => format!("write to \"{name}\""),
             Self::RollBack => format!("roll back of \"{name}\""),
+            Self::DeleteScheduled | Self::DeleteIrreversible => {
+                format!("deletion of \"{name}\"")
+            }
+            Self::Restore => format!("restore of \"{name}\""),
         }
     }
 
     fn done_summary(self, target: &WriteTarget<'_>) -> String {
+        let (name, store) = (target.name, target.store_label);
+
         match self {
-            Self::PutValue => format!(
-                "Wrote a new version of {} to {}",
-                target.name, target.store_label
-            ),
-            Self::RollBack => format!("Rolled back {} in {}", target.name, target.store_label),
+            Self::PutValue => format!("Wrote a new version of {name} to {store}"),
+            Self::RollBack => format!("Rolled back {name} in {store}"),
+            Self::DeleteScheduled => format!("Scheduled the deletion of {name} in {store}"),
+            Self::DeleteIrreversible => format!("Deleted {name} from {store}"),
+            Self::Restore => format!("Restored {name} in {store}"),
         }
     }
 
     fn refused_summary(self, target: &WriteTarget<'_>) -> String {
+        let (name, store) = (target.name, target.store_label);
+
         match self {
-            Self::PutValue => format!(
-                "Refused the write to {} in {}",
-                target.name, target.store_label
-            ),
-            Self::RollBack => format!(
-                "Refused to roll back {} in {}",
-                target.name, target.store_label
-            ),
+            Self::PutValue => format!("Refused the write to {name} in {store}"),
+            Self::RollBack => format!("Refused to roll back {name} in {store}"),
+            Self::DeleteScheduled | Self::DeleteIrreversible => {
+                format!("Refused to delete {name} in {store}")
+            }
+            Self::Restore => format!("Refused to restore {name} in {store}"),
         }
     }
 
     fn failed_summary(self, target: &WriteTarget<'_>) -> String {
+        let (name, store) = (target.name, target.store_label);
+
         match self {
-            Self::PutValue => format!(
-                "Could not write the value of {} to {}",
-                target.name, target.store_label
-            ),
-            Self::RollBack => format!(
-                "Could not roll back {} in {}",
-                target.name, target.store_label
-            ),
+            Self::PutValue => format!("Could not write the value of {name} to {store}"),
+            Self::RollBack => format!("Could not roll back {name} in {store}"),
+            Self::DeleteScheduled | Self::DeleteIrreversible => {
+                format!("Could not delete {name} in {store}")
+            }
+            Self::Restore => format!("Could not restore {name} in {store}"),
         }
     }
 
@@ -196,6 +237,20 @@ impl SecretOperation {
                 "The roll back of \"{name}\" landed in {store_label}, but its audit event could \
                  not be recorded ({error}). Rolling forward again would move the labels a second \
                  time and still not repair the audit; do not retry the roll back."
+            ),
+            Self::DeleteScheduled => format!(
+                "The deletion of \"{name}\" landed in {store_label} and is scheduled, but its \
+                 audit event could not be recorded ({error}). Restore the secret to cancel it; \
+                 do not retry the deletion to repair the audit trail."
+            ),
+            Self::DeleteIrreversible => format!(
+                "The deletion of \"{name}\" landed in {store_label} and cannot be undone, but its \
+                 audit event could not be recorded ({error}). Do not retry the deletion to \
+                 repair the audit trail."
+            ),
+            Self::Restore => format!(
+                "The restore of \"{name}\" landed in {store_label}, but its audit event could not \
+                 be recorded ({error}). Do not retry the restore to repair the audit trail."
             ),
         }
     }

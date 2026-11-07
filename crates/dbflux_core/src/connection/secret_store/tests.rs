@@ -301,3 +301,83 @@ fn the_default_roll_back_refuses_instead_of_succeeding_silently() {
     assert!(message.contains("test-store"), "{message}");
     assert!(message.contains("prod/api/credentials"), "{message}");
 }
+
+// --- Deleting and restoring ---
+
+#[test]
+fn a_scheduled_deletion_accepts_a_recovery_window_of_seven_to_thirty_days() {
+    for days in [7, 14, 30, DEFAULT_RECOVERY_WINDOW_DAYS] {
+        SecretDeleteRequest::scheduled("prod/api/credentials", days)
+            .validate()
+            .unwrap_or_else(|error| panic!("{days} days: {error}"));
+    }
+    assert_eq!(DEFAULT_RECOVERY_WINDOW_DAYS, 30);
+
+    for days in [0, 1, 6, 31, 365] {
+        let error = SecretDeleteRequest::scheduled("prod/api/credentials", days)
+            .validate()
+            .expect_err("a window outside 7 to 30 days is refused");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+        assert!(error.to_string().contains("7"), "{error}");
+        assert!(error.to_string().contains("30"), "{error}");
+    }
+}
+
+#[test]
+fn an_irreversible_deletion_needs_the_exact_name_typed_back() {
+    SecretDeleteRequest::irreversible("/app/prod/db/host", "/app/prod/db/host")
+        .validate()
+        .expect("the exact name confirms");
+
+    for typed in [
+        "",
+        "/app/prod/db/hos",
+        "/APP/PROD/DB/HOST",
+        " /app/prod/db/host",
+        "/app/prod/db/host ",
+        "/app/prod/db/host/",
+    ] {
+        let request = SecretDeleteRequest::irreversible("/app/prod/db/host", typed);
+
+        assert!(!request.confirmation_matches(), "{typed:?}");
+        let error = request
+            .validate()
+            .expect_err("anything but the exact name is refused");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+        assert!(error.to_string().contains("/app/prod/db/host"), "{error}");
+    }
+}
+
+#[test]
+fn a_scheduled_deletion_is_never_an_unconfirmed_irreversible_one() {
+    let scheduled = SecretDeleteRequest::scheduled("prod/api/credentials", 30);
+
+    assert!(scheduled.confirmation_matches(), "nothing to confirm");
+    assert_eq!(scheduled.name(), "prod/api/credentials");
+    assert!(!scheduled.is_irreversible());
+    assert!(
+        SecretDeleteRequest::irreversible("a", "a").is_irreversible(),
+        "the type, not a flag, says it cannot be recovered"
+    );
+}
+
+#[test]
+fn the_defaults_refuse_a_delete_and_a_restore_instead_of_succeeding_silently() {
+    let store = DefaultOnlyStore(descriptor_with(
+        SecretStoreCapabilities::WRITE
+            | SecretStoreCapabilities::DELETE
+            | SecretStoreCapabilities::SOFT_DELETE,
+    ));
+
+    let error = store
+        .delete_secret(&SecretDeleteRequest::scheduled("prod/api/credentials", 30))
+        .expect_err("an unimplemented delete must refuse");
+    let message = put_refusal_message(error);
+    assert!(message.contains("test-store"), "{message}");
+    assert!(message.contains("prod/api/credentials"), "{message}");
+
+    let error = store
+        .restore_secret("prod/api/credentials")
+        .expect_err("an unimplemented restore must refuse");
+    assert!(put_refusal_message(error).contains("prod/api/credentials"));
+}

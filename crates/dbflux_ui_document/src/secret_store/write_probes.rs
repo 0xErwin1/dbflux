@@ -17,16 +17,16 @@ use super::super::value::{RetrievalTarget, value_retrieval_event};
 use super::super::write::{
     SECRET_VALUE_WRITE_FAILED_ACTION, SECRET_VALUE_WRITE_REFUSED_ACTION,
     SECRET_VALUE_WRITTEN_ACTION, SecretOperation, SecretWriteFailure, SecretWriteFailureKind,
-    SecretWriteOutcome, WriteContext, WriteTarget, put_secret_value, roll_back_secret,
-    secret_write_event,
+    SecretWriteOutcome, WriteContext, WriteTarget, delete_secret, put_secret_value, restore_secret,
+    roll_back_secret, secret_write_event,
 };
 use dbflux_core::observability::{EventCategory, EventRecord, EventSink, EventSinkError};
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
-    DbError, MutationPolicy, ReadOnlyReason, SecretDetails, SecretListPage, SecretListRequest,
-    SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
-    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretValue,
-    SecretVersionStage,
+    DbError, MutationPolicy, ReadOnlyReason, SecretDeleteRequest, SecretDeletion, SecretDetails,
+    SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback,
+    SecretRollbackRequest, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
+    SecretValue, SecretVersionStage,
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -932,22 +932,64 @@ impl SecretStoreSource for OperationStore {
             previous_version: Some("v-before".to_string()),
         })
     }
+    fn delete_secret(&self, _request: &SecretDeleteRequest) -> Result<SecretDeletion, DbError> {
+        self.answer()?;
+        Ok(SecretDeletion::default())
+    }
+    fn restore_secret(&self, _name: &str) -> Result<(), DbError> {
+        self.answer()
+    }
 }
 
 fn operation_cases() -> Vec<OperationCase> {
-    vec![OperationCase {
-        label: "roll back",
-        operation: SecretOperation::RollBack,
-        name: "prod/api/credentials",
-        run: Box::new(|context| {
-            roll_back_secret(
-                context,
-                &SecretRollbackRequest::new("prod/api/credentials", "v-oldest"),
-            )
-            .map(|_| ())
-        }),
-        values: Vec::new(),
-    }]
+    vec![
+        OperationCase {
+            label: "roll back",
+            operation: SecretOperation::RollBack,
+            name: "prod/api/credentials",
+            run: Box::new(|context| {
+                roll_back_secret(
+                    context,
+                    &SecretRollbackRequest::new("prod/api/credentials", "v-oldest"),
+                )
+                .map(|_| ())
+            }),
+            values: Vec::new(),
+        },
+        OperationCase {
+            label: "scheduled delete",
+            operation: SecretOperation::DeleteScheduled,
+            name: "prod/api/credentials",
+            run: Box::new(|context| {
+                delete_secret(
+                    context,
+                    &SecretDeleteRequest::scheduled("prod/api/credentials", 30),
+                )
+                .map(|_| ())
+            }),
+            values: Vec::new(),
+        },
+        OperationCase {
+            label: "irreversible delete",
+            operation: SecretOperation::DeleteIrreversible,
+            name: "/app/prod/db/host",
+            run: Box::new(|context| {
+                delete_secret(
+                    context,
+                    &SecretDeleteRequest::irreversible("/app/prod/db/host", "/app/prod/db/host"),
+                )
+                .map(|_| ())
+            }),
+            values: Vec::new(),
+        },
+        OperationCase {
+            label: "restore",
+            operation: SecretOperation::Restore,
+            name: "prod/api/credentials",
+            run: Box::new(|context| restore_secret(context, "prod/api/credentials")),
+            values: Vec::new(),
+        },
+    ]
 }
 
 fn context<'a>(
@@ -984,6 +1026,21 @@ fn every_operation_pins_its_classification_and_capabilities() {
             SecretOperation::RollBack,
             dbflux_core::ExecutionClassification::Write,
             write | SecretStoreCapabilities::VERSION_LABELS,
+        ),
+        (
+            SecretOperation::DeleteScheduled,
+            dbflux_core::ExecutionClassification::Destructive,
+            write | SecretStoreCapabilities::DELETE | SecretStoreCapabilities::SOFT_DELETE,
+        ),
+        (
+            SecretOperation::DeleteIrreversible,
+            dbflux_core::ExecutionClassification::AdminDestructive,
+            write | SecretStoreCapabilities::DELETE,
+        ),
+        (
+            SecretOperation::Restore,
+            dbflux_core::ExecutionClassification::Write,
+            write | SecretStoreCapabilities::SOFT_DELETE,
         ),
     ] {
         assert_eq!(operation.classification(), classification, "{operation:?}");
@@ -1225,4 +1282,120 @@ fn every_operation_records_one_event_shaped_like_a_retrieval() {
             assert!(!format!("{event:?}").contains(value), "{}", case.label);
         }
     }
+}
+
+#[test]
+fn a_confirmation_that_is_not_the_exact_name_refuses_an_irreversible_delete_before_any_call() {
+    let store =
+        OperationStore::new(SecretStoreCapabilities::WRITE | SecretStoreCapabilities::DELETE);
+
+    for typed in [
+        "",
+        "/app/prod/db/hos",
+        "/APP/PROD/DB/HOST",
+        "/app/prod/db/host ",
+    ] {
+        let sink = Sink::default();
+
+        let failure = delete_secret(
+            &context(&store, &sink, MutationPolicy::Allowed, None),
+            &SecretDeleteRequest::irreversible("/app/prod/db/host", typed),
+        )
+        .expect_err("a mismatched confirmation refuses");
+
+        assert_eq!(failure.kind, SecretWriteFailureKind::Refused, "{typed:?}");
+        assert!(
+            matches!(failure.error, DbError::ConstraintViolation(_)),
+            "{typed:?}: {failure:?}"
+        );
+        assert_eq!(store.calls(), 0, "{typed:?} reached the store");
+
+        let events = sink.events();
+        assert_eq!(events.len(), 1, "{typed:?}");
+        assert_eq!(
+            events[0].action,
+            SecretOperation::DeleteIrreversible.actions().refused
+        );
+        let details = details_of(&events[0]);
+        assert_eq!(details["reason"], "confirmation_mismatch", "{typed:?}");
+        // The typed text is not an audit field; the name is the object.
+        assert!(
+            details.get("confirmation").is_none(),
+            "{typed:?}: {details}"
+        );
+    }
+}
+
+#[test]
+fn a_window_outside_seven_to_thirty_days_refuses_a_scheduled_delete_before_any_call() {
+    for days in [0, 6, 31] {
+        let store = OperationStore::new(SecretOperation::DeleteScheduled.required_capabilities());
+        let sink = Sink::default();
+
+        let failure = delete_secret(
+            &context(&store, &sink, MutationPolicy::Allowed, None),
+            &SecretDeleteRequest::scheduled("prod/api/credentials", days),
+        )
+        .expect_err("a window outside the accepted days refuses");
+
+        assert_eq!(failure.kind, SecretWriteFailureKind::Refused, "{days}");
+        assert_eq!(store.calls(), 0, "{days}");
+        assert_eq!(
+            details_of(&sink.events()[0])["reason"],
+            "invalid_request",
+            "{days}"
+        );
+    }
+}
+
+#[test]
+fn a_store_with_a_recovery_window_is_never_asked_to_delete_without_recovery() {
+    let store = OperationStore::new(
+        SecretStoreCapabilities::WRITE
+            | SecretStoreCapabilities::DELETE
+            | SecretStoreCapabilities::SOFT_DELETE,
+    );
+    let sink = Sink::default();
+
+    let failure = delete_secret(
+        &context(&store, &sink, MutationPolicy::Allowed, None),
+        &SecretDeleteRequest::irreversible("prod/api/credentials", "prod/api/credentials"),
+    )
+    .expect_err("a store with a recovery window refuses an irreversible delete");
+
+    assert_eq!(failure.kind, SecretWriteFailureKind::Refused);
+    assert!(
+        matches!(failure.error, DbError::NotSupported(_)),
+        "{failure:?}"
+    );
+    assert_eq!(store.calls(), 0);
+    assert_eq!(
+        details_of(&sink.events()[0])["reason"],
+        "recovery_window_available"
+    );
+}
+
+#[test]
+fn a_scheduled_delete_records_its_window_and_an_irreversible_one_says_so() {
+    let store = OperationStore::new(SecretOperation::DeleteScheduled.required_capabilities());
+    let sink = Sink::default();
+    delete_secret(
+        &context(&store, &sink, MutationPolicy::Allowed, None),
+        &SecretDeleteRequest::scheduled("prod/api/credentials", 14),
+    )
+    .expect("scheduled");
+    let details = details_of(&sink.events()[0]);
+    assert_eq!(details["recovery_window_days"], 14);
+    assert_eq!(details["classification"], "destructive");
+
+    let store = OperationStore::new(SecretOperation::DeleteIrreversible.required_capabilities());
+    let sink = Sink::default();
+    delete_secret(
+        &context(&store, &sink, MutationPolicy::Allowed, None),
+        &SecretDeleteRequest::irreversible("/app/prod/db/host", "/app/prod/db/host"),
+    )
+    .expect("irreversible");
+    let details = details_of(&sink.events()[0]);
+    assert_eq!(details["irreversible"], true);
+    assert_eq!(details["classification"], "admin_destructive");
 }

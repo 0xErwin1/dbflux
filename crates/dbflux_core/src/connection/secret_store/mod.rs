@@ -25,7 +25,10 @@ use crate::DbError;
 
 mod operations;
 
-pub use operations::{SecretRollback, SecretRollbackRequest};
+pub use operations::{
+    DEFAULT_RECOVERY_WINDOW_DAYS, MAX_RECOVERY_WINDOW_DAYS, MIN_RECOVERY_WINDOW_DAYS,
+    SecretDeleteRequest, SecretDeletion, SecretRollback, SecretRollbackRequest,
+};
 
 bitflags! {
     /// Behavior that differs between secret stores. The UI gates actions on
@@ -57,6 +60,12 @@ bitflags! {
         /// `SecretStoreSource::put_value`. A store that cannot write does not
         /// advertise it, and the UI reads its secrets read only.
         const WRITE = 1 << 6;
+
+        /// Secrets can be deleted through `SecretStoreSource::delete_secret`.
+        /// With `SOFT_DELETE` the deletion is scheduled with a recovery
+        /// window and can be restored; without it the deletion is
+        /// irreversible and needs the secret's exact name as confirmation.
+        const DELETE = 1 << 7;
     }
 }
 
@@ -556,6 +565,25 @@ pub trait SecretStoreSource: Send + Sync {
     /// default refuses.
     fn roll_back(&self, request: &SecretRollbackRequest) -> Result<SecretRollback, DbError> {
         refuse_unimplemented(self.descriptor(), "rolling back", &request.name)
+    }
+
+    /// Deletes a secret. A `Scheduled` request puts the deletion behind the
+    /// recovery window of a `SOFT_DELETE` store, and an `Irreversible` one,
+    /// accepted only by a store without that window and only with the exact
+    /// name as confirmation, removes it for good. A store refuses the kind
+    /// it does not offer before any call.
+    ///
+    /// Stores advertising `DELETE` and `WRITE` implement it; the default
+    /// refuses.
+    fn delete_secret(&self, request: &SecretDeleteRequest) -> Result<SecretDeletion, DbError> {
+        refuse_unimplemented(self.descriptor(), "deleting secrets", request.name())
+    }
+
+    /// Cancels a scheduled deletion, so the secret and its versions are
+    /// available again. Stores advertising `SOFT_DELETE` and `WRITE`
+    /// implement it; the default refuses.
+    fn restore_secret(&self, name: &str) -> Result<(), DbError> {
+        refuse_unimplemented(self.descriptor(), "restoring secrets", name)
     }
 }
 

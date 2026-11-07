@@ -434,3 +434,55 @@ fn stages_cover_deprecated_versions_with_an_empty_label_list() {
     let plan = plan_rollback(&stages, "prod/api", "v-deprecated").expect("deprecated target");
     assert_eq!(plan.from_version, "v-current");
 }
+
+#[test]
+fn a_scheduled_deletion_sends_its_window_and_nothing_else_is_ever_sent() {
+    let days = deletion_window(&SecretDeleteRequest::scheduled("prod/api", 14)).expect("14 days");
+    assert_eq!(days, 14);
+
+    for out_of_range in [0, 6, 31] {
+        let error = deletion_window(&SecretDeleteRequest::scheduled("prod/api", out_of_range))
+            .expect_err("a window outside 7 to 30 days is refused before the call");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    }
+}
+
+#[test]
+fn secrets_manager_never_deletes_without_recovery() {
+    // Even with the exact name typed back: the service's force-delete is
+    // not offered at all, so there is nothing to confirm.
+    let error = deletion_window(&SecretDeleteRequest::irreversible("prod/api", "prod/api"))
+        .expect_err("an irreversible deletion is refused");
+
+    assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+    assert!(error.to_string().contains("recovery window"), "{error}");
+    assert!(error.to_string().contains("prod/api"), "{error}");
+}
+
+#[test]
+fn the_deletion_date_comes_from_the_service_answer() {
+    let when = SmithyDateTime::from_secs(1_790_000_000);
+
+    let deletion = deletion_from_date(Some(&when));
+    assert_eq!(
+        deletion.deletion_scheduled_for.map(|date| date.timestamp()),
+        Some(1_790_000_000)
+    );
+
+    assert!(deletion_from_date(None).deletion_scheduled_for.is_none());
+}
+
+#[test]
+fn only_a_secret_that_is_not_scheduled_can_be_scheduled_and_only_a_scheduled_one_restored() {
+    let when = SmithyDateTime::from_secs(1_790_000_000);
+
+    ensure_not_scheduled(None, "prod/api").expect("a live secret can be scheduled");
+    let error = ensure_not_scheduled(Some(&when), "prod/api").expect_err("already scheduled");
+    assert!(error.to_string().contains("already scheduled"), "{error}");
+    assert!(error.to_string().contains("prod/api"), "{error}");
+
+    ensure_scheduled(Some(&when), "prod/api").expect("a scheduled secret can be restored");
+    let error = ensure_scheduled(None, "prod/api").expect_err("nothing to restore");
+    assert!(error.to_string().contains("not scheduled"), "{error}");
+    assert!(error.to_string().contains("prod/api"), "{error}");
+}

@@ -31,6 +31,8 @@ pub struct FakeSecretStoreCalls {
 #[derive(Debug, Clone)]
 pub enum FakeSecretMutation {
     RollBack(SecretRollbackRequest),
+    Delete(SecretDeleteRequest),
+    Restore { name: String },
 }
 
 /// Id of the fake flat store, shaped like AWS Secrets Manager.
@@ -387,6 +389,92 @@ impl SecretStoreSource for FakeSecretStore {
         self.accept_mutation(mutation);
         Ok(rollback)
     }
+
+    /// A `Scheduled` request on a store with a recovery window marks the
+    /// secret pending deletion, the way `DeleteSecret` does: the date the
+    /// deletion takes effect is the request time plus the window, and the
+    /// value is unavailable until the secret is restored. An `Irreversible`
+    /// request on a store without a window removes the entry. A store
+    /// refuses the kind it does not offer.
+    fn delete_secret(&self, request: &SecretDeleteRequest) -> Result<SecretDeletion, DbError> {
+        let mutation = FakeSecretMutation::Delete(request.clone());
+        let required = match request {
+            SecretDeleteRequest::Scheduled { .. } => {
+                SecretStoreCapabilities::WRITE
+                    | SecretStoreCapabilities::DELETE
+                    | SecretStoreCapabilities::SOFT_DELETE
+            }
+            SecretDeleteRequest::Irreversible { .. } => {
+                SecretStoreCapabilities::WRITE | SecretStoreCapabilities::DELETE
+            }
+        };
+        self.begin_mutation(mutation.clone(), request.name(), required, "delete")?;
+
+        let deletion = match request {
+            SecretDeleteRequest::Scheduled {
+                name,
+                recovery_window_days,
+            } => {
+                request.validate()?;
+                self.schedule_deletion(name, *recovery_window_days)?
+            }
+            SecretDeleteRequest::Irreversible { name, .. } => {
+                if self
+                    .descriptor
+                    .supports(SecretStoreCapabilities::SOFT_DELETE)
+                {
+                    return Err(DbError::NotSupported(format!(
+                        "Secret store \"{}\" deletes with a recovery window only; refused to \
+                         delete \"{name}\" without recovery.",
+                        self.descriptor.id
+                    )));
+                }
+                request.validate()?;
+                self.remove(name)?
+            }
+        };
+
+        self.accept_mutation(mutation);
+        Ok(deletion)
+    }
+
+    /// Clears a scheduled deletion, and with it the unavailable value the
+    /// scheduling caused.
+    fn restore_secret(&self, name: &str) -> Result<(), DbError> {
+        let mutation = FakeSecretMutation::Restore {
+            name: name.to_string(),
+        };
+        self.begin_mutation(
+            mutation.clone(),
+            name,
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::SOFT_DELETE,
+            "restore",
+        )?;
+
+        {
+            let mut stored = rwlock_write(&self.secrets);
+            let secret = find_mut(&mut stored, name, "Secret")?;
+            refuse_managed(secret, name)?;
+
+            if secret.details.summary.deletion_scheduled_for.is_none() {
+                return Err(DbError::query_failed(format!(
+                    "Secrets Manager secret \"{name}\" is not scheduled for deletion"
+                )));
+            }
+
+            secret.details.summary.deletion_scheduled_for = None;
+            secret.details.deleted_at = None;
+            if matches!(
+                secret.read_failure,
+                Some(FakeSecretReadFailure::Unavailable(_))
+            ) {
+                secret.read_failure = None;
+            }
+        }
+
+        self.accept_mutation(mutation);
+        Ok(())
+    }
 }
 
 /// The stored secret `name`, or the not-found answer of the service.
@@ -401,15 +489,21 @@ fn find_mut<'a>(
         .ok_or_else(|| DbError::object_not_found(format!("{noun} {name} not found")))
 }
 
-/// The refusals every flat-store write shares: secrets another service owns
-/// are read only in DBFlux, and the service rejects changes to a secret
-/// scheduled for deletion.
-fn refuse_unwritable(secret: &FakeSecret, name: &str) -> Result<(), DbError> {
-    if let Some(service) = &secret.details.summary.owning_service {
-        return Err(DbError::permission_denied(format!(
+/// Secrets another service owns are read only in DBFlux.
+fn refuse_managed(secret: &FakeSecret, name: &str) -> Result<(), DbError> {
+    match &secret.details.summary.owning_service {
+        Some(service) => Err(DbError::permission_denied(format!(
             "Secrets Manager secret \"{name}\" is managed by {service} and is read only"
-        )));
+        ))),
+        None => Ok(()),
     }
+}
+
+/// The refusals every flat-store change shares: a managed secret, and the
+/// service's rejection of changes to a secret scheduled for deletion.
+fn refuse_unwritable(secret: &FakeSecret, name: &str) -> Result<(), DbError> {
+    refuse_managed(secret, name)?;
+
     if secret.details.summary.deletion_scheduled_for.is_some() {
         return Err(DbError::query_failed(
             "Secrets Manager secret is scheduled for deletion; it cannot be changed",
@@ -420,6 +514,48 @@ fn refuse_unwritable(secret: &FakeSecret, name: &str) -> Result<(), DbError> {
 }
 
 impl FakeSecretStore {
+    /// Marks a secret pending deletion `days` after the fake clock.
+    fn schedule_deletion(&self, name: &str, days: u32) -> Result<SecretDeletion, DbError> {
+        let mut stored = rwlock_write(&self.secrets);
+        let secret = find_mut(&mut stored, name, "Secret")?;
+        refuse_managed(secret, name)?;
+
+        if secret.details.summary.deletion_scheduled_for.is_some() {
+            return Err(DbError::query_failed(format!(
+                "Secrets Manager secret \"{name}\" is already scheduled for deletion"
+            )));
+        }
+
+        let requested =
+            fake_now().ok_or_else(|| DbError::query_failed("The fake clock is unset"))?;
+        let scheduled_for = requested + chrono::Duration::days(i64::from(days));
+
+        secret.details.deleted_at = Some(requested);
+        secret.details.summary.deletion_scheduled_for = Some(scheduled_for);
+        if secret.read_failure.is_none() {
+            secret.read_failure = Some(FakeSecretReadFailure::Unavailable(
+                "The secret is scheduled for deletion",
+            ));
+        }
+
+        Ok(SecretDeletion {
+            deletion_scheduled_for: Some(scheduled_for),
+        })
+    }
+
+    /// Removes an entry for good, with the service's not-found answer for
+    /// one that is already gone.
+    fn remove(&self, name: &str) -> Result<SecretDeletion, DbError> {
+        let mut stored = rwlock_write(&self.secrets);
+        let position = stored
+            .iter()
+            .position(|secret| secret.details.summary.name == name)
+            .ok_or_else(|| DbError::object_not_found(format!("Parameter {name} not found")))?;
+        stored.remove(position);
+
+        Ok(SecretDeletion::default())
+    }
+
     /// The start of every write operation other than `put_value`: records
     /// the attempt, applies the store's own capability gate and the
     /// write-failure knob, exactly where the real drivers begin their calls.
@@ -557,6 +693,11 @@ impl FakeSecretStore {
             payload: request.payload.clone(),
         })
     }
+}
+
+/// The fake clock: the instant every fake write happens at.
+fn fake_now() -> Option<chrono::DateTime<chrono::Utc>> {
+    fake_time(11, 7, 12)
 }
 
 /// Principal the fake parameter store records for a version written through
@@ -727,7 +868,8 @@ pub(super) fn fake_secret_stores(state: &Arc<FakeDriverState>) -> Vec<FakeSecret
                     | SecretStoreCapabilities::VERSION_LABELS
                     | SecretStoreCapabilities::ROTATION
                     | SecretStoreCapabilities::SOFT_DELETE
-                    | SecretStoreCapabilities::WRITE,
+                    | SecretStoreCapabilities::WRITE
+                    | SecretStoreCapabilities::DELETE,
             ),
             secrets: RwLock::new(fake_flat_secrets().into_iter().map(label_current).collect()),
             default_page_size: 4,
@@ -741,7 +883,8 @@ pub(super) fn fake_secret_stores(state: &Arc<FakeDriverState>) -> Vec<FakeSecret
                 SecretStoreCapabilities::VERSIONS
                     | SecretStoreCapabilities::HIERARCHICAL
                     | SecretStoreCapabilities::TYPED_VALUES
-                    | SecretStoreCapabilities::WRITE,
+                    | SecretStoreCapabilities::WRITE
+                    | SecretStoreCapabilities::DELETE,
             ),
             secrets: RwLock::new(fake_parameters()),
             default_page_size: 2,

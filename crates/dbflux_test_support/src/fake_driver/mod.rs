@@ -10,10 +10,10 @@ use dbflux_core::{
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use dbflux_core::{
-    SecretDetails, SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest,
-    SecretRollback, SecretRollbackRequest, SecretRotation, SecretStoreCapabilities,
-    SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag, SecretValue,
-    SecretVersionInfo, SecretVersionStage,
+    SecretDeleteRequest, SecretDeletion, SecretDetails, SecretListPage, SecretListRequest,
+    SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest, SecretRotation,
+    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
+    SecretValue, SecretVersionInfo, SecretVersionStage,
 };
 use dbflux_driver_cloudwatch::CLOUDWATCH_FORM;
 use dbflux_driver_dynamodb::DYNAMODB_FORM;

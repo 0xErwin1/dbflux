@@ -13,9 +13,10 @@ use aws_sdk_secretsmanager::primitives::Blob;
 use aws_sdk_ssm::types::{ParameterType, Tag as ParameterTag};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    Connection, ConnectionProfile, DbConfig, DbDriver, DbError, DbKind, SecretListRequest,
-    SecretPayload, SecretPutRequest, SecretRollbackRequest, SecretStoreCapabilities,
-    SecretStoreSource, SecretValue, SecretVersionStage,
+    Connection, ConnectionProfile, DEFAULT_RECOVERY_WINDOW_DAYS, DbConfig, DbDriver, DbError,
+    DbKind, SecretDeleteRequest, SecretListRequest, SecretPayload, SecretPutRequest,
+    SecretRollbackRequest, SecretStoreCapabilities, SecretStoreSource, SecretValue,
+    SecretVersionStage,
 };
 use dbflux_driver_aws_secrets::{AwsSecretsDriver, PARAMETER_STORE_ID, SECRETS_MANAGER_ID};
 use dbflux_test_support::containers;
@@ -227,6 +228,7 @@ fn connection_exposes_secrets_manager_then_parameter_store() -> Result<(), DbErr
                 | SecretStoreCapabilities::ROTATION
                 | SecretStoreCapabilities::SOFT_DELETE
                 | SecretStoreCapabilities::WRITE
+                | SecretStoreCapabilities::DELETE
         ));
         assert_eq!(descriptors[1].id, PARAMETER_STORE_ID);
         assert_eq!(descriptors[1].label, "Parameter Store");
@@ -235,6 +237,7 @@ fn connection_exposes_secrets_manager_then_parameter_store() -> Result<(), DbErr
                 | SecretStoreCapabilities::HIERARCHICAL
                 | SecretStoreCapabilities::TYPED_VALUES
                 | SecretStoreCapabilities::WRITE
+                | SecretStoreCapabilities::DELETE
         ));
 
         connection.ping()
@@ -901,6 +904,125 @@ fn secrets_manager_roll_back_to_the_current_or_an_unknown_version_is_refused() -
         assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
 
         assert_eq!(labels_by_version(secrets, "rollback-refused")?, before);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn secrets_manager_delete_schedules_with_a_window_and_restore_brings_the_secret_back()
+-> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        seeder.secret_string("deletable", "kept-value");
+
+        let connection = connect(&endpoint)?;
+        let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
+
+        let deletion = secrets.delete_secret(&SecretDeleteRequest::scheduled(
+            "deletable",
+            DEFAULT_RECOVERY_WINDOW_DAYS,
+        ))?;
+
+        assert!(
+            deletion.deletion_scheduled_for.is_some(),
+            "the service reports when the deletion takes effect"
+        );
+        let details = secrets.describe("deletable")?;
+        assert!(details.summary.is_pending_deletion());
+        assert!(details.deleted_at.is_some());
+        assert!(
+            secrets.get_value("deletable", None).is_err(),
+            "a secret pending deletion has no readable value"
+        );
+
+        secrets.restore_secret("deletable")?;
+
+        let details = secrets.describe("deletable")?;
+        assert!(!details.summary.is_pending_deletion());
+        assert_eq!(text(&secrets.get_value("deletable", None)?), "kept-value");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn secrets_manager_never_deletes_without_recovery_and_refuses_a_missing_window()
+-> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        seeder.secret_string("kept", "value");
+
+        let connection = connect(&endpoint)?;
+        let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
+
+        let error = secrets
+            .delete_secret(&SecretDeleteRequest::irreversible("kept", "kept"))
+            .expect_err("a secret is never deleted without recovery");
+        assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+
+        let error = secrets
+            .delete_secret(&SecretDeleteRequest::scheduled("kept", 3))
+            .expect_err("a window under seven days is refused");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+
+        assert!(!secrets.describe("kept")?.summary.is_pending_deletion());
+        // LocalStack accepts a restore with nothing to restore, so the
+        // driver answers that itself instead of relying on the endpoint.
+        assert!(matches!(
+            secrets.restore_secret("kept"),
+            Err(DbError::QueryFailed(_))
+        ));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn parameter_store_delete_needs_the_exact_name_and_removes_the_parameter() -> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        seeder.parameter("/app/delete/me", "one", ParameterType::String);
+        seeder.parameter("/app/delete/keep", "two", ParameterType::String);
+
+        let connection = connect(&endpoint)?;
+        let parameters = store(connection.as_ref(), PARAMETER_STORE_ID);
+
+        let error = parameters
+            .delete_secret(&SecretDeleteRequest::irreversible(
+                "/app/delete/me",
+                "/app/delete/m",
+            ))
+            .expect_err("a mismatched confirmation is refused before the call");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+        assert!(parameters.describe("/app/delete/me").is_ok());
+
+        let error = parameters
+            .delete_secret(&SecretDeleteRequest::scheduled("/app/delete/me", 30))
+            .expect_err("a parameter has no recovery window");
+        assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+
+        let deletion = parameters.delete_secret(&SecretDeleteRequest::irreversible(
+            "/app/delete/me",
+            "/app/delete/me",
+        ))?;
+        assert!(deletion.deletion_scheduled_for.is_none());
+
+        assert!(matches!(
+            parameters.describe("/app/delete/me"),
+            Err(DbError::ObjectNotFound(_))
+        ));
+        assert!(parameters.describe("/app/delete/keep").is_ok());
+        assert!(matches!(
+            parameters.delete_secret(&SecretDeleteRequest::irreversible(
+                "/app/delete/me",
+                "/app/delete/me"
+            )),
+            Err(DbError::ObjectNotFound(_))
+        ));
 
         Ok(())
     })

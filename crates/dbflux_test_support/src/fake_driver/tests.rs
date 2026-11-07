@@ -1076,3 +1076,231 @@ fn the_write_error_knob_fails_a_roll_back_without_moving_labels() {
     assert_eq!(details.summary.version.as_deref(), Some("v-current"));
     assert!(driver.secret_store_calls().mutations.is_empty());
 }
+
+// --- Deleting and restoring ---
+
+#[test]
+fn a_scheduled_deletion_marks_the_secret_and_hides_its_value_until_restored() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let deletion = store
+        .delete_secret(&SecretDeleteRequest::scheduled(
+            "prod/notify/webhook-token",
+            14,
+        ))
+        .expect("a plain secret can be scheduled for deletion");
+
+    let scheduled_for = deletion
+        .deletion_scheduled_for
+        .expect("a scheduled deletion reports when it takes effect");
+    let details = store
+        .describe("prod/notify/webhook-token")
+        .expect("describe");
+    assert_eq!(details.summary.deletion_scheduled_for, Some(scheduled_for));
+    assert!(details.deleted_at.is_some());
+    assert!(details.summary.is_pending_deletion());
+    assert_eq!(
+        (scheduled_for - details.deleted_at.expect("requested at")).num_days(),
+        14
+    );
+
+    // The service refuses the value of a secret pending deletion.
+    assert!(store.get_value("prod/notify/webhook-token", None).is_err());
+
+    // It still lists, flagged, like `ListSecrets` with planned deletions.
+    let listed = store
+        .list(&SecretListRequest::default())
+        .expect("list")
+        .entries
+        .into_iter()
+        .chain(
+            store
+                .list(&SecretListRequest {
+                    page_token: Some("4".to_string()),
+                    ..SecretListRequest::default()
+                })
+                .expect("second page")
+                .entries,
+        )
+        .find(|entry| entry.name == "prod/notify/webhook-token")
+        .expect("still listed");
+    assert!(listed.is_pending_deletion());
+
+    store
+        .restore_secret("prod/notify/webhook-token")
+        .expect("a scheduled deletion can be restored");
+
+    let details = store
+        .describe("prod/notify/webhook-token")
+        .expect("describe");
+    assert!(!details.summary.is_pending_deletion());
+    assert!(details.deleted_at.is_none());
+    assert_eq!(
+        exposed_text(
+            &store
+                .get_value("prod/notify/webhook-token", None)
+                .expect("readable again")
+        ),
+        FAKE_SECRET_PLAINTEXT
+    );
+
+    let calls = driver.secret_store_calls();
+    assert_eq!(calls.mutation_attempts.len(), 2);
+    assert_eq!(calls.mutations.len(), 2);
+}
+
+#[test]
+fn deleting_twice_restoring_a_live_secret_and_managed_secrets_are_refused() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let error = store
+        .delete_secret(&SecretDeleteRequest::scheduled(
+            "prod/deploy/legacy-token",
+            7,
+        ))
+        .expect_err("already scheduled for deletion");
+    assert!(error.to_string().contains("already scheduled"), "{error}");
+
+    let error = store
+        .restore_secret("prod/notify/webhook-token")
+        .expect_err("nothing to restore");
+    assert!(error.to_string().contains("not scheduled"), "{error}");
+
+    for error in [
+        store
+            .delete_secret(&SecretDeleteRequest::scheduled("prod/db/master", 7))
+            .expect_err("managed"),
+        store.restore_secret("prod/db/master").expect_err("managed"),
+    ] {
+        assert!(matches!(error, DbError::PermissionDenied(_)), "{error}");
+    }
+
+    let error = store
+        .delete_secret(&SecretDeleteRequest::scheduled("prod/missing", 7))
+        .expect_err("missing");
+    assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+#[test]
+fn the_fixture_secret_pending_deletion_restores_and_becomes_readable() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    assert!(store.get_value("prod/deploy/legacy-token", None).is_err());
+    store
+        .restore_secret("prod/deploy/legacy-token")
+        .expect("restore");
+
+    assert_eq!(
+        exposed_text(
+            &store
+                .get_value("prod/deploy/legacy-token", None)
+                .expect("readable")
+        ),
+        "legacy-token-value"
+    );
+}
+
+#[test]
+fn a_parameter_deletion_needs_its_name_and_removes_it_for_good() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    let error = store
+        .delete_secret(&SecretDeleteRequest::irreversible(
+            "/app/prod/db/port",
+            "/app/prod/db/por",
+        ))
+        .expect_err("the confirmation must be the exact name");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    assert!(store.describe("/app/prod/db/port").is_ok());
+    assert!(driver.secret_store_calls().mutations.is_empty());
+
+    let deletion = store
+        .delete_secret(&SecretDeleteRequest::irreversible(
+            "/app/prod/db/port",
+            "/app/prod/db/port",
+        ))
+        .expect("a confirmed deletion goes through");
+    assert!(deletion.deletion_scheduled_for.is_none());
+
+    let error = store.describe("/app/prod/db/port").expect_err("deleted");
+    assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+    assert!(store.get_value("/app/prod/db/port", None).is_err());
+    let names: Vec<String> = store
+        .list(&SecretListRequest {
+            path: Some("/app/prod/db/".to_string()),
+            ..SecretListRequest::default()
+        })
+        .expect("list")
+        .entries
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect();
+    assert!(
+        !names.contains(&"/app/prod/db/port".to_string()),
+        "{names:?}"
+    );
+
+    // A second deletion finds nothing, with the service's own answer.
+    let error = store
+        .delete_secret(&SecretDeleteRequest::irreversible(
+            "/app/prod/db/port",
+            "/app/prod/db/port",
+        ))
+        .expect_err("already deleted");
+    assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+
+    let calls = driver.secret_store_calls();
+    assert_eq!(calls.mutations.len(), 1);
+}
+
+#[test]
+fn each_store_refuses_the_deletion_it_does_not_offer() {
+    let (driver, connection) = connected();
+
+    let error = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("store")
+        .delete_secret(&SecretDeleteRequest::scheduled("/app/prod/db/host", 30))
+        .expect_err("a parameter has no recovery window");
+    assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+
+    let error = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("store")
+        .delete_secret(&SecretDeleteRequest::irreversible(
+            "prod/notify/webhook-token",
+            "prod/notify/webhook-token",
+        ))
+        .expect_err("a secret is never deleted without recovery");
+    assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+
+    let error = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("store")
+        .restore_secret("/app/prod/db/host")
+        .expect_err("a parameter cannot be restored");
+    assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+    assert!(
+        connection
+            .secret_store(FAKE_SECRETS_STORE_ID)
+            .expect("store")
+            .describe("prod/notify/webhook-token")
+            .is_ok()
+    );
+}

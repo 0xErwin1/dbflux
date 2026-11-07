@@ -93,10 +93,11 @@ pub use connection::root_section::{
     RootSectionPage, RootSectionPresentation, RootSectionSource,
 };
 pub use connection::secret_store::{
-    SecretDetails, SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest,
-    SecretRollback, SecretRollbackRequest, SecretRotation, SecretStoreCapabilities,
-    SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag, SecretValue,
-    SecretVersionInfo, SecretVersionStage,
+    DEFAULT_RECOVERY_WINDOW_DAYS, MAX_RECOVERY_WINDOW_DAYS, MIN_RECOVERY_WINDOW_DAYS,
+    SecretDeleteRequest, SecretDeletion, SecretDetails, SecretListPage, SecretListRequest,
+    SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest, SecretRotation,
+    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
+    SecretValue, SecretVersionInfo, SecretVersionStage,
 };
 
 pub use connection::dump_analysis::{
