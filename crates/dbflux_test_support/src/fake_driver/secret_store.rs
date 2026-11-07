@@ -347,6 +347,11 @@ impl FakeSecretStore {
             FakeSecretPayload::for_write(&request.payload),
         ));
         if request.stage == Some(SecretVersionStage::Pending) {
+            // The service moves a staging label: only the newest pending
+            // version holds `AWSPENDING`.
+            for entry in secret.history.iter_mut() {
+                entry.labels.retain(|label| label != "AWSPENDING");
+            }
             secret
                 .history
                 .insert(0, written_version(&version, vec!["AWSPENDING".to_string()]));

@@ -550,7 +550,8 @@ pub(crate) fn rotation_schedule(rules: &RotationRulesType) -> Option<String> {
 /// The history rows of `ListSecretVersionIds` entries, newest first by
 /// `CreatedDate`. An entry without a creation date sorts last, and one
 /// without a version id cannot be selected, so it is dropped. The sort is
-/// stable, so the service's order breaks ties.
+/// stable, so versions with equal dates keep the order the service returned
+/// them in, which AWS does not specify.
 pub(crate) fn versions_from_entries(entries: &[SecretVersionsListEntry]) -> Vec<SecretVersionInfo> {
     let mut versions: Vec<SecretVersionInfo> = entries
         .iter()

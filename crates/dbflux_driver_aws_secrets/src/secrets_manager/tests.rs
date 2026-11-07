@@ -316,3 +316,14 @@ fn an_entry_without_a_version_id_is_dropped() {
 
     assert!(versions_from_entries(&[entry]).is_empty());
 }
+
+#[test]
+fn tied_creation_dates_keep_the_service_order() {
+    let versions = versions_from_entries(&[
+        version_entry("v-first", &["AWSPREVIOUS"], Some(1_000)),
+        version_entry("v-second", &["AWSCURRENT"], Some(1_000)),
+    ]);
+
+    let ids: Vec<&str> = versions.iter().map(|version| version.id.as_str()).collect();
+    assert_eq!(ids, ["v-first", "v-second"]);
+}

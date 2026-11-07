@@ -824,3 +824,29 @@ fn a_pending_write_updates_the_details_and_the_history_but_not_the_current_versi
         .expect("the staged version is readable by id");
     assert_eq!(exposed_text(&staged), "staged value");
 }
+
+#[test]
+fn a_second_pending_write_moves_the_pending_label() {
+    let (_driver, connection) = connected();
+    let secrets = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake secrets store exists");
+
+    for value in ["first staged", "second staged"] {
+        let mut request = SecretPutRequest::text("prod/api/credentials", value);
+        request.stage = Some(dbflux_core::SecretVersionStage::Pending);
+        secrets.put_value(&request).expect("a staged write");
+    }
+
+    let versions = secrets
+        .list_versions("prod/api/credentials")
+        .expect("versions");
+    let holders: Vec<&str> = versions
+        .iter()
+        .filter(|version| version.labels.iter().any(|label| label == "AWSPENDING"))
+        .map(|version| version.id.as_str())
+        .collect();
+
+    assert_eq!(holders, ["v-written-2"]);
+    assert_eq!(versions.len(), 5);
+}

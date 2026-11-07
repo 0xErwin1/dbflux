@@ -317,8 +317,7 @@ fn secrets_manager_describe_reports_metadata_tags_and_versions() -> Result<(), D
 
 #[test]
 #[ignore = "requires Docker daemon"]
-fn secrets_manager_lists_versions_newest_first_and_each_id_fetches_its_value() -> Result<(), DbError>
-{
+fn secrets_manager_lists_versions_by_label_and_each_id_fetches_its_value() -> Result<(), DbError> {
     containers::with_localstack_secrets_endpoint(|endpoint| {
         let seeder = Seeder::new(&endpoint);
         let first = seeder.secret_string("history", "first");
@@ -329,14 +328,28 @@ fn secrets_manager_lists_versions_newest_first_and_each_id_fetches_its_value() -
 
         let versions = secrets.list_versions("history")?;
 
-        let ids: Vec<&str> = versions.iter().map(|version| version.id.as_str()).collect();
-        assert_eq!(ids, [second.as_str(), first.as_str()]);
-        assert_eq!(versions[0].labels, ["AWSCURRENT"]);
-        assert_eq!(versions[1].labels, ["AWSPREVIOUS"]);
+        // LocalStack stores `CreatedDate` at whole seconds and lists oldest
+        // first, so two back-to-back writes tie and the order is not
+        // assertable here; versions are identified by label instead.
+        let by_label = |label: &str| {
+            versions
+                .iter()
+                .find(|version| version.labels.iter().any(|candidate| candidate == label))
+                .map(|version| version.id.as_str())
+        };
+        assert_eq!(versions.len(), 2);
+        assert_eq!(by_label("AWSCURRENT"), Some(second.as_str()));
+        assert_eq!(by_label("AWSPREVIOUS"), Some(first.as_str()));
         assert!(versions.iter().all(|version| version.created.is_some()));
+        assert!(
+            versions
+                .windows(2)
+                .all(|pair| pair[0].created >= pair[1].created)
+        );
 
-        for (version, expected) in versions.iter().zip(["second", "first"]) {
-            let value = secrets.get_value("history", Some(&version.id))?;
+        for (label, expected) in [("AWSCURRENT", "second"), ("AWSPREVIOUS", "first")] {
+            let id = by_label(label).expect("a labeled version");
+            let value = secrets.get_value("history", Some(id))?;
             assert_eq!(text(&value), expected);
         }
 
@@ -629,7 +642,9 @@ fn parameter_store_lists_history_newest_first_and_each_id_fetches_its_value() ->
             assert_eq!(text(&value), expected);
         }
 
-        assert!(!format!("{versions:?}").contains("second"));
+        let rendered = format!("{versions:?}");
+        assert!(!rendered.contains("first"));
+        assert!(!rendered.contains("second"));
 
         Ok(())
     })
