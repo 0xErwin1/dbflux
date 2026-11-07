@@ -20,6 +20,7 @@ use dbflux_core::{SecretDetails, SecretRotation, SecretStoreCapabilities, Secret
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::input::Textarea;
 use gpui_component::scroll::{ScrollableElement, Scrollbar};
 
 /// Lines the multi-line viewer keeps visible before it scrolls, so the
@@ -462,6 +463,13 @@ impl SecretStoreDocument {
     fn render_value_loaded(&self, value: &RetrievedValue, cx: &mut Context<Self>) -> Div {
         let mut body = div().flex().flex_col().gap(SecretStoreMetrics::ROW_GAP);
 
+        // The open editor replaces the value's presentation: the stored text
+        // in an editable surface, with Save and Discard, drawn inside the
+        // redaction boundary the multi-line viewer uses.
+        if self.is_editing_value() {
+            return self.render_value_editor(cx);
+        }
+
         body = match &value.content {
             ValueContent::KeyValue { .. } => body.child(self.render_value_view_switch(value, cx)),
             ValueContent::Plaintext(_) => body.child(
@@ -666,6 +674,99 @@ impl SecretStoreDocument {
             .gap(DocumentMetrics::GAP)
             .child(reveal_all)
             .child(copy_all)
+            .when(self.can_edit_value(), |actions| {
+                actions.child(
+                    Button::new(
+                        "secret-value-edit",
+                        dbflux_i18n::t!("document.secret_store.edit.open"),
+                    )
+                    .icon(AppIcon::Pencil)
+                    .tab_stop(false)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.start_value_edit(window, cx);
+                    })),
+                )
+            })
+    }
+
+    /// The editor of a plaintext value: the stored text in a multi-line
+    /// editor, a hint, and Save and Discard. The editor element itself is
+    /// marked redacted — rendered-frame observers withhold its text and its
+    /// accesskit node carries no value — and its container is also hidden
+    /// from the accessibility tree, so neither the accessibility tree nor
+    /// the rendered frame holds any of the text; the buttons sit outside the
+    /// hidden boundary, because their labels carry no value.
+    fn render_value_editor(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let foreground = theme.foreground;
+        let fill = theme.popover;
+        let border = theme.border;
+
+        let Some(edit) = &self.value_edit else {
+            return div();
+        };
+
+        let unchanged = !edit.is_changed(cx);
+        let saving = edit.saving;
+        let editor = edit.editor.clone();
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(SecretStoreMetrics::ROW_GAP)
+            .child(
+                div()
+                    .relative()
+                    .px(DocumentMetrics::DETAIL_BLOCK_PADDING_X)
+                    .py(DocumentMetrics::DETAIL_BLOCK_PADDING_Y)
+                    .font_family(fonts::editor_family(cx))
+                    .text_size(DocumentMetrics::DETAIL_BLOCK_FONT)
+                    .line_height(relative(DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT))
+                    .text_color(foreground)
+                    .child(Chamfer::new(ChamferCut::INPUT).fill(fill).border(border))
+                    .child(
+                        div()
+                            .id("secret-value-editor")
+                            .aria_hidden(true)
+                            .frame_redacted(true)
+                            .child(
+                                Textarea::new(&editor)
+                                    .redacted(true)
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .w_full(),
+                            ),
+                    ),
+            )
+            .child(
+                Text::caption(dbflux_i18n::t!("document.secret_store.edit.hint"))
+                    .muted_foreground(),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(DocumentMetrics::GAP)
+                    .child(
+                        Button::new(
+                            "secret-value-editor-discard",
+                            dbflux_i18n::t!("document.secret_store.edit.discard"),
+                        )
+                        .tab_stop(false)
+                        .disabled(saving)
+                        .on_click(cx.listener(|this, _, _, cx| this.discard_value_edit(cx))),
+                    )
+                    .child(
+                        Button::new(
+                            "secret-value-editor-save",
+                            dbflux_i18n::t!("document.secret_store.edit.save"),
+                        )
+                        .primary()
+                        .tab_stop(false)
+                        .disabled(unchanged || saving)
+                        .on_click(cx.listener(|this, _, _, cx| this.save_value_edit(cx))),
+                    ),
+            )
     }
 }
 

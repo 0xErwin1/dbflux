@@ -79,7 +79,7 @@ impl SecretStoreDocument {
                         kind: DocumentKind::SecretStore,
                         title: d.title(),
                         icon: DocumentIcon::SecretStore,
-                        state: d.state(),
+                        state: d.state(cx),
                         closable: true,
                         connection_id: d.connection_id(),
                     }
@@ -105,8 +105,13 @@ impl SecretStoreDocument {
                 let e = entity.clone();
                 Box::new(move |cx| e.read(cx).active_context())
             },
-            // change_summary — the document never holds unsaved changes
-            Box::new(|_cx| None),
+            // change_summary — the open editor holds unsaved value edits
+            // while it differs from the stored text, and the tab's dirty dot
+            // and the close prompt read it from here.
+            {
+                let e = entity.clone();
+                Box::new(move |cx| e.read(cx).unsaved_change_summary(cx))
+            },
             // refresh_policy
             {
                 let e = entity.clone();
