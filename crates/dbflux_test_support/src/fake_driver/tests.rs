@@ -701,6 +701,166 @@ fn an_overwrite_keeps_an_existing_decrypt_denial() {
     }
 }
 
+fn version_ids(versions: &[dbflux_core::SecretVersionInfo]) -> Vec<&str> {
+    versions.iter().map(|version| version.id.as_str()).collect()
+}
+
+#[test]
+fn the_flat_store_lists_versions_newest_first_with_staging_labels() {
+    let (driver, connection) = connected();
+    let secrets = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake secrets store exists");
+
+    let versions = secrets
+        .list_versions("prod/api/credentials")
+        .expect("the fake flat store lists versions");
+
+    assert_eq!(
+        version_ids(&versions),
+        ["v-current", "v-previous", "v-oldest"]
+    );
+    assert_eq!(versions[0].labels, ["AWSCURRENT"]);
+    assert_eq!(versions[1].labels, ["AWSPREVIOUS"]);
+    assert!(versions[2].labels.is_empty());
+    assert!(
+        versions
+            .windows(2)
+            .all(|pair| pair[0].created > pair[1].created)
+    );
+
+    let details = secrets
+        .describe("prod/api/credentials")
+        .expect("the secret is described");
+    assert_eq!(details.version_count, Some(3));
+    assert_eq!(details.version_labels, ["AWSCURRENT", "AWSPREVIOUS"]);
+
+    assert_eq!(
+        driver.secret_store_calls().version_listings,
+        [(
+            FAKE_SECRETS_STORE_ID.to_string(),
+            "prod/api/credentials".to_string()
+        )]
+    );
+}
+
+#[test]
+fn every_listed_version_id_fetches_its_own_value() {
+    let (_driver, connection) = connected();
+    let secrets = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake secrets store exists");
+
+    for version in secrets
+        .list_versions("prod/api/credentials")
+        .expect("versions")
+    {
+        let value = secrets
+            .get_value("prod/api/credentials", Some(&version.id))
+            .expect("a listed id is a selector get_value accepts");
+        assert_eq!(value.version.as_deref(), Some(version.id.as_str()));
+
+        let seeded = match version.id.as_str() {
+            "v-current" => FAKE_SECRET_PASSWORD,
+            "v-previous" => "fake-previous-2b8d",
+            "v-oldest" => "fake-oldest-90e1",
+            other => panic!("unexpected version {other}"),
+        };
+        assert!(exposed_text(&value).contains(seeded), "{}", version.id);
+    }
+}
+
+#[test]
+fn the_hierarchical_store_lists_numbered_versions_with_their_author() {
+    let (_driver, connection) = connected();
+    let parameters = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    let versions = parameters
+        .list_versions("/app/prod/db/host")
+        .expect("the fake parameter store lists history");
+
+    assert_eq!(version_ids(&versions), ["3", "2", "1"]);
+    assert!(
+        versions
+            .iter()
+            .all(|version| version.modified_by.is_some() && version.created.is_some())
+    );
+}
+
+#[test]
+fn a_write_adds_the_new_version_at_the_top_of_the_history() {
+    let (_driver, connection) = connected();
+    let secrets = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake secrets store exists");
+
+    secrets
+        .put_value(&SecretPutRequest::text("prod/api/credentials", "rotated"))
+        .expect("write");
+
+    let versions = secrets
+        .list_versions("prod/api/credentials")
+        .expect("versions");
+    assert_eq!(
+        version_ids(&versions),
+        ["v-written-1", "v-current", "v-previous", "v-oldest"]
+    );
+    assert_eq!(versions[0].labels, ["AWSCURRENT"]);
+    assert_eq!(versions[1].labels, ["AWSPREVIOUS"]);
+    assert!(versions[2].labels.is_empty());
+}
+
+#[test]
+fn listing_the_versions_of_a_missing_secret_is_not_found() {
+    let (_driver, connection) = connected();
+    let secrets = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake secrets store exists");
+
+    assert!(matches!(
+        secrets.list_versions("prod/nope"),
+        Err(dbflux_core::DbError::ObjectNotFound(_))
+    ));
+}
+
+#[test]
+fn a_pending_write_updates_the_details_and_the_history_but_not_the_current_version() {
+    let (_driver, connection) = connected();
+    let secrets = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake secrets store exists");
+
+    let mut request = SecretPutRequest::text("prod/api/credentials", "staged value");
+    request.stage = Some(dbflux_core::SecretVersionStage::Pending);
+    secrets.put_value(&request).expect("a staged write");
+
+    let details = secrets.describe("prod/api/credentials").expect("describe");
+    let versions = secrets
+        .list_versions("prod/api/credentials")
+        .expect("versions");
+
+    assert_eq!(details.summary.version.as_deref(), Some("v-current"));
+    assert_eq!(details.version_count, Some(4));
+    assert_eq!(
+        details.version_labels,
+        ["AWSCURRENT", "AWSPENDING", "AWSPREVIOUS"]
+    );
+    assert_eq!(
+        usize::try_from(details.version_count.unwrap_or(0)),
+        Ok(versions.len())
+    );
+    assert_eq!(versions[0].id, "v-written-1");
+    assert_eq!(versions[0].labels, ["AWSPENDING"]);
+    assert_eq!(versions[1].labels, ["AWSCURRENT"]);
+
+    let staged = secrets
+        .get_value("prod/api/credentials", Some("v-written-1"))
+        .expect("the staged version is readable by id");
+    assert_eq!(exposed_text(&staged), "staged value");
+}
+
 #[test]
 fn a_filtered_path_listing_only_includes_branches_with_a_matching_descendant() {
     let (_driver, connection) = connected();
@@ -732,4 +892,30 @@ fn a_page_token_at_the_end_of_the_index_range_is_an_error_not_an_overflow() {
     });
 
     assert!(matches!(result, Err(DbError::QueryFailed(_))));
+}
+
+#[test]
+fn a_second_pending_write_moves_the_pending_label() {
+    let (_driver, connection) = connected();
+    let secrets = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake secrets store exists");
+
+    for value in ["first staged", "second staged"] {
+        let mut request = SecretPutRequest::text("prod/api/credentials", value);
+        request.stage = Some(dbflux_core::SecretVersionStage::Pending);
+        secrets.put_value(&request).expect("a staged write");
+    }
+
+    let versions = secrets
+        .list_versions("prod/api/credentials")
+        .expect("versions");
+    let holders: Vec<&str> = versions
+        .iter()
+        .filter(|version| version.labels.iter().any(|label| label == "AWSPENDING"))
+        .map(|version| version.id.as_str())
+        .collect();
+
+    assert_eq!(holders, ["v-written-2"]);
+    assert_eq!(versions.len(), 5);
 }

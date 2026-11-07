@@ -95,7 +95,7 @@ pub use connection::root_section::{
 pub use connection::secret_store::{
     SecretDetails, SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest,
     SecretRotation, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
-    SecretSummary, SecretTag, SecretValue, SecretVersionStage,
+    SecretSummary, SecretTag, SecretValue, SecretVersionInfo, SecretVersionStage,
 };
 
 pub use connection::dump_analysis::{

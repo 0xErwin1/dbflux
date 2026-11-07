@@ -3,14 +3,15 @@ use std::collections::HashMap;
 use aws_sdk_secretsmanager::Client;
 use aws_sdk_secretsmanager::primitives::Blob;
 use aws_sdk_secretsmanager::types::{
-    Filter, FilterNameStringType, RotationRulesType, SecretListEntry, Tag,
+    Filter, FilterNameStringType, RotationRulesType, SecretListEntry, SecretVersionsListEntry, Tag,
 };
 use aws_smithy_types::DateTime as SmithyDateTime;
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
     DbError, FormattedError, SecretDetails, SecretListPage, SecretListRequest, SecretPayload,
     SecretPutRequest, SecretRotation, SecretStoreCapabilities, SecretStoreDescriptor,
-    SecretStoreSource, SecretSummary, SecretTag, SecretValue, SecretVersionStage,
+    SecretStoreSource, SecretSummary, SecretTag, SecretValue, SecretVersionInfo,
+    SecretVersionStage,
 };
 
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
@@ -338,6 +339,29 @@ impl SecretStoreSource for SecretsManagerStore {
         })
     }
 
+    /// `ListSecretVersionIds` with deprecated versions included, because a
+    /// version with no staging label is still a version of the secret. Every
+    /// page is followed, and the metadata is mapped page by page.
+    fn list_versions(&self, name: &str) -> Result<Vec<SecretVersionInfo>, DbError> {
+        list_versions_on_pages(|token| {
+            let output = runtime()
+                .block_on(
+                    self.client
+                        .list_secret_version_ids()
+                        .secret_id(name)
+                        .include_deprecated(true)
+                        .set_next_token(token)
+                        .send(),
+                )
+                .map_err(|error| self.operation_error(&error, Some(name)))?;
+
+            Ok((
+                output.versions().to_vec(),
+                output.next_token().map(ToString::to_string),
+            ))
+        })
+    }
+
     /// One `PutSecretValue` call with the new payload, after the checks the
     /// service does not make.
     ///
@@ -514,6 +538,52 @@ pub(crate) fn rotation_schedule(rules: &RotationRulesType) -> Option<String> {
     rules
         .automatically_after_days()
         .map(|days| format!("rate({days} days)"))
+}
+
+/// Walks every page of a `ListSecretVersionIds` listing. The fetcher sends
+/// one page: it receives the token to ask with (`None` for the first page)
+/// and answers with that page's entries and the next token, or `None` when
+/// the listing ended.
+pub(crate) fn list_versions_on_pages<F>(
+    mut fetch_page: F,
+) -> Result<Vec<SecretVersionInfo>, DbError>
+where
+    F: FnMut(Option<String>) -> Result<(Vec<SecretVersionsListEntry>, Option<String>), DbError>,
+{
+    let mut entries = Vec::new();
+    let mut token = None;
+
+    loop {
+        let (page, next_token) = fetch_page(token)?;
+        entries.extend(page);
+
+        match next_token {
+            Some(next) => token = Some(next),
+            None => return Ok(versions_from_entries(&entries)),
+        }
+    }
+}
+
+/// The history rows of `ListSecretVersionIds` entries, newest first by
+/// `CreatedDate`. An entry without a creation date sorts last, and one
+/// without a version id cannot be selected, so it is dropped. The sort is
+/// stable, so versions with equal dates keep the order the service returned
+/// them in, which AWS does not specify.
+pub(crate) fn versions_from_entries(entries: &[SecretVersionsListEntry]) -> Vec<SecretVersionInfo> {
+    let mut versions: Vec<SecretVersionInfo> = entries
+        .iter()
+        .filter_map(|entry| {
+            Some(SecretVersionInfo {
+                id: entry.version_id()?.to_string(),
+                labels: entry.version_stages().to_vec(),
+                created: entry.created_date().and_then(smithy_datetime_to_chrono),
+                modified_by: None,
+            })
+        })
+        .collect();
+
+    versions.sort_by_key(|version| std::cmp::Reverse(version.created));
+    versions
 }
 
 fn current_version(versions: &HashMap<String, Vec<String>>) -> Option<String> {
