@@ -15,19 +15,23 @@ pub(crate) struct LineChanges {
     /// part of the baseline.
     pub(crate) marked: Vec<bool>,
 
-    /// Baseline lines the edit no longer holds.
-    pub(crate) removed: usize,
+    /// Changed lines, counted per block of consecutive differences: a
+    /// replaced line counts once, and so does a deleted one, which has no
+    /// line left to mark. Separate blocks add up.
+    changed: usize,
 }
 
 impl LineChanges {
-    /// The number of lines the footer reports: a replaced line counts once,
-    /// and so does a deleted one, which has no line left to mark.
+    /// A text with `lines` lines and nothing changed.
+    pub(crate) fn unchanged(lines: usize) -> Self {
+        Self {
+            marked: vec![false; lines],
+            changed: 0,
+        }
+    }
+
     pub(crate) fn changed(&self) -> usize {
-        self.marked
-            .iter()
-            .filter(|marked| **marked)
-            .count()
-            .max(self.removed)
+        self.changed
     }
 }
 
@@ -64,31 +68,44 @@ pub(crate) fn changed_lines(baseline: &str, text: &str) -> LineChanges {
         .copied()
         .collect();
 
-    let kept = if old_middle.len() * new_middle.len() <= MAX_TABLE_CELLS {
+    let pairs = if old_middle.len() * new_middle.len() <= MAX_TABLE_CELLS {
         shared_lines(&old_middle, &new_middle)
     } else {
         positional(&old_middle, &new_middle)
     };
 
-    let mut marked = vec![false; new.len()];
+    let mut marked = vec![true; new.len()];
 
-    for (offset, line_kept) in kept.iter().enumerate() {
-        if let Some(slot) = marked.get_mut(prefix + offset) {
-            *slot = !line_kept;
+    for (index, slot) in marked.iter_mut().enumerate() {
+        if index < prefix || index >= new.len() - suffix {
+            *slot = false;
         }
     }
 
-    let kept_count = kept.iter().filter(|kept| **kept).count();
-
-    LineChanges {
-        marked,
-        removed: old_middle.len().saturating_sub(kept_count),
+    for (_, new_index) in &pairs {
+        if let Some(slot) = marked.get_mut(prefix + new_index) {
+            *slot = false;
+        }
     }
+
+    let mut changed = 0;
+    let (mut next_old, mut next_new) = (0, 0);
+
+    for (old_index, new_index) in pairs
+        .iter()
+        .copied()
+        .chain([(old_middle.len(), new_middle.len())])
+    {
+        changed += (old_index - next_old).max(new_index - next_new);
+        next_old = old_index + 1;
+        next_new = new_index + 1;
+    }
+
+    LineChanges { marked, changed }
 }
 
-/// For each line of `new`, whether it belongs to the longest common
-/// subsequence with `old`.
-fn shared_lines(old: &[&str], new: &[&str]) -> Vec<bool> {
+/// The `(old, new)` index pairs of the longest common subsequence.
+fn shared_lines(old: &[&str], new: &[&str]) -> Vec<(usize, usize)> {
     let width = new.len() + 1;
     let mut table = vec![0u32; (old.len() + 1) * width];
     let cell = |table: &[u32], row: usize, column: usize| {
@@ -109,14 +126,12 @@ fn shared_lines(old: &[&str], new: &[&str]) -> Vec<bool> {
         }
     }
 
-    let mut kept = vec![false; new.len()];
+    let mut pairs = Vec::new();
     let (mut row, mut column) = (0, 0);
 
     while let (Some(old_line), Some(new_line)) = (old.get(row), new.get(column)) {
         if old_line == new_line {
-            if let Some(slot) = kept.get_mut(column) {
-                *slot = true;
-            }
+            pairs.push((row, column));
             row += 1;
             column += 1;
         } else if cell(&table, row + 1, column) >= cell(&table, row, column + 1) {
@@ -126,13 +141,14 @@ fn shared_lines(old: &[&str], new: &[&str]) -> Vec<bool> {
         }
     }
 
-    kept
+    pairs
 }
 
-fn positional(old: &[&str], new: &[&str]) -> Vec<bool> {
+fn positional(old: &[&str], new: &[&str]) -> Vec<(usize, usize)> {
     new.iter()
         .enumerate()
-        .map(|(index, line)| old.get(index) == Some(line))
+        .filter(|(index, line)| old.get(*index) == Some(line))
+        .map(|(index, _)| (index, index))
         .collect()
 }
 
@@ -173,6 +189,20 @@ mod tests {
         let changes = changed_lines("a\nb\nc", "a\nc");
         assert_eq!(changes.marked, vec![false, false]);
         assert_eq!(changes.changed(), 1);
+    }
+
+    #[test]
+    fn separated_edits_count_independently() {
+        let changes = changed_lines("drop\nkeep\nstay", "keep\nstay\nadd");
+        assert_eq!(changes.changed(), 2);
+        assert_eq!(changes.marked, vec![false, false, true]);
+    }
+
+    #[test]
+    fn a_replacement_inside_a_block_counts_once() {
+        assert_eq!(changed_lines("a\nb\nc\nd", "a\nX\nY\nd").changed(), 2);
+        assert_eq!(changed_lines("a\nb\nc\nd", "a\nX\nd").changed(), 2);
+        assert_eq!(changed_lines("a\nb\nc\nd", "a\nX\nc\nY").changed(), 2);
     }
 
     #[test]

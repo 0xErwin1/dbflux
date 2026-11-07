@@ -4119,7 +4119,7 @@ mod editor_layout {
                 .expect("the element is rendered")
         }
 
-        fn dirty(&mut self) -> bool {
+        pub(super) fn dirty(&mut self) -> bool {
             let doc = self.doc.clone();
             self.window
                 .update(|_, cx| doc.read(cx).has_unsaved_value_edits(cx))
@@ -4177,9 +4177,12 @@ mod editor_layout {
             .join("\n");
         opened.show_value(&text);
         opened.start_edit();
-        assert_eq!(opened.gutter_lines(), 40);
+        assert!(
+            opened.gutter_lines() < 40,
+            "only the visible rows are drawn"
+        );
 
-        let first = opened.element_bounds("secret-value-editor-line-0").origin.y;
+        let first = opened.element_bounds("secret-value-editor-line-3").origin.y;
         let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
         opened.window.update(|_, cx| {
             editor.update(cx, |state, cx| {
@@ -4188,7 +4191,7 @@ mod editor_layout {
         });
         opened.window.run_until_parked();
 
-        let scrolled = opened.element_bounds("secret-value-editor-line-0").origin.y;
+        let scrolled = opened.element_bounds("secret-value-editor-line-3").origin.y;
         assert!(scrolled < first, "{first:?} then {scrolled:?}");
     }
 
@@ -4439,7 +4442,7 @@ mod editor_chrome {
                 .any(|path| path.ends_with(suffix))
         }
 
-        fn footer_text(&mut self) -> String {
+        pub(super) fn footer_text(&mut self) -> String {
             let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
             let frame = capture.frame(self.window);
 
@@ -5073,5 +5076,262 @@ mod editor_key_value {
             assert!(!text.contains("fake-password-7f3a"), "{mode:?}: {text}");
             assert!(!text.contains("api-user"), "{mode:?}: {text}");
         }
+    }
+}
+
+// -- Value editor: review findings ------------------------------------------
+
+mod editor_review {
+    use super::*;
+    use crate::keyboard_test_support::host_document;
+    use crate::secret_store::editor::EditMode;
+    use dbflux_app::keymap::ContextId;
+
+    /// The document hosted the way the workspace hosts it: the key context
+    /// comes from the document and every keymap command is routed to it, so
+    /// a test presses real keys.
+    fn open_hosted<'a>(cx: &'a mut TestAppContext) -> Opened<'a> {
+        init_keyboard_runtime(cx);
+
+        let driver = FakeDriver::new(DbKind::AwsSecrets);
+        let (app_state, profile_id) = connected_app_state(cx, &driver, "prod-aws");
+        cx.update(|cx| {
+            cx.set_global(AppStateGlobal {
+                entity: app_state.clone(),
+            });
+        });
+
+        let state = app_state.clone();
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| {
+                    SecretStoreDocument::new(
+                        profile_id,
+                        FAKE_SECRETS_STORE_ID.to_string(),
+                        None,
+                        state,
+                        window,
+                        cx,
+                    )
+                })
+            },
+            |doc, _| doc.active_context(),
+            |doc, command, window, cx| doc.dispatch_command(command, window, cx),
+        );
+        let doc = window.update(|_, cx| host.read(cx).document.clone());
+        window.update(|window, _| window.activate_window());
+        window.run_until_parked();
+
+        Opened {
+            doc,
+            window,
+            driver,
+            app_state,
+        }
+    }
+
+    fn save_chord() -> &'static str {
+        if cfg!(target_os = "macos") {
+            "cmd-s"
+        } else {
+            "ctrl-s"
+        }
+    }
+
+    fn start(opened: &mut Opened<'_>, stored: &str, edited: &str) {
+        opened.select(PLAINTEXT_SECRET);
+        opened.show_value(stored);
+        opened.start_edit();
+        opened.set_editor_text(edited);
+        opened.rendered_paths();
+    }
+
+    fn exists(opened: &mut Opened<'_>, suffix: &str) -> bool {
+        opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.ends_with(suffix))
+    }
+
+    fn count_with(opened: &mut Opened<'_>, needle: &str) -> usize {
+        opened
+            .rendered_paths()
+            .iter()
+            .filter(|path| path.contains(needle))
+            .count()
+    }
+
+    fn open_find(opened: &mut Opened<'_>) {
+        let doc = opened.doc.clone();
+        opened
+            .window
+            .update(|window, cx| doc.update(cx, |doc, cx| doc.find_in_value(window, cx)));
+        opened.window.run_until_parked();
+        opened.rendered_paths();
+    }
+
+    /// The real chord, through the window's key dispatch to the focused
+    /// textarea, reaches the store.
+    #[gpui::test]
+    fn the_save_chord_typed_into_the_textarea_writes(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        start(&mut opened, "stored text", "typed text");
+
+        opened.window.simulate_keystrokes(save_chord());
+        opened.window.run_until_parked();
+
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), "typed text".to_string())]
+        );
+    }
+
+    /// Focus inside the Find input is still the editor: the context stays
+    /// the text input's and the chord still saves.
+    #[gpui::test]
+    fn the_save_chord_typed_into_find_still_writes(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        start(&mut opened, "stored text", "typed text");
+
+        open_find(&mut opened);
+        assert_eq!(
+            opened.read(|doc| doc.active_context()),
+            ContextId::TextInput,
+            "focus moved to the Find input"
+        );
+
+        opened.window.simulate_keystrokes(save_chord());
+        opened.window.run_until_parked();
+
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), "typed text".to_string())]
+        );
+    }
+
+    /// While the editor holds the keyboard, the search command opens the
+    /// value's Find, not the secret-name search.
+    #[gpui::test]
+    fn focus_search_in_the_editor_opens_the_value_find(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        start(&mut opened, "stored text", "typed text");
+        let before = opened.rendered_paths().len();
+
+        assert!(opened.command(Command::FocusSearch));
+        opened.rendered_paths();
+
+        assert!(
+            !opened.read(|doc| doc.focus_mode == crate::secret_store::SecretFocusMode::Search),
+            "the secret-name search did not take the key"
+        );
+        assert!(opened.rendered_paths().len() > before, "Find panel drawn");
+        assert_eq!(
+            opened.read(|doc| doc.active_context()),
+            ContextId::TextInput
+        );
+    }
+
+    /// Indentation Formatted added is not a saveable change: no chip, no
+    /// marker, no changed-line count, and Save stays off.
+    #[gpui::test]
+    fn formatted_only_whitespace_is_not_modified(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        opened.select(PLAINTEXT_SECRET);
+        opened.show_value("[1,2]");
+        opened.start_edit();
+        opened.set_editor_text("[ 1 , 2 ]");
+        opened.rendered_paths();
+
+        assert!(!exists(&mut opened, "secret-value-editor-modified"));
+        assert_eq!(count_with(&mut opened, "-marker"), 0);
+        assert!(!opened.dirty());
+
+        // In Raw mode the same text is a change.
+        let doc = opened.doc.clone();
+        opened.window.update(|window, cx| {
+            doc.update(cx, |doc, cx| doc.set_edit_mode(EditMode::Raw, window, cx))
+        });
+        opened.set_editor_text("[ 1 , 2 ]");
+        opened.rendered_paths();
+        assert!(exists(&mut opened, "secret-value-editor-modified"));
+    }
+
+    /// A long value draws a bounded number of gutter rows, however many
+    /// lines it has, and a change far below the viewport has no marker row.
+    #[gpui::test]
+    fn a_long_value_draws_only_the_visible_rows(cx: &mut TestAppContext) {
+        let lines: Vec<String> = (0..5000).map(|index| format!("line {index}")).collect();
+        let stored = lines.join("\n");
+        let mut edited = lines.clone();
+        edited[4000] = "changed".to_string();
+
+        let mut opened = open_hosted(cx);
+        start(&mut opened, &stored, &edited.join("\n"));
+
+        let rows = count_with(&mut opened, "secret-value-editor-line-");
+        assert!(rows > 0 && rows < 100, "{rows} gutter elements");
+        assert!(!exists(&mut opened, "secret-value-editor-line-4000-marker"));
+        assert!(exists(&mut opened, "secret-value-editor-line-0-number"));
+        assert!(
+            opened.footer_text().contains("1 line changed"),
+            "{}",
+            opened.footer_text()
+        );
+    }
+
+    /// The first frame, before the textarea has laid out, sizes gutter rows
+    /// with the height the textarea will use.
+    #[gpui::test]
+    fn the_fallback_line_height_is_the_textarea_line_height(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        start(&mut opened, "a\nb", "a\nb");
+
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let laid_out = opened
+            .window
+            .update(|_, cx| editor.read(cx).line_height())
+            .expect("the textarea has laid out");
+        let fallback = opened
+            .window
+            .update(|_, cx| crate::secret_store::editor::fallback_line_height(cx));
+
+        assert_eq!(fallback, laid_out);
+    }
+
+    /// The caret is where the test put it, in bytes, before the footer is
+    /// asked: a byte-offset footer would pass `ñ` and fail after the emoji.
+    #[gpui::test]
+    fn the_caret_is_verified_by_byte_offset(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        start(&mut opened, "x", "ñ😀x");
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+
+        for (character, bytes, column) in
+            [(1u32, 2usize, "Col 2"), (2, 6, "Col 3"), (3, 7, "Col 4")]
+        {
+            opened.window.update(|window, cx| {
+                editor.update(cx, |state, cx| {
+                    state.set_cursor_position(lsp_types::Position::new(0, character), window, cx)
+                });
+            });
+            opened.window.run_until_parked();
+            opened.rendered_paths();
+
+            let offset = opened.window.update(|_, cx| editor.read(cx).cursor());
+            assert_eq!(offset, bytes, "caret byte offset");
+            assert!(opened.footer_text().contains(column), "{column}");
+        }
+    }
+
+    /// The Formatted hint describes what Save does for both stored layouts.
+    #[gpui::test]
+    fn the_formatted_hint_describes_both_layouts(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        start(&mut opened, "[1,2]", "[1,3]");
+
+        let text = opened.rendered_text();
+        assert!(text.contains("on one line back on one line"), "{text}");
+        assert!(text.contains("several lines as it is here"), "{text}");
     }
 }

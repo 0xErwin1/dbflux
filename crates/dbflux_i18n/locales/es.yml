@@ -3574,7 +3574,7 @@ document:
         changed_one: "1 línea modificada"
         changed_other: "%{count} líneas modificadas"
         caret: "Ln %{line}, Col %{column}"
-      hint_formatted: "Guardar escribe una versión nueva y la hace la actual. Formateado restaura el diseño almacenado al guardar; Sin formato guarda el texto exactamente como está aquí."
+      hint_formatted: "Guardar escribe una versión nueva y la hace la actual. Formateado guarda de nuevo en una sola línea un valor almacenado en una línea, y un valor almacenado en varias líneas tal como está aquí; Sin formato guarda el texto exactamente como está aquí."
       mode:
         formatted: "Formateado"
         raw: "Sin formato"

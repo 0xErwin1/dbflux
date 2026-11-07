@@ -101,6 +101,15 @@ fn parses_as_json(text: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(text).is_ok()
 }
 
+/// The height a gutter row takes before the textarea has laid out.
+pub(super) fn fallback_line_height(cx: &App) -> gpui::Pixels {
+    (dbflux_components::fonts::ui_px(
+        cx,
+        dbflux_components::tokens::DocumentMetrics::DETAIL_BLOCK_FONT,
+    ) * dbflux_components::tokens::DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT)
+        .round()
+}
+
 /// The open editor of the loaded plaintext value.
 pub(crate) struct ValueEditState {
     /// The stored text the editor opened with: the unchanged check and the
@@ -130,6 +139,10 @@ pub(crate) struct ValueEditState {
     /// focus-in and focus-out events. Save's chord resolves in the
     /// text-input context only while this is true.
     pub(super) focused: bool,
+
+    /// Wraps the textarea and its Find panel, so focus inside either one is
+    /// focus inside the editor.
+    pub(super) focus: gpui::FocusHandle,
     _focus_subscriptions: [Subscription; 2],
 
     /// The connection session the value was read from. A save names this
@@ -363,7 +376,7 @@ impl SecretStoreDocument {
         // Whether the editor holds the keyboard follows its focus handle,
         // so a click or a focus move that edits nothing still changes the
         // context the document reports.
-        let handle = gpui::Focusable::focus_handle(editor.read(cx), cx);
+        let handle = cx.focus_handle();
         let focus_in = cx.on_focus_in(&handle, window, |this, _, cx| {
             if let Some(edit) = &mut this.value_edit {
                 edit.focused = true;
@@ -384,6 +397,7 @@ impl SecretStoreDocument {
             saving: false,
             mode,
             focused: true,
+            focus: handle,
             _observer: observer,
             _focus_subscriptions: [focus_in, focus_out],
             connection,

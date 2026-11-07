@@ -1036,6 +1036,9 @@ impl SecretStoreDocument {
                 self.start_value_edit(window, cx);
             }
             Command::RefreshSchema => self.refresh(cx),
+            Command::FocusSearch if self.value_edit.as_ref().is_some_and(|edit| edit.focused) => {
+                self.find_in_value(window, cx)
+            }
             Command::FocusSearch | Command::FocusToolbar => self.focus_search(window, cx),
             Command::Cancel => {
                 self.focus_mode = SecretFocusMode::Table;

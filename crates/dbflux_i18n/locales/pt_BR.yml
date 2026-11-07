@@ -3574,7 +3574,7 @@ document:
         changed_one: "1 linha alterada"
         changed_other: "%{count} linhas alteradas"
         caret: "Ln %{line}, Col %{column}"
-      hint_formatted: "Salvar grava uma nova versão e a torna a atual. Formatado restaura o layout armazenado ao salvar; Bruto salva o texto exatamente como está aqui."
+      hint_formatted: "Salvar grava uma nova versão e a torna a atual. Formatado grava de volta em uma única linha um valor armazenado em uma linha, e um valor armazenado em várias linhas como está aqui; Bruto salva o texto exatamente como está aqui."
       mode:
         formatted: "Formatado"
         raw: "Bruto"

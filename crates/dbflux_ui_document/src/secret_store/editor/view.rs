@@ -25,6 +25,7 @@ use super::{EditMode, ValueEditState};
 use crate::buckets_table::format_bytes;
 use crate::object_text::{FIND_SHORTCUT_HINT, keycap_text};
 use crate::secret_store::details::VIEWER_GUTTER_WIDTH;
+use crate::secret_store::details::VIEWER_VISIBLE_LINES;
 use crate::secret_store::{SecretStoreDocument, ValueState};
 
 /// Width of the change-marker bar beside a gutter number.
@@ -54,7 +55,14 @@ impl SecretStoreDocument {
 
         let editor = edit.editor.clone();
         let text = editor.read(cx).value().to_string();
-        let changes = changed_lines(&edit.baseline_for_mode(), &text);
+        let line_count = text.split('\n').count();
+        // The chip, the markers and the count follow what Save would write,
+        // so indentation Formatted added is not a change.
+        let changes = if edit.is_changed(cx) {
+            changed_lines(&edit.baseline_for_mode(), &text)
+        } else {
+            LineChanges::unchanged(line_count)
+        };
         let write_size = edit.text_to_write(&text).len();
         let hint_key = match self.edit_mode() {
             Some(EditMode::Formatted) => "document.secret_store.edit.hint_formatted",
@@ -65,20 +73,20 @@ impl SecretStoreDocument {
             .flex()
             .flex_col()
             .gap(SecretStoreMetrics::ROW_GAP)
-            .child(self.render_editor_header(&changes, cx))
+            .child(self.render_editor_header(cx))
             .child(self.render_editor_body(&editor, &changes, cx))
             .child(self.render_editor_footer(&editor, &changes, write_size, cx))
             .child(Text::caption(dbflux_i18n::t!(hint_key)).muted_foreground())
     }
 
-    fn render_editor_header(&self, changes: &LineChanges, cx: &mut Context<Self>) -> Div {
+    fn render_editor_header(&self, cx: &mut Context<Self>) -> Div {
         let Some(edit) = &self.value_edit else {
             return div();
         };
 
         let unchanged = !edit.is_changed(cx);
         let saving = edit.saving;
-        let modified = changes.changed() > 0 || !unchanged;
+        let modified = !unchanged;
         let toggle = self
             .edit_mode()
             .map(|mode| self.render_edit_mode_toggle(mode, saving, cx));
@@ -200,24 +208,46 @@ impl SecretStoreDocument {
         let state = editor.read(cx);
         let line_count = changes.marked.len().max(1);
         let offset = state.scroll_offset().y;
-        let line_height = state.line_height().unwrap_or_else(|| {
-            fonts::ui_px(cx, DocumentMetrics::DETAIL_BLOCK_FONT)
-                * DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT
-        });
+        let line_height = state
+            .line_height()
+            .unwrap_or_else(|| super::fallback_line_height(cx));
+        // Only the rows the viewport can show are drawn, however long the
+        // value is; the margin covers the frame the scroll lags behind.
+        let first_row = (-offset / line_height).floor().max(0.0) as usize;
+        let last_row = (first_row + VIEWER_VISIBLE_LINES as usize + 2).min(line_count);
+        let first_row = first_row.min(last_row);
+        let rows_top = offset + line_height * first_row as f32;
+        let focus = self.value_edit.as_ref().map(|edit| edit.focus.clone());
 
         let tint = div()
+            .id("secret-value-editor-tint")
             .absolute()
-            .top(offset)
+            .top_0()
             .left_0()
-            .w_full()
-            .flex()
-            .flex_col()
-            .children(changes.marked.iter().map(|marked| {
+            .size_full()
+            .overflow_hidden()
+            .child(
                 div()
-                    .h(line_height)
+                    .absolute()
+                    .top(rows_top)
+                    .left_0()
                     .w_full()
-                    .when(*marked, |row| row.bg(warning.opacity(TINT_OPACITY)))
-            }));
+                    .flex()
+                    .flex_col()
+                    .children(
+                        changes
+                            .marked
+                            .iter()
+                            .skip(first_row)
+                            .take(last_row - first_row)
+                            .map(|marked| {
+                                div()
+                                    .h(line_height)
+                                    .w_full()
+                                    .when(*marked, |row| row.bg(warning.opacity(TINT_OPACITY)))
+                            }),
+                    ),
+            );
 
         let gutter = div()
             .id("secret-value-editor-gutter")
@@ -229,11 +259,11 @@ impl SecretStoreDocument {
             .child(
                 div()
                     .absolute()
-                    .top(offset)
+                    .top(rows_top)
                     .left_0()
                     .flex()
                     .flex_col()
-                    .children((0..line_count).map(|index| {
+                    .children((first_row..last_row).map(|index| {
                         let marked = changes.marked.get(index).copied().unwrap_or(false);
 
                         div()
@@ -294,21 +324,27 @@ impl SecretStoreDocument {
             .text_color(foreground)
             .child(Chamfer::new(ChamferCut::INPUT).fill(fill).border(border))
             .child(
-                div().relative().flex().child(tint).child(gutter).child(
-                    div()
-                        .id("secret-value-editor")
-                        .flex_1()
-                        .min_w_0()
-                        .aria_hidden(true)
-                        .frame_redacted(true)
-                        .child(
-                            Textarea::new(editor)
-                                .redacted(true)
-                                .appearance(false)
-                                .bordered(false)
-                                .w_full(),
-                        ),
-                ),
+                div()
+                    .relative()
+                    .flex()
+                    .when_some(focus, |block, focus| block.track_focus(&focus))
+                    .child(tint)
+                    .child(gutter)
+                    .child(
+                        div()
+                            .id("secret-value-editor")
+                            .flex_1()
+                            .min_w_0()
+                            .aria_hidden(true)
+                            .frame_redacted(true)
+                            .child(
+                                Textarea::new(editor)
+                                    .redacted(true)
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .w_full(),
+                            ),
+                    ),
             )
     }
 
