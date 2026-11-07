@@ -295,10 +295,6 @@ impl SecretStoreDocument {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            if let Err(error) = &result {
-                report_error_async(db_error_to_user_facing(error), cx);
-            }
-
             cx.update(|cx| {
                 entity.update(cx, |doc, cx| {
                     doc.apply_versions(generation, &name, result, cx)
@@ -334,7 +330,12 @@ impl SecretStoreDocument {
 
         self.versions = match result {
             Ok(versions) => VersionsState::Loaded(versions),
-            Err(error) => VersionsState::Failed(error.to_string()),
+            Err(error) => {
+                // First catch site, and only for a failure that still
+                // applies: a superseded request fails silently above.
+                report_error(db_error_to_user_facing(&error), cx);
+                VersionsState::Failed(error.to_string())
+            }
         };
         cx.notify();
     }
@@ -351,14 +352,18 @@ impl SecretStoreDocument {
     }
 
     /// Lists the selected secret's history again when the connection it was
-    /// listed from is gone. Independent of the unsaved-edit guard: the
+    /// listed from is gone, or when a connection returned after the history
+    /// had none to be listed from. Independent of the unsaved-edit guard: the
     /// history carries no edit, and stale ids must never be retrievable.
     pub(crate) fn adopt_connection_session(&mut self, cx: &mut Context<Self>) {
         let Some(SecretRowKey::Secret(name)) = self.selected.clone() else {
             return;
         };
 
-        if self.versions_session.is_none() || self.history_session_is_live(cx) {
+        if matches!(self.versions, VersionsState::NotSupported)
+            || self.history_session_is_live(cx)
+            || (self.versions_session.is_none() && self.connection(cx).is_none())
+        {
             return;
         }
 
@@ -367,20 +372,26 @@ impl SecretStoreDocument {
     }
 
     /// The version the store serves as the selected secret's current value:
-    /// the describe's, else the one the history marks current, else the
-    /// listing's.
+    /// the describe's, else the one the history marks current. Nothing is
+    /// inferred: without either, no version is known to be current.
     pub(crate) fn current_version_id(&self) -> Option<&str> {
         let described = match &self.details {
             DetailsState::Loaded(details) => details.summary.version.as_deref(),
             _ => None,
         };
 
-        described
-            .or_else(|| self.history_current_version())
-            .or_else(|| {
-                self.selected_summary()
-                    .and_then(|summary| summary.version.as_deref())
-            })
+        described.or_else(|| self.history_current_version())
+    }
+
+    /// The retrieved version id when the store's latest information says it
+    /// is no longer (or never was) the current one, evaluated on every call
+    /// so a rotation that lands later turns a once-current value into an
+    /// older one.
+    pub(crate) fn shown_older_version(&self) -> Option<&str> {
+        let shown = self.value_version.as_deref()?;
+        let current = self.current_version_id()?;
+
+        (shown != current).then_some(shown)
     }
 
     fn history_current_version(&self) -> Option<&str> {
@@ -424,7 +435,7 @@ impl SecretStoreDocument {
     /// Whether Back to current may run: a historical value is shown and no
     /// retrieval is in flight.
     pub fn can_return_to_current(&self) -> bool {
-        self.value_version.is_some() && !matches!(self.value, ValueState::Loading)
+        self.shown_older_version().is_some() && !matches!(self.value, ValueState::Loading)
     }
 
     /// Replaces a historical value with the current one.
@@ -443,8 +454,8 @@ impl SecretStoreDocument {
 
     /// Retrieves `version` of the selected secret, the current value when
     /// `None`. One path for both, so every retrieval is audited the same way.
-    /// The pane marks the value as historical only when `version` is not the
-    /// one it knows as current.
+    /// The retrieved id is kept; whether it reads as an older value is decided
+    /// against the latest current-version information when it is drawn.
     pub(crate) fn retrieve_version(&mut self, version: Option<String>, cx: &mut Context<Self>) {
         if !self.can_retrieve_value() {
             return;
@@ -459,12 +470,8 @@ impl SecretStoreDocument {
             return;
         };
 
-        let shown_version = version
-            .clone()
-            .filter(|version| !self.is_current_version(version));
-
         self.clear_value();
-        self.value_version = shown_version;
+        self.value_version = version.clone();
         let generation = self.value_generation;
         self.value = ValueState::Loading;
         cx.notify();

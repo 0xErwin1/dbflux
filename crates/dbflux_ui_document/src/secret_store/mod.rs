@@ -982,7 +982,12 @@ impl SecretStoreDocument {
                     .enabled(self.can_retrieve_value()),
                 );
             }
+        }
 
+        // Registered whatever the history is doing: the banner's button is
+        // drawn from the value, not from the history, so it needs its
+        // keyboard path even while the history loads or fails.
+        if self.store.supports(SecretStoreCapabilities::VERSIONS) {
             actions.push(
                 callback_action(
                     &target,

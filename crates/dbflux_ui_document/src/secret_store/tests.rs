@@ -4475,10 +4475,10 @@ fn activating_an_older_version_retrieves_exactly_that_version(cx: &mut TestAppCo
     );
 }
 
-/// The current version's row retrieves the current value without a banner,
-/// but the request names the row's own id: the current version can rotate
-/// between the listing and the click, and `None` would then read the new
-/// current value under the old row.
+/// The current version's row names its own id, because the current version
+/// can rotate between the listing and the click. Once the pane learns of the
+/// rotation, the old payload on screen is an older value: it shows its
+/// version and the way back, and Back to current reads the new current one.
 #[gpui::test]
 fn activating_the_current_version_retrieves_the_current_value(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
@@ -4502,10 +4502,96 @@ fn activating_the_current_version_retrieves_the_current_value(cx: &mut TestAppCo
     );
     assert_eq!(
         opened.read(|doc| doc.value_version().map(str::to_string)),
-        None,
-        "the pane still knows the row as current"
+        Some("v-current".to_string()),
+        "the retrieved version id is kept"
     );
+    assert!(
+        !opened.rendered_text().contains("Back to current"),
+        "as far as the pane knows the row is still current"
+    );
+
+    opened.update(|doc, cx| {
+        doc.describe(KEY_VALUE_SECRET.to_string(), cx);
+        doc.load_versions(KEY_VALUE_SECRET.to_string(), cx);
+    });
+
+    let text = opened.rendered_text();
+    assert!(text.contains("Showing version v-current"), "{text}");
+    assert!(text.contains("Back to current"), "{text}");
+    assert!(opened.read(|doc| doc.can_return_to_current()));
+    assert_eq!(
+        opened.shown_password().as_deref(),
+        Some(FAKE_SECRET_PASSWORD)
+    );
+
+    opened.update(|doc, cx| doc.back_to_current_version(cx));
+    assert!(opened.read(|doc| doc.value_version().is_none()));
     assert!(!opened.rendered_text().contains("Back to current"));
+}
+
+/// Without a rotation, the current version's row shows no older-value banner.
+#[gpui::test]
+fn the_current_row_shows_no_older_value_banner(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+
+    opened.update(|doc, cx| doc.activate_version(0, cx));
+
+    let text = opened.rendered_text();
+    assert!(!text.contains("Showing version"), "{text}");
+    assert!(!text.contains("Back to current"), "{text}");
+    assert!(!opened.read(|doc| doc.can_return_to_current()));
+}
+
+/// A describe that lands late with another version id neither moves the
+/// highlight nor drops the banner of the version that was retrieved.
+#[gpui::test]
+fn a_late_describe_does_not_change_the_version_shown(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| doc.activate_version(1, cx));
+
+    let mut details = opened.read(|doc| match doc.details() {
+        DetailsState::Loaded(details) => (**details).clone(),
+        other => panic!("{other:?}"),
+    });
+    details.summary.version = Some("v-oldest".to_string());
+    let generation = opened.read(|doc| doc.details_generation);
+    opened.update(|doc, cx| doc.apply_details(generation, KEY_VALUE_SECRET, Ok(details), 0, cx));
+
+    assert_eq!(
+        opened.read(|doc| doc.value_version().map(str::to_string)),
+        Some("v-previous".to_string())
+    );
+    let text = opened.rendered_text();
+    assert!(text.contains("Showing version v-previous"), "{text}");
+    assert_eq!(opened.shown_password().as_deref(), Some(PREVIOUS_PASSWORD));
+}
+
+/// Only the store's own markers name the current version: with neither a
+/// described version nor a flagged history row there is none, whatever the
+/// listing or the first row says.
+#[gpui::test]
+fn the_current_version_is_never_guessed(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+
+    opened.update(|doc, _cx| {
+        doc.details = DetailsState::Loading;
+        for entry in &mut doc.listing.entries {
+            entry.version = Some("listing-version".to_string());
+        }
+        if let VersionsState::Loaded(versions) = &mut doc.versions {
+            for version in versions.iter_mut() {
+                version.is_current = false;
+            }
+        }
+    });
+
+    assert_eq!(
+        opened.read(|doc| doc.current_version_id().map(str::to_string)),
+        None
+    );
 }
 
 /// Back to current is one action: it retrieves the current value, drops the
@@ -5156,4 +5242,111 @@ fn a_history_response_of_a_replaced_session_is_dropped(cx: &mut TestAppContext) 
             .contains(&"old-session-version".to_string())
     );
     assert_eq!(replacement.secret_store_calls().version_listings.len(), 1);
+}
+
+/// A history failure is reported where it lands, after the checks that tell
+/// whether it still matters: the current request's failure is reported once,
+/// a superseded request's failure is not reported at all.
+#[gpui::test]
+fn a_history_failure_is_reported_only_when_it_applies(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    let stale = opened.read(|doc| doc.versions_generation).wrapping_sub(1);
+    let current = opened.read(|doc| doc.versions_generation);
+
+    opened.update(|doc, cx| {
+        doc.apply_versions(
+            stale,
+            KEY_VALUE_SECRET,
+            Err(DbError::query_failed("stale")),
+            cx,
+        );
+    });
+    assert!(opened.reported_errors().is_empty());
+
+    opened.update(|doc, cx| {
+        doc.apply_versions(
+            current,
+            KEY_VALUE_SECRET,
+            Err(DbError::query_failed("denied")),
+            cx,
+        );
+    });
+    assert_eq!(opened.reported_errors().len(), 1);
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+}
+
+/// The real load of a refused history reports it once, not twice.
+#[gpui::test]
+fn a_refused_history_is_reported_once(cx: &mut TestAppContext) {
+    let driver = FakeDriver::new(DbKind::AwsSecrets)
+        .with_secret_versions_error(KEY_VALUE_SECRET, "not authorized");
+    let mut opened = open_with(cx, driver, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+
+    assert_eq!(opened.reported_errors().len(), 1);
+}
+
+/// A connection that went away and came back (here with a new session)
+/// retries the selected secret's history instead of staying failed.
+#[gpui::test]
+fn the_history_is_retried_when_the_connection_returns(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    let profile_id = opened.read(|doc| doc.profile_id);
+    let app_state = opened.app_state.clone();
+    let removed = opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id))
+    });
+    opened.announce_state_change();
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+
+    let replacement_driver = FakeDriver::new(DbKind::AwsSecrets);
+    let mut connected = removed.expect("was connected");
+    connected.connection = replacement_driver
+        .connect_arc(&connected.profile)
+        .expect("connect");
+    opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| {
+            state.connections_mut().insert(profile_id, connected);
+        });
+    });
+    opened.announce_state_change();
+
+    assert_eq!(
+        replacement_driver
+            .secret_store_calls()
+            .version_listings
+            .len(),
+        1
+    );
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Loaded(_))));
+
+    opened.announce_state_change();
+    assert_eq!(
+        replacement_driver
+            .secret_store_calls()
+            .version_listings
+            .len(),
+        1,
+        "a live session is not reloaded"
+    );
+}
+
+/// Back to current stays in the pane actions whatever the history is doing,
+/// enabled by the same rule as the banner button.
+#[gpui::test]
+fn back_to_current_stays_a_pane_action_while_the_history_loads_or_fails(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| doc.activate_version(1, cx));
+
+    for state in [
+        VersionsState::Loading,
+        VersionsState::Failed("history refused".to_string()),
+    ] {
+        opened.update(|doc, _cx| doc.versions = state);
+        let action = opened.pane_action("secret-version-current");
+        assert!(action.enabled, "a historical value is shown");
+    }
 }

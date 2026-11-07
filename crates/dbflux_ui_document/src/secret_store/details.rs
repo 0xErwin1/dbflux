@@ -567,9 +567,10 @@ impl SecretStoreDocument {
             .flex_col()
             .gap(SecretStoreMetrics::ROW_GAP)
             .child(header)
-            .when_some(self.value_version.clone(), |section, version| {
-                section.child(self.render_version_banner(version, cx))
-            })
+            .when_some(
+                self.shown_older_version().map(str::to_string),
+                |section, version| section.child(self.render_version_banner(version, cx)),
+            )
             .child(body)
     }
 
