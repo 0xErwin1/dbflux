@@ -28,6 +28,10 @@ pub(crate) struct SharedDuckDb {
     interrupt: Arc<duckdb::InterruptHandle>,
     key: String,
     settings: InstanceSettings,
+    /// The catalog the instance's first connection was left in by its startup
+    /// SQL. A cloned connection starts in the default catalog instead, so
+    /// clones switch to this one.
+    startup_catalog: Option<String>,
 }
 
 impl SharedDuckDb {
@@ -35,13 +39,19 @@ impl SharedDuckDb {
         connection: duckdb::Connection,
         key: String,
         settings: InstanceSettings,
+        startup_catalog: Option<String>,
     ) -> Self {
         Self {
             interrupt: connection.interrupt_handle(),
             connection: Mutex::new(connection),
             key,
             settings,
+            startup_catalog,
         }
+    }
+
+    pub(crate) fn startup_catalog(&self) -> Option<String> {
+        self.startup_catalog.clone()
     }
 
     pub(crate) fn key(&self) -> &str {
@@ -59,9 +69,14 @@ impl SharedDuckDb {
     }
 
     pub(crate) fn try_clone(&self) -> Result<duckdb::Connection, DbError> {
-        self.lock()?
-            .try_clone()
-            .map_err(|error| DbError::connection_failed(format_duckdb_error(&error)))
+        let failed = |error: duckdb::Error| DbError::connection_failed(format_duckdb_error(&error));
+        let clone = self.lock()?.try_clone().map_err(failed)?;
+        if let Some(catalog) = &self.startup_catalog {
+            clone
+                .execute_batch(&format!("USE {}", DUCKDB_DIALECT.quote_identifier(catalog)))
+                .map_err(failed)?;
+        }
+        Ok(clone)
     }
 }
 

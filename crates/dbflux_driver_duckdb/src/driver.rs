@@ -318,18 +318,29 @@ fn shared_instance(
         .map_err(|_| DbError::connection_failed("DuckDB instance registry poisoned"))?;
     entries.retain(|entry| entry.strong_count() > 0);
 
-    let raw = match entries.iter().find_map(Weak::upgrade) {
+    let (raw, startup_catalog) = match entries.iter().find_map(Weak::upgrade) {
         Some(existing) if existing.settings() != settings => {
             return Err(DbError::connection_failed(
                 "This DuckDB database is already open with different DuckLake or Init SQL \
                  settings. Disconnect the other connection to it first.",
             ));
         }
-        Some(existing) => existing.try_clone()?,
-        None => open_instance(path, settings)?,
+        Some(existing) => (existing.try_clone()?, existing.startup_catalog()),
+        None => {
+            let raw = open_instance(path, settings)?;
+            let catalog = raw
+                .query_row("SELECT current_database()", [], |row| row.get(0))
+                .map_err(|error| DbError::connection_failed(format_duckdb_error(&error)))?;
+            (raw, Some(catalog))
+        }
     };
 
-    let shared = Arc::new(SharedDuckDb::new(raw, key.to_string(), settings.clone()));
+    let shared = Arc::new(SharedDuckDb::new(
+        raw,
+        key.to_string(),
+        settings.clone(),
+        startup_catalog,
+    ));
     entries.push(Arc::downgrade(&shared));
     Ok(shared)
 }
@@ -347,6 +358,7 @@ pub(crate) fn fork_instance(shared: &SharedDuckDb) -> Result<Arc<SharedDuckDb>, 
         shared.try_clone()?,
         shared.key().to_string(),
         shared.settings().clone(),
+        shared.startup_catalog(),
     ));
     entries.push(Arc::downgrade(&forked));
     Ok(forked)
@@ -547,6 +559,34 @@ mod tests {
             scalar(second.as_ref(), "SELECT count(*) FROM t"),
             Value::Int(1)
         );
+    }
+
+    #[test]
+    fn a_joining_connection_starts_in_the_catalog_init_sql_selected() {
+        let config = DbConfig::DuckDB {
+            path: PathBuf::new(),
+            ducklake_catalog: None,
+            ducklake_data_path: None,
+            init_sql: Some(
+                "ATTACH ':memory:' AS lake; USE lake; CREATE SCHEMA gold; \
+                 CREATE TABLE gold.t AS SELECT 1 AS id"
+                    .into(),
+            ),
+        };
+        let driver = DuckDbDriver::new();
+        let profile = profile(config);
+        let first = driver.connect(&profile).unwrap();
+        // A refresh reconnects while an editor session still holds the instance.
+        let session = first.execution_session_factory().unwrap().open().unwrap();
+        drop(first);
+        let second = driver.connect(&profile).unwrap();
+
+        assert_eq!(second.active_database().as_deref(), Some("lake"));
+        assert_eq!(
+            scalar(second.as_ref(), "SELECT count(*) FROM gold.t"),
+            Value::Int(1)
+        );
+        drop(session);
     }
 
     #[test]
