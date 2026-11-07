@@ -2366,6 +2366,10 @@ pub struct FakeSecretStoreCalls {
     pub list_requests: Vec<(String, SecretListRequest)>,
     pub described: Vec<(String, String)>,
     pub value_requests: Vec<(String, String)>,
+    /// Every `put_value` attempt, accepted or not, as `(store_id, name)`. A
+    /// refused write must not reach the store, so a test watches this list
+    /// and never the payload.
+    pub put_attempts: Vec<(String, String)>,
     /// Every `put_value` attempt, as `(store_id, request)`. The payload
     /// travels as the `secrecy` type `SecretPayload`, so it stays redacted in
     /// `Debug` output.
@@ -2623,6 +2627,10 @@ impl SecretStoreSource for FakeSecretStore {
     /// Only a write the modeled service accepted is recorded: a refused put
     /// never reaches the store, so `put_requests` lists delivered writes.
     fn put_value(&self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+        mutex_lock(&self.state.secret_store_calls)
+            .put_attempts
+            .push((self.descriptor.id.clone(), request.name.clone()));
+
         self.descriptor.ensure_can_write(&request.name)?;
 
         let write_error = rwlock_read(&self.state.secret_write_errors)

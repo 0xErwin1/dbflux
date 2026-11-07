@@ -17,12 +17,21 @@ mod pane;
 mod region;
 mod render;
 mod value;
+mod write;
+
+#[cfg(test)]
+mod write_probes;
 
 pub use listing::{PathMode, SecretListing};
 pub use region::RegionListState;
 pub use value::{
     RetrievalTarget, RetrievedValue, VALUE_RETRIEVE_FAILED_ACTION, VALUE_RETRIEVED_ACTION,
     ValueContent, ValueFailure, ValueState, ValueView, encode_base64, value_retrieval_event,
+};
+pub use write::{
+    SECRET_VALUE_WRITE_FAILED_ACTION, SECRET_VALUE_WRITE_REFUSED_ACTION,
+    SECRET_VALUE_WRITTEN_ACTION, SECRET_WRITE_CLASSIFICATION, SecretWriteOutcome, WriteTarget,
+    put_secret_value, secret_write_event,
 };
 
 use super::handle::DocumentEvent;

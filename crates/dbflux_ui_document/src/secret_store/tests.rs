@@ -6,14 +6,23 @@ use super::value::{
     MASK, RetrievalTarget, RetrievedValue, ValueContent, ValueFailure, encode_base64,
     value_retrieval_event,
 };
+use super::write::{
+    SECRET_VALUE_WRITE_FAILED_ACTION, SECRET_VALUE_WRITE_REFUSED_ACTION,
+    SECRET_VALUE_WRITTEN_ACTION, put_secret_value,
+};
 use super::{
     DetailsState, PathMode, SecretRowKey, SecretStoreDocument, VALUE_RETRIEVE_FAILED_ACTION,
     VALUE_RETRIEVED_ACTION, ValueState, ValueView,
 };
 use crate::keyboard_test_support::{connected_app_state, init_keyboard_runtime};
 use dbflux_app::keymap::Command;
-use dbflux_core::secrecy::ExposeSecret as _;
-use dbflux_core::{DbKind, SecretListPage, SecretSummary, SecretValue};
+use dbflux_core::observability::{EventCategory, EventRecord, EventSink, EventSinkError};
+use dbflux_core::secrecy::ExposeSecret;
+use dbflux_core::{
+    Connection, DbError, DbKind, FormattedError, MutationPolicy, ReadOnlyReason, SecretDetails,
+    SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest, SecretStoreCapabilities,
+    SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretValue, SecretVersionStage,
+};
 use dbflux_test_support::fake_driver::{
     FAKE_KMS_DENIED_MESSAGE, FAKE_PARAMETER_STORE_ID, FAKE_SECRET_BINARY, FAKE_SECRET_PASSWORD,
     FAKE_SECRET_PLAINTEXT, FAKE_SECRETS_STORE_ID, FakeDriver,
@@ -21,7 +30,8 @@ use dbflux_test_support::fake_driver::{
 use dbflux_ui_base::app_state_entity::AppStateGlobal;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 use super::RegionListState;
@@ -2358,5 +2368,643 @@ fn the_copy_actions_are_reachable_without_a_right_click(cx: &mut TestAppContext)
             .iter()
             .any(|id| id == "secret-copy-path"),
         "Copy path is not offered for a secret selection"
+    );
+}
+
+// -- Writing through the governance seam -------------------------------------
+
+/// The value the write tests submit. Every assertion that inspects an
+/// audit event or an error also checks that this text never shows up in it.
+const WRITTEN_VALUE: &str = "rotated-token-9d41";
+
+/// Version the fake flat store reports for the first write it accepts.
+const WRITTEN_VERSION: &str = "v-written-1";
+
+/// A store whose writes fail with an error that echoes the submitted value,
+/// the way a careless driver would leak it; the seam must keep the value out
+/// of the error and the audit trail anyway.
+struct EchoingStore {
+    descriptor: SecretStoreDescriptor,
+    put_calls: AtomicUsize,
+}
+
+impl EchoingStore {
+    fn new() -> Self {
+        Self {
+            descriptor: SecretStoreDescriptor::new("echo", "Echo", SecretStoreCapabilities::WRITE),
+            put_calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl SecretStoreSource for EchoingStore {
+    fn descriptor(&self) -> &SecretStoreDescriptor {
+        &self.descriptor
+    }
+
+    fn list(&self, _request: &SecretListRequest) -> Result<SecretListPage, DbError> {
+        Err(DbError::NotSupported(
+            "listing is not part of this test".to_string(),
+        ))
+    }
+
+    fn describe(&self, _name: &str) -> Result<SecretDetails, DbError> {
+        Err(DbError::NotSupported(
+            "describing is not part of this test".to_string(),
+        ))
+    }
+
+    fn get_value(&self, _name: &str, _version: Option<&str>) -> Result<SecretValue, DbError> {
+        Err(DbError::NotSupported(
+            "reading is not part of this test".to_string(),
+        ))
+    }
+
+    fn put_value(&self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+        self.put_calls.fetch_add(1, Ordering::Relaxed);
+
+        let leak = match &request.payload {
+            SecretPayload::Text(text) => text.expose_secret().to_owned(),
+            SecretPayload::Binary(bytes) => {
+                String::from_utf8_lossy(bytes.expose_secret()).into_owned()
+            }
+        };
+
+        Err(DbError::query_failed(format!(
+            "the service rejected the submitted value {leak} for {}",
+            request.name
+        )))
+    }
+}
+
+/// The simplest in-memory audit recorder: the events the seam hands it, in
+/// order.
+#[derive(Default)]
+struct RecordingSink(Mutex<Vec<EventRecord>>);
+
+impl RecordingSink {
+    fn events(&self) -> Vec<EventRecord> {
+        match self.0.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+}
+
+impl EventSink for RecordingSink {
+    fn record(&self, event: EventRecord) -> Result<EventRecord, EventSinkError> {
+        match self.0.lock() {
+            Ok(mut guard) => guard.push(event.clone()),
+            Err(poisoned) => poisoned.into_inner().push(event.clone()),
+        }
+
+        Ok(event)
+    }
+}
+
+/// Runs `request` through the seam against `store`, under the policy the
+/// caller resolved.
+#[allow(clippy::result_large_err)] // test helper mirrors the seam's signature
+fn write_through(
+    store: &dyn SecretStoreSource,
+    sink: &RecordingSink,
+    policy: MutationPolicy,
+    read_only_reason: Option<ReadOnlyReason>,
+    request: &SecretPutRequest,
+) -> Result<SecretValue, DbError> {
+    put_secret_value(
+        store,
+        Uuid::from_u128(11),
+        "aws_secrets",
+        policy,
+        read_only_reason,
+        sink,
+        request,
+    )
+}
+
+/// A store that accepts a write and reports the version back, the way a
+/// healthy store does.
+struct SucceedingStore {
+    descriptor: SecretStoreDescriptor,
+    put_calls: AtomicUsize,
+}
+
+impl SucceedingStore {
+    fn new() -> Self {
+        Self {
+            descriptor: SecretStoreDescriptor::new(
+                "succeed",
+                "Succeed",
+                SecretStoreCapabilities::WRITE,
+            ),
+            put_calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl SecretStoreSource for SucceedingStore {
+    fn descriptor(&self) -> &SecretStoreDescriptor {
+        &self.descriptor
+    }
+
+    fn list(&self, _request: &SecretListRequest) -> Result<SecretListPage, DbError> {
+        Err(DbError::NotSupported(
+            "listing is not part of this test".to_string(),
+        ))
+    }
+
+    fn describe(&self, _name: &str) -> Result<SecretDetails, DbError> {
+        Err(DbError::NotSupported(
+            "describing is not part of this test".to_string(),
+        ))
+    }
+
+    fn get_value(&self, _name: &str, _version: Option<&str>) -> Result<SecretValue, DbError> {
+        Err(DbError::NotSupported(
+            "reading is not part of this test".to_string(),
+        ))
+    }
+
+    fn put_value(&self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+        self.put_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(SecretValue {
+            version: Some(WRITTEN_VERSION.to_string()),
+            payload: request.payload.clone(),
+        })
+    }
+}
+
+/// Through the seam, an allowed write's audit event classifies the
+/// operation, names the new version and the store, validates against the
+/// audit schema, and carries neither the value nor a stage: a `Current`
+/// write is every store's default meaning.
+#[test]
+fn the_seam_classifies_a_write_and_audits_its_version_without_the_value() {
+    let store = SucceedingStore::new();
+    let sink = RecordingSink::default();
+    let request = SecretPutRequest::text(PLAINTEXT_SECRET, WRITTEN_VALUE);
+
+    let written = write_through(&store, &sink, MutationPolicy::Allowed, None, &request)
+        .expect("an allowed write succeeds");
+    assert_eq!(written.version.as_deref(), Some(WRITTEN_VERSION));
+    assert_eq!(store.put_calls.load(Ordering::Relaxed), 1);
+
+    let events = sink.events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    let event = &events[0];
+    assert_eq!(event.action, SECRET_VALUE_WRITTEN_ACTION);
+    assert_eq!(event.category, EventCategory::SecretStore);
+    assert_eq!(event.object_type.as_deref(), Some("succeed"));
+    assert_eq!(event.object_id.as_deref(), Some(PLAINTEXT_SECRET));
+    assert_eq!(event.connection_id, Some(Uuid::from_u128(11).to_string()));
+    assert_eq!(
+        event.correlation_id, None,
+        "a success carries no correlation id"
+    );
+
+    let details: serde_json::Value =
+        serde_json::from_str(event.details_json.as_deref().expect("details"))
+            .expect("details_json is valid JSON");
+    assert_eq!(
+        details,
+        serde_json::json!({ "classification": "write", "version": WRITTEN_VERSION })
+    );
+    dbflux_audit::AuditService::validate_event(event).expect("valid event");
+
+    let serialized = serde_json::to_string(event).expect("serialize event");
+    assert!(!serialized.contains(WRITTEN_VALUE), "{serialized}");
+}
+
+/// A staged write records its stage; a `Current` write to the same store
+/// records none, because a store without staging labels has no stage to
+/// name and the probe G6 shape keeps the event honest.
+#[test]
+fn a_write_records_a_stage_only_when_it_is_staged() {
+    let store = SucceedingStore::new();
+
+    let sink = RecordingSink::default();
+    let staged = SecretPutRequest::text(PLAINTEXT_SECRET, WRITTEN_VALUE)
+        .with_stage(SecretVersionStage::Pending);
+    write_through(&store, &sink, MutationPolicy::Allowed, None, &staged)
+        .expect("the staged write succeeds");
+
+    let events = sink.events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    let details: serde_json::Value =
+        serde_json::from_str(events[0].details_json.as_deref().expect("details"))
+            .expect("details_json is valid JSON");
+    assert_eq!(details["stage"], serde_json::json!("pending"));
+
+    let sink = RecordingSink::default();
+    let current = SecretPutRequest::text(PLAINTEXT_SECRET, WRITTEN_VALUE);
+    write_through(&store, &sink, MutationPolicy::Allowed, None, &current)
+        .expect("the current write succeeds");
+
+    let events = sink.events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    let details: serde_json::Value =
+        serde_json::from_str(events[0].details_json.as_deref().expect("details"))
+            .expect("details_json is valid JSON");
+    assert!(details.get("stage").is_none(), "{details}");
+}
+
+/// A failed write's audit event carries the correlation id the seam minted
+/// as the failure's first catch site, the way a retrieval failure does.
+#[test]
+fn a_failed_write_audits_with_a_correlation_id_like_a_retrieval_failure() {
+    let store = EchoingStore::new();
+    let sink = RecordingSink::default();
+    let request = SecretPutRequest::text(PLAINTEXT_SECRET, WRITTEN_VALUE);
+
+    write_through(&store, &sink, MutationPolicy::Allowed, None, &request)
+        .expect_err("the echoing store refuses its writes");
+
+    let events = sink.events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].action, SECRET_VALUE_WRITE_FAILED_ACTION);
+    assert!(events[0].correlation_id.is_some(), "{events:?}");
+}
+
+/// The stored-form text of a payload, as the careless drivers the failure
+/// tests simulate would echo it.
+fn payload_text(request: &SecretPutRequest) -> String {
+    match &request.payload {
+        SecretPayload::Text(text) => text.expose_secret().to_owned(),
+        SecretPayload::Binary(bytes) => String::from_utf8_lossy(bytes.expose_secret()).into_owned(),
+    }
+}
+
+/// The error a failure-shaped store's write returns, built from the
+/// request the seam handed it.
+type ErrorBehaviour = Box<dyn Fn(&SecretPutRequest) -> DbError + Send + Sync>;
+
+/// A store whose writes fail with an error the test builds, so every error
+/// shape the seam must scrub has a probe of its own.
+struct ErrorStore {
+    descriptor: SecretStoreDescriptor,
+    error: ErrorBehaviour,
+}
+
+impl Default for ErrorStore {
+    fn default() -> Self {
+        Self {
+            descriptor: SecretStoreDescriptor::new(
+                "errors",
+                "Errors",
+                SecretStoreCapabilities::WRITE,
+            ),
+            error: Box::new(|_| DbError::NotSupported("no behaviour configured".into())),
+        }
+    }
+}
+
+impl SecretStoreSource for ErrorStore {
+    fn descriptor(&self) -> &SecretStoreDescriptor {
+        &self.descriptor
+    }
+
+    fn list(&self, _request: &SecretListRequest) -> Result<SecretListPage, DbError> {
+        Err(DbError::NotSupported(
+            "listing is not part of this test".to_string(),
+        ))
+    }
+
+    fn describe(&self, _name: &str) -> Result<SecretDetails, DbError> {
+        Err(DbError::NotSupported(
+            "describing is not part of this test".to_string(),
+        ))
+    }
+
+    fn get_value(&self, _name: &str, _version: Option<&str>) -> Result<SecretValue, DbError> {
+        Err(DbError::NotSupported(
+            "reading is not part of this test".to_string(),
+        ))
+    }
+
+    fn put_value(&self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+        Err((self.error)(request))
+    }
+}
+
+/// Every message-carrying error shape is scrubbed of the submitted value:
+/// the fields a `FormattedError` renders (message, detail, hint, code and
+/// location), the plain `String` variants, and an `io::Error` message. A
+/// binary value is scrubbed in both forms a formatter may echo it in, its
+/// lossy UTF-8 rendering and its base64.
+#[test]
+fn every_failure_shape_is_scrubbed_of_the_value() {
+    let echoed: Vec<ErrorBehaviour> = vec![
+        Box::new(|request| {
+            let value = payload_text(request);
+            DbError::PermissionDenied(
+                FormattedError::new(format!("the service rejected the value {value}"))
+                    .with_detail(format!("value {value} was not accepted"))
+                    .with_hint(format!("check the value {value}"))
+                    .with_code(format!("AccessDenied:{value}"))
+                    .with_location(dbflux_core::ErrorLocation {
+                        schema: None,
+                        table: Some(format!("secrets_{value}")),
+                        column: Some(value.clone()),
+                        constraint: Some(format!("constraint_{value}")),
+                    }),
+            )
+        }),
+        Box::new(|request| {
+            DbError::NotSupported(format!(
+                "the store refused the write and echoed {}",
+                payload_text(request)
+            ))
+        }),
+        Box::new(|request| {
+            DbError::ValueResolutionFailed(format!(
+                "the resolver rejected the value {}",
+                payload_text(request)
+            ))
+        }),
+        Box::new(|request| {
+            DbError::IoError(std::io::Error::other(format!(
+                "socket write failed while carrying {}",
+                payload_text(request)
+            )))
+        }),
+    ];
+
+    for error in echoed {
+        let store = ErrorStore {
+            error,
+            ..ErrorStore::default()
+        };
+        let sink = RecordingSink::default();
+        let request = SecretPutRequest::text(PLAINTEXT_SECRET, WRITTEN_VALUE);
+
+        let surfaced = write_through(&store, &sink, MutationPolicy::Allowed, None, &request)
+            .expect_err("the injected failure surfaces");
+
+        let message = surfaced.to_string();
+        assert!(!message.contains(WRITTEN_VALUE), "{message}");
+        assert!(message.contains("[redacted]"), "{message}");
+
+        let events = sink.events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].action, SECRET_VALUE_WRITE_FAILED_ACTION);
+        assert!(
+            !events[0]
+                .error_message
+                .as_deref()
+                .unwrap_or_default()
+                .contains(WRITTEN_VALUE),
+            "audit error_message leaked: {:?}",
+            events[0].error_message
+        );
+    }
+
+    // A binary payload echoed in either derived form: lossy UTF-8 or base64.
+    let base64 = encode_base64(WRITTEN_VALUE.as_bytes());
+    for (form, needle) in [
+        ("lossy utf-8", WRITTEN_VALUE.to_string()),
+        ("base64", base64.clone()),
+    ] {
+        let store = ErrorStore {
+            error: Box::new(move |_| {
+                DbError::query_failed(format!("bad blob echoed as {form}: {needle}"))
+            }),
+            ..ErrorStore::default()
+        };
+        let sink = RecordingSink::default();
+        let request = SecretPutRequest::binary("prod/blob", WRITTEN_VALUE.as_bytes().to_vec());
+
+        let surfaced = write_through(&store, &sink, MutationPolicy::Allowed, None, &request)
+            .expect_err("the injected failure surfaces");
+
+        let message = surfaced.to_string();
+        assert!(!message.contains(WRITTEN_VALUE), "{form}: {message}");
+        assert!(!message.contains(&base64), "{form}: {message}");
+        assert!(message.contains("[redacted]"), "{form}: {message}");
+    }
+}
+
+/// A driver error that echoes the submitted value reaches neither the
+/// caller nor the audit trail with the value in it.
+#[test]
+fn a_driver_error_that_echoes_the_value_is_scrubbed() {
+    let store = EchoingStore::new();
+    let sink = RecordingSink::default();
+    let request = SecretPutRequest::text(PLAINTEXT_SECRET, WRITTEN_VALUE);
+
+    let error = write_through(&store, &sink, MutationPolicy::Allowed, None, &request)
+        .expect_err("the echoing store refuses its writes");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("rejected the submitted value"),
+        "the driver's message survives the scrub: {message}"
+    );
+    assert!(!message.contains(WRITTEN_VALUE), "{message}");
+
+    let events = sink.events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].action, SECRET_VALUE_WRITE_FAILED_ACTION);
+    assert!(!format!("{events:?}").contains(WRITTEN_VALUE), "{events:?}");
+}
+
+impl Opened<'_> {
+    /// Resolves the connected profile's mutation policy to `policy`, the
+    /// way the profile resolver does at connect time.
+    fn set_policy(&mut self, policy: MutationPolicy, read_only_reason: Option<ReadOnlyReason>) {
+        let doc = self.doc.clone();
+        let state = self.app_state.clone();
+        self.window.update(|_, cx| {
+            let profile_id = doc.read(cx).profile_id;
+            state.update(cx, |state, _| {
+                if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
+                    connected.mutation_policy = policy;
+                    connected.read_only_reason = read_only_reason;
+                }
+            });
+        });
+    }
+
+    /// Runs `request` through the governance seam with the connection's
+    /// resolved policy and the app's audit service, the way the editor will
+    /// call it.
+    #[allow(clippy::result_large_err)] // test helper mirrors the seam's signature
+    fn governed_write(&mut self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+        let doc = self.doc.clone();
+        let state = self.app_state.clone();
+        self.window.update(|_, cx| {
+            let profile_id = doc.read(cx).profile_id;
+            let store_id = doc.read(cx).store_id().to_string();
+
+            let (connection, policy, reason) = {
+                let connected = state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .expect("connected profile");
+                (
+                    Arc::clone(&connected.connection),
+                    connected.mutation_policy,
+                    connected.read_only_reason,
+                )
+            };
+
+            let audit = state.read(cx).audit_service();
+            let store = connection
+                .secret_store(&store_id)
+                .expect("the fake connection exposes the store");
+
+            put_secret_value(
+                store,
+                profile_id,
+                connection.metadata().id.as_str(),
+                policy,
+                reason,
+                audit,
+                request,
+            )
+        })
+    }
+}
+
+/// A read-only profile refuses the write through the seam before the store
+/// is called, records one refused audit event, and the refusal names the
+/// setting without the value.
+#[gpui::test]
+fn a_read_only_profile_refuses_the_write_before_it_reaches_the_driver(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.set_policy(
+        MutationPolicy::ReadOnly,
+        Some(ReadOnlyReason::ProfileSetting),
+    );
+
+    let request = SecretPutRequest::text(PLAINTEXT_SECRET, WRITTEN_VALUE);
+    let error = opened
+        .governed_write(&request)
+        .expect_err("a read-only profile refuses the write");
+
+    let message = error.to_string();
+    assert!(message.contains("read-only"), "{message}");
+    assert!(message.contains(PLAINTEXT_SECRET), "{message}");
+    assert!(!message.contains(WRITTEN_VALUE), "{message}");
+
+    let calls = opened.driver.secret_store_calls();
+    assert!(calls.put_attempts.is_empty(), "{calls:?}");
+    assert!(calls.put_requests.is_empty(), "{calls:?}");
+
+    let events = opened.audit_events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(
+        events[0].contains(SECRET_VALUE_WRITE_REFUSED_ACTION),
+        "{events:?}"
+    );
+    assert!(
+        events.iter().all(|event| !event.contains(WRITTEN_VALUE)),
+        "{events:?}"
+    );
+}
+
+/// An approval-required profile must not silently allow the write: the seam
+/// refuses it, records the refusal and never calls the store until an
+/// approval flow for secret writes exists.
+#[gpui::test]
+fn an_approval_required_profile_does_not_silently_allow_the_write(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.set_policy(MutationPolicy::ApprovalRequired, None);
+
+    let request = SecretPutRequest::text(PLAINTEXT_SECRET, WRITTEN_VALUE);
+    let error = opened
+        .governed_write(&request)
+        .expect_err("an approval-required profile refuses the write");
+
+    let message = error.to_string();
+    assert!(message.contains("approval"), "{message}");
+    assert!(message.contains(PLAINTEXT_SECRET), "{message}");
+    assert!(!message.contains(WRITTEN_VALUE), "{message}");
+
+    let calls = opened.driver.secret_store_calls();
+    assert!(calls.put_attempts.is_empty(), "{calls:?}");
+
+    let events = opened.audit_events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(
+        events[0].contains(SECRET_VALUE_WRITE_REFUSED_ACTION),
+        "{events:?}"
+    );
+}
+
+/// An allowed write reaches the store once, returns the new version, and
+/// records exactly one audit event that carries the version and not the
+/// value.
+#[gpui::test]
+fn an_allowed_write_reaches_the_store_once_and_audits_the_new_version_without_the_value(
+    cx: &mut TestAppContext,
+) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+
+    let request = SecretPutRequest::text(PLAINTEXT_SECRET, WRITTEN_VALUE);
+    let written = opened
+        .governed_write(&request)
+        .expect("an allowed write succeeds");
+    assert_eq!(written.version.as_deref(), Some(WRITTEN_VERSION));
+
+    let calls = opened.driver.secret_store_calls();
+    assert_eq!(calls.put_attempts.len(), 1, "{calls:?}");
+    assert_eq!(calls.put_requests.len(), 1, "{calls:?}");
+
+    let events = opened.audit_events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(
+        events[0].contains(SECRET_VALUE_WRITTEN_ACTION),
+        "{events:?}"
+    );
+    assert!(events[0].contains(WRITTEN_VERSION), "{events:?}");
+    assert!(
+        events.iter().all(|event| !event.contains(WRITTEN_VALUE)),
+        "{events:?}"
+    );
+}
+
+/// A write the store fails records the failure event and no success event,
+/// and the surfaced error carries the store's message without the value.
+#[gpui::test]
+fn a_failing_write_audits_the_failure_and_no_success_event(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.driver = opened
+        .driver
+        .clone()
+        .with_secret_write_error(PLAINTEXT_SECRET, "not authorized to put the secret");
+
+    let request = SecretPutRequest::text(PLAINTEXT_SECRET, WRITTEN_VALUE);
+    let error = opened
+        .governed_write(&request)
+        .expect_err("the injected write failure surfaces");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("not authorized to put the secret"),
+        "{message}"
+    );
+    assert!(!message.contains(WRITTEN_VALUE), "{message}");
+
+    let calls = opened.driver.secret_store_calls();
+    assert_eq!(calls.put_attempts.len(), 1, "{calls:?}");
+    assert!(calls.put_requests.is_empty(), "{calls:?}");
+
+    let events = opened.audit_events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(
+        events[0].contains(SECRET_VALUE_WRITE_FAILED_ACTION),
+        "{events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !event.contains(SECRET_VALUE_WRITTEN_ACTION)),
+        "{events:?}"
+    );
+    assert!(
+        events.iter().all(|event| !event.contains(WRITTEN_VALUE)),
+        "{events:?}"
     );
 }
