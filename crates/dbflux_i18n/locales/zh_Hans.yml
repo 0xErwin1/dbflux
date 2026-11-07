@@ -3554,6 +3554,13 @@ document:
       metadata_loaded: "元数据已加载 · 仅值获取失败"
       deletion_scheduled: "计划于 %{date} 删除"
       deletion_scheduled_body: "在恢复之前无法获取其值。"
+
+    edit:
+      open: "编辑值"
+      save: "保存为新版本"
+      discard: "放弃"
+      hint: "保存会写入一个新版本并将其设为当前版本。文本将按此处的内容原样保存。"
+      invalid_json: "存储的值是 JSON，而编辑后的文本不是有效的 JSON：%{error}"
 document_tree:
   search_placeholder: 搜索…
   view:

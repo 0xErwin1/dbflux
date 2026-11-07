@@ -3554,6 +3554,13 @@ document:
       metadata_loaded: "Metadados carregados · só o valor falhou"
       deletion_scheduled: "Exclusão agendada para %{date}"
       deletion_scheduled_body: "O valor não pode ser obtido até que seja restaurado."
+
+    edit:
+      open: "Editar valor"
+      save: "Salvar como nova versão"
+      discard: "Descartar"
+      hint: "Salvar grava uma nova versão e a torna atual. O texto é salvo exatamente como está aqui."
+      invalid_json: "O valor armazenado era JSON e o texto editado não é um JSON válido: %{error}"
 document_tree:
   search_placeholder: Buscar…
   view:

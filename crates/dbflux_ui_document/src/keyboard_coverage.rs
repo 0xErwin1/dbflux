@@ -716,6 +716,18 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
             "secret-value-reveal-*",
             KeyboardPath::Command(Command::ExpandCollapse),
         ),
+        // The editor of a plaintext value: Edit value opens it from the
+        // pane actions, Save and Discard are its own entries while it is
+        // open (Save also answers the SaveQuery command in the dispatch).
+        ("secret-value-edit", KeyboardPath::Menu("secret-edit-value")),
+        (
+            "secret-value-editor-save",
+            KeyboardPath::Menu("secret-editor-save"),
+        ),
+        (
+            "secret-value-editor-discard",
+            KeyboardPath::Menu("secret-editor-discard"),
+        ),
         (
             "secret-value-copy-*",
             KeyboardPath::MouseOnly(
@@ -729,6 +741,13 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
         (
             "secret-menu-retrieve-value-*",
             KeyboardPath::Command(Command::ToggleValuePanel),
+        ),
+        // The row menu's Edit value entry, dispatched to the editor the
+        // details pane opens; the pane action of the same id is its second
+        // keyboard path.
+        (
+            "secret-menu-edit-value-*",
+            KeyboardPath::Menu("secret-edit-value"),
         ),
         (
             "secret-menu-copy-name-*",

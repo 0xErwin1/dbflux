@@ -110,6 +110,13 @@ pub struct SecretWriteFailure {
     /// failure; a refusal, or an audit event the sink refused after a landed
     /// write, carries none, because no failure event was recorded.
     pub correlation_id: Option<Uuid>,
+
+    /// Whether a gate refused the write before the store was called — the
+    /// connection's resolved policy, or the store's own write capability.
+    /// A refusal is a decision; a store failure is not, even when its error
+    /// variant is one a refusal also uses. Carried beside the error so the
+    /// caller maps the report on the seam's verdict, never on the variant.
+    pub refused: bool,
 }
 
 impl std::fmt::Display for SecretWriteFailure {
@@ -170,6 +177,7 @@ pub fn put_secret_value(
         return Err(SecretWriteFailure {
             error: DbError::permission_denied(message),
             correlation_id: None,
+            refused: true,
         });
     }
 
@@ -186,6 +194,7 @@ pub fn put_secret_value(
         return Err(SecretWriteFailure {
             error,
             correlation_id: None,
+            refused: true,
         });
     }
 
@@ -211,6 +220,7 @@ pub fn put_secret_value(
                             request.name, descriptor.label, error
                         )),
                         correlation_id: None,
+                        refused: false,
                     })
                 }
             }
@@ -236,6 +246,7 @@ pub fn put_secret_value(
             Err(SecretWriteFailure {
                 error,
                 correlation_id,
+                refused: false,
             })
         }
     }

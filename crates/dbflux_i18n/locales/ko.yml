@@ -3554,6 +3554,13 @@ document:
       metadata_loaded: "메타데이터 불러옴 · 값만 실패"
       deletion_scheduled: "%{date}에 삭제 예정"
       deletion_scheduled_body: "복원될 때까지 값을 가져올 수 없습니다."
+
+    edit:
+      open: "값 편집"
+      save: "새 버전으로 저장"
+      discard: "취소"
+      hint: "저장하면 새 버전이 기록되고 현재 버전이 됩니다. 텍스트는 여기에 입력한 그대로 저장됩니다."
+      invalid_json: "저장된 값은 JSON이지만 편집한 텍스트가 올바른 JSON이 아닙니다: %{error}"
 document_tree:
   search_placeholder: 검색…
   view:

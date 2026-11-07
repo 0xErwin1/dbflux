@@ -841,7 +841,12 @@ fn masked_value_state(
 
 impl Render for SecretStoreDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_value_inputs(window, cx);
+        // The editor of an open edit replaces the value's fields, so the
+        // read-only inputs of the closed presentation are not rebuilt while
+        // it holds a second copy of the value.
+        if !self.is_editing_value() {
+            self.sync_value_inputs(window, cx);
+        }
 
         // A menu entry chosen by click is queued and runs here, which has
         // the window the actions' focus changes need.

@@ -67,6 +67,15 @@ fn open<'a>(cx: &'a mut TestAppContext, store_id: &str, path: Option<&str>) -> O
     let driver = FakeDriver::new(DbKind::AwsSecrets);
     let (app_state, profile_id) = connected_app_state(cx, &driver, "prod-aws");
 
+    // `report_error` reaches the error seam through the `AppStateGlobal`
+    // registration; without it a reported failure is invisible to these
+    // tests.
+    cx.update(|cx| {
+        cx.set_global(AppStateGlobal {
+            entity: app_state.clone(),
+        });
+    });
+
     let store_id = store_id.to_string();
     let path = path.map(str::to_string);
     let state = app_state.clone();
@@ -177,6 +186,31 @@ impl Opened<'_> {
 
     /// Every label, value, description and text of the rendered frame.
     fn rendered_text(&mut self) -> String {
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
+        let frame = capture.frame(self.window);
+
+        frame
+            .nodes()
+            .map(|(_, node)| {
+                let accessible = frame.accessibility_node(node);
+                [
+                    accessible.and_then(|node| node.label()).unwrap_or_default(),
+                    accessible.and_then(|node| node.value()).unwrap_or_default(),
+                    accessible
+                        .and_then(|node| node.description())
+                        .unwrap_or_default(),
+                    node.content_text(),
+                ]
+                .join(" | ")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The accessibility update the frame produces, read the way the
+    /// automation bridge reads it: every node of the update, hidden or not,
+    /// with its label, value, description and rendered text.
+    fn accessibility_update_text(&mut self) -> String {
         let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
         let frame = capture.frame(self.window);
 
@@ -1064,6 +1098,547 @@ fn a_single_line_plaintext_secret_keeps_its_single_line_field(cx: &mut TestAppCo
             .iter()
             .any(|path| path.contains("secret-value-viewer")),
         "{paths:?}"
+    );
+}
+
+// -- Value editor -----------------------------------------------------------
+
+/// The text the editor of a saved value is opened with; a value a test
+/// writes back, kept apart from the fixtures so a leak assertion can name it.
+const EDITED_VALUE: &str = "rotated webhook token 77b1";
+
+impl Opened<'_> {
+    /// Opens the editor on the selected secret's loaded value.
+    fn start_edit(&mut self) {
+        let doc = self.doc.clone();
+        self.window
+            .update(|window, cx| doc.update(cx, |doc, cx| doc.start_value_edit(window, cx)));
+        self.window.run_until_parked();
+    }
+
+    /// The state of the open editor, if one is open.
+    fn editing(&mut self) -> Option<(String, bool)> {
+        self.read(|doc| {
+            let edit = doc.value_edit.as_ref()?;
+            Some((edit.original.expose_secret().to_string(), edit.saving))
+        })
+    }
+
+    /// The text the open editor holds.
+    fn editor_text(&mut self) -> String {
+        let editor = self.read(|doc| doc.value_edit.as_ref().expect("editor open").editor.clone());
+        self.window
+            .update(|_, cx| editor.read(cx).value().to_string())
+    }
+
+    /// Replaces the text of the open editor.
+    fn set_editor_text(&mut self, text: &str) {
+        let editor = self.read(|doc| doc.value_edit.as_ref().expect("editor open").editor.clone());
+        let text = text.to_string();
+        self.window.update(|window, cx| {
+            editor.update(cx, |state, cx| state.set_value(&text, window, cx));
+        });
+        self.window.run_until_parked();
+    }
+
+    /// Saves the open editor the way Save and the pane action do.
+    fn save_edit(&mut self) {
+        self.update(|doc, cx| doc.save_value_edit(cx));
+    }
+
+    /// Every error the user-facing seam reported this session, as
+    /// `(correlation id, summary)`.
+    fn reported_errors(&mut self) -> Vec<(uuid::Uuid, String)> {
+        use dbflux_ui_base::notifications::{NotificationKey, NotificationSources};
+
+        let state = self.app_state.clone();
+        self.window.update(|_, cx| {
+            let state = state.read(cx);
+            state
+                .notifications
+                .snapshot(&NotificationSources::default())
+                .entries
+                .iter()
+                .filter_map(|entry| match &entry.key {
+                    NotificationKey::Error(id) => {
+                        let error = state.notifications.error(*id)?;
+                        Some((*id, error.summary.clone()))
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
+    }
+
+    /// The recorded audit events as records, for the fields a formatted
+    /// dump would make awkward to read.
+    /// The recorded audit events as DTOs, for the fields a formatted dump
+    /// would make awkward to read.
+    fn audit_records(&mut self) -> Vec<dbflux_storage::AuditEventDto> {
+        let state = self.app_state.clone();
+        self.window.update(|_, cx| {
+            let filter = dbflux_audit::query::AuditQueryFilter {
+                category: Some("secret_store".to_string()),
+                ..Default::default()
+            };
+
+            state
+                .read(cx)
+                .audit_service()
+                .query_extended(&filter)
+                .expect("audit query")
+        })
+    }
+
+    /// The write requests the fake store received, as `(name, text)`.
+    fn written_values(&mut self) -> Vec<(String, String)> {
+        use dbflux_core::secrecy::ExposeSecret as _;
+
+        self.driver
+            .secret_store_calls()
+            .put_requests
+            .iter()
+            .map(|(_, request)| match &request.payload {
+                SecretPayload::Text(text) => {
+                    (request.name.clone(), text.expose_secret().to_string())
+                }
+                SecretPayload::Binary(_) => (request.name.clone(), String::new()),
+            })
+            .collect()
+    }
+}
+
+/// The editor opens with the stored text: the value the store returned, not
+/// a formatted view of it, and Save, Discard and the editor are drawn.
+#[gpui::test]
+fn the_editor_opens_with_the_stored_text(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+
+    assert!(!opened.read(|doc| doc.is_editing_value()));
+
+    // The action that opens the editor is drawn while the value keeps its
+    // presentation.
+    assert!(opened.rendered_text().contains("Edit value"));
+
+    opened.start_edit();
+
+    assert_eq!(opened.editor_text(), FAKE_SECRET_PLAINTEXT);
+    let (original, saving) = opened.editing().expect("the editor is open");
+    assert_eq!(original, FAKE_SECRET_PLAINTEXT);
+    assert!(!saving);
+
+    let text = opened.rendered_text();
+    assert!(text.contains("Save as new version"), "{text}");
+    assert!(text.contains("Discard"), "{text}");
+
+    let paths = opened.rendered_paths();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with("secret-value-editor")),
+        "{paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with("secret-value-editor-save")),
+        "{paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with("secret-value-editor-discard")),
+        "{paths:?}"
+    );
+}
+
+/// A save with nothing changed writes nothing: the store is not called, no
+/// audit event is added and the editor stays open.
+#[gpui::test]
+fn an_unchanged_save_writes_nothing(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    let events_before = opened.audit_records().len();
+
+    opened.save_edit();
+
+    assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+    assert_eq!(
+        opened.audit_records().len(),
+        events_before,
+        "no write attempt"
+    );
+    assert!(opened.reported_errors().is_empty());
+    assert!(
+        opened.read(|doc| doc.is_editing_value()),
+        "the editor stays open"
+    );
+}
+
+/// The JSON gate follows the stored value, not the editor: a plaintext
+/// value takes any edit, and only a value the store kept as JSON must stay
+/// JSON.
+#[gpui::test]
+fn the_json_gate_applies_only_to_a_stored_json_value(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+
+    // A plaintext value is written back exactly as edited, whatever it
+    // holds — JSON syntax included.
+    opened.show_value("host = db.internal # not JSON, braces }{ and all");
+    opened.start_edit();
+    opened.set_editor_text("{oops not json]");
+    opened.save_edit();
+    assert_eq!(
+        opened.written_values(),
+        vec![(PLAINTEXT_SECRET.to_string(), "{oops not json]".to_string())]
+    );
+
+    // A JSON value keeps the gate.
+    opened.show_value(r#"["token-a","token-b"]"#);
+    opened.start_edit();
+    opened.set_editor_text("{oops not json]");
+    opened.save_edit();
+    assert_eq!(opened.written_values().len(), 1, "the JSON value is gated");
+}
+
+/// A changed save runs through the governed seam once, shows the value and
+/// version the seam returned, closes the editor and refreshes the details,
+/// so the version the pane reports is the one the store now holds.
+#[gpui::test]
+fn a_changed_save_writes_a_new_version_through_the_seam(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+
+    opened.save_edit();
+
+    assert_eq!(
+        opened.written_values(),
+        vec![(PLAINTEXT_SECRET.to_string(), EDITED_VALUE.to_string())]
+    );
+
+    let events = opened.audit_records();
+    assert_eq!(events.len(), 2, "the retrieval and the write: {events:?}");
+    assert_eq!(
+        events[1].action.as_deref(),
+        Some(SECRET_VALUE_WRITTEN_ACTION),
+        "{events:?}"
+    );
+    assert!(
+        events[1]
+            .details_json
+            .as_deref()
+            .is_some_and(|json| json.contains("v-written-1")),
+        "{events:?}"
+    );
+
+    opened.read(|doc| {
+        assert!(!doc.is_editing_value(), "the editor closed");
+        match &doc.value {
+            ValueState::Loaded(value) => {
+                assert_eq!(value.version.as_deref(), Some("v-written-1"));
+                assert_eq!(value.content.full_text().expose_secret(), EDITED_VALUE);
+                assert!(!value.is_revealed(0), "the saved value is masked again");
+            }
+            other => panic!("value not loaded: {other:?}"),
+        }
+    });
+
+    let described: Vec<String> = opened
+        .driver
+        .secret_store_calls()
+        .described
+        .iter()
+        .map(|(_, name)| name.clone())
+        .collect();
+    assert_eq!(
+        described,
+        vec![PLAINTEXT_SECRET.to_string(), PLAINTEXT_SECRET.to_string()],
+        "the details refresh after the write"
+    );
+}
+
+/// A read-only connection refuses the save: the refusal reads as a decision,
+/// the store is never called, and the editor stays open.
+#[gpui::test]
+fn a_read_only_connection_refuses_the_save_without_calling_the_store(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.set_policy(
+        MutationPolicy::ReadOnly,
+        Some(ReadOnlyReason::ProfileSetting),
+    );
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+
+    opened.save_edit();
+
+    assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+    let events = opened.audit_records();
+    assert_eq!(events.len(), 2, "the retrieval and the refusal: {events:?}");
+    assert_eq!(
+        events[1].action.as_deref(),
+        Some(SECRET_VALUE_WRITE_REFUSED_ACTION),
+        "{events:?}"
+    );
+
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("read-only"), "{}", errors[0].1);
+
+    assert!(
+        opened.read(|doc| doc.is_editing_value()),
+        "the editor stays open"
+    );
+}
+
+/// The text is written back exactly as edited: a value the store kept as
+/// compact JSON stays compact, and an indented one keeps its indentation.
+#[gpui::test]
+fn the_stored_json_layout_is_preserved(cx: &mut TestAppContext) {
+    let compact = r#"["token-a","token-b"]"#;
+    let compact_edited = r#"["token-a","token-c"]"#;
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.show_value(compact);
+    opened.start_edit();
+    assert_eq!(
+        opened.editor_text(),
+        compact,
+        "the editor opens with the stored text"
+    );
+    opened.set_editor_text(compact_edited);
+    opened.save_edit();
+    assert_eq!(
+        opened.written_values(),
+        vec![(PLAINTEXT_SECRET.to_string(), compact_edited.to_string())]
+    );
+
+    let indented = "[\n  \"token-a\",\n  \"token-b\"\n]";
+    let indented_edited = "[\n  \"token-a\",\n  \"token-c\"\n]";
+    let mut reopened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    reopened.select(PLAINTEXT_SECRET);
+    reopened.show_value(indented);
+    reopened.start_edit();
+    reopened.set_editor_text(indented_edited);
+    reopened.save_edit();
+    assert_eq!(
+        reopened.written_values(),
+        vec![(PLAINTEXT_SECRET.to_string(), indented_edited.to_string())]
+    );
+}
+
+/// A value the store kept as JSON is refused when the edited text no longer
+/// parses: the refusal names the parse problem and nothing is written.
+#[gpui::test]
+fn an_invalid_json_edit_is_refused_and_names_the_problem(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.show_value(r#"["token-a","token-b"]"#);
+    opened.start_edit();
+    opened.set_editor_text("[\"token-a\" oops");
+
+    opened.save_edit();
+
+    assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+    assert!(opened.audit_records().is_empty(), "nothing was attempted");
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("JSON"), "{}", errors[0].1);
+    assert!(
+        opened.read(|doc| doc.is_editing_value()),
+        "the editor stays open"
+    );
+}
+
+/// The edited text reaches no node of the accessibility update: the probe
+/// reads every node the frame produced, hidden or not, the way the
+/// automation bridge reads it, while the text is edited and after it is
+/// saved.
+#[gpui::test]
+fn the_edited_text_reaches_no_node_of_the_accessibility_update(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+
+    let editing_text = opened.accessibility_update_text();
+    let editing_paths = opened.rendered_paths();
+    assert!(!editing_text.contains(EDITED_VALUE), "{editing_text}");
+    assert!(
+        !editing_text.contains(FAKE_SECRET_PLAINTEXT),
+        "{editing_text}"
+    );
+    assert!(
+        !editing_paths.iter().any(|path| path.contains(EDITED_VALUE)),
+        "{editing_paths:?}"
+    );
+
+    opened.save_edit();
+
+    let saved_text = opened.accessibility_update_text();
+    let saved_paths = opened.rendered_paths();
+    assert!(!saved_text.contains(EDITED_VALUE), "{saved_text}");
+    assert!(
+        !saved_paths.iter().any(|path| path.contains(EDITED_VALUE)),
+        "{saved_paths:?}"
+    );
+}
+
+/// The Edit value control is covered while it is drawn: the capture runs
+/// before any editor is open, so the editor's own controls cannot mask a
+/// misspelled registry row for the button.
+#[gpui::test]
+fn the_edit_value_control_is_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::SECRET_STORE;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+
+    let entries: Vec<String> = opened.window.update(|_, cx| {
+        opened
+            .doc
+            .read(cx)
+            .pane_actions(&opened.doc)
+            .into_iter()
+            .map(|action| action.id.to_string())
+            .collect()
+    });
+
+    let capture = FrameCapture::observe(opened.window);
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(entries)
+        .assert_covered(&capture.frame(opened.window));
+
+    assert!(
+        checked.iter().any(|id| id == "secret-value-edit"),
+        "{checked:?}"
+    );
+
+    // The row menu's Edit value entry, covered while the menu is open over
+    // the selected secret whose value is loaded — the state the entry is
+    // offered in.
+    opened.right_click(&format!("secret-row-{PLAINTEXT_SECRET}"));
+    let entries: Vec<String> = opened.window.update(|_, cx| {
+        opened
+            .doc
+            .read(cx)
+            .pane_actions(&opened.doc)
+            .into_iter()
+            .map(|action| action.id.to_string())
+            .collect()
+    });
+
+    let capture = FrameCapture::observe(opened.window);
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(entries)
+        .assert_covered(&capture.frame(opened.window));
+
+    assert!(
+        checked
+            .iter()
+            .any(|id| id.starts_with("secret-menu-edit-value")),
+        "{checked:?}"
+    );
+}
+
+/// The row menu offers Edit value for a value that can be edited, and
+/// choosing it opens the same editor the details pane's button opens.
+#[gpui::test]
+fn the_row_menu_offers_edit_value_and_opens_the_editor(cx: &mut TestAppContext) {
+    use super::context_menu::SecretMenuAction;
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+
+    // Right-clicking the already-selected row keeps its loaded value, which
+    // is the state the entry is offered in.
+    opened.right_click(&format!("secret-row-{PLAINTEXT_SECRET}"));
+    assert!(
+        opened
+            .rendered_text()
+            .contains(&dbflux_i18n::t!("document.secret_store.edit.open")),
+        "the menu offers Edit value: {:?}",
+        opened.rendered_text()
+    );
+
+    let index = opened.read(|doc| {
+        doc.context_menu
+            .as_ref()
+            .expect("menu open")
+            .items
+            .iter()
+            .position(|item| matches!(item.action, SecretMenuAction::EditValue))
+            .expect("the Edit value entry")
+    });
+
+    for _ in 0..index {
+        assert!(opened.command(Command::MenuDown));
+    }
+    assert!(opened.command(Command::MenuSelect));
+
+    assert!(
+        opened.read(|doc| doc.is_editing_value()),
+        "the menu opens the editor"
+    );
+    assert_eq!(opened.editor_text(), FAKE_SECRET_PLAINTEXT);
+    assert!(
+        !opened
+            .rendered_text()
+            .contains(&dbflux_i18n::t!("document.secret_store.edit.open")),
+        "the menu closed after the choice"
+    );
+}
+
+/// The editor's Save, Discard and pane entries have a keyboard path while
+/// the editor is open.
+#[gpui::test]
+fn the_editor_controls_are_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::SECRET_STORE;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    // Save is disabled while the text is unchanged, so the coverage check
+    // runs with an edit in it.
+    opened.set_editor_text(EDITED_VALUE);
+
+    let entries: Vec<String> = opened.window.update(|_, cx| {
+        opened
+            .doc
+            .read(cx)
+            .pane_actions(&opened.doc)
+            .into_iter()
+            .map(|action| action.id.to_string())
+            .collect()
+    });
+
+    let capture = FrameCapture::observe(opened.window);
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(entries)
+        .assert_covered(&capture.frame(opened.window));
+
+    assert!(
+        checked.iter().any(|id| id == "secret-value-editor-save"),
+        "{checked:?}"
+    );
+    assert!(
+        checked.iter().any(|id| id == "secret-value-editor-discard"),
+        "{checked:?}"
     );
 }
 

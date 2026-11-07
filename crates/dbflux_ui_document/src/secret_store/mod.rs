@@ -12,6 +12,7 @@
 mod context_menu;
 mod data;
 mod details;
+mod editor;
 mod listing;
 mod pane;
 mod region;
@@ -116,6 +117,11 @@ pub struct SecretStoreDocument {
     value_inputs_view: Option<ValueView>,
     /// Scroll position of the multi-line viewer.
     value_viewer_scroll: ScrollHandle,
+    /// The open editor of a plaintext value, if any.
+    value_edit: Option<editor::ValueEditState>,
+    /// Bumped when the value or the selection is dropped, so a write that
+    /// lands after the user moved on does not touch the pane.
+    value_write_generation: u64,
     last_call: Option<CallTiming>,
     /// Whether the connection's driver advertises `REGION_SWITCH`. Never a
     /// driver id: the capability gates the control.
@@ -282,6 +288,8 @@ impl SecretStoreDocument {
             value_input_masks: Vec::new(),
             value_inputs_view: None,
             value_viewer_scroll: ScrollHandle::new(),
+            value_edit: None,
+            value_write_generation: 0,
             last_call: None,
             region_switchable,
             region,
@@ -599,10 +607,13 @@ impl SecretStoreDocument {
 
     // -- Value -------------------------------------------------------------
 
-    /// Drops the retrieved value and the inputs that draw it.
+    /// Drops the retrieved value, the inputs that draw it and any open
+    /// editor of it.
     pub fn clear_value(&mut self) {
         self.value_generation = self.value_generation.wrapping_add(1);
+        self.value_write_generation = self.value_write_generation.wrapping_add(1);
         self.value = ValueState::NotLoaded;
+        self.value_edit = None;
         self.value_inputs.clear();
         self.value_input_masks.clear();
         self.value_inputs_view = None;
@@ -820,6 +831,20 @@ impl SecretStoreDocument {
                 Self::view_value_error_in_audit,
             )
             .enabled(value_failed),
+            callback_action(
+                &target,
+                "secret-editor-save",
+                "document.secret_store.edit.save",
+                Self::save_value_edit,
+            )
+            .enabled(self.is_editing_value()),
+            callback_action(
+                &target,
+                "secret-editor-discard",
+                "document.secret_store.edit.discard",
+                Self::discard_value_edit,
+            )
+            .enabled(self.is_editing_value()),
             command(
                 "secret-load-more",
                 "document.secret_store.load_more",
@@ -874,6 +899,25 @@ impl SecretStoreDocument {
             );
         }
 
+        // Edit value opens the editor of a plaintext value; the action needs
+        // the window the editor's state is built with.
+        if self.can_edit_value() {
+            let target = target.clone();
+            actions.push(
+                crate::pane::PaneAction::callback(
+                    "secret-edit-value",
+                    dbflux_i18n::t!("document.secret_store.edit.open"),
+                    move |window, cx| {
+                        if let Some(doc) = target.upgrade() {
+                            doc.update(cx, |doc, cx| doc.start_value_edit(window, cx));
+                        }
+                    },
+                )
+                .icon(AppIcon::Pencil)
+                .enabled(self.can_edit_value()),
+            );
+        }
+
         // The region picker and the retry of a failed listing are clickable
         // toolbar controls, so the pane actions are their keyboard path too.
         if self.region_switchable {
@@ -924,6 +968,7 @@ impl SecretStoreDocument {
             Command::SelectLast => self.select_edge(true, cx),
             Command::Execute => self.activate_selected(cx),
             Command::ToggleValuePanel => self.retrieve_selected_value(cx),
+            Command::SaveQuery if self.value_edit.is_some() => self.save_value_edit(cx),
             Command::ExpandCollapse => self.toggle_reveal_all(cx),
             Command::ResultsCopyCell => self.copy_resource_id(cx),
             Command::ResultsCopyRow => self.copy_full_value(cx),
