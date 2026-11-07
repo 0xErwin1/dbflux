@@ -27,9 +27,10 @@ pub use value::{
     ValueContent, ValueFailure, ValueState, ValueView, encode_base64, value_retrieval_event,
 };
 pub use write::{
-    SECRET_VALUE_WRITE_FAILED_ACTION, SECRET_VALUE_WRITE_REFUSED_ACTION,
-    SECRET_VALUE_WRITTEN_ACTION, SECRET_WRITE_CLASSIFICATION, SecretWriteFailure,
-    SecretWriteFailureKind, SecretWriteOutcome, WriteTarget, put_secret_value, secret_write_event,
+    OperationActions, SECRET_VALUE_WRITE_FAILED_ACTION, SECRET_VALUE_WRITE_REFUSED_ACTION,
+    SECRET_VALUE_WRITTEN_ACTION, SECRET_WRITE_CLASSIFICATION, SecretOperation, SecretWriteFailure,
+    SecretWriteFailureKind, SecretWriteOutcome, WriteContext, WriteTarget, put_secret_value,
+    roll_back_secret, secret_write_event,
 };
 
 use super::handle::DocumentEvent;

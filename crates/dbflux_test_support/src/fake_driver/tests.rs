@@ -919,3 +919,160 @@ fn a_second_pending_write_moves_the_pending_label() {
     assert_eq!(holders, ["v-written-2"]);
     assert_eq!(versions.len(), 5);
 }
+
+// --- Rolling back a version ---
+
+fn labels_of(versions: &[SecretVersionInfo]) -> Vec<(String, Vec<String>)> {
+    versions
+        .iter()
+        .map(|version| (version.id.clone(), version.labels.clone()))
+        .collect()
+}
+
+#[test]
+fn rolling_back_moves_current_to_the_chosen_version_and_previous_to_the_old_current() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let rollback = store
+        .roll_back(&SecretRollbackRequest::new(
+            "prod/api/credentials",
+            "v-oldest",
+        ))
+        .expect("v-oldest is an earlier version");
+
+    assert_eq!(rollback.current_version, "v-oldest");
+    assert_eq!(rollback.previous_version.as_deref(), Some("v-current"));
+
+    // Both labels moved and the label the old previous held is gone; no
+    // version was created.
+    let versions = store
+        .list_versions("prod/api/credentials")
+        .expect("history");
+    assert_eq!(
+        labels_of(&versions),
+        vec![
+            ("v-current".to_string(), vec!["AWSPREVIOUS".to_string()]),
+            ("v-previous".to_string(), Vec::new()),
+            ("v-oldest".to_string(), vec!["AWSCURRENT".to_string()]),
+        ]
+    );
+
+    let details = store.describe("prod/api/credentials").expect("describe");
+    assert_eq!(details.summary.version.as_deref(), Some("v-oldest"));
+    assert_eq!(details.version_count, Some(3));
+
+    // The current value is the rolled-back version's own, unchanged.
+    let current = store
+        .get_value("prod/api/credentials", None)
+        .expect("current value");
+    assert_eq!(current.version.as_deref(), Some("v-oldest"));
+    assert!(exposed_text(&current).contains("fake-oldest-90e1"));
+
+    let calls = driver.secret_store_calls();
+    assert_eq!(calls.mutation_attempts.len(), 1);
+    assert_eq!(calls.mutations.len(), 1);
+    assert!(
+        calls.put_attempts.is_empty(),
+        "a roll back is not a value write"
+    );
+}
+
+#[test]
+fn rolling_back_to_the_current_version_is_refused_and_changes_nothing() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let error = store
+        .roll_back(&SecretRollbackRequest::new(
+            "prod/api/credentials",
+            "v-current",
+        ))
+        .expect_err("the current version is not an earlier one");
+
+    assert!(error.to_string().contains("already the current"), "{error}");
+
+    let versions = store
+        .list_versions("prod/api/credentials")
+        .expect("history");
+    assert_eq!(
+        labels_of(&versions)[0],
+        ("v-current".to_string(), vec!["AWSCURRENT".to_string()])
+    );
+
+    let calls = driver.secret_store_calls();
+    assert_eq!(calls.mutation_attempts.len(), 1);
+    assert!(
+        calls.mutations.is_empty(),
+        "a refused roll back is not accepted"
+    );
+}
+
+#[test]
+fn rolling_back_to_an_unknown_version_or_secret_is_not_found() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    for request in [
+        SecretRollbackRequest::new("prod/api/credentials", "v-missing"),
+        SecretRollbackRequest::new("prod/missing", "v-oldest"),
+    ] {
+        let error = store.roll_back(&request).expect_err("nothing to move to");
+        assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+    }
+}
+
+#[test]
+fn a_managed_secret_and_a_store_without_labels_refuse_a_roll_back() {
+    let (driver, connection) = connected();
+
+    let error = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("store")
+        .roll_back(&SecretRollbackRequest::new("prod/db/master", "v-current"))
+        .expect_err("a managed secret is read only");
+    assert!(matches!(error, DbError::PermissionDenied(_)), "{error}");
+
+    let error = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("store")
+        .roll_back(&SecretRollbackRequest::new("/app/prod/db/host", "2"))
+        .expect_err("a numbered store has no labels to move");
+    assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+#[test]
+fn the_write_error_knob_fails_a_roll_back_without_moving_labels() {
+    let driver = FakeDriver::new(DbKind::AwsSecrets)
+        .with_secret_write_error("prod/api/credentials", "roll back denied by the fixture");
+    let profile = ConnectionProfile::new_with_driver(
+        "fake-aws-secrets",
+        DbKind::AwsSecrets,
+        "builtin:fake-aws-secrets",
+        DbConfig::default_aws_secrets(),
+    );
+    let connection = driver.connect(&profile).expect("connect");
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("store");
+
+    let error = store
+        .roll_back(&SecretRollbackRequest::new(
+            "prod/api/credentials",
+            "v-oldest",
+        ))
+        .expect_err("the knob denies the roll back");
+    assert!(matches!(error, DbError::PermissionDenied(_)), "{error}");
+
+    let details = store.describe("prod/api/credentials").expect("describe");
+    assert_eq!(details.summary.version.as_deref(), Some("v-current"));
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}

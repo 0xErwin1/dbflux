@@ -16,15 +16,17 @@ use super::super::encode_base64;
 use super::super::value::{RetrievalTarget, value_retrieval_event};
 use super::super::write::{
     SECRET_VALUE_WRITE_FAILED_ACTION, SECRET_VALUE_WRITE_REFUSED_ACTION,
-    SECRET_VALUE_WRITTEN_ACTION, SecretWriteFailure, SecretWriteOutcome, WriteTarget,
-    put_secret_value, secret_write_event,
+    SECRET_VALUE_WRITTEN_ACTION, SecretOperation, SecretWriteFailure, SecretWriteFailureKind,
+    SecretWriteOutcome, WriteContext, WriteTarget, put_secret_value, roll_back_secret,
+    secret_write_event,
 };
 use dbflux_core::observability::{EventCategory, EventRecord, EventSink, EventSinkError};
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
     DbError, MutationPolicy, ReadOnlyReason, SecretDetails, SecretListPage, SecretListRequest,
-    SecretPayload, SecretPutRequest, SecretStoreCapabilities, SecretStoreDescriptor,
-    SecretStoreSource, SecretValue, SecretVersionStage,
+    SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
+    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretValue,
+    SecretVersionStage,
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -852,4 +854,375 @@ fn probe_a_refusing_sink_keeps_every_other_outcome_intact() {
         "{failure}"
     );
     assert_eq!(store.calls(), 1);
+}
+
+// --- Operations beyond a value put ---
+//
+// Every operation takes the same governed path, so one table of cases
+// drives the same probes over all of them: a refusal records the refusal
+// and makes no store call, a store failure is audited once with its
+// correlation id, an audit loss after a landed operation says it landed, a
+// read-only profile refuses, and no secret value reaches an audit field.
+
+type OperationRun = Box<dyn Fn(&WriteContext<'_>) -> Result<(), SecretWriteFailure>>;
+
+struct OperationCase {
+    label: &'static str,
+    operation: SecretOperation,
+    name: &'static str,
+    run: OperationRun,
+    /// Secret values the case submits; none may appear in any audit field.
+    values: Vec<&'static str>,
+}
+
+/// A store that advertises the capabilities it is given and answers every
+/// operation with the behaviour it is given, counting the calls it gets.
+struct OperationStore {
+    descriptor: SecretStoreDescriptor,
+    calls: AtomicUsize,
+    failure: Option<Box<dyn Fn() -> DbError + Send + Sync>>,
+}
+
+impl OperationStore {
+    fn new(capabilities: SecretStoreCapabilities) -> Self {
+        Self {
+            descriptor: SecretStoreDescriptor::new("probe", "Probe", capabilities),
+            calls: AtomicUsize::new(0),
+            failure: None,
+        }
+    }
+
+    fn failing(mut self, failure: impl Fn() -> DbError + Send + Sync + 'static) -> Self {
+        self.failure = Some(Box::new(failure));
+        self
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::Relaxed)
+    }
+
+    /// Counts the call and answers with the configured failure, if any.
+    fn answer(&self) -> Result<(), DbError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+
+        match &self.failure {
+            Some(failure) => Err(failure()),
+            None => Ok(()),
+        }
+    }
+}
+
+impl SecretStoreSource for OperationStore {
+    fn descriptor(&self) -> &SecretStoreDescriptor {
+        &self.descriptor
+    }
+    fn list(&self, _request: &SecretListRequest) -> Result<SecretListPage, DbError> {
+        Err(DbError::NotSupported("unused".into()))
+    }
+    fn describe(&self, _name: &str) -> Result<SecretDetails, DbError> {
+        Err(DbError::NotSupported("unused".into()))
+    }
+    fn get_value(&self, _name: &str, _version: Option<&str>) -> Result<SecretValue, DbError> {
+        Err(DbError::NotSupported("unused".into()))
+    }
+    fn roll_back(&self, request: &SecretRollbackRequest) -> Result<SecretRollback, DbError> {
+        self.answer()?;
+        Ok(SecretRollback {
+            current_version: request.version_id.clone(),
+            previous_version: Some("v-before".to_string()),
+        })
+    }
+}
+
+fn operation_cases() -> Vec<OperationCase> {
+    vec![OperationCase {
+        label: "roll back",
+        operation: SecretOperation::RollBack,
+        name: "prod/api/credentials",
+        run: Box::new(|context| {
+            roll_back_secret(
+                context,
+                &SecretRollbackRequest::new("prod/api/credentials", "v-oldest"),
+            )
+            .map(|_| ())
+        }),
+        values: Vec::new(),
+    }]
+}
+
+fn context<'a>(
+    store: &'a OperationStore,
+    sink: &'a dyn EventSink,
+    policy: MutationPolicy,
+    reason: Option<ReadOnlyReason>,
+) -> WriteContext<'a> {
+    WriteContext {
+        store,
+        profile_id: PROFILE,
+        driver_id: "aws_secrets",
+        policy,
+        read_only_reason: reason,
+        audit: sink,
+    }
+}
+
+fn details_of(event: &EventRecord) -> serde_json::Value {
+    serde_json::from_str(event.details_json.as_deref().expect("details")).expect("json")
+}
+
+#[test]
+fn every_operation_pins_its_classification_and_capabilities() {
+    let write = SecretStoreCapabilities::WRITE;
+
+    for (operation, classification, capabilities) in [
+        (
+            SecretOperation::PutValue,
+            dbflux_core::ExecutionClassification::Write,
+            write,
+        ),
+        (
+            SecretOperation::RollBack,
+            dbflux_core::ExecutionClassification::Write,
+            write | SecretStoreCapabilities::VERSION_LABELS,
+        ),
+    ] {
+        assert_eq!(operation.classification(), classification, "{operation:?}");
+        assert_eq!(
+            operation.required_capabilities(),
+            capabilities,
+            "{operation:?}"
+        );
+    }
+}
+
+#[test]
+fn every_operation_refuses_a_gated_profile_before_any_call() {
+    for case in operation_cases() {
+        for (policy, reason, audited) in [
+            (
+                MutationPolicy::ReadOnly,
+                Some(ReadOnlyReason::ProfileSetting),
+                "read_only",
+            ),
+            (MutationPolicy::ApprovalRequired, None, "approval_required"),
+        ] {
+            let store = OperationStore::new(case.operation.required_capabilities());
+            let sink = Sink::default();
+
+            let failure =
+                (case.run)(&context(&store, &sink, policy, reason)).expect_err(case.label);
+
+            assert_eq!(
+                failure.kind,
+                SecretWriteFailureKind::Refused,
+                "{}",
+                case.label
+            );
+            assert!(
+                matches!(failure.error, DbError::PermissionDenied(_)),
+                "{}: {failure:?}",
+                case.label
+            );
+            assert!(failure.correlation_id.is_none(), "{}", case.label);
+            assert_eq!(
+                store.calls(),
+                0,
+                "{}: {audited} reached the store",
+                case.label
+            );
+
+            let events = sink.events();
+            assert_eq!(events.len(), 1, "{}", case.label);
+            assert_eq!(
+                events[0].action,
+                case.operation.actions().refused,
+                "{}",
+                case.label
+            );
+            assert_eq!(details_of(&events[0])["reason"], audited, "{}", case.label);
+        }
+    }
+}
+
+#[test]
+fn every_operation_refuses_a_store_that_lacks_a_capability_before_any_call() {
+    for case in operation_cases() {
+        let required = case.operation.required_capabilities();
+
+        // No WRITE at all, then WRITE without the operation's own
+        // capability (skipped for an operation that needs only WRITE).
+        let mut stores = vec![(
+            OperationStore::new(SecretStoreCapabilities::empty()),
+            "store_not_writable",
+        )];
+        if required != SecretStoreCapabilities::WRITE {
+            stores.push((
+                OperationStore::new(SecretStoreCapabilities::WRITE),
+                "operation_not_supported",
+            ));
+        }
+
+        for (store, audited) in stores {
+            let sink = Sink::default();
+
+            let failure = (case.run)(&context(&store, &sink, MutationPolicy::Allowed, None))
+                .expect_err(case.label);
+
+            assert_eq!(
+                failure.kind,
+                SecretWriteFailureKind::Refused,
+                "{}",
+                case.label
+            );
+            assert!(
+                matches!(failure.error, DbError::NotSupported(_)),
+                "{}: {failure:?}",
+                case.label
+            );
+            assert_eq!(store.calls(), 0, "{}", case.label);
+
+            let events = sink.events();
+            assert_eq!(events.len(), 1, "{}", case.label);
+            assert_eq!(events[0].action, case.operation.actions().refused);
+            assert_eq!(details_of(&events[0])["reason"], audited, "{}", case.label);
+        }
+    }
+}
+
+#[test]
+fn every_operation_audits_a_store_failure_once_with_its_correlation_id() {
+    for case in operation_cases() {
+        let store = OperationStore::new(case.operation.required_capabilities())
+            .failing(|| DbError::permission_denied("denied by the service"));
+        let sink = Sink::default();
+
+        let failure = (case.run)(&context(&store, &sink, MutationPolicy::Allowed, None))
+            .expect_err(case.label);
+
+        assert_eq!(
+            failure.kind,
+            SecretWriteFailureKind::StoreFailed,
+            "{}",
+            case.label
+        );
+        assert_eq!(store.calls(), 1, "{}", case.label);
+        assert!(failure.to_string().contains("denied by the service"));
+
+        let events = sink.events();
+        assert_eq!(events.len(), 1, "{}", case.label);
+        assert_eq!(events[0].action, case.operation.actions().failed);
+        assert_eq!(
+            events[0].correlation_id.as_deref(),
+            failure.correlation_id.map(|id| id.to_string()).as_deref(),
+            "{}",
+            case.label
+        );
+        assert!(failure.correlation_id.is_some(), "{}", case.label);
+    }
+}
+
+#[test]
+fn every_operation_scrubs_the_values_it_submits_from_a_store_failure() {
+    for case in operation_cases() {
+        let echoed = case.values.join(" ");
+        let store = OperationStore::new(case.operation.required_capabilities())
+            .failing(move || DbError::query_failed(format!("service rejected {echoed}")));
+        let sink = Sink::default();
+
+        let failure = (case.run)(&context(&store, &sink, MutationPolicy::Allowed, None))
+            .expect_err(case.label);
+
+        for value in &case.values {
+            assert!(!failure.to_string().contains(value), "{}", case.label);
+            assert!(
+                !format!("{:?}", sink.events()).contains(value),
+                "{}",
+                case.label
+            );
+        }
+    }
+}
+
+#[test]
+fn every_operation_reports_that_it_landed_when_the_audit_event_is_lost() {
+    struct RefusingSink;
+    impl EventSink for RefusingSink {
+        fn record(&self, _event: EventRecord) -> Result<EventRecord, EventSinkError> {
+            Err(EventSinkError::Storage("audit store is closed".into()))
+        }
+    }
+
+    for case in operation_cases() {
+        let store = OperationStore::new(case.operation.required_capabilities());
+
+        let failure = (case.run)(&context(
+            &store,
+            &RefusingSink,
+            MutationPolicy::Allowed,
+            None,
+        ))
+        .expect_err(case.label);
+
+        assert_eq!(
+            failure.kind,
+            SecretWriteFailureKind::AuditLost,
+            "{}",
+            case.label
+        );
+        assert_eq!(store.calls(), 1, "{}", case.label);
+        assert!(failure.to_string().contains("landed"), "{failure}");
+        let DbError::QueryFailed(formatted) = &failure.error else {
+            panic!("{}: {failure:?}", case.label);
+        };
+        assert!(!formatted.retriable, "{}", case.label);
+    }
+}
+
+#[test]
+fn every_operation_records_one_event_shaped_like_a_retrieval() {
+    let read_target = RetrievalTarget {
+        profile_id: PROFILE,
+        driver_id: "aws_secrets",
+        store_id: "probe",
+        store_label: "Probe",
+        name: "prod/api/credentials",
+    };
+
+    for case in operation_cases() {
+        let store = OperationStore::new(case.operation.required_capabilities());
+        let sink = Sink::default();
+
+        (case.run)(&context(&store, &sink, MutationPolicy::Allowed, None)).expect(case.label);
+
+        let events = sink.events();
+        assert_eq!(events.len(), 1, "{}", case.label);
+        let event = &events[0];
+        let read = value_retrieval_event(
+            &RetrievalTarget {
+                name: case.name,
+                ..read_target
+            },
+            None,
+            None,
+        );
+
+        assert_eq!(event.action, case.operation.actions().done);
+        assert_eq!(event.category, read.category, "{}", case.label);
+        assert_eq!(event.actor_id, read.actor_id, "{}", case.label);
+        assert_eq!(event.actor_type, read.actor_type, "{}", case.label);
+        assert_eq!(event.object_type, read.object_type, "{}", case.label);
+        assert_eq!(event.object_id, read.object_id, "{}", case.label);
+        assert_eq!(event.connection_id, read.connection_id, "{}", case.label);
+        assert_eq!(event.driver_id, read.driver_id, "{}", case.label);
+        assert_eq!(
+            details_of(event)["classification"],
+            serde_json::to_value(case.operation.classification()).expect("classification"),
+            "{}",
+            case.label
+        );
+        dbflux_audit::AuditService::validate_event(event).expect("valid event");
+        for value in &case.values {
+            assert!(!format!("{event:?}").contains(value), "{}", case.label);
+        }
+    }
 }

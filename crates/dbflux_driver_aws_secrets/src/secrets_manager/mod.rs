@@ -9,9 +9,9 @@ use aws_smithy_types::DateTime as SmithyDateTime;
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
     DbError, FormattedError, SecretDetails, SecretListPage, SecretListRequest, SecretPayload,
-    SecretPutRequest, SecretRotation, SecretStoreCapabilities, SecretStoreDescriptor,
-    SecretStoreSource, SecretSummary, SecretTag, SecretValue, SecretVersionInfo,
-    SecretVersionStage,
+    SecretPutRequest, SecretRollback, SecretRollbackRequest, SecretRotation,
+    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
+    SecretValue, SecretVersionInfo, SecretVersionStage,
 };
 
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
@@ -180,6 +180,47 @@ impl SecretsManagerStore {
 }
 
 impl SecretsManagerStore {
+    /// `DescribeSecret`, refusing a secret another service owns: DBFlux
+    /// keeps those read only and AWS does not enforce it, so every write
+    /// that is not a value put asks first and names the owner.
+    fn describe_unmanaged(
+        &self,
+        name: &str,
+    ) -> Result<aws_sdk_secretsmanager::operation::describe_secret::DescribeSecretOutput, DbError>
+    {
+        let metadata = runtime()
+            .block_on(self.client.describe_secret().secret_id(name).send())
+            .map_err(|error| self.operation_error(&error, Some(name)))?;
+
+        match managed_write_refusal_for(metadata.owning_service(), name) {
+            Some(refusal) => Err(refusal),
+            None => Ok(metadata),
+        }
+    }
+
+    /// Every version of `name`, deprecated ones included, following every
+    /// page of `ListSecretVersionIds`. `DescribeSecret` omits versions with
+    /// no staging label, so it cannot tell whether such a version exists.
+    fn version_entries(&self, name: &str) -> Result<Vec<SecretVersionsListEntry>, DbError> {
+        collect_version_entries(|token| {
+            let output = runtime()
+                .block_on(
+                    self.client
+                        .list_secret_version_ids()
+                        .secret_id(name)
+                        .include_deprecated(true)
+                        .set_next_token(token)
+                        .send(),
+                )
+                .map_err(|error| self.operation_error(&error, Some(name)))?;
+
+            Ok((
+                output.versions().to_vec(),
+                output.next_token().map(ToString::to_string),
+            ))
+        })
+    }
+
     /// One `ListSecrets` page, with the filter the caller chose and, when the
     /// page came from the prefix fallback, a token that says so.
     fn list_page(
@@ -410,6 +451,103 @@ impl SecretStoreSource for SecretsManagerStore {
             payload: request.payload.clone(),
         })
     }
+
+    /// One `UpdateSecretVersionStage` call moving `AWSCURRENT` to the chosen
+    /// version and removing it from the version that holds it. Secrets
+    /// Manager attaches `AWSPREVIOUS` to the version `AWSCURRENT` was moved
+    /// away from by itself, so one call moves both labels and no value is
+    /// rewritten or created.
+    ///
+    /// The metadata is asked for first: a secret another service owns is
+    /// refused naming the owner, and the plan names the version that holds
+    /// `AWSCURRENT` right now, so the call fails at the service when that
+    /// changed in between instead of moving the wrong label.
+    fn roll_back(&self, request: &SecretRollbackRequest) -> Result<SecretRollback, DbError> {
+        self.descriptor.ensure_can(
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::VERSION_LABELS,
+            "roll back",
+            &request.name,
+        )?;
+        request.validate()?;
+
+        self.describe_unmanaged(&request.name)?;
+        let stages = stages_by_version(&self.version_entries(&request.name)?);
+        let plan = plan_rollback(&stages, &request.name, &request.version_id)?;
+
+        runtime()
+            .block_on(
+                self.client
+                    .update_secret_version_stage()
+                    .secret_id(&request.name)
+                    .version_stage(CURRENT_STAGE)
+                    .move_to_version_id(&plan.to_version)
+                    .remove_from_version_id(&plan.from_version)
+                    .send(),
+            )
+            .map_err(|error| self.operation_error(&error, Some(&request.name)))?;
+
+        Ok(SecretRollback {
+            current_version: plan.to_version,
+            previous_version: Some(plan.from_version),
+        })
+    }
+}
+
+/// Where a roll back moves `AWSCURRENT` from and to.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct RollbackPlan {
+    pub from_version: String,
+    pub to_version: String,
+}
+
+/// The staging labels of every version `ListSecretVersionIds` reported,
+/// keyed by version id. A version without a label is in the map with an
+/// empty list.
+pub(crate) fn stages_by_version(
+    entries: &[SecretVersionsListEntry],
+) -> HashMap<String, Vec<String>> {
+    entries
+        .iter()
+        .filter_map(|entry| {
+            Some((
+                entry.version_id()?.to_string(),
+                entry.version_stages().to_vec(),
+            ))
+        })
+        .collect()
+}
+
+/// Decides a roll back from the stages of every version: the target must be
+/// a known version other than the one holding `AWSCURRENT`, and a secret
+/// with no current version cannot be rolled back, because the label would
+/// have nothing to move away from.
+pub(crate) fn plan_rollback(
+    versions: &HashMap<String, Vec<String>>,
+    name: &str,
+    target: &str,
+) -> Result<RollbackPlan, DbError> {
+    if !versions.contains_key(target) {
+        return Err(DbError::object_not_found(format!(
+            "Secrets Manager secret \"{name}\" has no version \"{target}\""
+        )));
+    }
+
+    let Some(current) = current_version(versions) else {
+        return Err(DbError::query_failed(format!(
+            "Secrets Manager secret \"{name}\" has no current version to roll back from"
+        )));
+    };
+
+    if current == target {
+        return Err(DbError::query_failed(format!(
+            "Version \"{target}\" of \"{name}\" is already the current version"
+        )));
+    }
+
+    Ok(RollbackPlan {
+        from_version: current,
+        to_version: target.to_string(),
+    })
 }
 
 /// The staging label the requested write stage maps to. `None` keeps the
@@ -545,8 +683,19 @@ pub(crate) fn rotation_schedule(rules: &RotationRulesType) -> Option<String> {
 /// and answers with that page's entries and the next token, or `None` when
 /// the listing ended.
 pub(crate) fn list_versions_on_pages<F>(
-    mut fetch_page: F,
+    fetch_page: F,
 ) -> Result<Vec<SecretVersionInfo>, DbError>
+where
+    F: FnMut(Option<String>) -> Result<(Vec<SecretVersionsListEntry>, Option<String>), DbError>,
+{
+    Ok(versions_from_entries(&collect_version_entries(fetch_page)?))
+}
+
+/// The raw entries of every page, for callers that need the staging labels
+/// as the service reports them (a roll back plans from them).
+pub(crate) fn collect_version_entries<F>(
+    mut fetch_page: F,
+) -> Result<Vec<SecretVersionsListEntry>, DbError>
 where
     F: FnMut(Option<String>) -> Result<(Vec<SecretVersionsListEntry>, Option<String>), DbError>,
 {
@@ -559,7 +708,7 @@ where
 
         match next_token {
             Some(next) => token = Some(next),
-            None => return Ok(versions_from_entries(&entries)),
+            None => return Ok(entries),
         }
     }
 }

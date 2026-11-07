@@ -11,8 +11,9 @@ use dbflux_core::{
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use dbflux_core::{
     SecretDetails, SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest,
-    SecretRotation, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
-    SecretSummary, SecretTag, SecretValue, SecretVersionInfo, SecretVersionStage,
+    SecretRollback, SecretRollbackRequest, SecretRotation, SecretStoreCapabilities,
+    SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag, SecretValue,
+    SecretVersionInfo, SecretVersionStage,
 };
 use dbflux_driver_cloudwatch::CLOUDWATCH_FORM;
 use dbflux_driver_dynamodb::DYNAMODB_FORM;
@@ -39,7 +40,7 @@ use secret_store::{FakeSecretStore, fake_secret_stores};
 
 pub use secret_store::{
     FAKE_KMS_DENIED_MESSAGE, FAKE_PARAMETER_STORE_ID, FAKE_SECRET_BINARY, FAKE_SECRET_PASSWORD,
-    FAKE_SECRET_PLAINTEXT, FAKE_SECRETS_STORE_ID, FakeSecretStoreCalls,
+    FAKE_SECRET_PLAINTEXT, FAKE_SECRETS_STORE_ID, FakeSecretMutation, FakeSecretStoreCalls,
 };
 
 #[cfg(test)]

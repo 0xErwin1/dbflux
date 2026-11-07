@@ -17,6 +17,20 @@ pub struct FakeSecretStoreCalls {
     pub put_requests: Vec<(String, SecretPutRequest)>,
     /// Every `list_versions` call, as `(store_id, name)`.
     pub version_listings: Vec<(String, String)>,
+    /// Every write operation other than `put_value` that reached the store,
+    /// accepted or not, as `(store_id, request)`. A refused operation must
+    /// not reach the store, so a test watches this list.
+    pub mutation_attempts: Vec<(String, FakeSecretMutation)>,
+    /// The operations of `mutation_attempts` the modeled service accepted.
+    pub mutations: Vec<(String, FakeSecretMutation)>,
+}
+
+/// One write operation the fake secret stores received, with its request.
+/// Requests that carry a value hold it as a `secrecy` type, so `Debug`
+/// output stays redacted.
+#[derive(Debug, Clone)]
+pub enum FakeSecretMutation {
+    RollBack(SecretRollbackRequest),
 }
 
 /// Id of the fake flat store, shaped like AWS Secrets Manager.
@@ -313,9 +327,132 @@ impl SecretStoreSource for FakeSecretStore {
 
         Ok(response)
     }
+
+    /// Moves the staging labels the way `UpdateSecretVersionStage` does for
+    /// `AWSCURRENT`: the label lands on the chosen version, the version
+    /// that held it becomes `AWSPREVIOUS`, and the one that held
+    /// `AWSPREVIOUS` is left without it. No version is created and no
+    /// payload changes.
+    fn roll_back(&self, request: &SecretRollbackRequest) -> Result<SecretRollback, DbError> {
+        let mutation = FakeSecretMutation::RollBack(request.clone());
+        self.begin_mutation(
+            mutation.clone(),
+            &request.name,
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::VERSION_LABELS,
+            "roll back",
+        )?;
+
+        let rollback = {
+            let mut secrets = rwlock_write(&self.secrets);
+            let secret = find_mut(&mut secrets, &request.name, "Secret")?;
+            refuse_unwritable(secret, &request.name)?;
+
+            let current = secret.details.summary.version.clone().unwrap_or_default();
+            if request.version_id == current {
+                return Err(DbError::query_failed(format!(
+                    "Version {} of {} is already the current version",
+                    request.version_id, request.name
+                )));
+            }
+            if !secret
+                .history
+                .iter()
+                .any(|entry| entry.id == request.version_id)
+            {
+                return Err(DbError::object_not_found(format!(
+                    "Secret {} has no version {}",
+                    request.name, request.version_id
+                )));
+            }
+
+            for entry in secret.history.iter_mut() {
+                entry.labels.retain(|label| label != "AWSPREVIOUS");
+                if entry.id == current {
+                    entry.labels.retain(|label| label != "AWSCURRENT");
+                    entry.labels.push("AWSPREVIOUS".to_string());
+                }
+                if entry.id == request.version_id {
+                    entry.labels.push("AWSCURRENT".to_string());
+                }
+            }
+            secret.details.summary.version = Some(request.version_id.clone());
+            secret.details.version_labels = distinct_labels(&secret.history);
+
+            SecretRollback {
+                current_version: request.version_id.clone(),
+                previous_version: Some(current),
+            }
+        };
+
+        self.accept_mutation(mutation);
+        Ok(rollback)
+    }
+}
+
+/// The stored secret `name`, or the not-found answer of the service.
+fn find_mut<'a>(
+    secrets: &'a mut [FakeSecret],
+    name: &str,
+    noun: &str,
+) -> Result<&'a mut FakeSecret, DbError> {
+    secrets
+        .iter_mut()
+        .find(|secret| secret.details.summary.name == name)
+        .ok_or_else(|| DbError::object_not_found(format!("{noun} {name} not found")))
+}
+
+/// The refusals every flat-store write shares: secrets another service owns
+/// are read only in DBFlux, and the service rejects changes to a secret
+/// scheduled for deletion.
+fn refuse_unwritable(secret: &FakeSecret, name: &str) -> Result<(), DbError> {
+    if let Some(service) = &secret.details.summary.owning_service {
+        return Err(DbError::permission_denied(format!(
+            "Secrets Manager secret \"{name}\" is managed by {service} and is read only"
+        )));
+    }
+    if secret.details.summary.deletion_scheduled_for.is_some() {
+        return Err(DbError::query_failed(
+            "Secrets Manager secret is scheduled for deletion; it cannot be changed",
+        ));
+    }
+
+    Ok(())
 }
 
 impl FakeSecretStore {
+    /// The start of every write operation other than `put_value`: records
+    /// the attempt, applies the store's own capability gate and the
+    /// write-failure knob, exactly where the real drivers begin their calls.
+    fn begin_mutation(
+        &self,
+        mutation: FakeSecretMutation,
+        name: &str,
+        required: SecretStoreCapabilities,
+        operation: &str,
+    ) -> Result<(), DbError> {
+        mutex_lock(&self.state.secret_store_calls)
+            .mutation_attempts
+            .push((self.descriptor.id.clone(), mutation));
+
+        self.descriptor.ensure_can(required, operation, name)?;
+
+        let write_error = rwlock_read(&self.state.secret_write_errors)
+            .iter()
+            .find(|(denied, _)| denied == name)
+            .map(|(_, message)| message.clone());
+        match write_error {
+            Some(message) => Err(DbError::permission_denied(message)),
+            None => Ok(()),
+        }
+    }
+
+    /// Records an operation the modeled service accepted.
+    fn accept_mutation(&self, mutation: FakeSecretMutation) {
+        mutex_lock(&self.state.secret_store_calls)
+            .mutations
+            .push((self.descriptor.id.clone(), mutation));
+    }
+
     /// The flat store's overwrite: a new version replaces the current value.
     fn put_secret_value(&self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
         let mut secrets = rwlock_write(&self.secrets);

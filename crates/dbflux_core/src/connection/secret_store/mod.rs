@@ -23,6 +23,10 @@ use secrecy::{ExposeSecret, SecretSlice, SecretString};
 
 use crate::DbError;
 
+mod operations;
+
+pub use operations::{SecretRollback, SecretRollbackRequest};
+
 bitflags! {
     /// Behavior that differs between secret stores. The UI gates actions on
     /// these flags and never on a driver id.
@@ -98,6 +102,27 @@ impl SecretStoreDescriptor {
 
         Err(DbError::NotSupported(format!(
             "Secret store \"{}\" ({}) does not support writing values; refused the write to \"{name}\".",
+            self.label, self.id
+        )))
+    }
+
+    /// Refuses when this store lacks any capability in `required`, naming
+    /// the operation the caller asked for and the secret it targets. Every
+    /// write operation other than `put_value` begins with this check, with
+    /// `WRITE` and the capability of its own, and so does the governed seam
+    /// before it calls the store.
+    pub fn ensure_can(
+        &self,
+        required: SecretStoreCapabilities,
+        operation: &str,
+        name: &str,
+    ) -> Result<(), DbError> {
+        if self.supports(required) {
+            return Ok(());
+        }
+
+        Err(DbError::NotSupported(format!(
+            "Secret store \"{}\" ({}) does not support this operation; refused to {operation} \"{name}\".",
             self.label, self.id
         )))
     }
@@ -452,6 +477,19 @@ impl<'de> serde::Deserialize<'de> for OrderedObject {
     }
 }
 
+/// The refusal of a write operation a store does not implement, naming the
+/// store and the secret and never a value.
+fn refuse_unimplemented<T>(
+    descriptor: &SecretStoreDescriptor,
+    operation: &str,
+    name: &str,
+) -> Result<T, DbError> {
+    Err(DbError::NotSupported(format!(
+        "Secret store \"{}\" does not implement {operation}; refused it for \"{name}\".",
+        descriptor.id
+    )))
+}
+
 /// A browsable secret store.
 ///
 /// Methods are synchronous and block on the driver's own runtime, like
@@ -507,6 +545,17 @@ pub trait SecretStoreSource: Send + Sync {
             "Secret store \"{}\" does not implement listing versions; refused the history of \"{name}\".",
             self.descriptor().id
         )))
+    }
+
+    /// Makes `request.version_id` the current version of `request.name`
+    /// and the version that was current the previous one, by moving the
+    /// staging labels. No value is rewritten and no version is created. It
+    /// refuses rolling back to the version that is already current.
+    ///
+    /// Stores advertising `VERSION_LABELS` and `WRITE` implement it; the
+    /// default refuses.
+    fn roll_back(&self, request: &SecretRollbackRequest) -> Result<SecretRollback, DbError> {
+        refuse_unimplemented(self.descriptor(), "rolling back", &request.name)
     }
 }
 

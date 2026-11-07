@@ -14,8 +14,8 @@ use aws_sdk_ssm::types::{ParameterType, Tag as ParameterTag};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     Connection, ConnectionProfile, DbConfig, DbDriver, DbError, DbKind, SecretListRequest,
-    SecretPayload, SecretPutRequest, SecretStoreCapabilities, SecretStoreSource, SecretValue,
-    SecretVersionStage,
+    SecretPayload, SecretPutRequest, SecretRollbackRequest, SecretStoreCapabilities,
+    SecretStoreSource, SecretValue, SecretVersionStage,
 };
 use dbflux_driver_aws_secrets::{AwsSecretsDriver, PARAMETER_STORE_ID, SECRETS_MANAGER_ID};
 use dbflux_test_support::containers;
@@ -815,6 +815,92 @@ fn parameter_store_missing_parameter_and_version_are_object_not_found() -> Resul
             parameters.describe("/missing"),
             Err(DbError::ObjectNotFound(_))
         ));
+
+        Ok(())
+    })
+}
+
+/// Staging labels by version id, sorted, so a test compares the whole map.
+fn labels_by_version(
+    secrets: &dyn SecretStoreSource,
+    name: &str,
+) -> Result<std::collections::BTreeMap<String, Vec<String>>, DbError> {
+    Ok(secrets
+        .list_versions(name)?
+        .into_iter()
+        .map(|version| {
+            let mut labels = version.labels;
+            labels.sort();
+            (version.id, labels)
+        })
+        .collect())
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn secrets_manager_roll_back_moves_both_labels_and_rewrites_no_value() -> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        let first = seeder.secret_string("rollback", "first");
+        let second = seeder.put_secret_string("rollback", "second");
+        let third = seeder.put_secret_string("rollback", "third");
+
+        let connection = connect(&endpoint)?;
+        let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
+
+        let before = labels_by_version(secrets, "rollback")?;
+        let rollback = secrets.roll_back(&SecretRollbackRequest::new("rollback", first.clone()))?;
+
+        assert_eq!(rollback.current_version, first);
+        assert_eq!(rollback.previous_version.as_deref(), Some(third.as_str()));
+
+        let labels = labels_by_version(secrets, "rollback")?;
+        assert!(
+            labels.keys().all(|id| before.contains_key(id)),
+            "a roll back creates no version: {labels:?}"
+        );
+        assert_eq!(labels[&first], ["AWSCURRENT"]);
+        assert_eq!(labels[&third], ["AWSPREVIOUS"]);
+        // AWS keeps the version that lost `AWSPREVIOUS` as a deprecated one
+        // with no label. LocalStack drops a version the moment it loses its
+        // last label, so the version may be gone there; it never holds a
+        // label either way.
+        assert!(labels.get(&second).is_none_or(Vec::is_empty), "{labels:?}");
+
+        assert_eq!(text(&secrets.get_value("rollback", None)?), "first");
+        assert_eq!(text(&secrets.get_value("rollback", Some(&third))?), "third");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn secrets_manager_roll_back_to_the_current_or_an_unknown_version_is_refused() -> Result<(), DbError>
+{
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        seeder.secret_string("rollback-refused", "first");
+        let current = seeder.put_secret_string("rollback-refused", "second");
+
+        let connection = connect(&endpoint)?;
+        let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
+        let before = labels_by_version(secrets, "rollback-refused")?;
+
+        let error = secrets
+            .roll_back(&SecretRollbackRequest::new("rollback-refused", current))
+            .expect_err("the current version is not an earlier one");
+        assert!(error.to_string().contains("already the current"), "{error}");
+
+        let error = secrets
+            .roll_back(&SecretRollbackRequest::new(
+                "rollback-refused",
+                "no-such-version",
+            ))
+            .expect_err("an unknown version cannot be rolled back to");
+        assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+
+        assert_eq!(labels_by_version(secrets, "rollback-refused")?, before);
 
         Ok(())
     })

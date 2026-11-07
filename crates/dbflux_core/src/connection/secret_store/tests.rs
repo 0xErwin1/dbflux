@@ -244,3 +244,60 @@ fn the_default_list_versions_refuses_naming_the_store_and_the_secret() {
     assert!(message.contains("test-store"), "{message}");
     assert!(message.contains("prod/api/credentials"), "{message}");
 }
+
+// --- Rolling back ---
+
+#[test]
+fn a_descriptor_missing_one_required_capability_refuses_naming_the_operation() {
+    let required = SecretStoreCapabilities::WRITE | SecretStoreCapabilities::VERSION_LABELS;
+
+    let error = descriptor_with(SecretStoreCapabilities::WRITE)
+        .ensure_can(required, "roll back", "prod/api/credentials")
+        .expect_err("a store without version labels cannot roll back");
+
+    let message = put_refusal_message(error);
+    assert!(message.contains("test-store"), "{message}");
+    assert!(message.contains("roll back"), "{message}");
+    assert!(message.contains("prod/api/credentials"), "{message}");
+
+    let error = descriptor_with(SecretStoreCapabilities::VERSION_LABELS)
+        .ensure_can(required, "roll back", "prod/api/credentials")
+        .expect_err("a store that cannot write cannot roll back");
+    assert!(put_refusal_message(error).contains("roll back"));
+
+    descriptor_with(required)
+        .ensure_can(required, "roll back", "prod/api/credentials")
+        .expect("a store with both capabilities rolls back");
+}
+
+#[test]
+fn a_rollback_request_needs_a_version_to_roll_back_to() {
+    SecretRollbackRequest::new("prod/api/credentials", "v-previous")
+        .validate()
+        .expect("a named version is a valid target");
+
+    for blank in ["", "   "] {
+        let error = SecretRollbackRequest::new("prod/api/credentials", blank)
+            .validate()
+            .expect_err("a blank version cannot be rolled back to");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    }
+}
+
+#[test]
+fn the_default_roll_back_refuses_instead_of_succeeding_silently() {
+    let store = DefaultOnlyStore(descriptor_with(
+        SecretStoreCapabilities::WRITE | SecretStoreCapabilities::VERSION_LABELS,
+    ));
+
+    let error = store
+        .roll_back(&SecretRollbackRequest::new(
+            "prod/api/credentials",
+            "v-previous",
+        ))
+        .expect_err("an unimplemented roll back must refuse");
+
+    let message = put_refusal_message(error);
+    assert!(message.contains("test-store"), "{message}");
+    assert!(message.contains("prod/api/credentials"), "{message}");
+}

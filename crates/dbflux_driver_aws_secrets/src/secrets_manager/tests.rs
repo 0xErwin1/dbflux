@@ -348,3 +348,89 @@ fn version_paging_forwards_the_token_and_keeps_the_later_pages() {
     let ids: Vec<&str> = versions.iter().map(|version| version.id.as_str()).collect();
     assert_eq!(ids, ["v-new", "v-old"]);
 }
+
+fn stages(entries: &[(&str, &[&str])]) -> HashMap<String, Vec<String>> {
+    entries
+        .iter()
+        .map(|(version, labels)| {
+            (
+                version.to_string(),
+                labels.iter().map(ToString::to_string).collect(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_roll_back_moves_current_from_the_version_that_holds_it() {
+    let versions = stages(&[
+        ("v-current", &["AWSCURRENT"]),
+        ("v-previous", &["AWSPREVIOUS"]),
+        ("v-oldest", &[]),
+    ]);
+
+    let plan = plan_rollback(&versions, "prod/api", "v-oldest").expect("an earlier version");
+
+    assert_eq!(plan.from_version, "v-current");
+    assert_eq!(plan.to_version, "v-oldest");
+}
+
+#[test]
+fn rolling_back_to_the_previous_version_is_a_roll_back_too() {
+    let versions = stages(&[
+        ("v-current", &["AWSCURRENT"]),
+        ("v-previous", &["AWSPREVIOUS"]),
+    ]);
+
+    let plan = plan_rollback(&versions, "prod/api", "v-previous").expect("previous");
+
+    assert_eq!(plan.from_version, "v-current");
+}
+
+#[test]
+fn a_roll_back_to_the_current_version_is_refused() {
+    let versions = stages(&[("v-current", &["AWSCURRENT"]), ("v-previous", &[])]);
+
+    let error = plan_rollback(&versions, "prod/api", "v-current")
+        .expect_err("the current version is not an earlier one");
+
+    assert!(error.to_string().contains("already the current"), "{error}");
+    assert!(error.to_string().contains("prod/api"), "{error}");
+}
+
+#[test]
+fn a_roll_back_to_an_unknown_version_or_without_a_current_one_is_refused() {
+    let versions = stages(&[("v-current", &["AWSCURRENT"])]);
+    let error = plan_rollback(&versions, "prod/api", "v-missing").expect_err("unknown");
+    assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+
+    let versions = stages(&[("v-a", &[]), ("v-b", &["pre-migration"])]);
+    let error = plan_rollback(&versions, "prod/api", "v-a").expect_err("no current");
+    assert!(error.to_string().contains("no current version"), "{error}");
+
+    let error = plan_rollback(&HashMap::new(), "prod/api", "v-a").expect_err("no versions");
+    assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+}
+
+#[test]
+fn stages_cover_deprecated_versions_with_an_empty_label_list() {
+    let entries = [
+        SecretVersionsListEntry::builder()
+            .version_id("v-current")
+            .version_stages("AWSCURRENT")
+            .build(),
+        SecretVersionsListEntry::builder()
+            .version_id("v-deprecated")
+            .build(),
+        SecretVersionsListEntry::builder().build(),
+    ];
+
+    let stages = stages_by_version(&entries);
+
+    assert_eq!(stages.len(), 2, "an entry without an id is dropped");
+    assert_eq!(stages["v-current"], ["AWSCURRENT"]);
+    assert!(stages["v-deprecated"].is_empty());
+
+    let plan = plan_rollback(&stages, "prod/api", "v-deprecated").expect("deprecated target");
+    assert_eq!(plan.from_version, "v-current");
+}
