@@ -19,9 +19,6 @@ mod render;
 mod value;
 mod write;
 
-#[cfg(test)]
-mod write_probes;
-
 pub use listing::{PathMode, SecretListing};
 pub use region::RegionListState;
 pub use value::{

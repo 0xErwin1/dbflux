@@ -1,3 +1,8 @@
+// The adopted verification probes run under the tests submodule, beside the
+// module's own tests.
+#[path = "write_probes.rs"]
+mod write_probes;
+
 use super::listing::{
     AUTO_CONTINUE_ENTRY_LIMIT, LARGEST_PAGE_ENTRIES, SecretListing, child_path_label,
     keeps_loading, parent_path, path_segments,
@@ -8,7 +13,7 @@ use super::value::{
 };
 use super::write::{
     SECRET_VALUE_WRITE_FAILED_ACTION, SECRET_VALUE_WRITE_REFUSED_ACTION,
-    SECRET_VALUE_WRITTEN_ACTION, put_secret_value,
+    SECRET_VALUE_WRITTEN_ACTION, SecretWriteFailure, put_secret_value,
 };
 use super::{
     DetailsState, PathMode, SecretRowKey, SecretStoreDocument, VALUE_RETRIEVE_FAILED_ACTION,
@@ -2471,7 +2476,7 @@ fn write_through(
     policy: MutationPolicy,
     read_only_reason: Option<ReadOnlyReason>,
     request: &SecretPutRequest,
-) -> Result<SecretValue, DbError> {
+) -> Result<SecretValue, SecretWriteFailure> {
     put_secret_value(
         store,
         Uuid::from_u128(11),
@@ -2829,7 +2834,10 @@ impl Opened<'_> {
     /// resolved policy and the app's audit service, the way the editor will
     /// call it.
     #[allow(clippy::result_large_err)] // test helper mirrors the seam's signature
-    fn governed_write(&mut self, request: &SecretPutRequest) -> Result<SecretValue, DbError> {
+    fn governed_write(
+        &mut self,
+        request: &SecretPutRequest,
+    ) -> Result<SecretValue, SecretWriteFailure> {
         let doc = self.doc.clone();
         let state = self.app_state.clone();
         self.window.update(|_, cx| {
@@ -3006,5 +3014,79 @@ fn a_failing_write_audits_the_failure_and_no_success_event(cx: &mut TestAppConte
     assert!(
         events.iter().all(|event| !event.contains(WRITTEN_VALUE)),
         "{events:?}"
+    );
+}
+
+/// A JSON-escaped form of the value — newlines as \n, quotes as \", a
+/// backslash as \\, a tab as \t — is the same leak as the verbatim value,
+/// and the seam scrubs it: a service echoing a request body reaches the
+/// caller with the escape-snipped marker, not the value.
+#[test]
+fn an_escaped_form_of_the_value_is_scrubbed() {
+    let json_escaped = |value: &str| {
+        let quoted = serde_json::to_string(value).expect("a &str always serializes");
+        quoted[1..quoted.len() - 1].to_string()
+    };
+
+    for value in [
+        "tab\tseparated",
+        "line\nbroken",
+        "quoted\"value",
+        "back\\slash",
+    ] {
+        // The store models a service that failed and echoed the request
+        // body it received, JSON escapes and all.
+        let escaped = json_escaped(value);
+        let store = ErrorStore {
+            error: Box::new({
+                let escaped = escaped.clone();
+                move |_| {
+                    DbError::query_failed(format!(
+                        "rejected the request body {{\"value\":\"{escaped}\"}}"
+                    ))
+                }
+            }),
+            ..ErrorStore::default()
+        };
+        let sink = RecordingSink::default();
+        let request = SecretPutRequest::text(PLAINTEXT_SECRET, value);
+
+        let failure = write_through(&store, &sink, MutationPolicy::Allowed, None, &request)
+            .expect_err("the echo failure surfaces");
+
+        let message = failure.to_string();
+        assert!(!message.contains(value), "{value}: {message}");
+        assert!(!message.contains(&escaped), "{value}: {message}");
+        assert!(message.contains("[redacted]"), "{value}: {message}");
+
+        let events = sink.events();
+        assert_eq!(events.len(), 1, "{value}");
+        let recorded = events[0].error_message.as_deref().unwrap_or_default();
+        assert!(!recorded.contains(value), "{value}: {recorded}");
+        assert!(!recorded.contains(&escaped), "{value}: {recorded}");
+    }
+}
+
+/// A failed write returns the correlation id its audit event recorded, so
+/// the caller can point at the same row when it reports, the way a
+/// retrieval failure does.
+#[test]
+fn a_failing_write_returns_the_correlation_id_its_audit_event_recorded() {
+    let store = EchoingStore::new();
+    let sink = RecordingSink::default();
+    let request = SecretPutRequest::text(PLAINTEXT_SECRET, WRITTEN_VALUE);
+
+    let failure = write_through(&store, &sink, MutationPolicy::Allowed, None, &request)
+        .expect_err("the echoing store refuses its writes");
+    let event = &sink.events()[0];
+
+    assert_eq!(event.action, SECRET_VALUE_WRITE_FAILED_ACTION);
+    assert!(
+        failure.correlation_id.is_some(),
+        "no id minted: {failure:?}"
+    );
+    assert_eq!(
+        failure.correlation_id.map(|id| id.to_string()),
+        event.correlation_id
     );
 }

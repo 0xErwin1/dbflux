@@ -93,6 +93,31 @@ pub enum SecretWriteOutcome<'a> {
 
 /// Performs one governed secret write against `store`.
 ///
+/// The failure side of one governed write.
+///
+/// The write's own error — a policy refusal, the store-level capability
+/// refusal, or the store's scrubbed failure — travels next to the
+/// correlation id of the failure audit event the seam recorded for it,
+/// when one was. The caller reports with the same id, so its toast and the
+/// audit row tell one story, the way a retrieval failure does.
+#[derive(Debug)]
+pub struct SecretWriteFailure {
+    /// Why the write did not complete, or why the audit trail has a hole
+    /// after a write the store accepted.
+    pub error: DbError,
+
+    /// The correlation id of the recorded failure event. Set for a store
+    /// failure; a refusal, or an audit event the sink refused after a landed
+    /// write, carries none, because no failure event was recorded.
+    pub correlation_id: Option<Uuid>,
+}
+
+impl std::fmt::Display for SecretWriteFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
 /// Synchronous and blocking, like `SecretStoreSource::put_value`: call it
 /// from a background executor, never on the UI thread. The caller passes the
 /// connection's resolved mutation policy and read-only reason —
@@ -103,13 +128,15 @@ pub enum SecretWriteOutcome<'a> {
 ///
 /// # Errors
 ///
-/// Returns the policy's refusal as `DbError::PermissionDenied` when the
-/// connection is read-only or approval-required, the store-level refusal of
+/// Returns [`SecretWriteFailure`] carrying the policy's refusal as
+/// `DbError::PermissionDenied` when the connection is read-only or
+/// approval-required, the store-level refusal of
 /// `SecretStoreDescriptor::ensure_can_write` when the store does not
 /// advertise `WRITE`, or the store's own error when the write itself fails —
-/// scrubbed of the submitted value in every form it may be echoed in. A
-/// write the store accepted whose audit event the sink refused returns the
-/// audit failure instead, with a message that says the write stands; see the
+/// scrubbed of the submitted value in every form it may be echoed in, and
+/// paired with the correlation id of its recorded failure event. A write the
+/// store accepted whose audit event the sink refused returns the audit
+/// failure instead, with a message that says the write stands; see the
 /// module documentation for the tradeoff.
 #[allow(clippy::result_large_err)] // `DbError` is the crate's error type
 pub fn put_secret_value(
@@ -120,7 +147,7 @@ pub fn put_secret_value(
     read_only_reason: Option<dbflux_core::ReadOnlyReason>,
     audit: &dyn EventSink,
     request: &SecretPutRequest,
-) -> Result<SecretValue, DbError> {
+) -> Result<SecretValue, SecretWriteFailure> {
     let descriptor = store.descriptor();
     let target = WriteTarget {
         profile_id,
@@ -140,7 +167,10 @@ pub fn put_secret_value(
             audit,
             secret_write_event(&target, SecretWriteOutcome::Refused { reason }),
         );
-        return Err(DbError::permission_denied(message));
+        return Err(SecretWriteFailure {
+            error: DbError::permission_denied(message),
+            correlation_id: None,
+        });
     }
 
     if let Err(error) = descriptor.ensure_can_write(&request.name) {
@@ -153,7 +183,10 @@ pub fn put_secret_value(
                 },
             ),
         );
-        return Err(error);
+        return Err(SecretWriteFailure {
+            error,
+            correlation_id: None,
+        });
     }
 
     match store.put_value(request) {
@@ -170,12 +203,15 @@ pub fn put_secret_value(
                 Ok(_) => Ok(value),
                 Err(error) => {
                     log::warn!("[secret store] failed to record secret write audit event: {error}");
-                    Err(DbError::query_failed(format!(
-                        "The write to \"{}\" landed in {}, but its audit event could not be \
-                         recorded ({}). The value cannot be un-written; do not retry the write \
-                         to repair the audit trail.",
-                        request.name, descriptor.label, error
-                    )))
+                    Err(SecretWriteFailure {
+                        error: DbError::query_failed(format!(
+                            "The write to \"{}\" landed in {}, but its audit event could not be \
+                             recorded ({}). The value cannot be un-written; do not retry the write \
+                             to repair the audit trail.",
+                            request.name, descriptor.label, error
+                        )),
+                        correlation_id: None,
+                    })
                 }
             }
         }
@@ -186,11 +222,21 @@ pub fn put_secret_value(
             // before the message reaches audit or the caller.
             let error = scrub_submitted_value(error, &request.payload);
             let message = error.to_string();
-            record(
-                audit,
-                secret_write_event(&target, SecretWriteOutcome::Failed { message: &message }),
-            );
-            Err(error)
+            let event =
+                secret_write_event(&target, SecretWriteOutcome::Failed { message: &message });
+            // The failure carries the id its audit event uses, so the
+            // caller can point at the same row when it reports. The event
+            // stores the id as text; parse it back to the type the caller
+            // reports with.
+            let correlation_id = event
+                .correlation_id
+                .as_deref()
+                .and_then(|correlation_id| Uuid::parse_str(correlation_id).ok());
+            record(audit, event);
+            Err(SecretWriteFailure {
+                error,
+                correlation_id,
+            })
         }
     }
 }
@@ -343,19 +389,39 @@ fn record(audit: &dyn EventSink, event: EventRecord) {
 /// reader that something was removed.
 const REDACTED: &str = "[redacted]";
 
+/// The JSON-escaped form of a value: what a serializer writes for it inside
+/// a JSON body, without the surrounding quotes — newlines as `\n`, quotes
+/// as `\"`, backslashes as `\\`, tabs as `\t`, other control characters as
+/// `\uXXXX`. A service or a client echoing a request body leaks the value
+/// in this form too. Returns an empty string when the escape cannot be
+/// produced or adds nothing over the verbatim value; an empty form scrubs
+/// nothing.
+fn json_escaped(value: &str) -> String {
+    let Ok(quoted) = serde_json::to_string(value) else {
+        return String::new();
+    };
+
+    if quoted.len() >= 2 && quoted.starts_with('"') && quoted.ends_with('"') {
+        quoted[1..quoted.len() - 1].to_string()
+    } else {
+        String::new()
+    }
+}
+
 /// Removes a submitted value from a put error before it reaches the caller
 /// or the audit trail. A service message that echoes the submitted value
 /// would print the very secret the write was carrying, so every field an
 /// error renders — the message, its detail and hint, the code and every
 /// location field — is scrubbed of every form the value may be echoed in:
-/// the text value verbatim; a binary value as its lossy UTF-8 rendering,
-/// the form a service echoing received bytes would produce, and its
-/// standard base64, the form a blob formatter would produce. An empty form
-/// scrubs nothing, so `replace` cannot mangle the message.
+/// the text value verbatim and the JSON-escaped form a serializer writes
+/// inside a request body; a binary value as its lossy UTF-8 rendering, the
+/// form a service echoing received bytes would produce, and its standard
+/// base64, the form a blob formatter would produce, each also escaped. An
+/// empty form scrubs nothing, so `replace` cannot mangle the message.
 ///
-/// The needle is borrowed straight from the `secrecy` type for text, so no
-/// second plaintext copy is created; the derived forms of a binary payload
-/// are zeroized as soon as the scrub is done.
+/// The verbatim text needle is borrowed straight from the `secrecy` type, so
+/// no second plaintext copy is created; every form that had to be built is
+/// zeroized as soon as the scrub is done.
 ///
 /// The AWS drivers scrub their own put errors the same way; the seam scrubs
 /// again because a driver that forgets must not leak a value through a
@@ -363,112 +429,132 @@ const REDACTED: &str = "[redacted]";
 fn scrub_submitted_value(error: DbError, payload: &SecretPayload) -> DbError {
     match payload {
         SecretPayload::Text(text) => {
-            let needle = text.expose_secret();
-            scrub_value_from_message(error, needle, None)
+            let verbatim = text.expose_secret();
+            let mut escaped = json_escaped(verbatim);
+            let error = scrub_value_from_message(error, &[verbatim, &escaped]);
+            escaped.zeroize();
+            error
         }
         SecretPayload::Binary(bytes) => {
             let bytes = bytes.expose_secret();
             let mut lossy = String::from_utf8_lossy(bytes).into_owned();
             let mut base64 = super::value::encode_base64(bytes);
-            let error = scrub_value_from_message(error, &lossy, Some(&base64));
-            lossy.zeroize();
-            base64.zeroize();
+            let mut lossy_escaped = json_escaped(&lossy);
+            let mut base64_escaped = json_escaped(&base64);
+            let error = scrub_value_from_message(
+                error,
+                &[&lossy, &lossy_escaped, &base64, &base64_escaped],
+            );
+            for buffer in [
+                &mut lossy,
+                &mut base64,
+                &mut lossy_escaped,
+                &mut base64_escaped,
+            ] {
+                buffer.zeroize();
+            }
             error
         }
     }
 }
 
-/// Scrubs `needle` — and `derived`, the second form of a binary payload —
-/// out of every field of the error that a rendered message reaches.
-fn scrub_value_from_message(error: DbError, needle: &str, derived: Option<&str>) -> DbError {
-    if needle.is_empty() {
-        return error;
-    }
+/// Scrubs each needle out of a message-carrying field, skipping a needle
+/// that is empty — it would match everything `replace` sees — or equal to
+/// the marker itself. A needle that equals an earlier one finds nothing
+/// new and is harmless.
+fn scrub_string_value(field: &mut String, needles: &[&str]) {
+    for needle in needles {
+        if needle.is_empty() || *needle == REDACTED {
+            continue;
+        }
 
-    let scrub = |field: &mut String| {
         *field = field.replace(needle, REDACTED);
+    }
+}
 
-        // Skips a second form that is empty or already the first one: a
-        // base64 rendering equal to the lossy text would only find what the
-        // first pass already removed.
-        if let Some(derived) = derived.filter(|derived| !derived.is_empty() && *derived != needle) {
-            *field = field.replace(derived, REDACTED);
-        }
-    };
-    let scrub_formatted = |formatted: &mut FormattedError| {
-        scrub(&mut formatted.message);
-        if let Some(detail) = &mut formatted.detail {
-            scrub(detail);
-        }
-        if let Some(hint) = &mut formatted.hint {
-            scrub(hint);
-        }
-        if let Some(code) = &mut formatted.code {
-            scrub(code);
-        }
-        if let Some(location) = &mut formatted.location {
-            if let Some(schema) = &mut location.schema {
-                scrub(schema);
-            }
-            if let Some(table) = &mut location.table {
-                scrub(table);
-            }
-            if let Some(column) = &mut location.column {
-                scrub(column);
-            }
-            if let Some(constraint) = &mut location.constraint {
-                scrub(constraint);
-            }
-        }
-    };
+/// Scrubs every field of a formatted error that a rendered message reaches:
+/// the message, its detail and hint, the code and every location field.
+fn scrub_formatted_error(formatted: &mut FormattedError, needles: &[&str]) {
+    scrub_string_value(&mut formatted.message, needles);
 
+    if let Some(detail) = &mut formatted.detail {
+        scrub_string_value(detail, needles);
+    }
+    if let Some(hint) = &mut formatted.hint {
+        scrub_string_value(hint, needles);
+    }
+    if let Some(code) = &mut formatted.code {
+        scrub_string_value(code, needles);
+    }
+    if let Some(location) = &mut formatted.location {
+        if let Some(schema) = &mut location.schema {
+            scrub_string_value(schema, needles);
+        }
+        if let Some(table) = &mut location.table {
+            scrub_string_value(table, needles);
+        }
+        if let Some(column) = &mut location.column {
+            scrub_string_value(column, needles);
+        }
+        if let Some(constraint) = &mut location.constraint {
+            scrub_string_value(constraint, needles);
+        }
+    }
+}
+
+/// Scrubs the submitted value, in every form it may be echoed in, out of
+/// the error the store returned. Every `DbError` variant is named here on
+/// purpose: a new message-carrying variant fails to compile until this
+/// scrub covers it, instead of leaking through a wildcard until a reviewer
+/// notices.
+fn scrub_value_from_message(error: DbError, needles: &[&str]) -> DbError {
     match error {
         DbError::ConnectionFailed(mut formatted) => {
-            scrub_formatted(&mut formatted);
+            scrub_formatted_error(&mut formatted, needles);
             DbError::ConnectionFailed(formatted)
         }
         DbError::QueryFailed(mut formatted) => {
-            scrub_formatted(&mut formatted);
+            scrub_formatted_error(&mut formatted, needles);
             DbError::QueryFailed(formatted)
         }
         DbError::AuthFailed(mut formatted) => {
-            scrub_formatted(&mut formatted);
+            scrub_formatted_error(&mut formatted, needles);
             DbError::AuthFailed(formatted)
         }
         DbError::ConstraintViolation(mut formatted) => {
-            scrub_formatted(&mut formatted);
+            scrub_formatted_error(&mut formatted, needles);
             DbError::ConstraintViolation(formatted)
         }
         DbError::SyntaxError(mut formatted) => {
-            scrub_formatted(&mut formatted);
+            scrub_formatted_error(&mut formatted, needles);
             DbError::SyntaxError(formatted)
         }
         DbError::PermissionDenied(mut formatted) => {
-            scrub_formatted(&mut formatted);
+            scrub_formatted_error(&mut formatted, needles);
             DbError::PermissionDenied(formatted)
         }
         DbError::ObjectNotFound(mut formatted) => {
-            scrub_formatted(&mut formatted);
+            scrub_formatted_error(&mut formatted, needles);
             DbError::ObjectNotFound(formatted)
         }
         DbError::NotSupported(mut message) => {
-            scrub(&mut message);
+            scrub_string_value(&mut message, needles);
             DbError::NotSupported(message)
         }
         DbError::InvalidProfile(mut message) => {
-            scrub(&mut message);
+            scrub_string_value(&mut message, needles);
             DbError::InvalidProfile(message)
         }
         DbError::ValueResolutionFailed(mut message) => {
-            scrub(&mut message);
+            scrub_string_value(&mut message, needles);
             DbError::ValueResolutionFailed(message)
         }
         DbError::Parse(mut message) => {
-            scrub(&mut message);
+            scrub_string_value(&mut message, needles);
             DbError::Parse(message)
         }
         DbError::Unsupported(mut message) => {
-            scrub(&mut message);
+            scrub_string_value(&mut message, needles);
             DbError::Unsupported(message)
         }
         // An `io::Error` may carry its message inside a custom error or a
@@ -477,13 +563,10 @@ fn scrub_value_from_message(error: DbError, needle: &str, derived: Option<&str>)
         DbError::IoError(error) => {
             let kind = error.kind();
             let mut message = error.to_string();
-            scrub(&mut message);
+            scrub_string_value(&mut message, needles);
             DbError::IoError(std::io::Error::new(kind, message))
         }
-        // Message-less variants carry nothing to scrub. Every `DbError`
-        // variant is named here on purpose: a new message-carrying variant
-        // fails to compile until this scrub covers it, instead of leaking
-        // through a wildcard until a reviewer notices.
+        // Message-less variants cannot carry any form of the value.
         DbError::Timeout => DbError::Timeout,
         DbError::Cancelled => DbError::Cancelled,
     }
