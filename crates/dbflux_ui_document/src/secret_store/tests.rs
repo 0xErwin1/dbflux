@@ -4931,3 +4931,147 @@ fn start_value_edit_reports_a_missing_connection(cx: &mut TestAppContext) {
         "{reported:?}"
     );
 }
+
+// -- Value editor: JSON key/value secrets -----------------------------------
+
+mod editor_key_value {
+    use super::*;
+    use crate::secret_store::editor::EditMode;
+
+    const EDITED: &str = r#"{"username":"api-user2","password":"fake-password-7f3a","port":5432}"#;
+
+    fn opened_key_value<'a>(cx: &'a mut TestAppContext) -> Opened<'a> {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.window.update(|window, _| window.activate_window());
+        opened.window.run_until_parked();
+        opened.select(KEY_VALUE_SECRET);
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened
+    }
+
+    fn has_path(opened: &mut Opened<'_>, suffix: &str) -> bool {
+        opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.ends_with(suffix))
+    }
+
+    #[gpui::test]
+    fn edit_value_is_offered_for_a_key_value_secret(cx: &mut TestAppContext) {
+        let mut opened = opened_key_value(cx);
+        assert!(opened.read(|doc| doc.can_edit_value()));
+        assert!(has_path(&mut opened, "secret-value-edit"));
+
+        opened.update(|doc, cx| doc.set_value_view(ValueView::Plaintext, cx));
+        assert!(has_path(&mut opened, "secret-value-edit"));
+
+        opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
+        assert!(
+            opened
+                .rendered_text()
+                .contains(&dbflux_i18n::t!("document.secret_store.edit.open"))
+        );
+    }
+
+    #[gpui::test]
+    fn the_chord_and_the_pane_action_open_the_editor(cx: &mut TestAppContext) {
+        let mut opened = opened_key_value(cx);
+        let actions: Vec<String> = opened.window.update(|_, cx| {
+            opened
+                .doc
+                .read(cx)
+                .pane_actions(&opened.doc)
+                .into_iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+        assert!(actions.iter().any(|id| id == "secret-edit-value"));
+
+        assert!(opened.command(Command::EditValue));
+        assert!(opened.read(|doc| doc.is_editing_value()));
+    }
+
+    #[gpui::test]
+    fn the_editor_opens_formatted_on_the_stored_text(cx: &mut TestAppContext) {
+        let mut opened = opened_key_value(cx);
+        opened.start_edit();
+
+        assert_eq!(
+            opened.read(|doc| doc.edit_mode()),
+            Some(EditMode::Formatted)
+        );
+        let text = opened.editor_text();
+        assert!(text.contains("\"username\": \"api-user\""), "{text}");
+        assert!(text.contains('\n'), "indented for editing: {text}");
+    }
+
+    #[gpui::test]
+    fn an_edited_pair_saves_compact_and_the_pairs_show_the_new_value(cx: &mut TestAppContext) {
+        let mut opened = opened_key_value(cx);
+        opened.start_edit();
+        let formatted = opened.editor_text().replace("api-user", "api-user2");
+        opened.set_editor_text(&formatted);
+
+        opened.save_edit();
+
+        assert_eq!(
+            opened.written_values(),
+            vec![(KEY_VALUE_SECRET.to_string(), EDITED.to_string())]
+        );
+        opened.read(|doc| {
+            assert!(!doc.is_editing_value());
+            let ValueState::Loaded(value) = &doc.value else {
+                panic!("value not loaded");
+            };
+            assert_eq!(value.view, ValueView::KeyValue);
+            let usernames: Vec<String> = value
+                .fields()
+                .into_iter()
+                .filter(|(key, _)| *key == Some("username"))
+                .map(|(_, field)| field.expose_secret().to_string())
+                .collect();
+            assert_eq!(usernames, vec!["api-user2".to_string()]);
+            assert!(!value.is_revealed(0), "masked again");
+        });
+    }
+
+    #[gpui::test]
+    fn invalid_json_blocks_save(cx: &mut TestAppContext) {
+        let mut opened = opened_key_value(cx);
+        opened.start_edit();
+        opened.set_editor_text("{\"username\": oops");
+
+        opened.save_edit();
+
+        assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+        let errors = opened.reported_errors();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].1.contains("JSON"));
+    }
+
+    #[gpui::test]
+    fn binary_managed_and_pending_values_stay_read_only(cx: &mut TestAppContext) {
+        for name in [BINARY_SECRET, MANAGED_SECRET, PENDING_DELETION_SECRET] {
+            let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+            opened.select(name);
+            opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+            assert!(!opened.read(|doc| doc.can_edit_value()), "{name}");
+        }
+    }
+
+    #[gpui::test]
+    fn the_key_value_editor_reaches_no_accessibility_node(cx: &mut TestAppContext) {
+        let mut opened = opened_key_value(cx);
+        opened.start_edit();
+        for mode in [EditMode::Formatted, EditMode::Raw] {
+            let doc = opened.doc.clone();
+            opened
+                .window
+                .update(|window, cx| doc.update(cx, |doc, cx| doc.set_edit_mode(mode, window, cx)));
+            opened.window.run_until_parked();
+            let text = opened.accessibility_update_text();
+            assert!(!text.contains("fake-password-7f3a"), "{mode:?}: {text}");
+            assert!(!text.contains("api-user"), "{mode:?}: {text}");
+        }
+    }
+}

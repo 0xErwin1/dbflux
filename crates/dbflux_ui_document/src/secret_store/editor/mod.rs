@@ -211,7 +211,7 @@ impl SecretStoreDocument {
             return false;
         };
 
-        if value.content.is_binary() || value.content.has_key_value_view() {
+        if value.content.is_binary() {
             return false;
         }
 
