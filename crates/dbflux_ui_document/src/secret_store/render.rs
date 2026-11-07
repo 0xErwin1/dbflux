@@ -2,6 +2,7 @@
 //! path and the store-side search, the rows, and the footer. The details pane
 //! lives in `details.rs`.
 
+use super::list::{format_short_time, rotation_chip};
 use super::listing::{PathMode, child_path_label, path_segments, relative_name};
 use super::{RegionListState, SecretFocusMode, SecretRowKey, SecretStoreDocument, context_menu};
 use crate::chrome::{
@@ -204,9 +205,10 @@ impl SecretStoreDocument {
     /// is this", so it sits between the store and the path rather than in the
     /// toolbar among the controls.
     ///
-    /// While the region list is loading or failed, the picker cannot be
-    /// offered; the region then stays visible as a plain segment, so the
-    /// listing never loses the answer to which region it was loaded under.
+    /// While the region list is loading, or when the store cannot list
+    /// regions, the picker cannot be offered; the region then stays visible
+    /// as a plain chip, so the listing never loses the answer to which region
+    /// it was loaded under.
     fn render_breadcrumb_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut row = div()
             .flex()
@@ -216,17 +218,20 @@ impl SecretStoreDocument {
             .child(Breadcrumb::new(self.identity_segments(cx)).mono());
 
         if let Some(picker) = self.render_region_picker() {
-            row = row.child(Self::breadcrumb_separator(cx)).child(picker);
+            row = row.child(picker);
         } else if self.region_switchable
             && let Some(region) = self.region.clone()
         {
-            row = row.child(Self::breadcrumb_separator(cx)).child(
-                // The same wrapper id the picker carries, so the plain
-                // segment reaches the accessibility tree too.
+            // The configured region, drawn like the picker's label but with
+            // no chevron: there is nothing to pick from.
+            row = row.child(
                 div()
                     .id("secret-region-plain")
                     .flex_shrink_0()
-                    .child(Breadcrumb::new(vec![BreadcrumbSegment::new(region)])),
+                    .font_family(dbflux_components::fonts::editor_family(cx))
+                    .text_size(NavigationMetrics::BREADCRUMB_FONT)
+                    .text_color(cx.theme().muted_foreground)
+                    .child(region),
             );
         }
 
@@ -256,32 +261,6 @@ impl SecretStoreDocument {
                 .child(dropdown.into_any_element())
                 .into_any_element()
         })
-    }
-
-    /// The failure of the region listing: the store's error and the retry,
-    /// where the toolbar keeps transient notices. A failed listing never
-    /// renders as an empty picker.
-    fn render_region_failure(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let RegionListState::Failed(error) = &self.regions else {
-            return Vec::new();
-        };
-
-        vec![
-            div()
-                .id("secret-region-error")
-                .max_w(px(240.0))
-                .truncate()
-                .text_size(DocumentMetrics::TABLE_META_FONT)
-                .text_color(cx.theme().muted_foreground)
-                .child(error.clone())
-                .into_any_element(),
-            Button::new(
-                "secret-region-retry",
-                dbflux_i18n::t!("document.secret_store.region.retry"),
-            )
-            .on_click(cx.listener(|this, _, _, cx| this.load_regions(cx)))
-            .into_any_element(),
-        ]
     }
 
     fn render_path_mode(&self, cx: &mut Context<Self>) -> SegmentedControl {
@@ -319,8 +298,7 @@ impl SecretStoreDocument {
     }
 
     /// Breadcrumb row, the Tree | Flat switch of a hierarchical store, the
-    /// store-side search and Refresh, plus the notice of a failed region
-    /// listing.
+    /// store-side search and Refresh.
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut refresh = Button::new(
             "secret-refresh",
@@ -341,22 +319,20 @@ impl SecretStoreDocument {
 
         let hierarchical = self.hierarchical();
 
-        // The breadcrumb and the search narrow before Refresh does, so a
-        // narrow listing keeps its toolbar actions on screen.
+        // The breadcrumb keeps its width: the search narrows first, down to
+        // its minimum, so the path never reads "aws-pr…" at a normal width.
         document_bar(DocumentMetrics::HEADER_HEIGHT_TALL, cx)
             .child(
                 div()
-                    .min_w_0()
-                    .overflow_hidden()
+                    .id("secret-breadcrumb")
+                    .flex_shrink_0()
                     .child(self.render_breadcrumb_row(cx)),
             )
             .child(div().flex_1())
             .when(hierarchical, |bar| bar.child(self.render_path_mode(cx)))
-            .when(self.region_switchable, |bar| {
-                bar.children(self.render_region_failure(cx))
-            })
             .child(
                 div()
+                    .id("secret-search")
                     .flex()
                     .w(ObjectStoreMetrics::SEARCH_WIDTH)
                     .min_w(SecretStoreMetrics::SEARCH_MIN_WIDTH)
@@ -508,6 +484,26 @@ impl SecretStoreDocument {
             )
     }
 
+    /// The rotation column: a chip, success-toned while rotation is enabled.
+    fn rotation_cell(summary: &SecretSummary) -> Div {
+        let chip = rotation_chip(summary.rotation.as_ref());
+        let mut badge =
+            Badge::new(chip.label, chip.tone).id(format!("secret-rotation-{}", summary.name));
+
+        if chip.tone == BadgeTone::Success {
+            badge = badge.icon(AppIcon::RefreshCcw);
+        }
+
+        div()
+            .flex()
+            .items_center()
+            .w(SecretStoreMetrics::ROTATION_WIDTH)
+            .flex_shrink_1()
+            .min_w_0()
+            .pr(DocumentMetrics::GAP)
+            .child(badge)
+    }
+
     fn render_secret_row(
         &self,
         summary: &SecretSummary,
@@ -546,10 +542,7 @@ impl SecretStoreDocument {
             )
             .child(name);
 
-        let last_changed = summary
-            .last_changed
-            .map(format_time)
-            .unwrap_or_else(|| UNKNOWN.to_string());
+        let last_changed = format_short_time(summary.last_changed);
 
         if self.store.supports(SecretStoreCapabilities::TYPED_VALUES) {
             let or_unknown =
@@ -590,13 +583,7 @@ impl SecretStoreDocument {
             ))
             .when(
                 self.store.supports(SecretStoreCapabilities::ROTATION),
-                |row| {
-                    row.child(meta_cell(
-                        SecretStoreMetrics::ROTATION_WIDTH,
-                        rotation_label(summary.rotation.as_ref()),
-                        foreground,
-                    ))
-                },
+                |row| row.child(Self::rotation_cell(summary)),
             )
             .child(meta_cell(
                 SecretStoreMetrics::LAST_CHANGED_WIDTH,
@@ -734,38 +721,44 @@ impl SecretStoreDocument {
     }
 
     fn render_footer(&self, cx: &Context<Self>) -> impl IntoElement {
-        let mut hints = vec![
-            (Command::Execute, "document.secret_store.footer.hint.open"),
+        let mut hints = vec![(Command::Execute, "document.secret_store.footer.hint.open")];
+
+        if self.hierarchical() {
+            hints.push((Command::ColumnLeft, "document.secret_store.footer.hint.up"));
+        }
+
+        // Ctrl+C copies the selection's resource id, which the details pane
+        // labels ARN.
+        hints.extend([
             (
                 Command::ToggleValuePanel,
                 "document.secret_store.footer.hint.retrieve",
             ),
             (
                 Command::ResultsCopyCell,
-                "document.secret_store.footer.hint.copy_id",
+                "document.secret_store.footer.hint.copy_arn",
             ),
             (
                 Command::FocusSearch,
                 "document.secret_store.footer.hint.filter",
             ),
-        ];
-
-        if self.hierarchical() {
-            hints.push((Command::ColumnLeft, "document.secret_store.footer.hint.up"));
-        }
+        ]);
 
         let hints = hints.into_iter().filter_map(|(command, key)| {
-            listing_shortcut(command)
-                .map(|shortcut| footer_key_hint(shortcut, dbflux_i18n::t!(key)))
+            listing_shortcut(command).map(|shortcut| {
+                let name = key.rsplit('.').next().unwrap_or(key);
+
+                footer_key_hint(shortcut, dbflux_i18n::t!(key))
+                    .id(format!("secret-footer-hint-{name}"))
+            })
         });
 
         document_footer(cx)
             .h(ObjectStoreMetrics::FOOTER_HEIGHT)
-            .child(footer_item(
-                AppIcon::KeyRound,
-                loaded_label(self.listing.entries.len()),
-                cx,
-            ))
+            .child(
+                footer_item(AppIcon::KeyRound, self.loaded_summary(), cx)
+                    .id("secret-footer-summary"),
+            )
             .child(div().flex_1())
             .children(hints)
     }

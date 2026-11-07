@@ -3427,7 +3427,6 @@ document:
     loading_more: "正在加载下一页…"
     region:
       label: "区域"
-      retry: "重试"
       switch_failed: "无法切换到区域 %{region}：%{error}"
     columns:
       name: "名称"
@@ -3459,10 +3458,18 @@ document:
       loaded:
         one: "已加载 %{count} 个密钥"
         many: "已加载 %{count} 个密钥"
+      paths:
+        one: "%{count} 个路径"
+        many: "%{count} 个路径"
+      parameters:
+        one: "%{count} 个参数"
+        many: "%{count} 个参数"
+      tree_summary: "%{path} 下 %{paths} · %{parameters}"
+      flat_summary: "%{path} 下 %{parameters}"
       hint:
         open: "打开"
         retrieve: "获取值"
-        copy_id: "复制 ID"
+        copy_arn: "复制 ARN"
         filter: "筛选"
         up: "上移"
     status:
@@ -3472,12 +3479,29 @@ document:
       describe_timing: "描述 · %{millis} ms"
       retrieve_timing: "获取值 · %{millis} ms"
       duration_tooltip: "上次存储调用的客户端耗时"
+    date:
+      short: "%{month}%{day}日 %{time}"
+      short_with_year: "%{year}年%{month}%{day}日 %{time}"
+      months:
+        jan: "1月"
+        feb: "2月"
+        mar: "3月"
+        apr: "4月"
+        may: "5月"
+        jun: "6月"
+        jul: "7月"
+        aug: "8月"
+        sep: "9月"
+        oct: "10月"
+        nov: "11月"
+        dec: "12月"
     rotation:
       off: "关闭"
       enabled: "已启用"
       disabled: "已禁用"
       every_days: "每 %{count} 天"
       every_hours: "每 %{count} 小时"
+      on_schedule: "按计划"
       schedule_with_window: "%{schedule} · 时间窗口 %{window}（%{expression}）"
       title: "轮换"
       status: "状态"

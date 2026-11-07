@@ -3427,7 +3427,6 @@ document:
     loading_more: "Cargando la página siguiente…"
     region:
       label: "Región"
-      retry: "Reintentar"
       switch_failed: "No se pudo cambiar a la región %{region}: %{error}"
     columns:
       name: "Nombre"
@@ -3459,10 +3458,18 @@ document:
       loaded:
         one: "%{count} secreto cargado"
         many: "%{count} secretos cargados"
+      paths:
+        one: "%{count} ruta"
+        many: "%{count} rutas"
+      parameters:
+        one: "%{count} parámetro"
+        many: "%{count} parámetros"
+      tree_summary: "%{paths} · %{parameters} en %{path}"
+      flat_summary: "%{parameters} en %{path}"
       hint:
         open: "abrir"
         retrieve: "obtener valor"
-        copy_id: "copiar ID"
+        copy_arn: "copiar ARN"
         filter: "filtrar"
         up: "subir"
     status:
@@ -3472,12 +3479,29 @@ document:
       describe_timing: "Descripción · %{millis} ms"
       retrieve_timing: "Obtener valor · %{millis} ms"
       duration_tooltip: "Duración en el cliente de la última llamada al almacén"
+    date:
+      short: "%{day} %{month}, %{time}"
+      short_with_year: "%{day} %{month} %{year}, %{time}"
+      months:
+        jan: "ene"
+        feb: "feb"
+        mar: "mar"
+        apr: "abr"
+        may: "may"
+        jun: "jun"
+        jul: "jul"
+        aug: "ago"
+        sep: "sep"
+        oct: "oct"
+        nov: "nov"
+        dec: "dic"
     rotation:
       off: "Desactivada"
       enabled: "Activada"
       disabled: "Desactivada"
       every_days: "Cada %{count} días"
       every_hours: "Cada %{count} horas"
+      on_schedule: "Según horario"
       schedule_with_window: "%{schedule} · ventana %{window} (%{expression})"
       title: "Rotación"
       status: "Estado"

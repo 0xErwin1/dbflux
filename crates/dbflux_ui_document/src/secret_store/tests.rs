@@ -7,6 +7,7 @@ use super::listing::{
     AUTO_CONTINUE_ENTRY_LIMIT, LARGEST_PAGE_ENTRIES, SecretListing, child_path_label,
     keeps_loading, parent_path, path_segments,
 };
+use super::render::loaded_label;
 use super::value::{
     MASK, RetrievalTarget, RetrievedValue, ValueContent, ValueFailure, encode_base64,
     value_retrieval_event,
@@ -25,8 +26,9 @@ use dbflux_core::observability::{EventCategory, EventRecord, EventSink, EventSin
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
     Connection, DbError, DbKind, FormattedError, MutationPolicy, ReadOnlyReason, SecretDetails,
-    SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest, SecretStoreCapabilities,
-    SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretValue, SecretVersionStage,
+    SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest, SecretRotation,
+    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretValue,
+    SecretVersionStage,
 };
 use dbflux_test_support::fake_driver::{
     FAKE_KMS_DENIED_MESSAGE, FAKE_PARAMETER_STORE_ID, FAKE_SECRET_BINARY, FAKE_SECRET_PASSWORD,
@@ -769,6 +771,188 @@ fn the_loaded_count_agrees_with_its_number() {
     assert_eq!(super::render::loaded_label(1), "1 secret loaded");
     assert_eq!(super::render::loaded_label(27), "27 secrets loaded");
     assert_eq!(super::render::loaded_label(0), "0 secrets loaded");
+}
+
+fn rotation(enabled: bool, schedule: Option<&str>) -> SecretRotation {
+    SecretRotation {
+        enabled,
+        schedule: schedule.map(str::to_string),
+        window: None,
+        function: None,
+        last_rotated: None,
+        next_rotation: None,
+    }
+}
+
+/// The rotation column is a chip: success-toned with the schedule in words
+/// while rotation is on, a short form for a cron schedule, neutral "Off"
+/// otherwise.
+#[test]
+fn the_rotation_chip_reads_the_schedule_and_the_tone() {
+    use super::list::rotation_chip;
+    use dbflux_components::primitives::BadgeTone;
+
+    let chip = rotation_chip(Some(&rotation(true, Some("rate(30 days)"))));
+    assert_eq!(
+        (chip.label.as_str(), chip.tone),
+        ("Every 30 days", BadgeTone::Success)
+    );
+
+    let chip = rotation_chip(Some(&rotation(true, Some("cron(0 4 ? * SUN *)"))));
+    assert_eq!(
+        (chip.label.as_str(), chip.tone),
+        ("On a schedule", BadgeTone::Success)
+    );
+
+    let chip = rotation_chip(Some(&rotation(true, None)));
+    assert_eq!(
+        (chip.label.as_str(), chip.tone),
+        ("Enabled", BadgeTone::Success)
+    );
+
+    for off in [Some(rotation(false, Some("rate(30 days)"))), None] {
+        let chip = rotation_chip(off.as_ref());
+        assert_eq!(
+            (chip.label.as_str(), chip.tone),
+            ("Off", BadgeTone::Neutral)
+        );
+    }
+}
+
+/// "Oct 1, 03:12" in the current year; the year joins it otherwise.
+#[test]
+fn the_short_time_drops_the_year_only_in_the_current_year() {
+    use super::list::short_time_label;
+    use dbflux_core::chrono::{Local, TimeZone as _};
+
+    let time = Local
+        .with_ymd_and_hms(2026, 10, 1, 3, 12, 0)
+        .single()
+        .expect("a local time");
+
+    assert_eq!(short_time_label(time, 2026), "Oct 1, 03:12");
+    assert_eq!(short_time_label(time, 2027), "Oct 1, 2026, 03:12");
+}
+
+/// A hierarchical store counts paths and parameters under the listed path; a
+/// flat listing has no paths; any other store counts secrets.
+#[test]
+fn the_loaded_summary_names_what_the_store_holds() {
+    use super::list::loaded_summary;
+
+    let summary = |hierarchical, mode, path: Option<&str>, paths, entries| {
+        loaded_summary(hierarchical, mode, path, paths, entries)
+    };
+
+    assert_eq!(
+        summary(true, PathMode::Tree, Some("/app/prod/shop/"), 2, 7),
+        "2 paths · 7 parameters under /app/prod/shop/"
+    );
+    assert_eq!(
+        summary(true, PathMode::Tree, None, 1, 1),
+        "1 path · 1 parameter under /"
+    );
+    assert_eq!(
+        summary(true, PathMode::Flat, Some("/app/"), 3, 5),
+        "5 parameters under /app/"
+    );
+    assert_eq!(
+        summary(false, PathMode::Tree, None, 0, 5),
+        "5 secrets loaded"
+    );
+}
+
+/// The footer of a Parameter Store level shows the counts the listing holds,
+/// and its key hints name what each key does: Ctrl+C copies the ARN.
+#[gpui::test]
+fn the_footer_counts_paths_and_parameters_and_names_the_keys(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+
+    let (paths, parameters) =
+        opened.read(|doc| (doc.listing().child_paths.len(), doc.listing().entries.len()));
+    assert!(
+        paths > 0 && parameters > 0,
+        "the level holds paths and parameters"
+    );
+
+    let text = opened.rendered_text();
+    let expected = format!(
+        "{paths} path{} · {parameters} parameter{} under /app/prod/",
+        if paths == 1 { "" } else { "s" },
+        if parameters == 1 { "" } else { "s" }
+    );
+    assert!(text.contains(&expected), "{expected}: {text}");
+    assert!(!text.contains("secrets loaded"), "{text}");
+    assert!(text.contains("copy ARN"), "{text}");
+    assert!(!text.contains("copy ID"), "{text}");
+    assert!(text.contains("up"), "{text}");
+
+    let status = opened
+        .window
+        .update(|_, cx| opened.doc.read(cx).loaded_summary());
+    assert_eq!(status, expected);
+}
+
+/// A flat store keeps counting secrets, and its rows show the rotation chips
+/// and the short change time.
+#[gpui::test]
+fn the_secrets_footer_and_rows_follow_the_design(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    let count = opened.read(|doc| doc.listing().entries.len());
+    let text = opened.rendered_text();
+
+    assert!(text.contains(&loaded_label(count)), "{text}");
+    assert!(text.contains("Every 30 days"), "{text}");
+    assert!(text.contains("Off"), "{text}");
+    assert!(text.contains("copy ARN"), "{text}");
+    assert!(
+        !text.contains("2026-09-20"),
+        "the long form is gone: {text}"
+    );
+}
+
+/// The breadcrumb keeps its natural width when the document narrows: the
+/// search field gives way first, so the path never reads "aws-pr…".
+#[gpui::test]
+fn the_breadcrumb_keeps_its_width_while_the_search_narrows(cx: &mut TestAppContext) {
+    use dbflux_ui_base::keyboard_coverage::FrameCapture;
+
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+
+    let widths = |opened: &mut Opened<'_>| -> (f32, f32) {
+        let capture = FrameCapture::observe(opened.window);
+        let frame = capture.frame(opened.window);
+        let width_of = |id: &str| {
+            frame
+                .nodes()
+                .find(|(_, node)| node.id() == id)
+                .map(|(_, node)| f32::from(node.bounds().size.width))
+                .unwrap_or_else(|| panic!("no element {id}"))
+        };
+
+        (width_of("secret-breadcrumb"), width_of("secret-search"))
+    };
+
+    opened
+        .window
+        .simulate_resize(gpui::size(gpui::px(1500.0), gpui::px(800.0)));
+    opened.window.run_until_parked();
+    let (wide_breadcrumb, wide_search) = widths(&mut opened);
+
+    opened
+        .window
+        .simulate_resize(gpui::size(gpui::px(1100.0), gpui::px(800.0)));
+    opened.window.run_until_parked();
+    let (narrow_breadcrumb, narrow_search) = widths(&mut opened);
+
+    assert!(
+        narrow_search < wide_search,
+        "the search narrows: {wide_search} -> {narrow_search}"
+    );
+    assert_eq!(
+        wide_breadcrumb, narrow_breadcrumb,
+        "the breadcrumb does not narrow"
+    );
 }
 
 #[gpui::test]
@@ -2190,44 +2374,49 @@ fn the_region_control_offers_the_regions_the_connection_lists(cx: &mut TestAppCo
     assert!(text.contains(CURRENT_REGION), "{text}");
 }
 
-/// A failed region listing is reported through the error seam, shown with a
-/// retry and never as an empty picker; the region itself stays visible as a
-/// breadcrumb while the picker cannot be offered. Retrying asks the
-/// connection again.
+/// A store that cannot list its regions (no EC2 behind it, or an IAM user
+/// without `ec2:DescribeRegions`) is not an error the user caused: no toast,
+/// no error text in the header, no retry. The region the connection is
+/// configured with stays visible as a plain chip, without a dropdown.
 #[gpui::test]
-fn a_failed_region_list_is_reported_and_retriable(cx: &mut TestAppContext) {
+fn a_failed_region_list_falls_back_to_the_configured_region_quietly(cx: &mut TestAppContext) {
     let message = "AccessDenied: not authorized to perform ec2:DescribeRegions";
     let mut opened = open_region_doc(cx, &[CURRENT_REGION], Some(message.to_string()));
 
     assert!(matches!(
         opened.read(|doc| doc.regions().clone()),
-        RegionListState::Failed(text) if text.contains(message)
+        RegionListState::Failed(_)
     ));
+    assert_eq!(opened.driver.available_regions_calls(), 1);
 
     let text = opened.rendered_text();
-    assert!(text.contains(message), "{text}");
+    assert!(!text.contains(message), "{text}");
     assert!(
-        text.contains(&dbflux_i18n::t!("document.secret_store.region.retry")),
+        !text.contains(&dbflux_i18n::t!("document.secret_store.region.retry")),
         "{text}"
     );
     assert!(
         text.contains(CURRENT_REGION),
-        "the region stays visible while the picker cannot be offered: {text}"
+        "the configured region stays visible: {text}"
     );
 
     let reported = opened
         .window
         .update(|_, cx| opened.app_state.read(cx).unread_error_count);
-    assert_eq!(reported, 1, "the failed listing must reach the error seam");
+    assert_eq!(reported, 0, "a missing region list is not a user error");
+    assert!(opened.reported_errors().is_empty());
 
-    opened.driver.set_region_list_error(None);
-    opened.update(|doc, cx| doc.load_regions(cx));
-
-    assert_eq!(opened.driver.available_regions_calls(), 2);
-    assert!(matches!(
-        opened.read(|doc| doc.regions().clone()),
-        RegionListState::Loaded(_)
-    ));
+    use dbflux_ui_base::keyboard_coverage::{FrameCapture, clickable_elements};
+    let capture = FrameCapture::observe(opened.window);
+    let frame = capture.frame(opened.window);
+    let paths: Vec<String> = clickable_elements(&frame)
+        .into_iter()
+        .map(|element| element.path)
+        .collect();
+    assert!(
+        !paths.iter().any(|path| path.contains("secret-region")),
+        "no picker and no retry without a region list: {paths:?}"
+    );
 }
 
 /// A successful switch reconnects the profile under the chosen region,
@@ -2486,12 +2675,11 @@ fn the_secret_store_document_is_covered(cx: &mut TestAppContext) {
     );
 }
 
-/// The region picker and the retry of a failed region listing are only
-/// rendered by a region-capable driver, so covering them needs documents of
-/// their own: the surface above renders a driver without `REGION_SWITCH` and
-/// says nothing about either control.
+/// The region picker is only rendered by a region-capable driver, so covering
+/// it needs a document of its own: the surface above renders a driver without
+/// `REGION_SWITCH` and says nothing about it.
 #[gpui::test]
-fn the_region_controls_are_covered(cx: &mut TestAppContext) {
+fn the_region_picker_is_covered(cx: &mut TestAppContext) {
     use crate::keyboard_coverage::SECRET_STORE;
     use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture, clickable_elements};
 
@@ -2528,24 +2716,14 @@ fn the_region_controls_are_covered(cx: &mut TestAppContext) {
             .any(|path| path.ends_with("secret-region.dropdown-trigger")),
         "the picker renders for a region-capable driver: {paths:?}"
     );
-    drop(switchable);
 
-    let mut failing = open_region_doc(cx, &[CURRENT_REGION], Some("AccessDenied".to_string()));
-    let paths = checked_paths(&mut failing);
-    assert!(
-        paths
-            .iter()
-            .any(|path| path.ends_with("secret-region-retry")),
-        "a failed region listing renders its retry: {paths:?}"
-    );
-
-    // Both controls are pane actions too: the entries above validate that the
-    // registry's Menu paths name real entries.
-    let action_ids: Vec<String> = failing.window.update(|_, cx| {
-        failing
+    // The picker is also a pane action: the entry above validates that the
+    // registry's Menu path names a real entry.
+    let action_ids: Vec<String> = switchable.window.update(|_, cx| {
+        switchable
             .doc
             .read(cx)
-            .pane_actions(&failing.doc)
+            .pane_actions(&switchable.doc)
             .into_iter()
             .map(|action| action.id.to_string())
             .collect()
@@ -2553,10 +2731,6 @@ fn the_region_controls_are_covered(cx: &mut TestAppContext) {
     assert!(
         action_ids.iter().any(|id| id == "secret-region"),
         "the picker has a pane action: {action_ids:?}"
-    );
-    assert!(
-        action_ids.iter().any(|id| id == "secret-region-retry"),
-        "the retry has a pane action: {action_ids:?}"
     );
 }
 

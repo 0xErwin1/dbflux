@@ -5,7 +5,6 @@
 //! this module owns how it is loaded, shown and switched.
 
 use super::SecretStoreDocument;
-use crate::object_text::db_error_to_user_facing;
 use dbflux_components::controls::DropdownItem;
 use dbflux_core::{DbError, SwitchRegionResult};
 use dbflux_ui_base::AppStateChanged;
@@ -13,8 +12,9 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::Context;
 
 /// The regions the connection offers, fetched once per document on the
-/// background executor. `Failed` keeps the store-side error, so a failed
-/// listing renders as an error with a retry and never as an empty picker.
+/// background executor. `Failed` keeps the store-side error for the log: a
+/// store that cannot list its regions is not a failure the user caused, so the
+/// document shows the configured region without a picker and says nothing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum RegionListState {
     #[default]
@@ -103,10 +103,14 @@ impl SecretStoreDocument {
                 RegionListState::Loaded(regions)
             }
             Err(error) => {
-                // First catch site of the discovery and of the user-triggered
-                // retry: report through the error seam and keep the inline
-                // retry, which renders below with the store's message.
-                report_error(db_error_to_user_facing(&error), cx);
+                // LocalStack without EC2 and an IAM user without
+                // `ec2:DescribeRegions` both land here on every open, so this
+                // is a log line and not a toast or an audit row.
+                log::warn!(
+                    "[secret store] the regions of profile {} could not be listed; \
+                     the document keeps the configured region: {error}",
+                    self.profile_id
+                );
                 RegionListState::Failed(error.to_string())
             }
         };

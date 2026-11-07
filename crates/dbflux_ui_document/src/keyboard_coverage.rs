@@ -675,11 +675,6 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
         // suffix (`secret-region.dropdown-trigger`); the pane actions list an
         // entry that opens it.
         ("secret-region.*", KeyboardPath::Menu("secret-region")),
-        // The retry of a failed region listing, also in the pane actions.
-        (
-            "secret-region-retry",
-            KeyboardPath::Menu("secret-region-retry"),
-        ),
         (
             "secret-path-crumb-*",
             KeyboardPath::Command(Command::ColumnLeft),
