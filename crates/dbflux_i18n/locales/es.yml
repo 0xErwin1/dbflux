@@ -3566,6 +3566,11 @@ document:
       refused_managed: "El valor de %{name} lo gestiona %{service}, por lo que no se puede editar."
       refused_deletion: "Hay una eliminación programada para %{name}, así que su valor no se puede editar hasta que se restaure."
       change_summary: "Cambios de valor sin guardar"
+      hint_formatted: "Guardar escribe una versión nueva y la hace la actual. Formateado restaura el diseño almacenado al guardar; Sin formato guarda el texto exactamente como está aquí."
+      mode:
+        formatted: "Formateado"
+        raw: "Sin formato"
+        toggle: "Alternar entre Formateado y Sin formato"
 document_tree:
   search_placeholder: Buscar…
   view:

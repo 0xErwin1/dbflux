@@ -915,6 +915,24 @@ impl SecretStoreDocument {
             );
         }
 
+        // The Formatted / Raw switch is a clickable control of the editor, so
+        // the pane actions are its keyboard path too.
+        if self.can_toggle_edit_mode() {
+            let target = target.clone();
+            actions.push(
+                crate::pane::PaneAction::callback(
+                    "secret-editor-mode",
+                    dbflux_i18n::t!("document.secret_store.edit.mode.toggle"),
+                    move |window, cx| {
+                        if let Some(doc) = target.upgrade() {
+                            doc.update(cx, |doc, cx| doc.cycle_edit_mode(window, cx));
+                        }
+                    },
+                )
+                .enabled(self.can_toggle_edit_mode()),
+            );
+        }
+
         // Edit value opens the editor of a plaintext value; the action needs
         // the window the editor's state is built with.
         if self.can_edit_value() {
@@ -985,6 +1003,9 @@ impl SecretStoreDocument {
             Command::Execute => self.activate_selected(cx),
             Command::ToggleValuePanel => self.retrieve_selected_value(cx),
             Command::SaveQuery if self.value_edit.is_some() => self.save_value_edit(cx),
+            Command::CycleResultView if self.value_edit.is_some() => {
+                self.cycle_edit_mode(window, cx)
+            }
             Command::ExpandCollapse => self.toggle_reveal_all(cx),
             Command::ResultsCopyCell => self.copy_resource_id(cx),
             Command::ResultsCopyRow => self.copy_full_value(cx),

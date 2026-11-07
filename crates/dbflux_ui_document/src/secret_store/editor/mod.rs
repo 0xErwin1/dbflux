@@ -32,11 +32,26 @@
 //! audited a second time.
 //!
 //! The JSON gate is typed, not shaped: a value the store kept as JSON is
-//! saved only as JSON — whatever JSON the user typed, in the layout they
-//! typed it in, of any shape or type, from a compact object to a bare
-//! number. It does not promise to preserve the stored layout or the
-//! value's shape beyond what the user typed, and a stored value that is not
-//! JSON has no gate at all.
+//! saved only as JSON — whatever JSON the user typed, of any shape or type,
+//! from a compact object to a bare number — in both modes. A stored value
+//! that is not JSON has no gate at all.
+//!
+//! A value stored as JSON opens in one of two modes, and Save writes the text
+//! of the mode being edited:
+//!
+//! - **Formatted** (the default) shows the value indented for editing. When
+//!   the stored text was a single line, Save puts it back on one line by
+//!   removing the whitespace between tokens ([`json_layout::minify`]); when
+//!   the stored text already spanned lines, Save writes the text as edited.
+//!   Strings and numbers are never re-parsed, so only whitespace between
+//!   tokens can differ from what the user sees.
+//! - **Raw** shows the stored text verbatim and Save writes it verbatim.
+//!
+//! What Save would write, compared with the stored text, decides whether
+//! anything changed: an untouched value, or one whose only change is the
+//! indentation Formatted added, saves as a no-op in either mode. Switching
+//! modes re-lays the current text out only when it parses; text that does not
+//! parse stays as typed.
 
 use std::sync::Arc;
 
@@ -50,14 +65,39 @@ use dbflux_core::{
 use dbflux_ui_base::notifications::ErrorNotification;
 use dbflux_ui_base::toast::{Toast, ToastAction, copy_action, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
-use gpui::{App, AppContext as _, Context, Entity, prelude::*};
+use gpui::{App, AppContext as _, Context, Entity, Subscription, Window, prelude::*};
 use gpui_component::input::TextareaState;
 use uuid::Uuid;
+
+pub(crate) mod json_layout;
 
 use super::write::{SecretWriteFailure, SecretWriteFailureKind, put_secret_value};
 use super::{DetailsState, SecretRowKey, SecretStoreDocument, ValueState};
 use crate::object_text::db_error_to_user_facing;
 use crate::types::DocumentState;
+
+/// How the editor lays out a value stored as JSON.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EditMode {
+    /// The value indented for editing; Save restores the stored layout.
+    Formatted,
+    /// The stored text, saved verbatim.
+    Raw,
+}
+
+/// What Formatted shows for a stored text: a single-line JSON value
+/// indented, anything else in its own layout.
+fn formatted_layout(stored: &str, stored_is_json: bool) -> String {
+    if stored_is_json && !stored.contains('\n') {
+        json_layout::pretty(stored)
+    } else {
+        stored.to_string()
+    }
+}
+
+fn parses_as_json(text: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text).is_ok()
+}
 
 /// The open editor of the loaded plaintext value.
 pub(crate) struct ValueEditState {
@@ -76,6 +116,14 @@ pub(crate) struct ValueEditState {
     /// Discard does not drop what the landing still has to read.
     pub(super) saving: bool,
 
+    /// The layout the editor text is in. A value that is not JSON is always
+    /// [`EditMode::Raw`].
+    pub(super) mode: EditMode,
+
+    /// Redraws the pane when the editor's text or scroll position changes,
+    /// so the gutter and the Save state follow it.
+    _observer: Subscription,
+
     /// The connection session the value was read from. A save names this
     /// session, so a connection replaced under the open editor refuses the
     /// write instead of landing it on a connection the value never came
@@ -84,9 +132,59 @@ pub(crate) struct ValueEditState {
 }
 
 impl ValueEditState {
-    /// Whether the editor's text differs from the stored text it opened with.
+    /// Whether Save would write something other than the stored text.
     pub(super) fn is_changed(&self, cx: &App) -> bool {
-        self.editor.read(cx).value().as_str() != self.original.expose_secret()
+        self.text_to_write(self.editor.read(cx).value().as_str()) != self.original.expose_secret()
+    }
+
+    /// Whether the stored text spans more than one line. Valid JSON holds no
+    /// raw line break inside a string, so any line break is layout.
+    fn stored_is_multiline(&self) -> bool {
+        self.original.expose_secret().contains('\n')
+    }
+
+    /// What Formatted shows for the stored text: a single-line value
+    /// indented, a multi-line one in its own layout.
+    fn formatted_baseline(&self) -> String {
+        formatted_layout(self.original.expose_secret(), self.stored_is_json)
+    }
+
+    /// The bytes Save writes for `text` in the current mode.
+    pub(super) fn text_to_write(&self, text: &str) -> String {
+        if self.mode == EditMode::Raw {
+            return text.to_string();
+        }
+
+        if text == self.formatted_baseline() {
+            return self.original.expose_secret().to_string();
+        }
+
+        if self.stored_is_multiline() || !parses_as_json(text) {
+            text.to_string()
+        } else {
+            json_layout::minify(text)
+        }
+    }
+
+    /// The text `text` becomes when the editor moves to `mode`. Text that
+    /// does not parse stays as typed.
+    fn switched_text(&self, text: &str, mode: EditMode) -> String {
+        if !parses_as_json(text) {
+            return text.to_string();
+        }
+
+        match mode {
+            EditMode::Raw => self.text_to_write(text),
+            EditMode::Formatted => {
+                if text == self.original.expose_secret() {
+                    self.formatted_baseline()
+                } else if self.stored_is_multiline() {
+                    text.to_string()
+                } else {
+                    json_layout::pretty(text)
+                }
+            }
+        }
     }
 }
 
@@ -116,6 +214,59 @@ impl SecretStoreDocument {
         summary.owning_service.is_none()
             && summary.deletion_scheduled_for.is_none()
             && self.store.supports(SecretStoreCapabilities::WRITE)
+    }
+
+    /// The mode of the open editor; `None` when no editor is open or the
+    /// stored value is not JSON, which has no modes.
+    pub(crate) fn edit_mode(&self) -> Option<EditMode> {
+        self.value_edit
+            .as_ref()
+            .filter(|edit| edit.stored_is_json)
+            .map(|edit| edit.mode)
+    }
+
+    /// Whether the open editor offers the Formatted / Raw toggle.
+    pub fn can_toggle_edit_mode(&self) -> bool {
+        self.edit_mode().is_some() && !self.is_saving_value_edit()
+    }
+
+    /// Moves the open editor to `mode`, re-laying the current text out when
+    /// it parses.
+    pub(crate) fn set_edit_mode(
+        &mut self,
+        mode: EditMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can_toggle_edit_mode() {
+            return;
+        }
+
+        let Some(edit) = &mut self.value_edit else {
+            return;
+        };
+
+        if edit.mode == mode {
+            return;
+        }
+
+        let text = edit.editor.read(cx).value().to_string();
+        let switched = edit.switched_text(&text, mode);
+        edit.mode = mode;
+        edit.editor
+            .update(cx, |state, cx| state.set_value(&switched, window, cx));
+        cx.notify();
+    }
+
+    /// Switches to the other mode, for the key and the pane action.
+    pub fn cycle_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let next = match self.edit_mode() {
+            Some(EditMode::Formatted) => EditMode::Raw,
+            Some(EditMode::Raw) => EditMode::Formatted,
+            None => return,
+        };
+
+        self.set_edit_mode(next, window, cx);
     }
 
     /// Whether the value editor is open.
@@ -162,22 +313,31 @@ impl SecretStoreDocument {
         };
 
         let stored = value.content.full_text().expose_secret().to_string();
-        let stored_is_json = serde_json::from_str::<serde_json::Value>(&stored).is_ok();
+        let stored_is_json = parses_as_json(&stored);
+        let mode = if stored_is_json {
+            EditMode::Formatted
+        } else {
+            EditMode::Raw
+        };
+        let opening = formatted_layout(&stored, stored_is_json);
 
         let editor = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx)
                 .auto_grow(2, super::details::VIEWER_VISIBLE_LINES as usize)
                 .soft_wrap(true);
-            state.set_value(&stored, window, cx);
+            state.set_value(&opening, window, cx);
             state
         });
         editor.update(cx, |state, cx| state.focus(window, cx));
+        let observer = cx.observe(&editor, |_, _, cx| cx.notify());
 
         self.value_edit = Some(ValueEditState {
             original: SecretString::from(stored),
             stored_is_json,
             editor,
             saving: false,
+            mode,
+            _observer: observer,
             connection,
         });
         // The single-line fields the value drew are not drawn in edit mode;
@@ -293,7 +453,7 @@ impl SecretStoreDocument {
             return;
         }
 
-        let text = edit.editor.read(cx).value().to_string();
+        let text = edit.text_to_write(edit.editor.read(cx).value().as_str());
 
         if !edit.is_changed(cx) {
             return;
@@ -443,16 +603,18 @@ impl SecretStoreDocument {
                         // The editor exists for text values only.
                         SecretPayload::Binary(_) => String::new(),
                     };
-                    let stored_is_json =
-                        serde_json::from_str::<serde_json::Value>(&saved_text).is_ok();
+                    let stored_is_json = parses_as_json(&saved_text);
                     let keep_editing = self.value_edit.as_ref().is_some_and(|edit| {
-                        edit.editor.read(cx).value().as_str() != saved_text.as_str()
+                        edit.text_to_write(edit.editor.read(cx).value().as_str()) != saved_text
                     });
 
                     if keep_editing {
                         if let Some(edit) = &mut self.value_edit {
                             edit.original = SecretString::from(saved_text);
                             edit.stored_is_json = stored_is_json;
+                            if !stored_is_json {
+                                edit.mode = EditMode::Raw;
+                            }
                             edit.saving = false;
                         }
                     } else {

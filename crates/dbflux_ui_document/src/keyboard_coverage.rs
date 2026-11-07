@@ -724,6 +724,13 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
             "secret-value-editor-save",
             KeyboardPath::Menu("secret-editor-save"),
         ),
+        // The Formatted / Raw switch of a JSON value: the result-view key
+        // flips it while the editor is open, and the pane action of the same
+        // name is its menu entry.
+        (
+            "segmented-secret-editor-mode-*",
+            KeyboardPath::Command(Command::CycleResultView),
+        ),
         (
             "secret-value-editor-discard",
             KeyboardPath::Menu("secret-editor-discard"),

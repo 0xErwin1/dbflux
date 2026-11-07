@@ -1412,10 +1412,10 @@ fn the_stored_json_layout_is_preserved(cx: &mut TestAppContext) {
     opened.start_edit();
     assert_eq!(
         opened.editor_text(),
-        compact,
-        "the editor opens with the stored text"
+        "[\n  \"token-a\",\n  \"token-b\"\n]",
+        "Formatted opens the stored text indented"
     );
-    opened.set_editor_text(compact_edited);
+    opened.set_editor_text("[\n  \"token-a\",\n  \"token-c\"\n]");
     opened.save_edit();
     assert_eq!(
         opened.written_values(),
@@ -4063,4 +4063,341 @@ fn a_failing_write_returns_the_correlation_id_its_audit_event_recorded() {
         failure.correlation_id.map(|id| id.to_string()),
         event.correlation_id
     );
+}
+
+// -- Value editor: line numbers and Formatted / Raw -------------------------
+
+mod editor_layout {
+    use super::*;
+    use crate::secret_store::editor::EditMode;
+    use crate::secret_store::editor::json_layout::{minify, pretty};
+
+    /// Nested, so it opens as plaintext (not key/value), with a string that
+    /// holds repeated spaces and escaped quotes, and a number a parse and
+    /// re-serialize would normalize.
+    const COMPACT: &str = r#"{"db":{"host":"h","note":"a  b \"q\" 77b1-secret"},"n":[1,2.50]}"#;
+
+    const FORMATTED: &str = "{\n  \"db\": {\n    \"host\": \"h\",\n    \"note\": \"a  b \\\"q\\\" 77b1-secret\"\n  },\n  \"n\": [\n    1,\n    2.50\n  ]\n}";
+
+    const COMPACT_EDITED: &str =
+        r#"{"db":{"host":"h2","note":"a  b \"q\" 77b1-secret"},"n":[1,2.50]}"#;
+
+    impl Opened<'_> {
+        fn edit_mode(&mut self) -> Option<EditMode> {
+            self.read(|doc| doc.edit_mode())
+        }
+
+        fn set_mode(&mut self, mode: EditMode) {
+            let doc = self.doc.clone();
+            self.window
+                .update(|window, cx| doc.update(cx, |doc, cx| doc.set_edit_mode(mode, window, cx)));
+            self.window.run_until_parked();
+        }
+
+        /// The gutter line elements the frame drew.
+        fn gutter_lines(&mut self) -> usize {
+            self.rendered_paths()
+                .iter()
+                .filter(|path| {
+                    path.rsplit_once("secret-value-editor-line-")
+                        .is_some_and(|(_, index)| {
+                            !index.is_empty() && index.chars().all(|ch| ch.is_ascii_digit())
+                        })
+                })
+                .count()
+        }
+
+        /// The bounds of the element whose path ends with `suffix`.
+        fn element_bounds(&mut self, suffix: &str) -> gpui::Bounds<gpui::Pixels> {
+            let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
+            let frame = capture.frame(self.window);
+
+            frame
+                .nodes()
+                .find(|(_, node)| node.path().ends_with(suffix))
+                .map(|(_, node)| node.bounds())
+                .expect("the element is rendered")
+        }
+
+        fn dirty(&mut self) -> bool {
+            let doc = self.doc.clone();
+            self.window
+                .update(|_, cx| doc.read(cx).has_unsaved_value_edits(cx))
+        }
+
+        fn has_path(&mut self, suffix: &str) -> bool {
+            self.rendered_paths()
+                .iter()
+                .any(|path| path.ends_with(suffix))
+        }
+
+        fn edit_json(&mut self, stored: &str) {
+            self.select(PLAINTEXT_SECRET);
+            self.show_value(stored);
+            self.start_edit();
+        }
+    }
+
+    #[test]
+    fn pretty_and_minify_change_only_insignificant_whitespace() {
+        assert_eq!(pretty(COMPACT), FORMATTED);
+        assert_eq!(minify(FORMATTED), COMPACT);
+        assert_eq!(minify(&pretty(COMPACT)), COMPACT);
+        assert_eq!(pretty("{}"), "{}");
+        assert_eq!(
+            pretty(r#"{"a":[],"b":{}}"#),
+            "{\n  \"a\": [],\n  \"b\": {}\n}"
+        );
+        assert_eq!(pretty("42"), "42");
+        assert_eq!(minify(" [ 1 , 2 ] "), "[1,2]");
+    }
+
+    #[gpui::test]
+    fn the_gutter_has_one_number_per_line_and_follows_the_edit(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(PLAINTEXT_SECRET);
+        opened.show_value("a\nb\nc");
+        opened.start_edit();
+        assert_eq!(opened.gutter_lines(), 3);
+
+        opened.set_editor_text("a\nb\nc\nd\ne");
+        assert_eq!(opened.gutter_lines(), 5);
+
+        opened.set_editor_text("only");
+        assert_eq!(opened.gutter_lines(), 1);
+    }
+
+    #[gpui::test]
+    fn the_gutter_scrolls_with_the_editor(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(PLAINTEXT_SECRET);
+        let text = (0..40)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        opened.show_value(&text);
+        opened.start_edit();
+        assert_eq!(opened.gutter_lines(), 40);
+
+        let first = opened.element_bounds("secret-value-editor-line-0").origin.y;
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        opened.window.update(|_, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_scroll_offset(gpui::point(gpui::px(0.), gpui::px(-60.)), cx)
+            });
+        });
+        opened.window.run_until_parked();
+
+        let scrolled = opened.element_bounds("secret-value-editor-line-0").origin.y;
+        assert!(scrolled < first, "{first:?} then {scrolled:?}");
+    }
+
+    #[gpui::test]
+    fn the_toggle_is_offered_for_stored_json_only(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json("host = db.internal\nport = 5432");
+        assert_eq!(opened.edit_mode(), None, "plaintext has no mode");
+        assert!(!opened.has_path("segmented-secret-editor-mode"));
+        assert!(!opened.read(|doc| doc.can_toggle_edit_mode()));
+
+        let mut json = open(cx, FAKE_SECRETS_STORE_ID, None);
+        json.edit_json(COMPACT);
+        assert_eq!(json.edit_mode(), Some(EditMode::Formatted));
+        assert!(json.read(|doc| doc.can_toggle_edit_mode()));
+        assert!(json.has_path("segmented-secret-editor-mode-formatted"));
+        assert!(json.has_path("segmented-secret-editor-mode-raw"));
+    }
+
+    #[gpui::test]
+    fn a_json_value_opens_formatted_and_switches_losslessly(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+        assert_eq!(opened.editor_text(), FORMATTED);
+        assert_eq!(opened.gutter_lines(), FORMATTED.lines().count());
+
+        opened.set_mode(EditMode::Raw);
+        assert_eq!(opened.editor_text(), COMPACT, "Raw shows the stored text");
+        assert_eq!(opened.gutter_lines(), 1);
+
+        opened.set_mode(EditMode::Formatted);
+        assert_eq!(opened.editor_text(), FORMATTED);
+        assert!(!opened.dirty());
+    }
+
+    #[gpui::test]
+    fn switching_with_an_edit_carries_the_edit_when_it_parses(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+        opened.set_editor_text(&FORMATTED.replace("\"h\"", "\"h2\""));
+
+        opened.set_mode(EditMode::Raw);
+        assert_eq!(opened.editor_text(), COMPACT_EDITED);
+
+        opened.set_mode(EditMode::Formatted);
+        assert_eq!(opened.editor_text(), pretty(COMPACT_EDITED));
+
+        // Text that does not parse is kept as typed.
+        opened.set_editor_text("{\"db\": oops");
+        opened.set_mode(EditMode::Raw);
+        assert_eq!(opened.editor_text(), "{\"db\": oops");
+    }
+
+    #[gpui::test]
+    fn formatted_save_of_compact_json_writes_compact(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+        opened.set_editor_text(&FORMATTED.replace("\"h\"", "\"h2\""));
+
+        opened.save_edit();
+
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), COMPACT_EDITED.to_string())]
+        );
+    }
+
+    #[gpui::test]
+    fn formatted_save_of_multiline_json_writes_the_text_as_edited(cx: &mut TestAppContext) {
+        let stored = "{\n    \"db\": {\n        \"host\": \"h\"\n    }\n}";
+        let edited = "{\n    \"db\": {\n        \"host\": \"h2\"\n    }\n}";
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(stored);
+        assert_eq!(opened.editor_text(), stored, "its own layout is kept");
+
+        opened.set_editor_text(edited);
+        opened.save_edit();
+
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), edited.to_string())]
+        );
+    }
+
+    #[gpui::test]
+    fn raw_save_writes_the_text_verbatim(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+        opened.set_mode(EditMode::Raw);
+        let spaced = r#"{ "db": { "host": "h3" } }"#;
+        opened.set_editor_text(spaced);
+
+        opened.save_edit();
+
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), spaced.to_string())]
+        );
+    }
+
+    #[gpui::test]
+    fn an_unchanged_save_is_a_no_op_in_either_mode(cx: &mut TestAppContext) {
+        for stored in [COMPACT, r#"{"db": {"host": "h"}}"#, "{\n    \"a\": [1]\n}"] {
+            let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+            opened.edit_json(stored);
+            let events = opened.audit_records().len();
+
+            opened.save_edit();
+            opened.set_mode(EditMode::Raw);
+            assert_eq!(opened.editor_text(), stored);
+            opened.save_edit();
+            opened.set_mode(EditMode::Formatted);
+            opened.save_edit();
+
+            assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+            assert_eq!(opened.audit_records().len(), events);
+            assert!(opened.reported_errors().is_empty());
+            assert!(!opened.dirty());
+        }
+    }
+
+    #[gpui::test]
+    fn invalid_json_blocks_save_in_both_modes(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+
+        opened.set_editor_text("{\"db\": oops");
+        opened.save_edit();
+        opened.set_mode(EditMode::Raw);
+        opened.set_editor_text("{\"db\": oops");
+        opened.save_edit();
+
+        assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+        let errors = opened.reported_errors();
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors.iter().all(|(_, summary)| summary.contains("JSON")));
+    }
+
+    #[gpui::test]
+    fn the_value_reaches_no_accessibility_node_in_either_mode(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+
+        for mode in [EditMode::Formatted, EditMode::Raw] {
+            opened.set_mode(mode);
+            let text = opened.accessibility_update_text();
+            let paths = opened.rendered_paths();
+            assert!(!text.contains("77b1-secret"), "{mode:?}: {text}");
+            assert!(!text.contains("host"), "{mode:?}: {text}");
+            assert!(!paths.iter().any(|path| path.contains("77b1")));
+            assert!(
+                paths
+                    .iter()
+                    .any(|path| path.ends_with("secret-value-editor-gutter")),
+                "{mode:?}: the gutter is drawn"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn the_gutter_is_hidden_from_assistive_technology(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
+        let frame = capture.frame(opened.window);
+        let exposed = frame
+            .nodes()
+            .filter(|(_, node)| node.path().contains("secret-value-editor-line-"))
+            .filter(|(_, node)| frame.accessibility_node(node).is_some())
+            .count();
+
+        assert_eq!(exposed, 0, "no gutter line has an accessibility node");
+    }
+
+    #[gpui::test]
+    fn the_mode_has_a_keyboard_path(cx: &mut TestAppContext) {
+        use crate::keyboard_coverage::SECRET_STORE;
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+        opened.set_editor_text(&FORMATTED.replace("\"h\"", "\"h2\""));
+
+        let entries: Vec<String> = opened.window.update(|_, cx| {
+            opened
+                .doc
+                .read(cx)
+                .pane_actions(&opened.doc)
+                .into_iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+        assert!(entries.iter().any(|id| id == "secret-editor-mode"));
+
+        let capture = FrameCapture::observe(opened.window);
+        let checked = Coverage::new(SECRET_STORE)
+            .with_menu_entries(entries)
+            .assert_covered(&capture.frame(opened.window));
+        assert!(
+            checked
+                .iter()
+                .any(|id| id == "segmented-secret-editor-mode-raw"),
+            "{checked:?}"
+        );
+
+        assert!(opened.command(Command::CycleResultView));
+        assert_eq!(opened.edit_mode(), Some(EditMode::Raw));
+        assert!(opened.command(Command::CycleResultView));
+        assert_eq!(opened.edit_mode(), Some(EditMode::Formatted));
+    }
 }
