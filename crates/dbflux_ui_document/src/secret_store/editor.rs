@@ -441,6 +441,9 @@ impl SecretStoreDocument {
             Ok(written) => {
                 if is_current {
                     self.value = ValueState::Loaded(Box::new(super::RetrievedValue::new(&written)));
+                    // The saved text is the current version now, whatever
+                    // version the pane was showing.
+                    self.value_version = None;
 
                     // The saved text becomes the editor's new baseline: an
                     // editor whose text still matches what was saved closes,
@@ -470,6 +473,13 @@ impl SecretStoreDocument {
                     // The details refresh, so the version the pane reports
                     // is the version the store now holds.
                     self.describe(name.to_string(), cx);
+                }
+
+                // The new version and the labels that moved with it. Listing
+                // again also invalidates a history request still in flight,
+                // which predates the write.
+                if self.selected == Some(SecretRowKey::Secret(name.to_string())) {
+                    self.load_versions(name.to_string(), cx);
                 }
             }
             Err(failure) => {

@@ -44,6 +44,7 @@ use dbflux_core::{
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::AppStateEntity;
 use gpui::*;
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// Which part of the document owns keyboard input.
@@ -122,6 +123,9 @@ pub struct SecretStoreDocument {
     details_generation: u64,
     versions: VersionsState,
     versions_generation: u64,
+    /// The connection the history was listed from, so ids of a replaced
+    /// session are never retrieved against the new one.
+    versions_session: Option<Arc<dyn Connection>>,
     /// The version whose value the value section shows or is retrieving,
     /// `None` for the current value.
     value_version: Option<String>,
@@ -275,6 +279,7 @@ impl SecretStoreDocument {
         subscriptions.push(
             cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
                 this.adopt_connection_region(cx);
+                this.adopt_connection_session(cx);
             }),
         );
 
@@ -302,6 +307,7 @@ impl SecretStoreDocument {
             details_generation: 0,
             versions: VersionsState::Idle,
             versions_generation: 0,
+            versions_session: None,
             value_version: None,
             value: ValueState::NotLoaded,
             value_generation: 0,
@@ -953,6 +959,7 @@ impl SecretStoreDocument {
         if let VersionsState::Loaded(versions) = &self.versions {
             for (index, version) in versions.iter().enumerate() {
                 let target = target.clone();
+                let history_generation = self.versions_generation;
                 actions.push(
                     PaneAction::callback(
                         format!("secret-version-retrieve-{index}"),
@@ -962,7 +969,12 @@ impl SecretStoreDocument {
                         ),
                         move |_window, cx| {
                             if let Some(doc) = target.upgrade() {
-                                doc.update(cx, |doc, cx| doc.activate_version(index, cx));
+                                doc.update(cx, |doc, cx| {
+                                    // The menu was built over another history.
+                                    if doc.versions_generation == history_generation {
+                                        doc.activate_version(index, cx);
+                                    }
+                                });
                             }
                         },
                     )
@@ -979,7 +991,7 @@ impl SecretStoreDocument {
                     Self::back_to_current_version,
                 )
                 .icon(AppIcon::RotateCcw)
-                .enabled(self.value_version.is_some()),
+                .enabled(self.can_return_to_current()),
             );
         }
 

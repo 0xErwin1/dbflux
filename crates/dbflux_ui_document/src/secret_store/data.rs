@@ -20,6 +20,10 @@ use gpui::Context;
 use std::sync::Arc;
 use std::time::Instant;
 
+/// The staging label a store with movable labels keeps on its current
+/// version.
+const CURRENT_LABEL: &str = "AWSCURRENT";
+
 impl SecretStoreDocument {
     pub(crate) fn connection(&self, cx: &Context<Self>) -> Option<Arc<dyn Connection>> {
         self.app_state
@@ -251,6 +255,7 @@ impl SecretStoreDocument {
     pub(crate) fn reset_versions(&mut self) {
         self.versions_generation = self.versions_generation.wrapping_add(1);
         self.versions = VersionsState::Idle;
+        self.versions_session = None;
     }
 
     /// Lists the versions of `name` for the details pane, on the background
@@ -267,6 +272,7 @@ impl SecretStoreDocument {
         }
 
         self.versions = VersionsState::Loading;
+        self.versions_session = None;
 
         let Some(connection) = self.connection(cx) else {
             self.versions = VersionsState::Failed(dbflux_i18n::t!(
@@ -274,6 +280,8 @@ impl SecretStoreDocument {
             ));
             return;
         };
+
+        self.versions_session = Some(connection.clone());
 
         let store_id = self.store.id.clone();
         let entity = cx.entity().clone();
@@ -305,7 +313,9 @@ impl SecretStoreDocument {
     }
 
     /// Lands a history. A response for another secret, or from a load that
-    /// a newer selection, refresh or connection replaced, is dropped.
+    /// a newer selection, refresh or connection replaced, is dropped; a
+    /// connection replaced since the load started drops it and lists again
+    /// from the new session.
     pub(crate) fn apply_versions(
         &mut self,
         generation: u64,
@@ -320,6 +330,12 @@ impl SecretStoreDocument {
             return;
         }
 
+        if !self.history_session_is_live(cx) {
+            self.load_versions(name.to_string(), cx);
+            cx.notify();
+            return;
+        }
+
         self.versions = match result {
             Ok(versions) => VersionsState::Loaded(versions),
             Err(error) => VersionsState::Failed(error.to_string()),
@@ -327,14 +343,70 @@ impl SecretStoreDocument {
         cx.notify();
     }
 
-    /// The version the store serves as the selected secret's current value.
-    pub(crate) fn current_version_id(&self) -> Option<&str> {
-        match &self.details {
-            DetailsState::Loaded(details) => details.summary.version.as_deref(),
-            _ => self
-                .selected_summary()
-                .and_then(|summary| summary.version.as_deref()),
+    /// Whether the history was listed from the connection the profile
+    /// holds now. A connection replaced since — a reconnect, a region switch,
+    /// a credentials refresh — is another session, whose versions the
+    /// listed ids do not name.
+    pub(crate) fn history_session_is_live(&self, cx: &Context<Self>) -> bool {
+        match (&self.versions_session, self.connection(cx)) {
+            (Some(listed), Some(live)) => Arc::ptr_eq(listed, &live),
+            _ => false,
         }
+    }
+
+    /// Lists the selected secret's history again when the connection it was
+    /// listed from is gone. Independent of the unsaved-edit guard: the
+    /// history carries no edit, and stale ids must never be retrievable.
+    pub(crate) fn adopt_connection_session(&mut self, cx: &mut Context<Self>) {
+        let Some(SecretRowKey::Secret(name)) = self.selected.clone() else {
+            return;
+        };
+
+        if self.versions_session.is_none() || self.history_session_is_live(cx) {
+            return;
+        }
+
+        self.load_versions(name, cx);
+        cx.notify();
+    }
+
+    /// The version the store serves as the selected secret's current value:
+    /// the describe's, else the one the history marks (the row holding the
+    /// current label, or the highest number on a store without labels), else
+    /// the listing's.
+    pub(crate) fn current_version_id(&self) -> Option<&str> {
+        let described = match &self.details {
+            DetailsState::Loaded(details) => details.summary.version.as_deref(),
+            _ => None,
+        };
+
+        described
+            .or_else(|| self.history_current_version())
+            .or_else(|| {
+                self.selected_summary()
+                    .and_then(|summary| summary.version.as_deref())
+            })
+    }
+
+    fn history_current_version(&self) -> Option<&str> {
+        let VersionsState::Loaded(versions) = &self.versions else {
+            return None;
+        };
+
+        let row = if self.store.supports(SecretStoreCapabilities::VERSION_LABELS) {
+            versions
+                .iter()
+                .find(|version| version.labels.iter().any(|label| label == CURRENT_LABEL))
+        } else {
+            versions
+                .iter()
+                .filter_map(|version| Some((version.id.parse::<u64>().ok()?, version)))
+                .max_by_key(|(number, _)| *number)
+                .map(|(_, version)| version)
+                .or_else(|| versions.first())
+        };
+
+        row.map(|version| version.id.as_str())
     }
 
     pub(crate) fn is_current_version(&self, version: &str) -> bool {
@@ -342,8 +414,9 @@ impl SecretStoreDocument {
     }
 
     /// Retrieves the value of the version at `index` of the history, through
-    /// the same audited retrieval Retrieve value uses. The current version's
-    /// row retrieves the current value.
+    /// the same audited retrieval Retrieve value uses. The request always
+    /// names the row's id, the current version's row included: the current
+    /// version can rotate between the listing and the click.
     pub fn activate_version(&mut self, index: usize, cx: &mut Context<Self>) {
         let VersionsState::Loaded(versions) = &self.versions else {
             return;
@@ -353,13 +426,25 @@ impl SecretStoreDocument {
             return;
         };
 
-        let requested = (!self.is_current_version(&id)).then_some(id);
-        self.retrieve_version(requested, cx);
+        // The ids belong to the session that listed them; against another
+        // connection they could name a different version or none.
+        if !self.history_session_is_live(cx) {
+            self.adopt_connection_session(cx);
+            return;
+        }
+
+        self.retrieve_version(Some(id), cx);
+    }
+
+    /// Whether Back to current may run: a historical value is shown and no
+    /// retrieval is in flight.
+    pub fn can_return_to_current(&self) -> bool {
+        self.value_version.is_some() && !matches!(self.value, ValueState::Loading)
     }
 
     /// Replaces a historical value with the current one.
     pub fn back_to_current_version(&mut self, cx: &mut Context<Self>) {
-        if self.value_version.is_some() {
+        if self.can_return_to_current() {
             self.retrieve_version(None, cx);
         }
     }
@@ -373,8 +458,15 @@ impl SecretStoreDocument {
 
     /// Retrieves `version` of the selected secret, the current value when
     /// `None`. One path for both, so every retrieval is audited the same way.
+    /// The pane marks the value as historical only when `version` is not the
+    /// one it knows as current.
     pub(crate) fn retrieve_version(&mut self, version: Option<String>, cx: &mut Context<Self>) {
         if !self.can_retrieve_value() {
+            return;
+        }
+
+        // Retrieving replaces the value section and drops the open editor.
+        if self.block_unsaved_value_edits(cx) {
             return;
         }
 
@@ -382,8 +474,12 @@ impl SecretStoreDocument {
             return;
         };
 
+        let shown_version = version
+            .clone()
+            .filter(|version| !self.is_current_version(version));
+
         self.clear_value();
-        self.value_version = version.clone();
+        self.value_version = shown_version;
         let generation = self.value_generation;
         self.value = ValueState::Loading;
         cx.notify();

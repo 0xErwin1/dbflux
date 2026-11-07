@@ -185,10 +185,15 @@ impl SecretStoreDocument {
             sections.push(managed_card(&summary.name, service).into_any_element());
         }
 
+        // The history loads apart from the describe, so it shows whatever
+        // state the describe is in; it sits after the metadata when there is
+        // one.
+        let mut versions = self.render_versions_section(cx);
+
         match &self.details {
             DetailsState::Loaded(details) => {
                 sections.push(self.render_metadata_section(details, cx).into_any_element());
-                sections.extend(self.render_versions_section(cx));
+                sections.extend(versions.take());
 
                 if self.store.supports(SecretStoreCapabilities::ROTATION) {
                     sections.push(render_rotation_section(details, cx).into_any_element());
@@ -211,6 +216,8 @@ impl SecretStoreDocument {
             ),
             DetailsState::Idle => {}
         }
+
+        sections.extend(versions);
 
         let theme = cx.theme();
 
@@ -575,6 +582,7 @@ impl SecretStoreDocument {
         )
         .icon(AppIcon::RotateCcw)
         .tab_stop(false)
+        .disabled(!self.can_return_to_current())
         .on_click(cx.listener(|this, _, _, cx| this.back_to_current_version(cx)));
 
         BannerBlock::new(
