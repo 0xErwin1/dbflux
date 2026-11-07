@@ -229,3 +229,33 @@ fn a_put_request_redacts_its_value_from_debug() {
     assert!(format!("{request:?}").contains("prod/api/credentials"));
     assert_eq!(request.stage, Some(SecretVersionStage::Pending));
 }
+
+// --- Listing versions ---
+
+#[test]
+fn the_default_list_versions_refuses_naming_the_store_and_the_secret() {
+    let store = DefaultOnlyStore(descriptor_with(SecretStoreCapabilities::VERSIONS));
+
+    let error = store
+        .list_versions("prod/api/credentials")
+        .expect_err("an unimplemented history must refuse, not answer empty");
+
+    let message = put_refusal_message(error);
+    assert!(message.contains("test-store"), "{message}");
+    assert!(message.contains("prod/api/credentials"), "{message}");
+}
+
+#[test]
+fn a_version_row_has_no_field_that_can_hold_a_value() {
+    let info = SecretVersionInfo {
+        id: "v1".to_string(),
+        labels: vec!["AWSCURRENT".to_string()],
+        created: None,
+        modified_by: Some("arn:aws:iam::1:user/dev".to_string()),
+    };
+
+    let rendered = format!("{info:?}");
+
+    assert!(rendered.contains("v1"), "{rendered}");
+    assert!(rendered.contains("AWSCURRENT"), "{rendered}");
+}

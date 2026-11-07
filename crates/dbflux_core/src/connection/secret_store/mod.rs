@@ -11,7 +11,8 @@
 //! and audits. Values travel as `secrecy` types, so they are redacted from
 //! `Debug` output and zeroed when dropped. A value is replaced only by
 //! `SecretStoreSource::put_value`, under the same rules, on stores whose
-//! descriptor advertises `SecretStoreCapabilities::WRITE`.
+//! descriptor advertises `SecretStoreCapabilities::WRITE`. The history of a
+//! secret is `SecretStoreSource::list_versions`, which reports metadata only.
 //!
 //! Every type here is provider-neutral: no SDK type crosses the seam, so an
 //! external RPC driver can implement it.
@@ -263,6 +264,28 @@ pub struct SecretDetails {
     pub deleted_at: Option<DateTime<Utc>>,
 }
 
+/// One entry of a secret's version history, as
+/// `SecretStoreSource::list_versions` reports it.
+///
+/// It has no value field and no payload type: a history row cannot hold a
+/// secret, so rendering or logging one can never leak it. A value is read
+/// only through `SecretStoreSource::get_value` with `id`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecretVersionInfo {
+    /// The selector `SecretStoreSource::get_value` accepts for this version:
+    /// a version id in Secrets Manager, a version number in Parameter Store.
+    pub id: String,
+
+    /// Staging labels (Secrets Manager) or parameter labels (Parameter
+    /// Store) attached to this version. Empty for a version with none.
+    pub labels: Vec<String>,
+
+    pub created: Option<DateTime<Utc>>,
+
+    /// Principal that wrote this version, when the store reports it.
+    pub modified_by: Option<String>,
+}
+
 /// A retrieved or written value.
 #[derive(Clone, Debug)]
 pub enum SecretPayload {
@@ -464,6 +487,19 @@ pub trait SecretStoreSource: Send + Sync {
             "Secret store \"{}\" does not implement writing values; refused the write to \"{}\".",
             self.descriptor().id,
             request.name
+        )))
+    }
+
+    /// Lists the versions of `name`, newest first, following every page the
+    /// store answers with. Never fetches a value: a row carries metadata
+    /// only, and each `id` is read through `get_value`.
+    ///
+    /// Stores advertising `VERSIONS` implement it; the default refuses
+    /// instead of answering an empty history.
+    fn list_versions(&self, name: &str) -> Result<Vec<SecretVersionInfo>, DbError> {
+        Err(DbError::NotSupported(format!(
+            "Secret store \"{}\" does not implement listing versions; refused the history of \"{name}\".",
+            self.descriptor().id
         )))
     }
 }

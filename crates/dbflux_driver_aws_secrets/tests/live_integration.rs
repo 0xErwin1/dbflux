@@ -317,6 +317,40 @@ fn secrets_manager_describe_reports_metadata_tags_and_versions() -> Result<(), D
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn secrets_manager_lists_versions_newest_first_and_each_id_fetches_its_value() -> Result<(), DbError>
+{
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        let first = seeder.secret_string("history", "first");
+        let second = seeder.put_secret_string("history", "second");
+
+        let connection = connect(&endpoint)?;
+        let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
+
+        let versions = secrets.list_versions("history")?;
+
+        let ids: Vec<&str> = versions.iter().map(|version| version.id.as_str()).collect();
+        assert_eq!(ids, [second.as_str(), first.as_str()]);
+        assert_eq!(versions[0].labels, ["AWSCURRENT"]);
+        assert_eq!(versions[1].labels, ["AWSPREVIOUS"]);
+        assert!(versions.iter().all(|version| version.created.is_some()));
+
+        for (version, expected) in versions.iter().zip(["second", "first"]) {
+            let value = secrets.get_value("history", Some(&version.id))?;
+            assert_eq!(text(&value), expected);
+        }
+
+        assert!(matches!(
+            secrets.list_versions("missing"),
+            Err(DbError::ObjectNotFound(_))
+        ));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn secrets_manager_get_value_returns_text_json_binary_and_versions() -> Result<(), DbError> {
     containers::with_localstack_secrets_endpoint(|endpoint| {
         let seeder = Seeder::new(&endpoint);
@@ -567,6 +601,35 @@ fn parameter_store_put_value_overwrites_and_bumps_the_version() -> Result<(), Db
             parameters.put_value(&SecretPutRequest::text("/missing", "value")),
             Err(DbError::ObjectNotFound(_))
         ));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn parameter_store_lists_history_newest_first_and_each_id_fetches_its_value() -> Result<(), DbError>
+{
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        let first = seeder.parameter("/svc/history", "first", ParameterType::String);
+        let second = seeder.parameter("/svc/history", "second", ParameterType::String);
+
+        let connection = connect(&endpoint)?;
+        let parameters = store(connection.as_ref(), PARAMETER_STORE_ID);
+
+        let versions = parameters.list_versions("/svc/history")?;
+
+        let ids: Vec<&str> = versions.iter().map(|version| version.id.as_str()).collect();
+        assert_eq!(ids, [second.to_string(), first.to_string()]);
+        assert!(versions.iter().all(|version| version.created.is_some()));
+
+        for (version, expected) in versions.iter().zip(["second", "first"]) {
+            let value = parameters.get_value("/svc/history", Some(&version.id))?;
+            assert_eq!(text(&value), expected);
+        }
+
+        assert!(!format!("{versions:?}").contains("second"));
 
         Ok(())
     })
