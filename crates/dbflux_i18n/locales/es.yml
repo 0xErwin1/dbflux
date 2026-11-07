@@ -4462,6 +4462,7 @@ settings:
       toggle_console: Mostrar u ocultar consola
       load_more: Cargar más
       edit_expiry: Editar expiración…
+      edit_value: Editar valor
       copy_preview: Copiar vista previa
       import_items: "Importar…"
       import_from_client: "Importar desde otro cliente…"

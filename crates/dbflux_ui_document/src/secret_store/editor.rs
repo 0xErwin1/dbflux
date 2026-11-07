@@ -146,14 +146,21 @@ impl SecretStoreDocument {
     }
 
     /// Opens the editor on the loaded value with the stored text. A value
-    /// that may not be edited, or a connection that is gone, ignores the
-    /// request.
+    /// that may not be edited ignores the request; a connection that is gone
+    /// is reported, as a save without one is.
     pub fn start_value_edit(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
         if !self.can_edit_value() {
             return;
         }
 
         let Some(connection) = self.connection(cx) else {
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::User,
+                    dbflux_i18n::t!("document.secret_store.error.connection_unavailable"),
+                ),
+                cx,
+            );
             return;
         };
 

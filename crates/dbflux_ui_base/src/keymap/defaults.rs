@@ -578,6 +578,9 @@ fn results_layer() -> KeymapLayer {
         Command::NewQueryTab,
     );
 
+    // The secret store's Edit value; other documents leave it unhandled.
+    layer.bind(KeyChord::new("e", Modifiers::none()), Command::EditValue);
+
     // Panel navigation (Ctrl+hjkl) — vim-style, literal Ctrl on every platform.
     layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
     layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::FocusToolbar);
