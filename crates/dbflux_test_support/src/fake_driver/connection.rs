@@ -36,22 +36,23 @@ impl FakeConnection {
         }
     }
 
-    fn execute_internal(&self, req: &QueryRequest) -> Result<QueryResult, Box<DbError>> {
-        mutex_lock(&self.state.executed_requests).push(req.clone());
+    fn execute_internal(&self, request: &QueryRequest) -> Result<QueryResult, Box<DbError>> {
+        mutex_lock(&self.state.executed_requests).push(request.clone());
 
         let refuses_read_only = !self.metadata.enforces_read_only()
             || self.state.refuse_read_only.load(Ordering::Relaxed);
         if refuses_read_only {
-            req.refuse_read_only_enforcement("Fake driver")
+            request
+                .refuse_read_only_enforcement("Fake driver")
                 .map_err(Box::new)?;
         }
 
-        if let Some(database) = req.database.clone() {
+        if let Some(database) = request.database.clone() {
             *rwlock_write(&self.active_database) = Some(database);
         }
 
         if let Some(outcome) = rwlock_read(&self.state.query_outcomes)
-            .get(&req.sql)
+            .get(&request.sql)
             .cloned()
         {
             return outcome.to_result();
