@@ -1,11 +1,10 @@
 #![windows_subsystem = "windows"]
 #![recursion_limit = "256"]
 
-mod cli;
 #[cfg(unix)]
 mod shell_path;
 
-use dbflux_app::mcp_command::run_mcp_command;
+use dbflux_cli::{Cli, Parser, Dispatch};
 use dbflux_audit::AuditService;
 use dbflux_core::ShutdownPhase;
 use dbflux_core::observability::actions::{SYSTEM_SHUTDOWN, SYSTEM_STARTUP};
@@ -263,37 +262,11 @@ fn install_default_crypto_provider() {
 fn main() {
     install_panic_hook();
     install_default_crypto_provider();
-
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.get(1).map(|s| s.as_str()) == Some("mcp") {
-        #[expect(
-            clippy::indexing_slicing,
-            reason = "the guard above requires `args[1]` to exist, so \
-                      `args.len() >= 2` and the `[2..]` slice is in range"
-        )]
-        let exit_code = run_mcp_command(&args[2..]);
-        std::process::exit(exit_code);
+    
+    match Cli::parse().run() {
+        Dispatch::Exit(code) => std::process::exit(code),
+        Dispatch::RunGui => run_gui(),
     }
-
-    if args.get(1).map(|s| s.as_str()) == Some("--gui") {
-        run_gui();
-        return;
-    }
-
-    if args.len() == 1 {
-        if let Ok(name) = socket_name()
-            && let Ok(mut stream) = IpcStream::connect(name)
-            && send_focus_request(&mut stream, 1).is_ok()
-        {
-            return;
-        }
-
-        run_gui();
-        return;
-    }
-
-    std::process::exit(cli::run(&args));
 }
 
 fn bind_ipc_socket() -> Result<IpcListener, ()> {

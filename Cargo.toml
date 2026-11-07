@@ -2,6 +2,7 @@
 members = [
     "crates/dbflux",
     "crates/dbflux_app",
+    "crates/dbflux_cli",
     "crates/dbflux_ui",
     "crates/dbflux_ui_base",
     "crates/dbflux_ui_document",
@@ -75,6 +76,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 dbflux = { path = "crates/dbflux" }
+dbflux_cli = { path = "crates/dbflux_cli" }
 dbflux_core = { path = "crates/dbflux_core" }
 dbflux_lua = { path = "crates/dbflux_lua" }
 dbflux_js = { path = "crates/dbflux_js" }
@@ -230,6 +232,7 @@ indexmap = "2"
 sqlformat = "0.5.0"
 sys-locale = "0.3"
 serde_yaml = "0.9"
+clap = { version = "4.6.7", features = ["derive"] }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

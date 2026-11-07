@@ -3100,6 +3100,7 @@ version = "0.10.0-dev.0"
 dependencies = [
  "dbflux_app",
  "dbflux_audit",
+ "dbflux_cli",
  "dbflux_core",
  "dbflux_driver_ipc",
  "dbflux_i18n",
@@ -3223,6 +3224,17 @@ dependencies = [
 [[package]]
 name = "dbflux_byte_source"
 version = "0.10.0-dev.0"
+
+[[package]]
+name = "dbflux_cli"
+version = "0.10.0-dev.0"
+dependencies = [
+ "clap",
+ "dbflux_app",
+ "dbflux_ipc",
+ "interprocess",
+ "libc",
+]
 
 [[package]]
 name = "dbflux_components"
