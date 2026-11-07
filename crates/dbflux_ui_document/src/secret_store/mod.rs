@@ -51,9 +51,6 @@ use uuid::Uuid;
 pub enum SecretFocusMode {
     Table,
     Search,
-    /// The value editor holds the keyboard: chords resolve as in a text
-    /// buffer, where Save is bound.
-    Editor,
 }
 
 /// One row of the listing.
@@ -427,7 +424,7 @@ impl SecretStoreDocument {
         }
 
         if self.focus_mode == SecretFocusMode::Search
-            || (self.focus_mode == SecretFocusMode::Editor && self.value_edit.is_some())
+            || self.value_edit.as_ref().is_some_and(|edit| edit.focused)
         {
             return ContextId::TextInput;
         }

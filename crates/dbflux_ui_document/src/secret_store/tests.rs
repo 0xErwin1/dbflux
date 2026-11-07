@@ -4412,6 +4412,10 @@ mod editor_chrome {
 
     impl Opened<'_> {
         fn edit_text(&mut self, stored: &str, edited: &str) {
+            // Focus events reach listeners only while the window is active.
+            self.window.update(|window, _| window.activate_window());
+            self.window.run_until_parked();
+            self.rendered_paths();
             self.select(PLAINTEXT_SECRET);
             self.show_value(stored);
             self.start_edit();
@@ -4603,6 +4607,7 @@ mod editor_chrome {
         assert!(opened.read(|doc| doc.is_editing_value()));
 
         assert!(opened.command(Command::Cancel), "Escape leaves the editor");
+        opened.rendered_paths();
         let context = opened.read(|doc| doc.active_context());
         assert_eq!(context, dbflux_app::keymap::ContextId::Results);
         assert!(
@@ -4669,6 +4674,78 @@ mod editor_chrome {
         let text = opened.accessibility_update_text();
         assert!(!text.contains("alpha-77b1"), "{text}");
         assert!(opened.exists("secret-value-editor-find"));
+    }
+
+    /// Focus decides the context, not a flag a keystroke sets: after Escape
+    /// leaves the editor, a click back into it restores the editor's chords
+    /// with no key in between.
+    #[gpui::test]
+    fn clicking_back_into_the_editor_restores_ctrl_s(cx: &mut TestAppContext) {
+        use dbflux_app::keymap::{ContextId, KeyChord, Modifiers};
+
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, "changed");
+        opened.rendered_paths();
+        assert!(opened.command(Command::Cancel));
+        // Focus events are delivered with the frame, as in the running app.
+        opened.rendered_paths();
+        assert_eq!(
+            opened.read(|doc| doc.active_context()),
+            ContextId::Results,
+            "Escape left the editor"
+        );
+
+        // A focus change that edits nothing: the textarea has no state
+        // change to announce, so only focus can say the editor is back.
+        let state = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        opened.window.update(|window, cx| {
+            let handle = gpui::Focusable::focus_handle(state.read(cx), cx);
+            window.focus(&handle, cx);
+        });
+        opened.window.run_until_parked();
+        opened.rendered_paths();
+        assert_eq!(
+            opened.read(|doc| doc.active_context()),
+            dbflux_app::keymap::ContextId::TextInput,
+            "focus alone restores the editor's context"
+        );
+
+        assert!(opened.command(Command::Cancel));
+        opened.rendered_paths();
+        let editor = opened.rect("secret-value-editor");
+        opened
+            .window
+            .simulate_click(editor.center(), gpui::Modifiers::default());
+        opened.window.run_until_parked();
+
+        let context = opened.read(|doc| doc.active_context());
+        assert_eq!(context, ContextId::TextInput);
+        let save = KeyChord::new("s", Modifiers::primary());
+        let command = dbflux_ui_base::effective_keymap().resolve(context, &save);
+        assert_eq!(command, Some(Command::SaveQuery));
+        assert!(opened.command(Command::SaveQuery));
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), "changed".to_string())]
+        );
+    }
+
+    /// `Col` counts characters, not bytes or UTF-16 units: `ñ` is two bytes
+    /// and an emoji is two UTF-16 units and four bytes, each one column.
+    #[gpui::test]
+    fn the_caret_column_counts_characters(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text("x", "ñ😀x");
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        opened.window.update(|window, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_cursor_position(lsp_types::Position::new(0, 2), window, cx)
+            });
+        });
+        opened.window.run_until_parked();
+
+        let footer = opened.footer_text();
+        assert!(footer.contains("Ln 1, Col 3"), "{footer}");
     }
 
     #[gpui::test]

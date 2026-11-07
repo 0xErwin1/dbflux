@@ -74,7 +74,7 @@ mod line_diff;
 mod view;
 
 use super::write::{SecretWriteFailure, SecretWriteFailureKind, put_secret_value};
-use super::{DetailsState, SecretFocusMode, SecretRowKey, SecretStoreDocument, ValueState};
+use super::{DetailsState, SecretRowKey, SecretStoreDocument, ValueState};
 use crate::object_text::db_error_to_user_facing;
 use crate::types::DocumentState;
 
@@ -125,6 +125,12 @@ pub(crate) struct ValueEditState {
     /// Redraws the pane when the editor's text or scroll position changes,
     /// so the gutter and the Save state follow it.
     _observer: Subscription,
+
+    /// Whether the editor holds the keyboard, fed by its focus handle's
+    /// focus-in and focus-out events. Save's chord resolves in the
+    /// text-input context only while this is true.
+    pub(super) focused: bool,
+    _focus_subscriptions: [Subscription; 2],
 
     /// The connection session the value was read from. A save names this
     /// session, so a connection replaced under the open editor refuses the
@@ -346,15 +352,23 @@ impl SecretStoreDocument {
             state
         });
         editor.update(cx, |state, cx| state.focus(window, cx));
-        let observer = cx.observe(&editor, |this, _, cx| {
-            // Typing means the editor holds the keyboard, which is the
-            // context its chords (Save) resolve in.
-            if this.value_edit.is_some() {
-                this.focus_mode = SecretFocusMode::Editor;
+        let observer = cx.observe(&editor, |_, _, cx| cx.notify());
+        // Whether the editor holds the keyboard follows its focus handle,
+        // so a click or a focus move that edits nothing still changes the
+        // context the document reports.
+        let handle = gpui::Focusable::focus_handle(editor.read(cx), cx);
+        let focus_in = cx.on_focus_in(&handle, window, |this, _, cx| {
+            if let Some(edit) = &mut this.value_edit {
+                edit.focused = true;
             }
             cx.notify();
         });
-        self.focus_mode = SecretFocusMode::Editor;
+        let focus_out = cx.on_focus_out(&handle, window, |this, _, _, cx| {
+            if let Some(edit) = &mut this.value_edit {
+                edit.focused = false;
+            }
+            cx.notify();
+        });
 
         self.value_edit = Some(ValueEditState {
             original: SecretString::from(stored),
@@ -362,7 +376,9 @@ impl SecretStoreDocument {
             editor,
             saving: false,
             mode,
+            focused: true,
             _observer: observer,
+            _focus_subscriptions: [focus_in, focus_out],
             connection,
         });
         // The single-line fields the value drew are not drawn in edit mode;
