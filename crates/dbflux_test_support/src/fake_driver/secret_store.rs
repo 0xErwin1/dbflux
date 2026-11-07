@@ -10,10 +10,13 @@ pub struct FakeSecretStoreCalls {
     /// refused write must not reach the store, so a test watches this list
     /// and never the payload.
     pub put_attempts: Vec<(String, String)>,
-    /// Every `put_value` attempt, as `(store_id, request)`. The payload
-    /// travels as the `secrecy` type `SecretPayload`, so it stays redacted in
-    /// `Debug` output.
+    /// Only the `put_value` requests the store accepted, as
+    /// `(store_id, request)`; rejected attempts are in `put_attempts`. The
+    /// payload travels as the `secrecy` type `SecretPayload`, so it stays
+    /// redacted in `Debug` output.
     pub put_requests: Vec<(String, SecretPutRequest)>,
+    /// Every `list_versions` call, as `(store_id, name)`.
+    pub version_listings: Vec<(String, String)>,
 }
 
 /// Id of the fake flat store, shaped like AWS Secrets Manager.
@@ -69,6 +72,10 @@ struct FakeSecret {
     /// a written version answers by its id for `Pending` and `Current`
     /// alike.
     versions: Vec<(String, FakeSecretPayload)>,
+    /// The metadata `list_versions` reports, newest first. Carries no
+    /// payload, like the seam type; every id here has its payload in
+    /// `versions`.
+    history: Vec<SecretVersionInfo>,
     /// Why a read of this secret fails, decided at fixture time and never
     /// changed by a write: read authorization is independent of the stored
     /// value.
@@ -136,7 +143,7 @@ impl FakeSecretStore {
             match rest.split_once('/') {
                 Some((segment, _)) if !request.recursive => {
                     let child = format!("{path}{segment}/");
-                    if !child_paths.contains(&child) {
+                    if self.matches_filter(name, filter) && !child_paths.contains(&child) {
                         child_paths.push(child);
                     }
                 }
@@ -196,7 +203,10 @@ impl SecretStoreSource for FakeSecretStore {
             .map_or(self.default_page_size, |size| size as usize)
             .clamp(1, self.default_page_size);
 
-        let end = (start + page_size).min(entries.len());
+        let end = start
+            .checked_add(page_size)
+            .ok_or_else(|| DbError::query_failed(format!("Page token {start} is out of range")))?
+            .min(entries.len());
         let page: Vec<SecretSummary> = entries
             .get(start..end)
             .unwrap_or_default()
@@ -233,7 +243,6 @@ impl SecretStoreSource for FakeSecretStore {
             };
         }
 
-        // The version asked for, or the current one when none was named.
         let requested = version
             .map(ToString::to_string)
             .or_else(|| secret.details.summary.version.clone());
@@ -252,6 +261,17 @@ impl SecretStoreSource for FakeSecretStore {
                     requested.as_deref().unwrap_or("<none>")
                 ))
             })
+    }
+
+    /// The fixture's history for `name`, newest first. Like the real stores,
+    /// listing reads metadata only, so a secret whose value read fails still
+    /// lists its versions.
+    fn list_versions(&self, name: &str) -> Result<Vec<SecretVersionInfo>, DbError> {
+        mutex_lock(&self.state.secret_store_calls)
+            .version_listings
+            .push((self.descriptor.id.clone(), name.to_string()));
+
+        self.find(name).map(|secret| secret.history)
     }
 
     /// One overwrite, following the rules the real stores keep: secrets
@@ -329,9 +349,21 @@ impl FakeSecretStore {
             version.clone(),
             FakeSecretPayload::for_write(&request.payload),
         ));
-        if request.stage != Some(SecretVersionStage::Pending) {
+        if request.stage == Some(SecretVersionStage::Pending) {
+            // The service moves a staging label: only the newest pending
+            // version holds `AWSPENDING`.
+            for entry in secret.history.iter_mut() {
+                entry.labels.retain(|label| label != "AWSPENDING");
+            }
+            secret
+                .history
+                .insert(0, written_version(&version, vec!["AWSPENDING".to_string()]));
+        } else {
             secret.details.summary.version = Some(version.clone());
+            move_current_label(&mut secret.history, &version);
         }
+        secret.details.version_count = u32::try_from(secret.history.len()).ok();
+        secret.details.version_labels = distinct_labels(&secret.history);
 
         Ok(SecretValue {
             version: Some(version),
@@ -375,12 +407,61 @@ impl FakeSecretStore {
             version.clone(),
             FakeSecretPayload::for_write(&request.payload),
         ));
+        secret.history.insert(
+            0,
+            SecretVersionInfo {
+                modified_by: Some(FAKE_WRITER.to_string()),
+                ..written_version(&version, Vec::new())
+            },
+        );
 
         Ok(SecretValue {
             version: Some(version),
             payload: request.payload.clone(),
         })
     }
+}
+
+/// Principal the fake parameter store records for a version written through
+/// it.
+const FAKE_WRITER: &str = "arn:fake:user/editor";
+
+/// The history row of a version a write just created.
+fn written_version(id: &str, labels: Vec<String>) -> SecretVersionInfo {
+    SecretVersionInfo {
+        id: id.to_string(),
+        labels,
+        created: fake_time(11, 7, 12),
+        modified_by: None,
+    }
+}
+
+/// A current write on a staged store: `AWSCURRENT` moves to the new version,
+/// the version that held it becomes `AWSPREVIOUS`, and the one that held
+/// `AWSPREVIOUS` is left with no label.
+fn move_current_label(history: &mut Vec<SecretVersionInfo>, version: &str) {
+    for entry in history.iter_mut() {
+        entry.labels.retain(|label| label != "AWSPREVIOUS");
+
+        for label in entry.labels.iter_mut() {
+            if label == "AWSCURRENT" {
+                *label = "AWSPREVIOUS".to_string();
+            }
+        }
+    }
+
+    history.insert(0, written_version(version, vec!["AWSCURRENT".to_string()]));
+}
+
+/// Every label in use, sorted, like the real store's `describe`.
+fn distinct_labels(history: &[SecretVersionInfo]) -> Vec<String> {
+    let mut labels: Vec<String> = history
+        .iter()
+        .flat_map(|entry| entry.labels.iter().cloned())
+        .collect();
+    labels.sort();
+    labels.dedup();
+    labels
 }
 
 /// The `SecretValue` payload form of a stored version.
@@ -443,10 +524,50 @@ fn fake_secret(
         ..SecretDetails::default()
     };
 
+    let details = details(base);
+    let history = vec![SecretVersionInfo {
+        id: version.clone(),
+        labels: Vec::new(),
+        created: details.created,
+        modified_by: details.last_changed_by.clone(),
+    }];
+
     FakeSecret {
-        details: details(base),
+        details,
         versions: vec![(version, payload)],
+        history,
         read_failure: None,
+    }
+}
+
+/// Replaces a fixture's single version with `older` ones behind it, newest
+/// first, each with its metadata and payload. The first entry stays the
+/// current version.
+fn with_history(
+    secret: FakeSecret,
+    history: Vec<(SecretVersionInfo, FakeSecretPayload)>,
+) -> FakeSecret {
+    FakeSecret {
+        versions: history
+            .iter()
+            .map(|(info, payload)| (info.id.clone(), payload.clone()))
+            .collect(),
+        history: history.into_iter().map(|(info, _)| info).collect(),
+        ..secret
+    }
+}
+
+fn history_row(
+    id: &str,
+    labels: &[&str],
+    created: Option<chrono::DateTime<chrono::Utc>>,
+    modified_by: Option<&str>,
+) -> SecretVersionInfo {
+    SecretVersionInfo {
+        id: id.to_string(),
+        labels: labels.iter().map(ToString::to_string).collect(),
+        created,
+        modified_by: modified_by.map(ToString::to_string),
     }
 }
 
@@ -471,7 +592,7 @@ pub(super) fn fake_secret_stores(state: &Arc<FakeDriverState>) -> Vec<FakeSecret
                     | SecretStoreCapabilities::SOFT_DELETE
                     | SecretStoreCapabilities::WRITE,
             ),
-            secrets: RwLock::new(fake_flat_secrets()),
+            secrets: RwLock::new(fake_flat_secrets().into_iter().map(label_current).collect()),
             default_page_size: 4,
             written_versions: AtomicUsize::new(0),
             state: state.clone(),
@@ -493,6 +614,18 @@ pub(super) fn fake_secret_stores(state: &Arc<FakeDriverState>) -> Vec<FakeSecret
     ]
 }
 
+/// Every version of a staged store that holds the current value carries
+/// `AWSCURRENT`, so a fixture with a single version lists one.
+fn label_current(mut secret: FakeSecret) -> FakeSecret {
+    if let Some(newest) = secret.history.first_mut()
+        && newest.labels.is_empty()
+    {
+        newest.labels.push("AWSCURRENT".to_string());
+    }
+
+    secret
+}
+
 /// Six secrets, so the default page of four leaves a second page: a
 /// key/value secret with rotation, a secret managed by another service, a
 /// plaintext one, a binary one, one pending deletion and one more key/value.
@@ -506,29 +639,51 @@ fn fake_flat_secrets() -> Vec<FakeSecret> {
         next_rotation: fake_time(10, 20, 3),
     };
 
+    let credentials = |password: &str| {
+        FakeSecretPayload::Text(format!(
+            r#"{{"username":"api-user","password":"{password}","port":5432}}"#
+        ))
+    };
+
     vec![
-        fake_secret(
-            SecretSummary {
-                description: Some("Payments API credentials".to_string()),
-                version: Some("v-current".to_string()),
-                last_changed: fake_time(9, 20, 3),
-                rotation: Some(rotation),
-                ..SecretSummary::new("prod/api/credentials")
-            },
-            |details| SecretDetails {
-                encryption_key: Some("alias/secrets".to_string()),
-                last_accessed: fake_time(10, 1, 0),
-                version_count: Some(4),
-                version_labels: vec!["AWSCURRENT".to_string(), "AWSPREVIOUS".to_string()],
-                tags: vec![
-                    SecretTag::new("team", "payments"),
-                    SecretTag::new("env", "prod"),
-                ],
-                ..details
-            },
-            FakeSecretPayload::Text(format!(
-                r#"{{"username":"api-user","password":"{FAKE_SECRET_PASSWORD}","port":5432}}"#
-            )),
+        with_history(
+            fake_secret(
+                SecretSummary {
+                    description: Some("Payments API credentials".to_string()),
+                    version: Some("v-current".to_string()),
+                    last_changed: fake_time(9, 20, 3),
+                    rotation: Some(rotation),
+                    ..SecretSummary::new("prod/api/credentials")
+                },
+                |details| SecretDetails {
+                    encryption_key: Some("alias/secrets".to_string()),
+                    last_accessed: fake_time(10, 1, 0),
+                    version_count: Some(3),
+                    version_labels: vec!["AWSCURRENT".to_string(), "AWSPREVIOUS".to_string()],
+                    tags: vec![
+                        SecretTag::new("team", "payments"),
+                        SecretTag::new("env", "prod"),
+                    ],
+                    ..details
+                },
+                FakeSecretPayload::Text(format!(
+                    r#"{{"username":"api-user","password":"{FAKE_SECRET_PASSWORD}","port":5432}}"#
+                )),
+            ),
+            vec![
+                (
+                    history_row("v-current", &["AWSCURRENT"], fake_time(9, 20, 3), None),
+                    credentials(FAKE_SECRET_PASSWORD),
+                ),
+                (
+                    history_row("v-previous", &["AWSPREVIOUS"], fake_time(8, 20, 3), None),
+                    credentials("fake-previous-2b8d"),
+                ),
+                (
+                    history_row("v-oldest", &[], fake_time(7, 20, 3), None),
+                    credentials("fake-oldest-90e1"),
+                ),
+            ],
         ),
         fake_secret(
             SecretSummary {
@@ -596,22 +751,42 @@ fn fake_parameter(
     tier: &str,
     payload: FakeSecretPayload,
 ) -> FakeSecret {
-    fake_secret(
-        SecretSummary {
-            value_type: Some(value_type.to_string()),
-            tier: Some(tier.to_string()),
-            version: Some("3".to_string()),
-            last_changed: fake_time(9, 1, 10),
-            ..SecretSummary::new(name)
-        },
-        |details| SecretDetails {
-            data_type: Some("text".to_string()),
-            last_changed_by: Some("arn:fake:user/deployer".to_string()),
-            encryption_key: (value_type == "SecureString").then(|| "alias/app-prod".to_string()),
-            tags: vec![SecretTag::new("app", "shop")],
-            ..details
-        },
-        payload,
+    let current = payload.clone();
+    let author = "arn:fake:user/deployer";
+
+    with_history(
+        fake_secret(
+            SecretSummary {
+                value_type: Some(value_type.to_string()),
+                tier: Some(tier.to_string()),
+                version: Some("3".to_string()),
+                last_changed: fake_time(9, 1, 10),
+                ..SecretSummary::new(name)
+            },
+            |details| SecretDetails {
+                data_type: Some("text".to_string()),
+                last_changed_by: Some("arn:fake:user/deployer".to_string()),
+                encryption_key: (value_type == "SecureString")
+                    .then(|| "alias/app-prod".to_string()),
+                tags: vec![SecretTag::new("app", "shop")],
+                ..details
+            },
+            payload,
+        ),
+        vec![
+            (
+                history_row("3", &["prod"], fake_time(9, 1, 10), Some(author)),
+                current,
+            ),
+            (
+                history_row("2", &[], fake_time(8, 1, 10), Some("arn:fake:user/ana")),
+                FakeSecretPayload::Text("fake-parameter-v2".to_string()),
+            ),
+            (
+                history_row("1", &[], fake_time(7, 1, 10), Some(author)),
+                FakeSecretPayload::Text("fake-parameter-v1".to_string()),
+            ),
+        ],
     )
 }
 

@@ -133,15 +133,16 @@ impl SecretStoreDocument {
                 // The design's Edit value entry: offered for a value that
                 // can be edited, dispatching to the editor the details pane
                 // already opens. The menu is built from the selected row's
-                // state, which is the state the editor opens on. It carries
-                // no keycap: the design's `e` chord is not bound in this
-                // layer, and a hint that binds nothing would lie.
+                // state, which is the state the editor opens on.
                 if self.can_edit_value() {
-                    items.push(SecretMenuItem::new(
-                        SecretMenuAction::EditValue,
-                        dbflux_i18n::t!("document.secret_store.edit.open").into(),
-                        AppIcon::Pencil,
-                    ));
+                    items.push(
+                        SecretMenuItem::new(
+                            SecretMenuAction::EditValue,
+                            dbflux_i18n::t!("document.secret_store.edit.open").into(),
+                            AppIcon::Pencil,
+                        )
+                        .with_shortcut(Command::EditValue),
+                    );
                 }
 
                 items

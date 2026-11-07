@@ -269,6 +269,9 @@ pub enum Command {
     ToggleConsole,
     LoadMore,
     EditExpiry,
+    /// Opens the editor on the value of the selected entry (the secret
+    /// store's Edit value).
+    EditValue,
     CopyPreview,
     /// Imports entries from a file into the list that has the keyboard (the
     /// profile lists of the settings window).
@@ -539,6 +542,7 @@ impl Command {
             Command::ToggleConsole => "Toggle console",
             Command::LoadMore => "Load more",
             Command::EditExpiry => "Edit expiry…",
+            Command::EditValue => "Edit value",
             Command::CopyPreview => "Copy preview",
             Command::ImportItems => "Import…",
             Command::ImportFromClient => "Import from another client…",
@@ -745,6 +749,7 @@ impl Command {
             Command::ToggleConsole => "toggle_console",
             Command::LoadMore => "load_more",
             Command::EditExpiry => "edit_expiry",
+            Command::EditValue => "edit_value",
             Command::CopyPreview => "copy_preview",
             Command::ImportItems => "import_items",
             Command::ImportFromClient => "import_from_client",
@@ -955,6 +960,7 @@ impl Command {
             Command::ToggleConsole,
             Command::LoadMore,
             Command::EditExpiry,
+            Command::EditValue,
             Command::CopyPreview,
             Command::ImportItems,
             Command::ImportFromClient,
@@ -1166,6 +1172,7 @@ impl Command {
             Command::ToggleConsole => "View",
             Command::LoadMore => "Navigation",
             Command::EditExpiry => "Actions",
+            Command::EditValue => "Actions",
             Command::CopyPreview => "Actions",
             Command::ImportItems
             | Command::ImportFromClient

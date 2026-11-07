@@ -4475,6 +4475,7 @@ settings:
       toggle_console: Toggle console
       load_more: Load more
       edit_expiry: Edit expiry…
+      edit_value: Edit value
       copy_preview: Copy preview
       import_items: "Import…"
       import_from_client: "Import from another client…"

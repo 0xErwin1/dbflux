@@ -3922,6 +3922,7 @@ dependencies = [
  "dbflux_ipc",
  "dbflux_ssh",
  "dbflux_storage",
+ "dbflux_test_support",
  "dbflux_ui_base",
  "dbflux_ui_document",
  "dbflux_ui_sidebar",

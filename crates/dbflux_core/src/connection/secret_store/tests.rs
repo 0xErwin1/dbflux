@@ -229,3 +229,18 @@ fn a_put_request_redacts_its_value_from_debug() {
     assert!(format!("{request:?}").contains("prod/api/credentials"));
     assert_eq!(request.stage, Some(SecretVersionStage::Pending));
 }
+
+// --- Listing versions ---
+
+#[test]
+fn the_default_list_versions_refuses_naming_the_store_and_the_secret() {
+    let store = DefaultOnlyStore(descriptor_with(SecretStoreCapabilities::VERSIONS));
+
+    let error = store
+        .list_versions("prod/api/credentials")
+        .expect_err("an unimplemented history must refuse, not answer empty");
+
+    let message = put_refusal_message(error);
+    assert!(message.contains("test-store"), "{message}");
+    assert!(message.contains("prod/api/credentials"), "{message}");
+}

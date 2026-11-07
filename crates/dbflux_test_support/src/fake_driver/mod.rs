@@ -12,7 +12,7 @@ use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use dbflux_core::{
     SecretDetails, SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest,
     SecretRotation, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
-    SecretSummary, SecretTag, SecretValue, SecretVersionStage,
+    SecretSummary, SecretTag, SecretValue, SecretVersionInfo, SecretVersionStage,
 };
 use dbflux_driver_cloudwatch::CLOUDWATCH_FORM;
 use dbflux_driver_dynamodb::DYNAMODB_FORM;
@@ -129,9 +129,11 @@ impl FakeDriver {
 
     /// Declares `supports_read_only` and runs requests that require read-only
     /// enforcement. The fake enforces nothing: it only lets callers observe
-    /// that the flag reached the connection.
+    /// that the flag reached the connection. It clears an earlier
+    /// `with_read_only_refusal`, so the last call of the two wins.
     pub fn with_read_only_enforcement(mut self) -> Self {
         self.set_read_only_capability(true);
+        self.state.refuse_read_only.store(false, Ordering::Relaxed);
         self
     }
 

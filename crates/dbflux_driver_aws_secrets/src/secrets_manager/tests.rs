@@ -251,3 +251,100 @@ fn a_fallback_listing_keeps_its_filter_on_every_page() {
     assert!(token.is_none());
     assert!(!in_name_listing);
 }
+
+fn version_entry(
+    id: &str,
+    stages: &[&str],
+    created_secs: Option<i64>,
+) -> aws_sdk_secretsmanager::types::SecretVersionsListEntry {
+    let mut builder =
+        aws_sdk_secretsmanager::types::SecretVersionsListEntry::builder().version_id(id);
+
+    for stage in stages {
+        builder = builder.version_stages(*stage);
+    }
+
+    if let Some(secs) = created_secs {
+        builder = builder.created_date(SmithyDateTime::from_secs(secs));
+    }
+
+    builder.build()
+}
+
+#[test]
+fn versions_are_listed_newest_first_whatever_order_the_service_answers() {
+    let entries = [
+        version_entry("v-old", &[], Some(1_000)),
+        version_entry("v-current", &["AWSCURRENT"], Some(3_000)),
+        version_entry("v-previous", &["AWSPREVIOUS"], Some(2_000)),
+    ];
+
+    let versions = versions_from_entries(&entries);
+
+    let ids: Vec<&str> = versions.iter().map(|version| version.id.as_str()).collect();
+    assert_eq!(ids, ["v-current", "v-previous", "v-old"]);
+    assert_eq!(versions[0].labels, ["AWSCURRENT"]);
+    assert_eq!(versions[1].labels, ["AWSPREVIOUS"]);
+}
+
+#[test]
+fn a_version_with_no_staging_label_is_kept() {
+    let versions = versions_from_entries(&[version_entry("v-orphan", &[], Some(1_000))]);
+
+    assert_eq!(versions.len(), 1);
+    assert!(versions[0].labels.is_empty());
+    assert_eq!(versions[0].id, "v-orphan");
+    assert!(versions[0].created.is_some());
+    assert_eq!(versions[0].modified_by, None);
+}
+
+#[test]
+fn a_version_without_a_creation_date_sorts_last() {
+    let versions = versions_from_entries(&[
+        version_entry("v-undated", &[], None),
+        version_entry("v-dated", &["AWSCURRENT"], Some(5)),
+    ]);
+
+    assert_eq!(versions[0].id, "v-dated");
+    assert_eq!(versions[1].id, "v-undated");
+    assert_eq!(versions[1].created, None);
+}
+
+#[test]
+fn an_entry_without_a_version_id_is_dropped() {
+    let entry = aws_sdk_secretsmanager::types::SecretVersionsListEntry::builder().build();
+
+    assert!(versions_from_entries(&[entry]).is_empty());
+}
+
+#[test]
+fn tied_creation_dates_keep_the_service_order() {
+    let versions = versions_from_entries(&[
+        version_entry("v-first", &["AWSPREVIOUS"], Some(1_000)),
+        version_entry("v-second", &["AWSCURRENT"], Some(1_000)),
+    ]);
+
+    let ids: Vec<&str> = versions.iter().map(|version| version.id.as_str()).collect();
+    assert_eq!(ids, ["v-first", "v-second"]);
+}
+
+#[test]
+fn version_paging_forwards_the_token_and_keeps_the_later_pages() {
+    let tokens = std::cell::RefCell::new(Vec::new());
+
+    let versions = list_versions_on_pages(|token| {
+        tokens.borrow_mut().push(token.clone());
+        Ok(match token.as_deref() {
+            None => (
+                vec![version_entry("v-new", &["AWSCURRENT"], Some(3_000))],
+                Some("page-2".to_string()),
+            ),
+            Some(_) => (vec![version_entry("v-old", &[], Some(1_000))], None),
+        })
+    })
+    .expect("both pages are read");
+
+    assert_eq!(*tokens.borrow(), [None, Some("page-2".to_string())]);
+    let ids: Vec<&str> = versions.iter().map(|version| version.id.as_str()).collect();
+    assert_eq!(ids, ["v-new", "v-old"]);
+}

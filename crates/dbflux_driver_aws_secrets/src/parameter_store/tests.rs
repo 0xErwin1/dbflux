@@ -6,8 +6,8 @@ use dbflux_core::{
 
 use super::hierarchy::{group_level, normalize_path, path_filter_value};
 use super::{
-    ParameterStore, existing_key_id, find_parameter_on_pages, overwrite_type, put_parameter_call,
-    put_text,
+    ParameterStore, existing_key_id, find_parameter_on_pages, list_versions_on_pages,
+    overwrite_type, page_versions, put_parameter_call, put_text, sort_newest_first,
 };
 use crate::driver::AwsSecretsProfileConfig;
 
@@ -403,4 +403,110 @@ fn a_parameter_write_failure_never_carries_the_value() {
     let rendered = refusal.to_string();
     assert!(rendered.contains("/app/prod/db/host"), "{rendered}");
     assert!(!rendered.contains("hunter2"), "{rendered}");
+}
+
+fn versions_from_history(
+    entries: &[aws_sdk_ssm::types::ParameterHistory],
+) -> Vec<dbflux_core::SecretVersionInfo> {
+    let mut versions: Vec<_> = page_versions(entries).collect();
+    sort_newest_first(&mut versions);
+    versions
+}
+
+const HISTORY_SENTINEL: &str = "sentinel-value-must-never-surface-4c1f";
+
+fn history_entry(
+    version: i64,
+    labels: &[&str],
+    modified_secs: Option<i64>,
+    user: Option<&str>,
+) -> aws_sdk_ssm::types::ParameterHistory {
+    let mut builder = aws_sdk_ssm::types::ParameterHistory::builder()
+        .name("/app/prod/db/password")
+        .version(version)
+        .value(HISTORY_SENTINEL);
+
+    for label in labels {
+        builder = builder.labels(*label);
+    }
+
+    if let Some(secs) = modified_secs {
+        builder = builder.last_modified_date(aws_smithy_types::DateTime::from_secs(secs));
+    }
+
+    if let Some(user) = user {
+        builder = builder.last_modified_user(user);
+    }
+
+    builder.build()
+}
+
+#[test]
+fn history_is_listed_newest_version_first_with_labels_and_author() {
+    let entries = [
+        history_entry(1, &[], Some(1_000), Some("arn:aws:iam::1:user/ana")),
+        history_entry(3, &["prod"], Some(3_000), Some("arn:aws:iam::1:user/bo")),
+        history_entry(2, &["stable", "prod-old"], Some(2_000), None),
+    ];
+
+    let versions = versions_from_history(&entries);
+
+    let ids: Vec<&str> = versions.iter().map(|version| version.id.as_str()).collect();
+    assert_eq!(ids, ["3", "2", "1"]);
+    assert_eq!(versions[0].labels, ["prod"]);
+    assert_eq!(
+        versions[0].modified_by.as_deref(),
+        Some("arn:aws:iam::1:user/bo")
+    );
+    assert_eq!(versions[1].labels, ["stable", "prod-old"]);
+    assert_eq!(versions[1].modified_by, None);
+    assert!(versions[2].labels.is_empty());
+    assert!(versions[2].created.is_some());
+}
+
+#[test]
+fn a_history_row_never_carries_the_parameter_value() {
+    let entries = [
+        history_entry(2, &["prod"], Some(2_000), Some("arn:aws:iam::1:user/bo")),
+        history_entry(1, &[], Some(1_000), None),
+    ];
+
+    let versions = versions_from_history(&entries);
+
+    assert!(!format!("{versions:?}").contains(HISTORY_SENTINEL));
+}
+
+#[test]
+fn a_history_id_is_the_selector_get_value_builds() {
+    let versions = versions_from_history(&[history_entry(7, &[], None, None)]);
+
+    assert_eq!(
+        format!("/app/prod/db/password:{}", versions[0].id),
+        "/app/prod/db/password:7"
+    );
+}
+
+#[test]
+fn history_paging_forwards_the_token_and_keeps_the_later_pages() {
+    let tokens = std::cell::RefCell::new(Vec::new());
+
+    let versions = list_versions_on_pages(|token| {
+        tokens.borrow_mut().push(token.clone());
+        Ok(match token.as_deref() {
+            None => (
+                page_versions(&[history_entry(1, &[], Some(1_000), None)]).collect(),
+                Some("page-2".to_string()),
+            ),
+            Some(_) => (
+                page_versions(&[history_entry(2, &["prod"], Some(2_000), None)]).collect(),
+                None,
+            ),
+        })
+    })
+    .expect("both pages are read");
+
+    assert_eq!(*tokens.borrow(), [None, Some("page-2".to_string())]);
+    let ids: Vec<&str> = versions.iter().map(|version| version.id.as_str()).collect();
+    assert_eq!(ids, ["2", "1"]);
+    assert!(!format!("{versions:?}").contains(HISTORY_SENTINEL));
 }
