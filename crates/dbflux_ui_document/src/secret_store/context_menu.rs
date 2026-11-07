@@ -244,6 +244,14 @@ impl SecretStoreDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A menu opened over another row would first select it, which is a
+        // move the unsaved-edits guard refuses: opening the menu on a target
+        // it cannot act on would offer entries for a secret the user is
+        // leaving behind.
+        if self.selected.as_ref() != Some(&row) && self.block_unsaved_value_edits(cx) {
+            return;
+        }
+
         self.select_row(row.clone(), cx);
 
         let items = self.build_menu_items(&row);

@@ -1494,6 +1494,405 @@ fn the_edited_text_reaches_no_node_of_the_accessibility_update(cx: &mut TestAppC
     );
 }
 
+/// The connection is replaced while the editor is open — a region switch, a
+/// reconnect, a credentials refresh: the save refuses instead of landing
+/// the value on a session the user never saw, and the editor keeps its
+/// text.
+#[gpui::test]
+fn a_replaced_connection_refuses_the_save(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+
+    let replacement_driver = FakeDriver::new(DbKind::AwsSecrets);
+    let replacement = {
+        // Same shape the fixture's profile has, so the replacement reports
+        // the same region and nothing but the session identity moves.
+        let profile = dbflux_core::ConnectionProfile::new(
+            "prod-aws",
+            dbflux_core::DbConfig::SQLite {
+                path: std::path::PathBuf::from(":memory:"),
+                connection_id: None,
+            },
+        );
+        replacement_driver.connect_arc(&profile).expect("connect")
+    };
+    let app_state = opened.app_state.clone();
+    let doc = opened.doc.clone();
+    opened.window.update(|_, cx| {
+        let profile_id = doc.read(cx).profile_id;
+        app_state.update(cx, |state, _| {
+            if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
+                connected.connection = replacement.clone();
+            }
+        });
+    });
+
+    opened.save_edit();
+
+    assert!(
+        opened.driver.secret_store_calls().put_attempts.is_empty(),
+        "the old session was not written"
+    );
+    assert!(
+        replacement_driver
+            .secret_store_calls()
+            .put_attempts
+            .is_empty(),
+        "the replacement session was not written"
+    );
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("was replaced"), "{}", errors[0].1);
+    assert!(
+        opened.read(|doc| doc.is_editing_value()),
+        "the editor stays open"
+    );
+}
+
+/// Every transition that would drop the open editor — another selection, a
+/// refresh — is refused while it holds unsaved text, and works again once
+/// the editor is discarded.
+#[gpui::test]
+fn unsaved_edits_block_the_transitions_that_would_drop_them(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+
+    opened.select(MANAGED_SECRET);
+    assert_eq!(
+        opened.read(|doc| doc.selected().cloned()),
+        Some(SecretRowKey::Secret(PLAINTEXT_SECRET.to_string())),
+        "the selection stayed"
+    );
+    assert!(opened.read(|doc| doc.is_editing_value()));
+
+    let lists_before = opened.driver.secret_store_calls().list_requests.len();
+    assert!(opened.command(Command::RefreshSchema));
+    assert_eq!(
+        opened.driver.secret_store_calls().list_requests.len(),
+        lists_before,
+        "the refresh was refused"
+    );
+    assert!(opened.read(|doc| doc.is_editing_value()));
+    assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+
+    let errors: Vec<String> = opened
+        .reported_errors()
+        .into_iter()
+        .map(|(_, summary)| summary)
+        .collect();
+    assert!(
+        errors
+            .iter()
+            .all(|summary| summary.contains("unsaved edits")),
+        "{errors:?}"
+    );
+
+    opened.update(|doc, cx| doc.discard_value_edit(cx));
+    opened.select(MANAGED_SECRET);
+    assert!(
+        !opened.read(|doc| doc.is_editing_value()),
+        "the selection works again after Discard"
+    );
+}
+
+/// The tab itself reports unsaved value edits, so the workspace's dirty dot
+/// and its unsaved-changes prompt ask before a close discards them.
+#[gpui::test]
+fn the_tab_reports_unsaved_edits_and_asks_before_closing(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+
+    let (summary, status) = opened.window.update(|_, cx| {
+        let doc = opened.doc.clone();
+        (
+            doc.read(cx).unsaved_change_summary(cx),
+            doc.read(cx).state(cx),
+        )
+    });
+    assert_eq!(summary.as_deref(), Some("Unsaved value edits"));
+    assert_eq!(status, crate::types::DocumentState::Modified);
+
+    opened.update(|doc, cx| doc.discard_value_edit(cx));
+    let (summary, status) = opened.window.update(|_, cx| {
+        let doc = opened.doc.clone();
+        (
+            doc.read(cx).unsaved_change_summary(cx),
+            doc.read(cx).state(cx),
+        )
+    });
+    assert_eq!(summary, None);
+    assert_eq!(status, crate::types::DocumentState::Clean);
+}
+
+/// Text typed while a save is in flight survives the landing: the editor
+/// stays open over it with the saved text as its baseline, so nothing the
+/// user typed after Save is lost, and the next Save writes it as its own
+/// version.
+#[gpui::test]
+fn edits_typed_during_the_save_survive_the_landing(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+
+    // Save without waiting for the landing to restock the executor.
+    let doc = opened.doc.clone();
+    opened
+        .window
+        .update(|_, cx| doc.update(cx, |doc, cx| doc.save_value_edit(cx)));
+    // Typed while the write is in flight; the helper's park lets the
+    // landing run after it.
+    let continued = format!("{EDITED_VALUE}\nENV=staging");
+    opened.set_editor_text(&continued);
+
+    opened.read(|doc| {
+        assert!(doc.is_editing_value(), "the editor stayed open");
+        if let Some(edit) = &doc.value_edit {
+            assert!(!edit.saving);
+            assert_eq!(edit.original.expose_secret(), EDITED_VALUE);
+        } else {
+            panic!("no editor");
+        }
+    });
+    assert_eq!(opened.editor_text(), continued);
+    assert_eq!(
+        opened.written_values(),
+        vec![(PLAINTEXT_SECRET.to_string(), EDITED_VALUE.to_string())]
+    );
+    opened.read(|doc| match &doc.value {
+        ValueState::Loaded(value) => {
+            assert_eq!(value.version.as_deref(), Some("v-written-1"));
+            assert_eq!(value.content.full_text().expose_secret(), EDITED_VALUE);
+        }
+        other => panic!("value not loaded: {other:?}"),
+    });
+
+    // The next Save writes what was typed as its own version, and the
+    // editor closes: this time it still holds what was saved.
+    opened.save_edit();
+    let continued = continued.clone();
+    assert_eq!(
+        opened.written_values(),
+        vec![
+            (PLAINTEXT_SECRET.to_string(), EDITED_VALUE.to_string()),
+            (PLAINTEXT_SECRET.to_string(), continued)
+        ]
+    );
+    assert!(!opened.read(|doc| doc.is_editing_value()));
+}
+
+/// Discard sits out while a save is in flight — the pane action is
+/// disabled and the guard makes a stale action a no-op — so the landing
+/// still reads what was typed after Save.
+#[gpui::test]
+fn discard_sits_out_while_a_save_is_in_flight(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+    opened.update(|doc, _cx| {
+        if let Some(edit) = doc.value_edit.as_mut() {
+            edit.saving = true;
+        }
+    });
+
+    let mut enabled = |id: &str| {
+        opened.window.update(|_, cx| {
+            opened
+                .doc
+                .read(cx)
+                .pane_actions(&opened.doc)
+                .into_iter()
+                .find(|action| action.id.as_ref() == id)
+                .map(|action| action.enabled)
+        })
+    };
+    assert_eq!(enabled("secret-editor-discard"), Some(false));
+    assert_eq!(enabled("secret-editor-save"), Some(false));
+
+    opened.update(|doc, cx| doc.discard_value_edit(cx));
+    assert!(
+        opened.read(|doc| doc.is_editing_value()),
+        "the in-flight save's editor is not discarded"
+    );
+
+    opened.update(|doc, _cx| {
+        if let Some(edit) = doc.value_edit.as_mut() {
+            edit.saving = false;
+        }
+    });
+    opened.update(|doc, cx| doc.discard_value_edit(cx));
+    assert!(!opened.read(|doc| doc.is_editing_value()));
+}
+
+/// The secret's details are re-checked at save time: a secret that has
+/// meanwhile become managed, or whose deletion is scheduled, refuses with
+/// the vocabulary the uneditable cases use, and nothing is written.
+#[gpui::test]
+fn a_details_change_refuses_the_save(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+
+    // A describe that landed while the editor was open now reports another
+    // service as the owner.
+    opened.update(|doc, _cx| {
+        if let DetailsState::Loaded(details) = &mut doc.details {
+            details.summary.owning_service = Some("rds".to_string());
+        }
+    });
+    opened.save_edit();
+
+    assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors
+            .iter()
+            .all(|(_, summary)| summary.contains("managed by")),
+        "{errors:?}"
+    );
+    assert!(opened.read(|doc| doc.is_editing_value()));
+
+    // The ownership clears again, but a deletion is scheduled meanwhile.
+    opened.update(|doc, _cx| {
+        if let DetailsState::Loaded(details) = &mut doc.details {
+            details.summary.owning_service = None;
+            details.summary.deletion_scheduled_for = Some(dbflux_core::chrono::Utc::now());
+        }
+    });
+    opened.save_edit();
+
+    assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(
+        errors
+            .iter()
+            .any(|(_, summary)| summary.contains("Deletion is scheduled")),
+        "{errors:?}"
+    );
+    assert!(opened.read(|doc| doc.is_editing_value()));
+}
+
+/// A failed write is audited once: the seam records the event, so the
+/// failure report must not emit the error seam's own tracing event, which
+/// the audit bridge would turn into a second `user_error` row. The audit
+/// trail keeps exactly the seam's row, and the user-facing notification
+/// still goes out.
+///
+/// The regression this pins only surfaces where the audit bridge runs (the
+/// app binary); in a test process without it the `user_error` emission
+/// would be invisible, so the report path itself must never send one —
+/// that is what `report_seam_write_failure` exists for.
+#[gpui::test]
+fn a_failed_write_audits_once_and_still_reaches_the_user(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.driver = opened
+        .driver
+        .clone()
+        .with_secret_write_error(PLAINTEXT_SECRET, "put was denied by the fixture");
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+
+    opened.save_edit();
+
+    let events = opened.audit_records();
+    assert_eq!(
+        events.len(),
+        2,
+        "the retrieval and the write's own failure row: {events:?}"
+    );
+    assert_eq!(
+        events[1].action.as_deref(),
+        Some(SECRET_VALUE_WRITE_FAILED_ACTION)
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event.action.as_deref() != Some("user_error")),
+        "no second row from the error seam: {events:?}"
+    );
+
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].1, "put was denied by the fixture");
+}
+
+/// Save drives through the interface: the button starts disabled, typed
+/// input enables it, and clicking it runs the governed save.
+#[gpui::test]
+fn the_save_button_drives_the_save_from_the_interface(cx: &mut TestAppContext) {
+    use dbflux_ui_base::keyboard_coverage::FrameCapture;
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    // The input lands where the editor put the keyboard.
+    opened.start_edit();
+
+    let save_button = |opened: &mut Opened<'_>| {
+        let capture = FrameCapture::observe(opened.window);
+        let frame = capture.frame(opened.window);
+        let (_, node) = frame
+            .nodes()
+            .find(|(_, node)| node.path().ends_with("secret-value-editor-save"))
+            .expect("Save is drawn");
+        (
+            node.bounds(),
+            frame
+                .accessibility_node(node)
+                .map(|node| node.is_disabled()),
+        )
+    };
+
+    let (_, disabled) = save_button(&mut opened);
+    assert_eq!(disabled, Some(true), "an unchanged editor cannot save");
+
+    opened.window.simulate_input("typed by hand");
+    opened.window.run_until_parked();
+
+    let (bounds, disabled) = save_button(&mut opened);
+    assert_eq!(disabled, Some(false), "typing enables Save");
+
+    // The click is a real one: press and release on the button's bounds.
+    opened
+        .window
+        .simulate_click(bounds.center(), gpui::Modifiers::default());
+    opened.window.run_until_parked();
+
+    // The text lands at the editor's caret, which starts at the stored
+    // value's first character.
+    assert_eq!(
+        opened.written_values(),
+        vec![(
+            PLAINTEXT_SECRET.to_string(),
+            format!("typed by hand{FAKE_SECRET_PLAINTEXT}")
+        )]
+    );
+    assert!(!opened.read(|doc| doc.is_editing_value()));
+    let events = opened.audit_records();
+    assert_eq!(
+        events.last().and_then(|event| event.action.as_deref()),
+        Some(SECRET_VALUE_WRITTEN_ACTION)
+    );
+}
+
 /// The Edit value control is covered while it is drawn: the capture runs
 /// before any editor is open, so the editor's own controls cannot mask a
 /// misspelled registry row for the button.

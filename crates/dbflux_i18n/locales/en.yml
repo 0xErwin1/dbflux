@@ -3561,6 +3561,11 @@ document:
       discard: "Discard"
       hint: "Saving writes a new version and makes it current. The text is saved exactly as it is here."
       invalid_json: "The stored value was JSON, and the edited text is not valid JSON: %{error}"
+      unsaved_block: "%{name} has unsaved edits. Save or discard them first."
+      connection_replaced: "The connection was replaced while the value was being edited. Discard the editor and retrieve the value again before saving."
+      refused_managed: "The value of %{name} is managed by %{service}, so it cannot be edited."
+      refused_deletion: "Deletion is scheduled for %{name}, so its value cannot be edited until it is restored."
+      change_summary: "Unsaved value edits"
 document_tree:
   search_placeholder: Search…
   view:

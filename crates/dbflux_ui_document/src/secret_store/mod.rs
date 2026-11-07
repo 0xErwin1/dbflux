@@ -28,8 +28,8 @@ pub use value::{
 };
 pub use write::{
     SECRET_VALUE_WRITE_FAILED_ACTION, SECRET_VALUE_WRITE_REFUSED_ACTION,
-    SECRET_VALUE_WRITTEN_ACTION, SECRET_WRITE_CLASSIFICATION, SecretWriteOutcome, WriteTarget,
-    put_secret_value, secret_write_event,
+    SECRET_VALUE_WRITTEN_ACTION, SECRET_WRITE_CLASSIFICATION, SecretWriteFailure,
+    SecretWriteFailureKind, SecretWriteOutcome, WriteTarget, put_secret_value, secret_write_event,
 };
 
 use super::handle::DocumentEvent;
@@ -319,8 +319,13 @@ impl SecretStoreDocument {
         self.title.clone()
     }
 
-    pub fn state(&self) -> DocumentState {
-        if self.listing.loading {
+    /// The tab's state. The dirty dot rides on unsaved value edits first:
+    /// the open editor holding text no save has written is the one change a
+    /// close must ask about.
+    pub fn state(&self, cx: &App) -> DocumentState {
+        if self.has_unsaved_value_edits(cx) {
+            DocumentState::Modified
+        } else if self.listing.loading {
             DocumentState::Loading
         } else if self.listing.error.is_some() {
             DocumentState::Error
@@ -492,6 +497,13 @@ impl SecretStoreDocument {
             return;
         }
 
+        // The open editor belongs to the selection's value: moving to
+        // another secret with unsaved text would drop it, so the move is
+        // refused and the editor keeps its text until Save or Discard.
+        if self.block_unsaved_value_edits(cx) {
+            return;
+        }
+
         self.clear_value();
         self.details_generation = self.details_generation.wrapping_add(1);
         self.details = DetailsState::Idle;
@@ -555,6 +567,10 @@ impl SecretStoreDocument {
     /// store ignores it.
     pub fn navigate_to(&mut self, path: Option<String>, cx: &mut Context<Self>) {
         if !self.hierarchical() || self.path == path {
+            return;
+        }
+
+        if self.block_unsaved_value_edits(cx) {
             return;
         }
 
@@ -837,14 +853,14 @@ impl SecretStoreDocument {
                 "document.secret_store.edit.save",
                 Self::save_value_edit,
             )
-            .enabled(self.is_editing_value()),
+            .enabled(self.is_editing_value() && !self.is_saving_value_edit()),
             callback_action(
                 &target,
                 "secret-editor-discard",
                 "document.secret_store.edit.discard",
                 Self::discard_value_edit,
             )
-            .enabled(self.is_editing_value()),
+            .enabled(self.is_editing_value() && !self.is_saving_value_edit()),
             command(
                 "secret-load-more",
                 "document.secret_store.load_more",

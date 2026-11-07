@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 impl SecretStoreDocument {
-    fn connection(&self, cx: &Context<Self>) -> Option<Arc<dyn Connection>> {
+    pub(crate) fn connection(&self, cx: &Context<Self>) -> Option<Arc<dyn Connection>> {
         self.app_state
             .read(cx)
             .connections()
@@ -46,8 +46,13 @@ impl SecretStoreDocument {
 
     /// Lists the current level from its first page. The selection, its
     /// details and any retrieved value are dropped with the old listing, and
-    /// a menu open over it would act on rows that no longer exist.
+    /// a menu open over it would act on rows that no longer exist — none of
+    /// which may happen under an editor holding unsaved text.
     pub fn load_first_page(&mut self, cx: &mut Context<Self>) {
+        if self.block_unsaved_value_edits(cx) {
+            return;
+        }
+
         self.selected = None;
         self.details_generation = self.details_generation.wrapping_add(1);
         self.details = DetailsState::Idle;
