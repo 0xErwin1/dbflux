@@ -6,6 +6,9 @@ pub struct FakeSecretStoreCalls {
     pub list_requests: Vec<(String, SecretListRequest)>,
     pub described: Vec<(String, String)>,
     pub value_requests: Vec<(String, String)>,
+    /// Every `get_value` call, as `(store_id, name, version)`: the version
+    /// the caller asked for, `None` for the current value.
+    pub value_version_requests: Vec<(String, String, Option<String>)>,
     /// Every `put_value` attempt, accepted or not, as `(store_id, name)`. A
     /// refused write must not reach the store, so a test watches this list
     /// and never the payload.
@@ -233,6 +236,13 @@ impl SecretStoreSource for FakeSecretStore {
         mutex_lock(&self.state.secret_store_calls)
             .value_requests
             .push((self.descriptor.id.clone(), name.to_string()));
+        mutex_lock(&self.state.secret_store_calls)
+            .value_version_requests
+            .push((
+                self.descriptor.id.clone(),
+                name.to_string(),
+                version.map(ToString::to_string),
+            ));
 
         let secret = self.find(name)?;
 
@@ -270,6 +280,14 @@ impl SecretStoreSource for FakeSecretStore {
         mutex_lock(&self.state.secret_store_calls)
             .version_listings
             .push((self.descriptor.id.clone(), name.to_string()));
+
+        let failure = rwlock_read(&self.state.secret_version_errors)
+            .iter()
+            .find(|(failing, _)| failing == name)
+            .map(|(_, message)| message.clone());
+        if let Some(message) = failure {
+            return Err(DbError::permission_denied(message));
+        }
 
         self.find(name).map(|secret| secret.history)
     }
@@ -407,10 +425,14 @@ impl FakeSecretStore {
             version.clone(),
             FakeSecretPayload::for_write(&request.payload),
         ));
+        for entry in secret.history.iter_mut() {
+            entry.is_current = false;
+        }
         secret.history.insert(
             0,
             SecretVersionInfo {
                 modified_by: Some(FAKE_WRITER.to_string()),
+                is_current: true,
                 ..written_version(&version, Vec::new())
             },
         );
@@ -433,6 +455,7 @@ fn written_version(id: &str, labels: Vec<String>) -> SecretVersionInfo {
         labels,
         created: fake_time(11, 7, 12),
         modified_by: None,
+        is_current: false,
     }
 }
 
@@ -442,6 +465,7 @@ fn written_version(id: &str, labels: Vec<String>) -> SecretVersionInfo {
 fn move_current_label(history: &mut Vec<SecretVersionInfo>, version: &str) {
     for entry in history.iter_mut() {
         entry.labels.retain(|label| label != "AWSPREVIOUS");
+        entry.is_current = false;
 
         for label in entry.labels.iter_mut() {
             if label == "AWSCURRENT" {
@@ -450,7 +474,13 @@ fn move_current_label(history: &mut Vec<SecretVersionInfo>, version: &str) {
         }
     }
 
-    history.insert(0, written_version(version, vec!["AWSCURRENT".to_string()]));
+    history.insert(
+        0,
+        SecretVersionInfo {
+            is_current: true,
+            ..written_version(version, vec!["AWSCURRENT".to_string()])
+        },
+    );
 }
 
 /// Every label in use, sorted, like the real store's `describe`.
@@ -530,6 +560,7 @@ fn fake_secret(
         labels: Vec::new(),
         created: details.created,
         modified_by: details.last_changed_by.clone(),
+        is_current: true,
     }];
 
     FakeSecret {
@@ -552,7 +583,14 @@ fn with_history(
             .iter()
             .map(|(info, payload)| (info.id.clone(), payload.clone()))
             .collect(),
-        history: history.into_iter().map(|(info, _)| info).collect(),
+        history: history
+            .into_iter()
+            .enumerate()
+            .map(|(index, (info, _))| SecretVersionInfo {
+                is_current: index == 0,
+                ..info
+            })
+            .collect(),
         ..secret
     }
 }
@@ -568,6 +606,7 @@ fn history_row(
         labels: labels.iter().map(ToString::to_string).collect(),
         created,
         modified_by: modified_by.map(ToString::to_string),
+        is_current: false,
     }
 }
 

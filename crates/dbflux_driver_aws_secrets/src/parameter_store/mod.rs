@@ -494,6 +494,7 @@ pub(crate) fn page_versions(
             .last_modified_date()
             .and_then(smithy_datetime_to_chrono),
         modified_by: entry.last_modified_user().map(ToString::to_string),
+        is_current: false,
     })
 }
 
@@ -525,9 +526,15 @@ where
     }
 }
 
-/// Parameter versions are numbered, so the highest number is the newest.
+/// Parameter versions are numbered, so the highest number is the newest, and
+/// the newest is the one a read without a version serves: it alone is marked
+/// current, whatever a partial page marked before.
 pub(crate) fn sort_newest_first(versions: &mut [SecretVersionInfo]) {
     versions.sort_by_key(|version| std::cmp::Reverse(version.id.parse::<u64>().unwrap_or(0)));
+
+    for (index, version) in versions.iter_mut().enumerate() {
+        version.is_current = index == 0;
+    }
 }
 
 fn clamp_page_size(page_size: u32) -> i32 {

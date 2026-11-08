@@ -348,7 +348,10 @@ use dbflux_core::secrecy::ExposeSecret;
 use super::*;
 
 fn connected() -> (FakeDriver, Box<dyn Connection>) {
-    let driver = FakeDriver::new(DbKind::AwsSecrets);
+    connected_with(FakeDriver::new(DbKind::AwsSecrets))
+}
+
+fn connected_with(driver: FakeDriver) -> (FakeDriver, Box<dyn Connection>) {
     let profile = ConnectionProfile::new_with_driver(
         "fake-aws-secrets",
         DbKind::AwsSecrets,
@@ -813,6 +816,54 @@ fn a_write_adds_the_new_version_at_the_top_of_the_history() {
 }
 
 #[test]
+fn a_value_request_records_the_version_it_asked_for() {
+    let (driver, connection) = connected();
+    let secrets = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake secrets store exists");
+
+    secrets
+        .get_value("prod/api/credentials", None)
+        .expect("the current value");
+    secrets
+        .get_value("prod/api/credentials", Some("v-previous"))
+        .expect("an older version");
+
+    assert_eq!(
+        driver.secret_store_calls().value_version_requests,
+        [
+            (
+                FAKE_SECRETS_STORE_ID.to_string(),
+                "prod/api/credentials".to_string(),
+                None
+            ),
+            (
+                FAKE_SECRETS_STORE_ID.to_string(),
+                "prod/api/credentials".to_string(),
+                Some("v-previous".to_string())
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_configured_history_failure_fails_only_that_secrets_listing() {
+    let driver = FakeDriver::new(DbKind::AwsSecrets)
+        .with_secret_versions_error("prod/api/credentials", "not authorized");
+    let (_driver, connection) = connected_with(driver);
+    let secrets = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake secrets store exists");
+
+    assert!(matches!(
+        secrets.list_versions("prod/api/credentials"),
+        Err(DbError::PermissionDenied(_))
+    ));
+    assert!(secrets.list_versions("prod/db/master").is_ok());
+    assert!(secrets.get_value("prod/api/credentials", None).is_ok());
+}
+
+#[test]
 fn listing_the_versions_of_a_missing_secret_is_not_found() {
     let (_driver, connection) = connected();
     let secrets = connection
@@ -918,4 +969,61 @@ fn a_second_pending_write_moves_the_pending_label() {
 
     assert_eq!(holders, ["v-written-2"]);
     assert_eq!(versions.len(), 5);
+}
+
+fn current_ids(versions: &[dbflux_core::SecretVersionInfo]) -> Vec<&str> {
+    versions
+        .iter()
+        .filter(|version| version.is_current)
+        .map(|version| version.id.as_str())
+        .collect()
+}
+
+#[test]
+fn the_history_marks_exactly_one_current_version_across_writes() {
+    let (_driver, connection) = connected();
+    let flat = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake flat store exists");
+    let parameters = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+    let name = "prod/api/credentials";
+    let parameter = "/app/prod/db/host";
+
+    assert_eq!(
+        current_ids(&flat.list_versions(name).unwrap()),
+        ["v-current"]
+    );
+    assert_eq!(
+        current_ids(&parameters.list_versions(parameter).unwrap()),
+        ["3"]
+    );
+
+    let mut pending = SecretPutRequest::text(name, "staged value");
+    pending.stage = Some(dbflux_core::SecretVersionStage::Pending);
+    flat.put_value(&pending).expect("a staged write");
+    assert_eq!(
+        current_ids(&flat.list_versions(name).unwrap()),
+        ["v-current"],
+        "a pending write moves no current version"
+    );
+
+    let written = flat
+        .put_value(&SecretPutRequest::text(name, "new current"))
+        .expect("a current write")
+        .version
+        .expect("version");
+    assert_eq!(
+        current_ids(&flat.list_versions(name).unwrap()),
+        [written.as_str()]
+    );
+
+    parameters
+        .put_value(&SecretPutRequest::text(parameter, "db2"))
+        .expect("a parameter write");
+    assert_eq!(
+        current_ids(&parameters.list_versions(parameter).unwrap()),
+        ["4"]
+    );
 }

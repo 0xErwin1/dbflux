@@ -3528,7 +3528,24 @@ document:
       created: "创建时间"
       last_changed: "上次更改"
       last_retrieved: "上次获取"
-      versions: "版本"
+    versions:
+      title: "版本"
+      history_title: "历史记录"
+      count:
+        one: "%{count} 个版本"
+        many: "%{count} 个版本"
+      column:
+        version: "版本"
+        labels: "暂存标签"
+        created: "创建时间"
+      no_labels: "无标签"
+      history_version: "v%{id}"
+      loading: "正在加载版本…"
+      failed: "无法加载版本"
+      retrieve: "获取版本 %{version}"
+      back_to_current: "返回当前版本"
+      shown: "正在显示版本 %{version}"
+      not_current: "这不是当前版本。获取操作会被审计，值不会。"
     tags:
       title: "标签"
       none: "无标签"

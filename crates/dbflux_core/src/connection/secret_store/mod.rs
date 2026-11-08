@@ -284,6 +284,10 @@ pub struct SecretVersionInfo {
 
     /// Principal that wrote this version, when the store reports it.
     pub modified_by: Option<String>,
+
+    /// The version the store serves when no version is requested. At most
+    /// one row of a history carries it.
+    pub is_current: bool,
 }
 
 /// A retrieved or written value.

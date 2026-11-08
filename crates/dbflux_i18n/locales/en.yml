@@ -3528,7 +3528,24 @@ document:
       created: "Created"
       last_changed: "Last changed"
       last_retrieved: "Last retrieved"
-      versions: "Versions"
+    versions:
+      title: "Versions"
+      history_title: "History"
+      count:
+        one: "%{count} version"
+        many: "%{count} versions"
+      column:
+        version: "Version"
+        labels: "Staging labels"
+        created: "Created"
+      no_labels: "no labels"
+      history_version: "v%{id}"
+      loading: "Loading the versions…"
+      failed: "The versions could not be loaded"
+      retrieve: "Retrieve version %{version}"
+      back_to_current: "Back to current"
+      shown: "Showing version %{version}"
+      not_current: "This is not the current version. The retrieval is audited, the value is not."
     tags:
       title: "Tags"
       none: "No tags"
