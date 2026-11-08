@@ -784,7 +784,14 @@ impl SecretStoreDocument {
             SecretViewEvent::StoreCalled(timing) => self.last_call = Some(*timing),
             SecretViewEvent::Removed => self.selected = None,
             SecretViewEvent::DialogOpened => self.drop_context_menu(),
-            SecretViewEvent::DialogClosed => self.drop_create_dialog(),
+            SecretViewEvent::DialogClosed => {
+                // The event is delivered after the update that closed the
+                // dialog; a New secret form opened since then is not the one
+                // it reports.
+                if !self.view.read(cx).create_slot_is_open() {
+                    self.drop_create_dialog();
+                }
+            }
             SecretViewEvent::CloseRequested => self.close_details(window, cx),
             SecretViewEvent::Created { name, stands } => {
                 self.land_create(name, *stands, cx);

@@ -143,6 +143,11 @@ impl SecretView {
         self.dialog.is_some()
     }
 
+    /// Whether the open dialog is the host's New secret form.
+    pub(in crate::secret_store) fn create_slot_is_open(&self) -> bool {
+        matches!(self.dialog, Some(WriteDialog::Create))
+    }
+
     /// Whether a governed write is in flight.
     pub fn write_in_flight(&self) -> bool {
         self.write_in_flight

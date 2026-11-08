@@ -4242,6 +4242,33 @@ fn the_rotation_dialog_is_locked_while_its_save_is_in_flight(cx: &mut TestAppCon
     assert_eq!(after, enabled, "the switch did nothing");
 }
 
+/// Closing the New secret dialog and opening it again in the same update
+/// keeps the new form: the close event queued by the first one belongs to the
+/// form it closed.
+#[gpui::test]
+fn a_queued_close_does_not_erase_a_create_form_opened_after_it(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    opened.click("secret-new");
+    assert!(opened.is_drawn("secret-create-dialog"));
+
+    let doc = opened.doc.clone();
+    opened.window.update(|window, cx| {
+        doc.update(cx, |doc, cx| {
+            doc.close_dialog(cx);
+            doc.open_create(window, cx);
+        })
+    });
+    opened.window.run_until_parked();
+
+    assert!(opened.read(|doc| doc.create_dialog.is_some()));
+    assert!(opened.dialog_open());
+    assert!(
+        opened.is_drawn("secret-create-dialog"),
+        "the modal is drawn"
+    );
+}
+
 /// A store that declares tiers but no value types shows no type group and
 /// sends no value type.
 #[gpui::test]
