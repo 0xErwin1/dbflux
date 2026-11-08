@@ -104,6 +104,24 @@ impl SecretStoreDocument {
             .into_any_element(),
         );
 
+        if self.supports_description_edit() && self.description_edit_rewrites_value() {
+            buttons.push(
+                blocked(
+                    Button::new(
+                        "secret-action-edit-description",
+                        dbflux_i18n::t!("document.secret_store.description_edit.button"),
+                    )
+                    .icon(AppIcon::Pencil)
+                    .tab_stop(false)
+                    .disabled(!self.can_edit_description())
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_edit_description(window, cx)),
+                    ),
+                )
+                .into_any_element(),
+            );
+        }
+
         if self.supports_rotation() {
             buttons.push(
                 blocked(

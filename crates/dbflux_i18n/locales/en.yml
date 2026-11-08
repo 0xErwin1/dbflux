@@ -3706,6 +3706,33 @@ document:
       unfinished: "Rotation is off, but version %{version} still holds the pending stage of a rotation that never finished."
       unfinished_title: "A cancelled rotation left version %{version} pending"
       unfinished_body: "Check the credentials behind version %{version}, then move or remove its pending stage. Until then a later rotation can be refused."
+    tags_edit:
+      short: "Edit"
+      button: "Edit tags"
+      title: "Edit tags of %{name}"
+      lead: "Changing a tag does not touch the value or any version."
+      key_placeholder: "key"
+      value_placeholder: "value"
+      key_label: "Tag %{row} key"
+      value_label: "Tag %{row} value"
+      remove: "Remove tag"
+      add: "Add tag"
+      confirm: "Save tags"
+      done: "Updated the tags of %{name}"
+      no_change: "No tag differs from the ones the secret has."
+      duplicate: "The key %{key} appears in more than one row."
+    description_edit:
+      short: "Edit"
+      button: "Edit description"
+      title: "Edit description of %{name}"
+      label: "Description"
+      placeholder: "No description"
+      confirm: "Save description"
+      confirm_version: "Save as new version"
+      done: "Updated the description of %{name}"
+      done_version: "Updated the description of %{name}; version %{version} holds the new description"
+      rewrites_title: "This writes the value again as a new version"
+      rewrites_body: "This store changes a description only by writing the value again, so saving creates a new version. The value, its type and its key stay as they are."
 document_tree:
   search_placeholder: Search…
   view:

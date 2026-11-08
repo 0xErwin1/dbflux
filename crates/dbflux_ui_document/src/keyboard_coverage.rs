@@ -824,6 +824,34 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::Cancel),
         ),
         ("secret-rotation-enabled", KeyboardPath::TabStop),
+        // Edit tags (the Tags section and the row menu) and Edit description
+        // (the Details section, or the bottom bar) are pane actions; each
+        // dialog's buttons answer Enter and Escape, and its row controls are
+        // stops of the dialog.
+        ("secret-tags-edit", KeyboardPath::Menu("secret-edit-tags")),
+        (
+            "secret-details-edit",
+            KeyboardPath::Menu("secret-edit-description"),
+        ),
+        (
+            "secret-action-edit-description",
+            KeyboardPath::Menu("secret-edit-description"),
+        ),
+        (
+            "secret-tags-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        ("secret-tags-cancel", KeyboardPath::Command(Command::Cancel)),
+        ("secret-tags-add", KeyboardPath::TabStop),
+        ("secret-tags-remove-*", KeyboardPath::TabStop),
+        (
+            "secret-description-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-description-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
         (
             "secret-value-copy-*",
             KeyboardPath::MouseOnly(
@@ -848,6 +876,10 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
         (
             "secret-menu-delete-*",
             KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-menu-edit-tags-*",
+            KeyboardPath::Menu("secret-edit-tags"),
         ),
         (
             "secret-menu-rotate-now-*",

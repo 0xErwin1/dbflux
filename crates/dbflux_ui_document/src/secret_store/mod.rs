@@ -1223,6 +1223,45 @@ impl SecretStoreDocument {
             actions.push(delete);
         }
 
+        // Edit tags and Edit description are buttons of the Tags and Details
+        // sections (the description's of the bottom bar on a store that
+        // rewrites the value for it).
+        if matches!(self.selected, Some(SecretRowKey::Secret(_))) {
+            if self.supports_tags() {
+                let tags_target = target.clone();
+                actions.push(
+                    PaneAction::callback(
+                        "secret-edit-tags",
+                        dbflux_i18n::t!("document.secret_store.tags_edit.button"),
+                        move |window, cx| {
+                            if let Some(doc) = tags_target.upgrade() {
+                                doc.update(cx, |doc, cx| doc.open_edit_tags(window, cx));
+                            }
+                        },
+                    )
+                    .icon(AppIcon::Tag)
+                    .enabled(self.can_edit_tags()),
+                );
+            }
+
+            if self.supports_description_edit() {
+                let description_target = target.clone();
+                actions.push(
+                    PaneAction::callback(
+                        "secret-edit-description",
+                        dbflux_i18n::t!("document.secret_store.description_edit.button"),
+                        move |window, cx| {
+                            if let Some(doc) = description_target.upgrade() {
+                                doc.update(cx, |doc, cx| doc.open_edit_description(window, cx));
+                            }
+                        },
+                    )
+                    .icon(AppIcon::Pencil)
+                    .enabled(self.can_edit_description()),
+                );
+            }
+        }
+
         // Rotate now and Edit rotation are buttons of the Rotation section,
         // the bottom bar and the row menu.
         if self.supports_rotation() && matches!(self.selected, Some(SecretRowKey::Secret(_))) {

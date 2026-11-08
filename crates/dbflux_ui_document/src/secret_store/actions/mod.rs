@@ -16,8 +16,10 @@
 
 mod bar;
 mod delete;
+mod description;
 mod rollback;
 mod rotation;
+mod tags;
 
 use super::editor::write_failure_to_user_facing;
 use super::write::{SecretWriteFailure, SecretWriteFailureKind, WriteContext};
@@ -39,8 +41,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 pub(super) use delete::{DeleteDialog, DeleteKind};
+pub(super) use description::DescriptionDialog;
 pub(super) use rollback::RollBackDialog;
 pub(super) use rotation::{RotationDialog, RotationNotice};
+pub(super) use tags::TagsDialog;
 
 /// The dialog open over the document, if any. Only one is ever open: a
 /// dialog is modal, and opening another waits for it to close.
@@ -48,6 +52,8 @@ pub(super) enum WriteDialog {
     RollBack(RollBackDialog),
     Delete(DeleteDialog),
     Rotation(RotationDialog),
+    Tags(TagsDialog),
+    Description(DescriptionDialog),
 }
 
 /// Everything a governed write takes from the document, captured on the
@@ -341,6 +347,8 @@ impl SecretStoreDocument {
             Some(WriteDialog::RollBack(_)) => self.submit_roll_back(window, cx),
             Some(WriteDialog::Delete(_)) => self.submit_delete(window, cx),
             Some(WriteDialog::Rotation(_)) => self.submit_rotation(window, cx),
+            Some(WriteDialog::Tags(_)) => self.submit_tags(window, cx),
+            Some(WriteDialog::Description(_)) => self.submit_description(window, cx),
             None => {}
         }
     }
@@ -352,6 +360,8 @@ impl SecretStoreDocument {
             WriteDialog::RollBack(dialog) => self.render_roll_back_dialog(dialog, cx),
             WriteDialog::Delete(dialog) => self.render_delete_dialog(dialog, cx),
             WriteDialog::Rotation(dialog) => self.render_rotation_dialog(dialog, cx),
+            WriteDialog::Tags(dialog) => self.render_tags_dialog(dialog, cx),
+            WriteDialog::Description(dialog) => self.render_description_dialog(dialog, cx),
         })
     }
 }

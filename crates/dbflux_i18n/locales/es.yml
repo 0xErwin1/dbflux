@@ -3706,6 +3706,33 @@ document:
       unfinished: "La rotación está desactivada, pero la versión %{version} aún conserva la etapa pendiente de una rotación que nunca terminó."
       unfinished_title: "Una rotación cancelada dejó pendiente la versión %{version}"
       unfinished_body: "Revise las credenciales de la versión %{version} y luego mueva o elimine su etapa pendiente. Hasta entonces se puede rechazar una rotación posterior."
+    tags_edit:
+      short: "Editar"
+      button: "Editar etiquetas"
+      title: "Editar las etiquetas de %{name}"
+      lead: "Cambiar una etiqueta no toca el valor ni ninguna versión."
+      key_placeholder: "clave"
+      value_placeholder: "valor"
+      key_label: "Clave de la etiqueta %{row}"
+      value_label: "Valor de la etiqueta %{row}"
+      remove: "Quitar etiqueta"
+      add: "Añadir etiqueta"
+      confirm: "Guardar etiquetas"
+      done: "Se actualizaron las etiquetas de %{name}"
+      no_change: "Ninguna etiqueta difiere de las que tiene el secreto."
+      duplicate: "La clave %{key} aparece en más de una fila."
+    description_edit:
+      short: "Editar"
+      button: "Editar descripción"
+      title: "Editar la descripción de %{name}"
+      label: "Descripción"
+      placeholder: "Sin descripción"
+      confirm: "Guardar descripción"
+      confirm_version: "Guardar como nueva versión"
+      done: "Se actualizó la descripción de %{name}"
+      done_version: "Se actualizó la descripción de %{name}; la versión %{version} contiene la nueva descripción"
+      rewrites_title: "Esto vuelve a escribir el valor como una nueva versión"
+      rewrites_body: "Este almacén solo cambia una descripción escribiendo de nuevo el valor, así que guardar crea una nueva versión. El valor, su tipo y su clave se mantienen."
 document_tree:
   search_placeholder: Buscar…
   view:

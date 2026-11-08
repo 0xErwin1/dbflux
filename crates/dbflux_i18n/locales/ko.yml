@@ -3706,6 +3706,33 @@ document:
       unfinished: "교체는 꺼졌지만 버전 %{version}에 끝나지 않은 교체의 보류 단계가 남아 있습니다."
       unfinished_title: "취소된 교체로 버전 %{version}이(가) 보류 상태로 남았습니다"
       unfinished_body: "버전 %{version}의 자격 증명을 확인한 다음 보류 단계를 옮기거나 제거하세요. 그때까지는 이후 교체가 거부될 수 있습니다."
+    tags_edit:
+      short: "편집"
+      button: "태그 편집"
+      title: "%{name}의 태그 편집"
+      lead: "태그를 바꿔도 값이나 어떤 버전도 변경되지 않습니다."
+      key_placeholder: "키"
+      value_placeholder: "값"
+      key_label: "태그 %{row} 키"
+      value_label: "태그 %{row} 값"
+      remove: "태그 제거"
+      add: "태그 추가"
+      confirm: "태그 저장"
+      done: "%{name}의 태그를 업데이트했습니다"
+      no_change: "시크릿이 가진 태그와 다른 태그가 없습니다."
+      duplicate: "키 %{key}이(가) 둘 이상의 행에 있습니다."
+    description_edit:
+      short: "편집"
+      button: "설명 편집"
+      title: "%{name}의 설명 편집"
+      label: "설명"
+      placeholder: "설명 없음"
+      confirm: "설명 저장"
+      confirm_version: "새 버전으로 저장"
+      done: "%{name}의 설명을 업데이트했습니다"
+      done_version: "%{name}의 설명을 업데이트했습니다. 버전 %{version}에 새 설명이 들어 있습니다"
+      rewrites_title: "값을 새 버전으로 다시 기록합니다"
+      rewrites_body: "이 저장소는 값을 다시 기록해야만 설명을 바꿀 수 있으므로 저장하면 새 버전이 만들어집니다. 값, 유형, 키는 그대로 유지됩니다."
 document_tree:
   search_placeholder: 검색…
   view:

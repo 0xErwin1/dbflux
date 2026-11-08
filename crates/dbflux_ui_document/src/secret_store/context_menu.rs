@@ -49,6 +49,7 @@ pub(super) enum SecretMenuAction {
     RetrieveValue,
     EditValue,
     RotateNow,
+    EditTags,
     Restore,
     Delete,
     CopyName,
@@ -65,6 +66,7 @@ impl SecretMenuAction {
             SecretMenuAction::RetrieveValue => "secret-menu-retrieve-value",
             SecretMenuAction::EditValue => "secret-menu-edit-value",
             SecretMenuAction::RotateNow => "secret-menu-rotate-now",
+            SecretMenuAction::EditTags => "secret-menu-edit-tags",
             SecretMenuAction::Restore => "secret-menu-restore",
             SecretMenuAction::Delete => "secret-menu-delete",
             SecretMenuAction::CopyName => "secret-menu-copy-name",
@@ -166,6 +168,19 @@ impl SecretStoreDocument {
                             AppIcon::Zap,
                         ),
                         self.can_start_rotation_action(),
+                        true,
+                    ));
+                }
+
+                // Edit tags opens the dialog the Tags section's button opens.
+                if self.supports_tags() {
+                    items.push(self.write_item(
+                        SecretMenuItem::new(
+                            SecretMenuAction::EditTags,
+                            dbflux_i18n::t!("document.secret_store.tags_edit.button").into(),
+                            AppIcon::Tag,
+                        ),
+                        self.can_edit_tags(),
                         true,
                     ));
                 }
@@ -477,6 +492,12 @@ impl SecretStoreDocument {
                 return;
             }
             SecretMenuAction::RotateNow => self.rotate_selected_now(cx),
+            SecretMenuAction::EditTags => {
+                // The dialog takes the keyboard when it opens; the common
+                // refocus below would take it straight back.
+                self.open_edit_tags(window, cx);
+                return;
+            }
             SecretMenuAction::Restore => self.restore_selected(cx),
             SecretMenuAction::RetrieveValue => self.retrieve_selected_value(cx),
             SecretMenuAction::CopyName => self.copy_selected_name(cx),

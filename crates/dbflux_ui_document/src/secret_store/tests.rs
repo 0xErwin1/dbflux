@@ -3704,8 +3704,8 @@ impl Opened<'_> {
 }
 
 /// Right-clicking a secret row opens the menu anchored at the pointer, the
-/// row becomes the selection, and the menu holds the read items, Rotate now
-/// and Delete.
+/// row becomes the selection, and the menu holds the read items and the write
+/// entries: Rotate now, Edit tags and Delete.
 /// Edit value waits for a loaded value, so a row whose value was not
 /// retrieved does not offer it.
 #[gpui::test]
@@ -3726,9 +3726,10 @@ fn a_secondary_click_opens_a_secret_row_menu(cx: &mut TestAppContext) {
             "CopyName",
             "CopyArn",
             "RotateNow",
+            "EditTags",
             "Delete"
         ],
-        "the menu lists the read items, Rotate now and Delete"
+        "the menu lists the read items and the write entries"
     );
 
     let text = opened.rendered_text();
@@ -3737,6 +3738,7 @@ fn a_secondary_click_opens_a_secret_row_menu(cx: &mut TestAppContext) {
         "Copy name",
         "Copy ARN",
         "Rotate now",
+        "Edit tags",
         "Delete",
     ] {
         assert!(text.contains(label), "{label} missing: {text}");
@@ -3757,6 +3759,7 @@ fn restricted_secrets_disable_delete_and_say_why(cx: &mut TestAppContext) {
                 "CopyName",
                 "CopyArn",
                 "RotateNow",
+                "EditTags",
                 "Delete",
             ],
         ),
@@ -3767,6 +3770,7 @@ fn restricted_secrets_disable_delete_and_say_why(cx: &mut TestAppContext) {
                 "CopyName",
                 "CopyArn",
                 "RotateNow",
+                "EditTags",
                 "Restore",
                 "Delete",
             ],
@@ -3851,7 +3855,8 @@ fn a_secret_pending_deletion_keeps_retrieve_value_disabled(cx: &mut TestAppConte
     );
 }
 
-/// A parameter row under a path offers Copy name, Retrieve value and Delete.
+/// A parameter row under a path offers Copy name, Retrieve value, Edit tags
+/// and Delete.
 #[gpui::test]
 fn a_parameter_row_offers_copy_name_and_retrieve_value(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
@@ -3860,8 +3865,8 @@ fn a_parameter_row_offers_copy_name_and_retrieve_value(cx: &mut TestAppContext) 
 
     assert_eq!(
         opened.menu_actions(),
-        vec!["RetrieveValue", "CopyName", "Delete"],
-        "a parameter row offers Copy name, Retrieve value and Delete"
+        vec!["RetrieveValue", "CopyName", "EditTags", "Delete"],
+        "a parameter row offers Copy name, Retrieve value, Edit tags and Delete"
     );
     let text = opened.rendered_text();
     assert!(text.contains("Copy name"), "{text}");
@@ -8220,7 +8225,7 @@ mod details_design {
     }
 
     #[gpui::test]
-    fn tags_are_key_value_chips_in_a_wrapping_row_without_an_edit_button(cx: &mut TestAppContext) {
+    fn tags_are_key_value_chips_in_a_wrapping_row_with_an_edit_button(cx: &mut TestAppContext) {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.select(KEY_VALUE_SECRET);
 
@@ -8235,8 +8240,8 @@ mod details_design {
 
         let paths = opened.rendered_paths();
         assert!(
-            !paths.iter().any(|path| path.contains("secret-tags-edit")),
-            "the write UI comes later"
+            paths.iter().any(|path| path.contains("secret-tags-edit")),
+            "the Tags section ends with its Edit button"
         );
     }
 

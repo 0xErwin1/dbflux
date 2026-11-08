@@ -77,6 +77,30 @@ fn section_title(title: String, cx: &App) -> Div {
         .child(title.to_uppercase())
 }
 
+/// A section whose title row ends with an action button, such as the Edit of
+/// Details and Tags.
+fn section_with_action(
+    title: String,
+    action: Option<AnyElement>,
+    rows: Vec<AnyElement>,
+    cx: &App,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(SecretStoreMetrics::ROW_GAP)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(DocumentMetrics::GAP)
+                .child(section_title(title, cx))
+                .child(div().flex_1())
+                .children(action),
+        )
+        .children(rows)
+}
+
 fn section(title: String, rows: Vec<AnyElement>, cx: &App) -> Div {
     div()
         .flex()
@@ -216,7 +240,7 @@ impl SecretStoreDocument {
                     sections.push(self.render_rotation_section(details, cx).into_any_element());
                 }
 
-                sections.push(render_tags_section(details, cx).into_any_element());
+                sections.push(self.render_tags_section(details, cx).into_any_element());
             }
             DetailsState::Loading => sections.push(
                 Text::caption(dbflux_i18n::t!("document.secret_store.details.loading"))
@@ -344,7 +368,7 @@ impl SecretStoreDocument {
     /// The details the describe reported. A typed store shows its type, tier
     /// and data type; every store shows the identifier, description,
     /// encryption key, versions and the change dates it reports.
-    fn render_metadata_section(&self, details: &SecretDetails, cx: &App) -> Div {
+    fn render_metadata_section(&self, details: &SecretDetails, cx: &mut Context<Self>) -> Div {
         let summary = &details.summary;
         let typed = self.store.supports(SecretStoreCapabilities::TYPED_VALUES);
         let label = |key: &str| dbflux_i18n::t!(key);
@@ -429,8 +453,34 @@ impl SecretStoreDocument {
             ));
         }
 
-        section(
+        // A store that changes the description alone has Edit here; one that
+        // rewrites the value for it has Edit description in the bottom bar.
+        let edit = (self.supports_description_edit() && !self.description_edit_rewrites_value())
+            .then(|| {
+                let button = Button::new(
+                    "secret-details-edit",
+                    dbflux_i18n::t!("document.secret_store.description_edit.short"),
+                )
+                .icon(AppIcon::Pencil)
+                .aria_label(dbflux_i18n::t!(
+                    "document.secret_store.description_edit.button"
+                ))
+                .tab_stop(false)
+                .disabled(!self.can_edit_description())
+                .on_click(
+                    cx.listener(|this, _, window, cx| this.open_edit_description(window, cx)),
+                );
+
+                match self.write_refusal_reason() {
+                    Some(reason) => button.tooltip(reason),
+                    None => button,
+                }
+                .into_any_element()
+            });
+
+        section_with_action(
             dbflux_i18n::t!("document.secret_store.details.title"),
+            edit,
             rows,
             cx,
         )
@@ -678,6 +728,36 @@ impl SecretStoreDocument {
             )
             .children(action)
             .into_any_element()
+    }
+
+    /// The Tags section: the tags as chips, and Edit when the store edits
+    /// them. The button says Edit and is named Edit tags, as the narrow pane
+    /// of the design draws it.
+    fn render_tags_section(&self, details: &SecretDetails, cx: &mut Context<Self>) -> Div {
+        let edit = self.supports_tags().then(|| {
+            let button = Button::new(
+                "secret-tags-edit",
+                dbflux_i18n::t!("document.secret_store.tags_edit.short"),
+            )
+            .icon(AppIcon::Tag)
+            .aria_label(dbflux_i18n::t!("document.secret_store.tags_edit.button"))
+            .tab_stop(false)
+            .disabled(!self.can_edit_tags())
+            .on_click(cx.listener(|this, _, window, cx| this.open_edit_tags(window, cx)));
+
+            match self.write_refusal_reason() {
+                Some(reason) => button.tooltip(reason),
+                None => button,
+            }
+            .into_any_element()
+        });
+
+        section_with_action(
+            dbflux_i18n::t!("document.secret_store.tags.title"),
+            edit,
+            vec![tag_chips(details, cx)],
+            cx,
+        )
     }
 
     /// The Rotation section: the settings the store reports, the warning a
@@ -1484,16 +1564,15 @@ fn rotation_rows(details: &SecretDetails, cx: &App) -> Vec<AnyElement> {
     }
 }
 
-/// Tags as `key=value` chips in a row that wraps. The artboard's Edit
-/// button is left out until a tags-edit action exists.
-fn render_tags_section(details: &SecretDetails, cx: &App) -> Div {
+/// Tags as `key=value` chips in a row that wraps.
+fn tag_chips(details: &SecretDetails, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let fill = theme.secondary;
     let border = theme.border;
     let muted = theme.muted_foreground;
     let family = fonts::editor_family(cx);
 
-    let body: AnyElement = if details.tags.is_empty() {
+    if details.tags.is_empty() {
         Text::caption(dbflux_i18n::t!("document.secret_store.tags.none"))
             .muted_foreground()
             .into_any_element()
@@ -1515,11 +1594,5 @@ fn render_tags_section(details: &SecretDetails, cx: &App) -> Div {
                     .child(format!("{}={}", tag.key, tag.value))
             }))
             .into_any_element()
-    };
-
-    section(
-        dbflux_i18n::t!("document.secret_store.tags.title"),
-        vec![body],
-        cx,
-    )
+    }
 }

@@ -1229,3 +1229,469 @@ fn the_rotation_controls_are_covered(cx: &mut TestAppContext) {
         );
     }
 }
+
+// -- Tags --------------------------------------------------------------------
+
+/// Edit tags is a button of the Tags section and an entry of the row menu, on
+/// a flat and a hierarchical store alike.
+#[gpui::test]
+fn edit_tags_is_offered_in_the_section_and_the_menu(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    assert!(opened.is_drawn("secret-tags-edit"));
+    opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
+    assert!(opened.menu_actions().contains(&"EditTags".to_string()));
+
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.open_parameter("/app/prod/db/host");
+    assert!(opened.is_drawn("secret-tags-edit"));
+    opened.right_click("secret-row-/app/prod/db/host");
+    assert!(opened.menu_actions().contains(&"EditTags".to_string()));
+}
+
+/// The dialog opens on the secret's tags, writes nothing on its own, and
+/// Save sends only the difference: the tags that are new or changed and the
+/// keys that are gone.
+#[gpui::test]
+fn edit_tags_sends_the_difference_through_the_seam(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-tags-edit");
+
+    assert!(opened.is_drawn("secret-tags-dialog"));
+    assert!(opened.is_drawn("secret-tags-key-0"));
+    assert!(opened.is_drawn("secret-tags-key-1"));
+    assert!(
+        opened.is_disabled("secret-tags-confirm"),
+        "nothing changed yet"
+    );
+    assert!(opened.mutations().is_empty());
+
+    opened.fill_input("secret-tags-value-0", "billing");
+    opened.click("secret-tags-remove-1");
+    opened.click("secret-tags-add");
+    opened.fill_input("secret-tags-key-1", "cost-center");
+    opened.fill_input("secret-tags-value-1", "4021");
+    assert!(!opened.is_disabled("secret-tags-confirm"));
+
+    opened.click("secret-tags-confirm");
+
+    let mutations = opened.mutations();
+    assert_eq!(mutations.len(), 1, "{mutations:?}");
+    let FakeSecretMutation::UpdateTags(update) = &mutations[0] else {
+        panic!("{mutations:?}");
+    };
+    let set: Vec<(&str, &str)> = update
+        .set
+        .iter()
+        .map(|tag| (tag.key.as_str(), tag.value.as_str()))
+        .collect();
+    assert_eq!(set, vec![("team", "billing"), ("cost-center", "4021")]);
+    assert_eq!(update.remove, vec!["env".to_string()]);
+    assert_eq!(opened.audit_actions(), vec!["secret_tags_updated"]);
+    assert!(!opened.dialog_open());
+
+    let text = opened.rendered_text();
+    assert!(text.contains("team=billing"), "{text}");
+    assert!(text.contains("cost-center=4021"), "{text}");
+    assert!(!text.contains("env=prod"), "{text}");
+}
+
+/// The services' limits are the seam's own checks, shown under the rows:
+/// the reserved prefix, an over-long value and a key in two rows. Save stays
+/// disabled and nothing is sent.
+#[gpui::test]
+fn a_tag_the_seam_would_refuse_shows_its_message_and_sends_nothing(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-tags-edit");
+
+    opened.fill_input("secret-tags-key-0", "aws:team");
+    assert!(opened.is_disabled("secret-tags-confirm"));
+    assert!(opened.is_drawn("secret-tags-problem"));
+    let text = opened.rendered_text();
+    assert!(text.contains("reserved prefix"), "{text}");
+
+    opened.fill_input("secret-tags-key-0", "team");
+    opened.fill_input("secret-tags-value-0", &"x".repeat(257));
+    let text = opened.rendered_text();
+    assert!(text.contains("longer than 256 characters"), "{text}");
+    assert!(opened.is_disabled("secret-tags-confirm"));
+
+    opened.fill_input("secret-tags-value-0", "payments");
+    opened.fill_input("secret-tags-key-1", "team");
+    let text = opened.rendered_text();
+    assert!(text.contains("appears in more than one row"), "{text}");
+    assert!(opened.is_disabled("secret-tags-confirm"));
+
+    opened.click("secret-tags-confirm");
+    let doc = opened.doc.clone();
+    opened
+        .window
+        .update(|window, cx| doc.update(cx, |doc, cx| doc.confirm_dialog(window, cx)));
+    opened.window.run_until_parked();
+
+    assert!(opened.mutations().is_empty(), "{:?}", opened.mutations());
+    assert!(
+        opened.audit_actions().is_empty(),
+        "the dialog sends nothing, so not even a refusal reaches the seam"
+    );
+    assert!(opened.dialog_open());
+}
+
+/// Cancelling the dialog writes nothing.
+#[gpui::test]
+fn cancelling_edit_tags_writes_nothing(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-tags-edit");
+    opened.click("secret-tags-remove-0");
+
+    opened.click("secret-tags-cancel");
+
+    assert!(!opened.dialog_open());
+    assert!(opened.mutations().is_empty());
+    assert!(opened.audit_actions().is_empty());
+}
+
+/// A parameter's last tag can be removed: the request is a removal only.
+#[gpui::test]
+fn removing_the_last_tag_of_a_parameter_sends_a_removal_only(cx: &mut TestAppContext) {
+    let name = "/app/prod/db/host";
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.open_parameter(name);
+    opened.click("secret-tags-edit");
+    opened.click("secret-tags-remove-0");
+
+    opened.click("secret-tags-confirm");
+
+    let mutations = opened.mutations();
+    assert_eq!(mutations.len(), 1, "{mutations:?}");
+    assert!(
+        matches!(
+            &mutations[0],
+            FakeSecretMutation::UpdateTags(update)
+                if update.name == name && update.set.is_empty() && update.remove == vec!["app".to_string()]
+        ),
+        "{mutations:?}"
+    );
+    assert!(opened.rendered_text().contains("No tags"));
+}
+
+/// A refusal at the seam and a store failure are each reported once and keep
+/// the dialog.
+#[gpui::test]
+fn a_refused_or_failed_tag_edit_is_reported_once(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.set_policy(
+        MutationPolicy::ReadOnly,
+        Some(ReadOnlyReason::ProfileSetting),
+    );
+    opened.click("secret-tags-edit");
+    opened.click("secret-tags-remove-0");
+
+    opened.click("secret-tags-confirm");
+
+    assert!(opened.mutations().is_empty());
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("read-only"), "{}", errors[0].1);
+    assert!(opened.dialog_open());
+    assert_eq!(opened.audit_actions(), vec!["secret_tags_update_refused"]);
+}
+
+#[gpui::test]
+fn a_failed_tag_edit_names_its_cause_once(cx: &mut TestAppContext) {
+    let driver = FakeDriver::new(DbKind::AwsSecrets)
+        .with_secret_write_error(KEY_VALUE_SECRET, "not authorized to tag");
+    let mut opened = open_with(cx, driver, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-tags-edit");
+    opened.click("secret-tags-remove-0");
+
+    opened.click("secret-tags-confirm");
+
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("not authorized"), "{}", errors[0].1);
+    assert!(opened.dialog_open());
+    assert_eq!(opened.audit_actions(), vec!["secret_tags_update_failed"]);
+}
+
+/// A managed secret takes no tag edit.
+#[gpui::test]
+fn a_managed_secret_cannot_have_its_tags_or_description_edited(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(MANAGED_SECRET);
+
+    assert!(opened.is_disabled("secret-tags-edit"));
+    assert!(opened.is_disabled("secret-details-edit"));
+}
+
+// -- Description ---------------------------------------------------------------
+
+const NEW_DESCRIPTION: &str = "Rotated by the platform team";
+
+/// A store that changes a description alone draws Edit in the Details
+/// section; the dialog says nothing about a new version, Save waits for a
+/// change, and the write creates no version.
+#[gpui::test]
+fn the_description_of_a_secret_is_edited_without_a_new_version(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    assert!(opened.is_drawn("secret-details-edit"));
+    assert!(!opened.is_drawn("secret-action-edit-description"));
+    let versions_before = opened.read(|doc| match doc.versions() {
+        VersionsState::Loaded(versions) => versions.len(),
+        _ => 0,
+    });
+
+    opened.click("secret-details-edit");
+
+    assert!(opened.is_drawn("secret-description-dialog"));
+    assert!(!opened.is_drawn("secret-description-rewrites"));
+    assert!(opened.is_disabled("secret-description-confirm"));
+    assert!(opened.mutations().is_empty());
+
+    opened.fill_input("secret-description-input", NEW_DESCRIPTION);
+    opened.click("secret-description-confirm");
+
+    let mutations = opened.mutations();
+    assert_eq!(mutations.len(), 1, "{mutations:?}");
+    assert!(
+        matches!(
+            &mutations[0],
+            FakeSecretMutation::UpdateDescription(update)
+                if update.name == KEY_VALUE_SECRET && update.description == NEW_DESCRIPTION
+        ),
+        "{mutations:?}"
+    );
+    assert_eq!(opened.audit_actions(), vec!["secret_description_updated"]);
+    assert!(!opened.dialog_open());
+    assert!(opened.rendered_text().contains(NEW_DESCRIPTION));
+    let versions_after = opened.read(|doc| match doc.versions() {
+        VersionsState::Loaded(versions) => versions.len(),
+        _ => 0,
+    });
+    assert_eq!(versions_after, versions_before);
+
+    // The description text is not an audit field.
+    let audit = format!("{:?}", opened.audit_records());
+    assert!(!audit.contains(NEW_DESCRIPTION), "{audit}");
+}
+
+/// A store that changes a description by writing the value again says so in
+/// the dialog before it is confirmed, draws Edit description in the bottom
+/// bar, and the write names the version it created.
+#[gpui::test]
+fn a_parameters_description_edit_says_it_writes_a_new_version(cx: &mut TestAppContext) {
+    let name = "/app/prod/db/host";
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.open_parameter(name);
+    assert!(opened.is_drawn("secret-action-edit-description"));
+    assert!(!opened.is_drawn("secret-details-edit"));
+    let versions_before = opened.read(|doc| match doc.versions() {
+        VersionsState::Loaded(versions) => versions.len(),
+        _ => 0,
+    });
+
+    opened.click("secret-action-edit-description");
+
+    assert!(opened.is_drawn("secret-description-rewrites"));
+    let text = opened.rendered_text();
+    assert!(
+        text.contains("writes the value again as a new version"),
+        "{text}"
+    );
+    assert!(text.contains("Save as new version"), "{text}");
+
+    opened.fill_input("secret-description-input", NEW_DESCRIPTION);
+    opened.click("secret-description-confirm");
+
+    let mutations = opened.mutations();
+    assert_eq!(mutations.len(), 1, "{mutations:?}");
+    assert!(
+        matches!(&mutations[0], FakeSecretMutation::UpdateDescription(update) if update.name == name),
+        "{mutations:?}"
+    );
+    assert_eq!(opened.audit_actions(), vec!["secret_description_updated"]);
+    let versions_after = opened.read(|doc| match doc.versions() {
+        VersionsState::Loaded(versions) => versions.len(),
+        _ => 0,
+    });
+    assert_eq!(versions_after, versions_before + 1, "the history lists it");
+}
+
+/// Cancelling writes nothing, and so does saving without a change.
+#[gpui::test]
+fn cancelling_edit_description_writes_nothing(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-details-edit");
+    opened.fill_input("secret-description-input", NEW_DESCRIPTION);
+
+    opened.click("secret-description-cancel");
+
+    assert!(!opened.dialog_open());
+    assert!(opened.mutations().is_empty());
+    assert!(opened.audit_actions().is_empty());
+
+    opened.click("secret-details-edit");
+    let doc = opened.doc.clone();
+    opened
+        .window
+        .update(|window, cx| doc.update(cx, |doc, cx| doc.confirm_dialog(window, cx)));
+    opened.window.run_until_parked();
+    assert!(
+        opened.mutations().is_empty(),
+        "an unchanged text sends nothing"
+    );
+}
+
+/// A refusal at the seam and a store failure are each reported once and keep
+/// the dialog; a store that cannot clear a description says so.
+#[gpui::test]
+fn a_refused_or_failed_description_edit_is_reported_once(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.set_policy(
+        MutationPolicy::ReadOnly,
+        Some(ReadOnlyReason::ProfileSetting),
+    );
+    opened.click("secret-details-edit");
+    opened.fill_input("secret-description-input", NEW_DESCRIPTION);
+
+    opened.click("secret-description-confirm");
+
+    assert!(opened.mutations().is_empty());
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("read-only"), "{}", errors[0].1);
+    assert!(opened.dialog_open());
+    assert_eq!(
+        opened.audit_actions(),
+        vec!["secret_description_update_refused"]
+    );
+}
+
+#[gpui::test]
+fn a_description_a_store_cannot_clear_is_reported_once(cx: &mut TestAppContext) {
+    let name = "/app/prod/db/host";
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.open_parameter(name);
+
+    // Give the parameter a description first, so clearing it is a change.
+    opened.click("secret-action-edit-description");
+    opened.fill_input("secret-description-input", NEW_DESCRIPTION);
+    opened.click("secret-description-confirm");
+    assert!(!opened.dialog_open());
+    assert!(opened.reported_errors().is_empty());
+
+    opened.click("secret-action-edit-description");
+    opened.click("secret-description-input");
+    opened.window.simulate_keystrokes("ctrl-a");
+    opened.window.simulate_keystrokes("backspace");
+    opened.window.run_until_parked();
+    assert!(
+        !opened.is_disabled("secret-description-confirm"),
+        "a cleared description differs from the stored one"
+    );
+
+    opened.click("secret-description-confirm");
+
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("cannot be cleared"), "{}", errors[0].1);
+    assert!(opened.dialog_open(), "the dialog stays for another text");
+}
+
+/// Every control of the tag and description dialogs has a keyboard path.
+#[gpui::test]
+fn the_tag_and_description_controls_are_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::SECRET_STORE;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+
+    let entries = opened.pane_action_ids();
+    for id in ["secret-edit-tags", "secret-edit-description"] {
+        assert!(entries.iter().any(|entry| entry == id), "{id}: {entries:?}");
+    }
+
+    let capture = FrameCapture::observe(opened.window);
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(entries.clone())
+        .assert_covered(&capture.frame(opened.window));
+    for id in ["secret-tags-edit", "secret-details-edit"] {
+        assert!(
+            checked.iter().any(|checked| checked == id),
+            "{id}: {checked:?}"
+        );
+    }
+
+    opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
+    let capture = FrameCapture::observe(opened.window);
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(entries.clone())
+        .assert_covered(&capture.frame(opened.window));
+    assert!(
+        checked
+            .iter()
+            .any(|id| id.starts_with("secret-menu-edit-tags")),
+        "{checked:?}"
+    );
+    opened.command(Command::Cancel);
+
+    opened.click("secret-tags-edit");
+    opened.click("secret-tags-add");
+    opened.fill_input("secret-tags-key-2", "owner");
+    opened.fill_input("secret-tags-value-2", "platform");
+    let capture = FrameCapture::observe(opened.window);
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(entries.clone())
+        .assert_covered(&capture.frame(opened.window));
+    for id in [
+        "secret-tags-confirm",
+        "secret-tags-cancel",
+        "secret-tags-add",
+        "secret-tags-remove-0",
+    ] {
+        assert!(
+            checked.iter().any(|checked| checked == id),
+            "{id}: {checked:?}"
+        );
+    }
+    opened.click("secret-tags-cancel");
+
+    opened.click("secret-details-edit");
+    opened.fill_input("secret-description-input", NEW_DESCRIPTION);
+    let capture = FrameCapture::observe(opened.window);
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(entries)
+        .assert_covered(&capture.frame(opened.window));
+    for id in ["secret-description-confirm", "secret-description-cancel"] {
+        assert!(
+            checked.iter().any(|checked| checked == id),
+            "{id}: {checked:?}"
+        );
+    }
+    opened.click("secret-description-cancel");
+
+    // A store that rewrites the value for a description has the bar's button.
+    let mut parameters = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    parameters.open_parameter("/app/prod/db/host");
+    let entries = parameters.pane_action_ids();
+    let capture = FrameCapture::observe(parameters.window);
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(entries)
+        .assert_covered(&capture.frame(parameters.window));
+    assert!(
+        checked
+            .iter()
+            .any(|id| id == "secret-action-edit-description"),
+        "{checked:?}"
+    );
+}

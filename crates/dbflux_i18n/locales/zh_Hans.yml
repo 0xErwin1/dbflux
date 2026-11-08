@@ -3706,6 +3706,33 @@ document:
       unfinished: "轮换已关闭，但版本 %{version} 仍保留着一次未完成轮换的待定阶段。"
       unfinished_title: "已取消的轮换让版本 %{version} 处于待定状态"
       unfinished_body: "请检查版本 %{version} 背后的凭据，然后移动或删除它的待定阶段。在此之前，之后的轮换可能会被拒绝。"
+    tags_edit:
+      short: "编辑"
+      button: "编辑标签"
+      title: "编辑 %{name} 的标签"
+      lead: "更改标签不会触及值或任何版本。"
+      key_placeholder: "键"
+      value_placeholder: "值"
+      key_label: "标签 %{row} 的键"
+      value_label: "标签 %{row} 的值"
+      remove: "移除标签"
+      add: "添加标签"
+      confirm: "保存标签"
+      done: "已更新 %{name} 的标签"
+      no_change: "没有任何标签与该密钥现有的标签不同。"
+      duplicate: "键 %{key} 出现在多于一行中。"
+    description_edit:
+      short: "编辑"
+      button: "编辑描述"
+      title: "编辑 %{name} 的描述"
+      label: "描述"
+      placeholder: "无描述"
+      confirm: "保存描述"
+      confirm_version: "另存为新版本"
+      done: "已更新 %{name} 的描述"
+      done_version: "已更新 %{name} 的描述；版本 %{version} 包含新的描述"
+      rewrites_title: "这会把值重新写成一个新版本"
+      rewrites_body: "此存储只能通过重新写入值来更改描述，因此保存会创建新版本。值、类型和键保持不变。"
 document_tree:
   search_placeholder: 搜索…
   view:

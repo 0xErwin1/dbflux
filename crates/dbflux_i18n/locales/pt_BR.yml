@@ -3706,6 +3706,33 @@ document:
       unfinished: "A rotação está desativada, mas a versão %{version} ainda mantém a etapa pendente de uma rotação que nunca terminou."
       unfinished_title: "Uma rotação cancelada deixou a versão %{version} pendente"
       unfinished_body: "Verifique as credenciais da versão %{version} e depois mova ou remova sua etapa pendente. Até lá, uma rotação posterior pode ser recusada."
+    tags_edit:
+      short: "Editar"
+      button: "Editar tags"
+      title: "Editar as tags de %{name}"
+      lead: "Alterar uma tag não toca no valor nem em nenhuma versão."
+      key_placeholder: "chave"
+      value_placeholder: "valor"
+      key_label: "Chave da tag %{row}"
+      value_label: "Valor da tag %{row}"
+      remove: "Remover tag"
+      add: "Adicionar tag"
+      confirm: "Salvar tags"
+      done: "As tags de %{name} foram atualizadas"
+      no_change: "Nenhuma tag difere das que o segredo tem."
+      duplicate: "A chave %{key} aparece em mais de uma linha."
+    description_edit:
+      short: "Editar"
+      button: "Editar descrição"
+      title: "Editar a descrição de %{name}"
+      label: "Descrição"
+      placeholder: "Sem descrição"
+      confirm: "Salvar descrição"
+      confirm_version: "Salvar como nova versão"
+      done: "A descrição de %{name} foi atualizada"
+      done_version: "A descrição de %{name} foi atualizada; a versão %{version} contém a nova descrição"
+      rewrites_title: "Isso grava o valor novamente como uma nova versão"
+      rewrites_body: "Este armazenamento só altera uma descrição gravando o valor novamente, então salvar cria uma nova versão. O valor, seu tipo e sua chave permanecem como estão."
 document_tree:
   search_placeholder: Buscar…
   view:
