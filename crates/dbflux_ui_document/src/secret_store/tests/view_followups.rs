@@ -134,7 +134,11 @@ fn the_versions_highlight_follows_the_displayed_value(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_store_without_versions_stays_unsupported_for_a_pending_secret(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
-    opened.update_view(|view, _| view.store.capabilities.remove(SecretStoreCapabilities::VERSIONS));
+    opened.update_view(|view, _| {
+        view.store
+            .capabilities
+            .remove(SecretStoreCapabilities::VERSIONS)
+    });
     opened.open_secret(PENDING_DELETION_SECRET);
 
     assert!(opened.read_view(|view| view.deletion_pending()));
@@ -171,7 +175,9 @@ fn a_listing_showing_the_secret_active_resumes_the_history(cx: &mut TestAppConte
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.load_everything();
     opened.open_secret(PENDING_DELETION_SECRET);
-    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::ScheduledForDeletion)));
+    assert!(
+        opened.read_view(|view| matches!(view.versions(), VersionsState::ScheduledForDeletion))
+    );
 
     opened
         .live_connection()
@@ -187,4 +193,42 @@ fn a_listing_showing_the_secret_active_resumes_the_history(cx: &mut TestAppConte
 
     assert!(!opened.version_ids().is_empty(), "the history loaded");
     assert!(opened.reported_errors().is_empty());
+}
+
+/// A store that reports only the date the deletion takes effect shows that
+/// date as "Deletes on" and invents neither a "Deleted" moment nor a window.
+#[gpui::test]
+fn a_scheduled_deletion_without_a_request_moment_shows_only_its_date(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    opened.update_view(|view, cx| {
+        if let DetailsState::Loaded(details) = &mut view.details {
+            details.deleted_at = None;
+        }
+        cx.notify();
+    });
+
+    let text = opened.rendered_text();
+
+    assert!(text.contains("Deletion scheduled for"), "{text}");
+    assert!(text.contains("Deletes on"), "{text}");
+    assert!(!text.contains("recovery window"), "{text}");
+    assert!(!text.contains("was deleted on"), "{text}");
+    assert!(!text.contains("Deleted"), "{text}");
+}
+
+/// When the store does report the moment the deletion was requested, the
+/// details and the banner keep showing it with the window it implies.
+#[gpui::test]
+fn a_scheduled_deletion_with_a_request_moment_keeps_showing_it(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+
+    let text = opened.rendered_text();
+
+    assert!(text.contains("Deletes on"), "{text}");
+    assert!(text.contains("Deleted"), "{text}");
+    assert!(text.contains("recovery window"), "{text}");
 }

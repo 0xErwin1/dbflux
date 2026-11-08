@@ -4212,7 +4212,11 @@ fn the_tags_dialog_is_locked_while_its_save_is_in_flight(cx: &mut TestAppContext
     assert!(opened.read_view(|view| view.write_in_flight));
 
     let frame = opened.frame_unsettled();
-    for id in ["secret-tags-add", "secret-tags-remove-0", "secret-tags-confirm"] {
+    for id in [
+        "secret-tags-add",
+        "secret-tags-remove-0",
+        "secret-tags-confirm",
+    ] {
         let node = frame
             .nodes()
             .find(|(_, node)| node.id() == id)

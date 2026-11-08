@@ -19,8 +19,8 @@ fn with_correlation_id_overrides_generated_uuid() {
 
 #[test]
 fn with_severity_round_trips() {
-    let err = UserFacingError::new(ErrorKind::User, "mild problem")
-        .with_severity(EventSeverity::Warn);
+    let err =
+        UserFacingError::new(ErrorKind::User, "mild problem").with_severity(EventSeverity::Warn);
     assert_eq!(err.severity, EventSeverity::Warn);
 }
 
@@ -193,8 +193,8 @@ fn record_error_keeps_the_notification_and_the_audit_event_but_queues_no_toast(
 ) {
     let _keymap_state = crate::keymap::keymap_state_test_guard();
     let (app_state, host) = reporting_app(cx);
-    let err = UserFacingError::new(ErrorKind::Driver, "history refused")
-        .with_cause("denied by policy");
+    let err =
+        UserFacingError::new(ErrorKind::Driver, "history refused").with_cause("denied by policy");
     let capture = std::sync::Arc::new(FieldCapture::default());
 
     tracing::subscriber::with_default(capture.clone(), || {

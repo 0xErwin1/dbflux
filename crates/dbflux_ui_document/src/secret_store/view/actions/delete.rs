@@ -328,7 +328,12 @@ impl SecretView {
         );
     }
 
-    pub(in crate::secret_store) fn land_restore(&mut self, name: &str, landing: Landing<()>, cx: &mut Context<Self>) {
+    pub(in crate::secret_store) fn land_restore(
+        &mut self,
+        name: &str,
+        landing: Landing<()>,
+        cx: &mut Context<Self>,
+    ) {
         match landing {
             Landing::Done(()) => {
                 self.toast_written(
