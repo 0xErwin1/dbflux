@@ -1090,6 +1090,10 @@ impl Render for SecretStoreDocument {
             self.sync_value_inputs(window, cx);
         }
 
+        // The bottom bar's Edit value retrieved the value first; the editor
+        // opens now that it landed.
+        self.open_pending_edit(window, cx);
+
         // A menu entry chosen by click is queued and runs here, which has
         // the window the actions' focus changes need.
         if let Some(action) = self.pending_menu_action.take() {

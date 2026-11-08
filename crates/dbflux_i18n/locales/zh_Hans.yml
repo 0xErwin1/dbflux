@@ -3657,6 +3657,30 @@ document:
       confirm: "回滚"
       done: "%{name} 现在使用版本 %{version}"
       no_earlier_version: "%{name} 没有可回滚的更早版本。"
+    delete:
+      button: "删除"
+      title:
+        secret: "删除密钥"
+        parameter: "删除参数"
+      lead_scheduled: "要删除 %{name} 吗？恢复期结束后，读取它的应用将开始失败。"
+      lead_irreversible: "要删除 %{name} 吗？此操作无法撤销。参数会立即被移除，读取它的应用将立刻开始失败。"
+      window_label: "恢复期"
+      window_option: "%{count} 天"
+      window_hint: "在此期间内可以恢复该密钥。"
+      confirm_label:
+        secret: "输入密钥名称以确认"
+        parameter: "输入参数名称以确认"
+      confirm_aria: "输入 %{name} 以确认删除"
+      confirm_scheduled: "安排删除"
+      confirm_irreversible: "永久删除"
+      done: "已删除 %{name}"
+      done_scheduled: "%{name} 已安排在 %{date} 删除"
+      scheduled_detail: "%{name} 已于 %{deleted} 删除，恢复期为 %{days} 天。恢复之前无法获取其值。"
+      row_deleted: "删除时间"
+      row_deletes_on: "将于以下时间删除"
+    restore:
+      button: "恢复密钥"
+      done: "已恢复 %{name}"
 document_tree:
   search_placeholder: 搜索…
   view:

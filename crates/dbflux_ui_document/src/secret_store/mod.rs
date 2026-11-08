@@ -194,6 +194,12 @@ pub struct SecretStoreDocument {
     /// Moves the keyboard into the dialog when it opens and hands it back
     /// when it closes.
     dialog_focus: ModalFocus,
+    /// A governed write is in flight. Another write waits for it, so a
+    /// double click cannot send the request twice.
+    write_in_flight: bool,
+    /// The bottom bar's Edit value was pressed before the value was
+    /// retrieved: the editor opens when the retrieval lands.
+    edit_after_retrieve: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -359,6 +365,8 @@ impl SecretStoreDocument {
             context_menu_focus: cx.focus_handle(),
             dialog: None,
             dialog_focus: ModalFocus::new(cx),
+            write_in_flight: false,
+            edit_after_retrieve: false,
             _subscriptions: subscriptions,
         };
 
@@ -741,6 +749,7 @@ impl SecretStoreDocument {
     pub fn clear_value(&mut self) {
         self.value_generation = self.value_generation.wrapping_add(1);
         self.value_write_generation = self.value_write_generation.wrapping_add(1);
+        self.edit_after_retrieve = false;
         self.value = ValueState::NotLoaded;
         self.value_version = None;
         self.value_edit = None;
@@ -1168,24 +1177,63 @@ impl SecretStoreDocument {
             );
         }
 
-        // Edit value opens the editor of a plaintext value; the action needs
-        // the window the editor's state is built with.
-        if self.can_edit_value() {
+        // Edit value opens the editor of a plaintext value, retrieving the
+        // value first when it is not loaded; the action needs the window the
+        // editor's state is built with. The bottom bar's button and the row
+        // menu's entry are covered by it.
+        if self.can_request_edit_value() || self.can_edit_value() {
             let target = target.clone();
             let mut edit_value = crate::pane::PaneAction::callback(
                 "secret-edit-value",
                 dbflux_i18n::t!("document.secret_store.edit.open"),
                 move |window, cx| {
                     if let Some(doc) = target.upgrade() {
-                        doc.update(cx, |doc, cx| doc.start_value_edit(window, cx));
+                        doc.update(cx, |doc, cx| doc.request_edit_value(window, cx));
                     }
                 },
             )
             .icon(AppIcon::Pencil)
-            .enabled(self.can_edit_value());
+            .enabled(self.can_request_edit_value());
             edit_value.shortcut =
                 dbflux_ui_base::keymap::shortcut_label(ContextId::Results, Command::EditValue);
             actions.push(edit_value);
+        }
+
+        // Delete asks first; Restore cancels a scheduled deletion. Both are
+        // buttons of the details pane, so both have an entry here.
+        if self.supports_delete() && matches!(self.selected, Some(SecretRowKey::Secret(_))) {
+            let target = target.clone();
+            let mut delete = PaneAction::callback(
+                "secret-delete",
+                dbflux_i18n::t!("document.secret_store.delete.button"),
+                move |window, cx| {
+                    if let Some(doc) = target.upgrade() {
+                        doc.update(cx, |doc, cx| doc.open_delete(window, cx));
+                    }
+                },
+            )
+            .icon(AppIcon::Delete)
+            .enabled(self.can_delete_selected());
+            delete.shortcut =
+                dbflux_ui_base::keymap::shortcut_label(ContextId::Results, Command::Delete);
+            actions.push(delete);
+        }
+
+        if self.supports_restore()
+            && self
+                .selected_summary()
+                .is_some_and(|summary| summary.is_pending_deletion())
+        {
+            actions.push(
+                callback_action(
+                    &target,
+                    "secret-restore",
+                    "document.secret_store.restore.button",
+                    Self::restore_selected,
+                )
+                .icon(AppIcon::RotateCcw)
+                .enabled(self.can_restore_selected()),
+            );
         }
 
         // The region picker is a clickable toolbar control, so the pane
@@ -1252,6 +1300,12 @@ impl SecretStoreDocument {
             }
             Command::RollBackVersion if self.supports_roll_back() => {
                 self.roll_back_to_previous(window, cx);
+            }
+            Command::Delete
+                if self.supports_delete()
+                    && matches!(self.selected, Some(SecretRowKey::Secret(_))) =>
+            {
+                self.open_delete(window, cx);
             }
             Command::RefreshSchema => self.refresh(cx),
             Command::FocusSearch if self.value_edit.as_ref().is_some_and(|edit| edit.focused) => {

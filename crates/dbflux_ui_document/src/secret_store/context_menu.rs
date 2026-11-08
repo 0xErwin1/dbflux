@@ -5,13 +5,11 @@
 //! pane actions already use — the menu adds no logic of its own.
 //!
 //! The menu entries dispatch through the actions the details pane and the
-//! pane actions already use — the menu adds no logic of its own. Edit value
-//! is the one write-shaped entry: it opens the details pane's editor for a
-//! value that can be edited, the same `start_value_edit` the button calls.
-//! The rest of the write surface (Rotate now, Edit tags, Delete) waits
-//! until the write path grows it (issue #1270), and "Open in tab" waits for
-//! a per-secret document target: the value pane is deliberately scoped to
-//! this tab.
+//! pane actions already use — the menu adds no logic of its own. The write
+//! entries (Edit value, Restore, Delete, and the ones the store offers
+//! beyond them) open the same editor and dialogs the pane's buttons do, and
+//! "Open in tab" waits for a per-secret document target: the value pane is
+//! deliberately scoped to this tab.
 
 use super::{DetailsState, SecretRowKey, SecretStoreDocument, copied_toast};
 use dbflux_app::keymap::{Command, ContextId};
@@ -42,12 +40,16 @@ pub(super) struct SecretMenuItem {
     /// never copies or fetches nothing silently.
     pub detail: Option<SharedString>,
     pub disabled: bool,
+    /// A destructive entry, drawn in the danger tone.
+    pub danger: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SecretMenuAction {
     RetrieveValue,
     EditValue,
+    Restore,
+    Delete,
     CopyName,
     CopyArn,
     CopyPath,
@@ -61,6 +63,8 @@ impl SecretMenuAction {
         match self {
             SecretMenuAction::RetrieveValue => "secret-menu-retrieve-value",
             SecretMenuAction::EditValue => "secret-menu-edit-value",
+            SecretMenuAction::Restore => "secret-menu-restore",
+            SecretMenuAction::Delete => "secret-menu-delete",
             SecretMenuAction::CopyName => "secret-menu-copy-name",
             SecretMenuAction::CopyArn => "secret-menu-copy-arn",
             SecretMenuAction::CopyPath => "secret-menu-copy-path",
@@ -95,7 +99,13 @@ impl SecretMenuItem {
             shortcut: None,
             detail: None,
             disabled: false,
+            danger: false,
         }
+    }
+
+    fn danger(mut self) -> Self {
+        self.danger = true;
+        self
     }
 
     fn with_shortcut(mut self, command: Command) -> Self {
@@ -145,6 +155,41 @@ impl SecretStoreDocument {
                     );
                 }
 
+                // Restore cancels a scheduled deletion; Delete schedules or
+                // makes one. Each is drawn disabled, with the reason, when
+                // the secret's own state refuses it.
+                if self.supports_restore()
+                    && self
+                        .selected_summary()
+                        .is_some_and(|summary| summary.is_pending_deletion())
+                {
+                    items.push(self.write_item(
+                        SecretMenuItem::new(
+                            SecretMenuAction::Restore,
+                            dbflux_i18n::t!("document.secret_store.restore.button").into(),
+                            AppIcon::RotateCcw,
+                        ),
+                        self.can_restore_selected(),
+                        false,
+                    ));
+                }
+
+                if self.supports_delete() {
+                    items.push(
+                        self.write_item(
+                            SecretMenuItem::new(
+                                SecretMenuAction::Delete,
+                                dbflux_i18n::t!("document.secret_store.delete.button").into(),
+                                AppIcon::Delete,
+                            )
+                            .danger()
+                            .with_shortcut(Command::Delete),
+                            self.can_delete_selected(),
+                            true,
+                        ),
+                    );
+                }
+
                 items
             }
             SecretRowKey::Path(_) => vec![
@@ -161,6 +206,29 @@ impl SecretStoreDocument {
                 .with_shortcut(Command::RefreshSchema),
             ],
             SecretRowKey::LoadMore => Vec::new(),
+        }
+    }
+
+    /// A write entry: enabled when `allowed`; otherwise disabled with the
+    /// reason the secret's own state gives, when it has one. `refuse_state`
+    /// asks for that reason (a restore is for a secret whose deletion is
+    /// scheduled, so that state is no reason to refuse it).
+    fn write_item(
+        &self,
+        item: SecretMenuItem,
+        allowed: bool,
+        refuse_state: bool,
+    ) -> SecretMenuItem {
+        if allowed {
+            return item;
+        }
+
+        match refuse_state.then(|| self.write_refusal_reason()).flatten() {
+            Some(reason) => item.disabled_with_reason(reason.into()),
+            None => SecretMenuItem {
+                disabled: true,
+                ..item
+            },
         }
     }
 
@@ -194,6 +262,7 @@ impl SecretStoreDocument {
             shortcut: menu_shortcut(Command::ToggleValuePanel),
             detail,
             disabled,
+            danger: false,
         }
     }
 
@@ -386,6 +455,13 @@ impl SecretStoreDocument {
                 self.start_value_edit(window, cx);
                 return;
             }
+            SecretMenuAction::Delete => {
+                // The dialog takes the keyboard when it opens; the common
+                // refocus below would take it straight back.
+                self.open_delete(window, cx);
+                return;
+            }
+            SecretMenuAction::Restore => self.restore_selected(cx),
             SecretMenuAction::RetrieveValue => self.retrieve_selected_value(cx),
             SecretMenuAction::CopyName => self.copy_selected_name(cx),
             SecretMenuAction::CopyArn => self.copy_resource_id(cx),
@@ -411,6 +487,10 @@ fn shared_menu_item(item: &SecretMenuItem) -> MenuItem {
 
     if let Some(detail) = &item.detail {
         entry = entry.detail(detail.clone());
+    }
+
+    if item.danger {
+        entry = entry.danger();
     }
 
     if item.disabled {

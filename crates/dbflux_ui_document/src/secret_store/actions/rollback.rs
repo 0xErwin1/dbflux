@@ -29,7 +29,6 @@ pub(in crate::secret_store) struct RollBackDialog {
     /// The version that is current now, which the store keeps as the
     /// previous one.
     pub current_version: Option<String>,
-    pub submitting: bool,
 }
 
 /// The capabilities a roll back needs: the same pair the seam requires.
@@ -137,7 +136,6 @@ impl SecretStoreDocument {
                 name,
                 version_id,
                 current_version,
-                submitting: false,
             }),
             None,
             window,
@@ -174,11 +172,6 @@ impl SecretStoreDocument {
         let Some(session) = self.write_session(cx) else {
             return;
         };
-
-        if let Some(WriteDialog::RollBack(dialog)) = &mut self.dialog {
-            dialog.submitting = true;
-        }
-        cx.notify();
 
         let request = SecretRollbackRequest::new(name.clone(), version_id.clone());
 
@@ -217,11 +210,6 @@ impl SecretStoreDocument {
             }
             Landing::Rejected(failure) => {
                 self.report_write_failure(&failure, cx);
-
-                if let Some(WriteDialog::RollBack(dialog)) = &mut self.dialog {
-                    dialog.submitting = false;
-                }
-                cx.notify();
             }
         }
     }
@@ -268,7 +256,7 @@ impl SecretStoreDocument {
                 confirm_icon: AppIcon::RotateCcw,
                 danger: false,
                 enabled: true,
-                submitting: dialog.submitting,
+                submitting: self.write_in_flight,
             },
             cx,
         );
@@ -282,7 +270,7 @@ impl SecretStoreDocument {
                 ),
                 icon: AppIcon::RotateCcw,
                 danger: false,
-                confirm_enabled: !dialog.submitting,
+                confirm_enabled: !self.write_in_flight,
             },
             body,
             footer,

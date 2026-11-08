@@ -3657,6 +3657,30 @@ document:
       confirm: "롤백"
       done: "%{name}이(가) 이제 버전 %{version}을(를) 사용합니다"
       no_earlier_version: "%{name}에는 롤백할 이전 버전이 없습니다."
+    delete:
+      button: "삭제"
+      title:
+        secret: "시크릿 삭제"
+        parameter: "파라미터 삭제"
+      lead_scheduled: "%{name}을(를) 삭제할까요? 복구 기간이 끝나면 이를 읽는 애플리케이션이 실패하기 시작합니다."
+      lead_irreversible: "%{name}을(를) 삭제할까요? 되돌릴 수 없습니다. 파라미터가 즉시 제거되며, 이를 읽는 애플리케이션은 바로 실패하기 시작합니다."
+      window_label: "복구 기간"
+      window_option: "%{count}일"
+      window_hint: "이 기간 동안 시크릿을 복원할 수 있습니다."
+      confirm_label:
+        secret: "확인하려면 시크릿 이름을 입력하세요"
+        parameter: "확인하려면 파라미터 이름을 입력하세요"
+      confirm_aria: "삭제를 확인하려면 %{name}을(를) 입력하세요"
+      confirm_scheduled: "삭제 예약"
+      confirm_irreversible: "영구 삭제"
+      done: "%{name}을(를) 삭제했습니다"
+      done_scheduled: "%{name}의 삭제가 %{date}에 예약되었습니다"
+      scheduled_detail: "%{name}은(는) %{deleted}에 복구 기간 %{days}일로 삭제되었습니다. 복원하기 전에는 값을 가져올 수 없습니다."
+      row_deleted: "삭제됨"
+      row_deletes_on: "삭제 예정일"
+    restore:
+      button: "시크릿 복원"
+      done: "%{name}을(를) 복원했습니다"
 document_tree:
   search_placeholder: 검색…
   view:

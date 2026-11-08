@@ -772,7 +772,34 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
             "secret-rollback-cancel",
             KeyboardPath::Command(Command::Cancel),
         ),
+        (
+            "secret-delete-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-delete-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        // The recovery window of a scheduled deletion: each choice is a
+        // button of the dialog, which keeps Tab inside it.
+        ("secret-delete-window-*", KeyboardPath::TabStop),
         ("modal-close", KeyboardPath::Command(Command::Cancel)),
+        // Delete is the `x` key on the selected secret, from the pane header
+        // and the bottom bar alike; the row menu's entry runs the same
+        // command. Edit value in the bar and Restore are pane actions.
+        (
+            "secret-details-delete",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-action-delete",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-action-edit-value",
+            KeyboardPath::Menu("secret-edit-value"),
+        ),
+        ("secret-restore", KeyboardPath::Menu("secret-restore")),
         (
             "secret-value-copy-*",
             KeyboardPath::MouseOnly(
@@ -793,6 +820,14 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
         (
             "secret-menu-edit-value-*",
             KeyboardPath::Menu("secret-edit-value"),
+        ),
+        (
+            "secret-menu-delete-*",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-menu-restore-*",
+            KeyboardPath::Menu("secret-restore"),
         ),
         (
             "secret-menu-copy-name-*",

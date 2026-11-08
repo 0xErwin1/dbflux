@@ -2938,9 +2938,7 @@ fn the_row_menu_offers_edit_value_and_opens_the_editor(cx: &mut TestAppContext) 
     );
     assert_eq!(opened.editor_text(), FAKE_SECRET_PLAINTEXT);
     assert!(
-        !opened
-            .rendered_text()
-            .contains(&dbflux_i18n::t!("document.secret_store.edit.open")),
+        opened.read(|doc| doc.context_menu.is_none()),
         "the menu closed after the choice"
     );
 }
@@ -3706,8 +3704,9 @@ impl Opened<'_> {
 }
 
 /// Right-clicking a secret row opens the menu anchored at the pointer, the
-/// row becomes the selection, and the menu holds the read-only items only:
-/// the write path does not exist yet, so no edit action may appear.
+/// row becomes the selection, and the menu holds the read items and Delete.
+/// Edit value waits for a loaded value, so a row whose value was not
+/// retrieved does not offer it.
 #[gpui::test]
 fn a_secondary_click_opens_a_secret_row_menu(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
@@ -3721,21 +3720,32 @@ fn a_secondary_click_opens_a_secret_row_menu(cx: &mut TestAppContext) {
     );
     assert_eq!(
         opened.menu_actions(),
-        vec!["RetrieveValue", "CopyName", "CopyArn"],
-        "the menu lists the read-only items"
+        vec!["RetrieveValue", "CopyName", "CopyArn", "Delete"],
+        "the menu lists the read items and Delete"
     );
 
     let text = opened.rendered_text();
-    for label in ["Retrieve value", "Copy name", "Copy ARN"] {
+    for label in ["Retrieve value", "Copy name", "Copy ARN", "Delete"] {
         assert!(text.contains(label), "{label} missing: {text}");
     }
 }
 
-/// A secret managed by another service and a secret with a scheduled
-/// deletion offer the same read-only items; nothing implies an edit.
+/// A secret managed by another service offers the read items, and Delete
+/// drawn disabled with the reason; a secret whose deletion is scheduled
+/// offers Restore, and Delete disabled the same way. Nothing implies an
+/// edit.
 #[gpui::test]
-fn restricted_secrets_offer_the_same_read_only_items(cx: &mut TestAppContext) {
-    for name in [MANAGED_SECRET, PENDING_DELETION_SECRET] {
+fn restricted_secrets_disable_delete_and_say_why(cx: &mut TestAppContext) {
+    for (name, expected) in [
+        (
+            MANAGED_SECRET,
+            vec!["RetrieveValue", "CopyName", "CopyArn", "Delete"],
+        ),
+        (
+            PENDING_DELETION_SECRET,
+            vec!["RetrieveValue", "CopyName", "CopyArn", "Restore", "Delete"],
+        ),
+    ] {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
 
         opened.right_click(&format!("secret-row-{name}"));
@@ -3747,10 +3757,22 @@ fn restricted_secrets_offer_the_same_read_only_items(cx: &mut TestAppContext) {
             )),
             "{name} becomes the selection"
         );
-        assert_eq!(
-            opened.menu_actions(),
-            vec!["RetrieveValue", "CopyName", "CopyArn"],
-            "{name} offers the same read-only items"
+        assert_eq!(opened.menu_actions(), expected, "{name}");
+
+        let delete = opened.read(|doc| {
+            doc.context_menu
+                .as_ref()
+                .expect("menu open")
+                .items
+                .iter()
+                .find(|item| item.action == super::context_menu::SecretMenuAction::Delete)
+                .map(|item| (item.disabled, item.detail.clone()))
+                .expect("the menu offers Delete")
+        });
+        assert!(delete.0, "{name}: Delete is disabled");
+        assert!(
+            delete.1.is_some_and(|reason| !reason.is_empty()),
+            "{name}: Delete says why"
         );
     }
 }
@@ -3803,7 +3825,7 @@ fn a_secret_pending_deletion_keeps_retrieve_value_disabled(cx: &mut TestAppConte
     );
 }
 
-/// A parameter row under a path offers Copy name and Retrieve value.
+/// A parameter row under a path offers Copy name, Retrieve value and Delete.
 #[gpui::test]
 fn a_parameter_row_offers_copy_name_and_retrieve_value(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
@@ -3812,8 +3834,8 @@ fn a_parameter_row_offers_copy_name_and_retrieve_value(cx: &mut TestAppContext) 
 
     assert_eq!(
         opened.menu_actions(),
-        vec!["RetrieveValue", "CopyName"],
-        "a parameter row offers Copy name and Retrieve value"
+        vec!["RetrieveValue", "CopyName", "Delete"],
+        "a parameter row offers Copy name, Retrieve value and Delete"
     );
     let text = opened.rendered_text();
     assert!(text.contains("Copy name"), "{text}");
@@ -4116,9 +4138,10 @@ fn a_failed_describe_is_not_reported_as_loading(cx: &mut TestAppContext) {
             .as_ref()
             .expect("menu open")
             .items
-            .last()
+            .iter()
+            .find(|item| item.action == super::context_menu::SecretMenuAction::CopyArn)
             .map(|item| (item.disabled, item.detail.clone()))
-            .expect("Copy ARN is the last entry")
+            .expect("the menu offers Copy ARN")
     });
     let loading = dbflux_i18n::t!("document.secret_store.context_menu.arn_loading").to_string();
     assert_eq!(
@@ -4142,9 +4165,10 @@ fn a_failed_describe_is_not_reported_as_loading(cx: &mut TestAppContext) {
             .as_ref()
             .expect("menu open")
             .items
-            .last()
+            .iter()
+            .find(|item| item.action == super::context_menu::SecretMenuAction::CopyArn)
             .map(|item| (item.disabled, item.detail.clone()))
-            .expect("Copy ARN is the last entry")
+            .expect("the menu offers Copy ARN")
     });
     assert!(detail.0, "the entry stays disabled after a failed describe");
     let detail = detail.1.unwrap_or_default();

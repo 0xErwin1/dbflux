@@ -14,6 +14,8 @@
 //! What an action offers follows the store's `SecretStoreCapabilities`,
 //! never a driver id.
 
+mod bar;
+mod delete;
 mod rollback;
 
 use super::editor::write_failure_to_user_facing;
@@ -35,12 +37,14 @@ use gpui::*;
 use std::sync::Arc;
 use uuid::Uuid;
 
+pub(super) use delete::{DeleteDialog, DeleteKind};
 pub(super) use rollback::RollBackDialog;
 
 /// The dialog open over the document, if any. Only one is ever open: a
 /// dialog is modal, and opening another waits for it to close.
 pub(super) enum WriteDialog {
     RollBack(RollBackDialog),
+    Delete(DeleteDialog),
 }
 
 /// Everything a governed write takes from the document, captured on the
@@ -94,6 +98,9 @@ impl<T> Landing<T> {
 pub(super) enum WriteEffect {
     /// The versions of the secret: the shown value is stale.
     Versions,
+
+    /// The secret is gone: nothing of it stays selected.
+    Removed,
 }
 
 impl SecretStoreDocument {
@@ -187,6 +194,8 @@ impl SecretStoreDocument {
         cx: &mut Context<Self>,
     ) {
         let entity = cx.entity().clone();
+        self.write_in_flight = true;
+        cx.notify();
 
         let task = cx.background_executor().spawn(async move {
             let WriteSession {
@@ -226,7 +235,10 @@ impl SecretStoreDocument {
             let result = task.await;
 
             cx.update(|cx| {
-                entity.update(cx, |doc, cx| land(doc, result, cx));
+                entity.update(cx, |doc, cx| {
+                    doc.write_in_flight = false;
+                    land(doc, result, cx);
+                });
             });
         })
         .detach();
@@ -256,7 +268,9 @@ impl SecretStoreDocument {
         effect: WriteEffect,
         cx: &mut Context<Self>,
     ) {
-        if self.selected == Some(SecretRowKey::Secret(name.to_string())) {
+        if effect == WriteEffect::Removed {
+            self.forget_removed_secret(name);
+        } else if self.selected == Some(SecretRowKey::Secret(name.to_string())) {
             if effect == WriteEffect::Versions {
                 self.clear_value();
             }
@@ -305,11 +319,9 @@ impl SecretStoreDocument {
         }
     }
 
+    /// Whether the open dialog's write is in flight.
     pub(super) fn dialog_is_submitting(&self) -> bool {
-        match &self.dialog {
-            Some(WriteDialog::RollBack(dialog)) => dialog.submitting,
-            None => false,
-        }
+        self.dialog.is_some() && self.write_in_flight
     }
 
     /// Confirms the open dialog: the one primary action of whichever dialog
@@ -321,6 +333,7 @@ impl SecretStoreDocument {
 
         match &self.dialog {
             Some(WriteDialog::RollBack(_)) => self.submit_roll_back(window, cx),
+            Some(WriteDialog::Delete(_)) => self.submit_delete(window, cx),
             None => {}
         }
     }
@@ -330,6 +343,7 @@ impl SecretStoreDocument {
 
         Some(match dialog {
             WriteDialog::RollBack(dialog) => self.render_roll_back_dialog(dialog, cx),
+            WriteDialog::Delete(dialog) => self.render_delete_dialog(dialog, cx),
         })
     }
 }

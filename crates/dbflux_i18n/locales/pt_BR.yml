@@ -3657,6 +3657,30 @@ document:
       confirm: "Reverter"
       done: "%{name} agora usa a versão %{version}"
       no_earlier_version: "%{name} não tem uma versão anterior para a qual reverter."
+    delete:
+      button: "Excluir"
+      title:
+        secret: "Excluir segredo"
+        parameter: "Excluir parâmetro"
+      lead_scheduled: "Excluir %{name}? Os aplicativos que o leem começarão a falhar quando o período de recuperação terminar."
+      lead_irreversible: "Excluir %{name}? Isso não pode ser desfeito. O parâmetro é removido imediatamente, e os aplicativos que o leem começarão a falhar logo em seguida."
+      window_label: "Período de recuperação"
+      window_option: "%{count} dias"
+      window_hint: "Você pode restaurar o segredo durante este período."
+      confirm_label:
+        secret: "Digite o nome do segredo para confirmar"
+        parameter: "Digite o nome do parâmetro para confirmar"
+      confirm_aria: "Digite %{name} para confirmar a exclusão"
+      confirm_scheduled: "Agendar exclusão"
+      confirm_irreversible: "Excluir permanentemente"
+      done: "%{name} foi excluído"
+      done_scheduled: "A exclusão de %{name} está agendada para %{date}"
+      scheduled_detail: "%{name} foi excluído em %{deleted} com um período de recuperação de %{days} dias. Seu valor não pode ser obtido até que seja restaurado."
+      row_deleted: "Excluído"
+      row_deletes_on: "Será excluído em"
+    restore:
+      button: "Restaurar segredo"
+      done: "%{name} foi restaurado"
 document_tree:
   search_placeholder: Buscar…
   view:

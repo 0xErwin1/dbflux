@@ -3657,6 +3657,30 @@ document:
       confirm: "Revertir"
       done: "%{name} ahora usa la versión %{version}"
       no_earlier_version: "%{name} no tiene una versión anterior a la que revertir."
+    delete:
+      button: "Eliminar"
+      title:
+        secret: "Eliminar secreto"
+        parameter: "Eliminar parámetro"
+      lead_scheduled: "¿Eliminar %{name}? Las aplicaciones que lo leen empezarán a fallar cuando termine el período de recuperación."
+      lead_irreversible: "¿Eliminar %{name}? No se puede deshacer. El parámetro se elimina de inmediato y las aplicaciones que lo leen empezarán a fallar enseguida."
+      window_label: "Período de recuperación"
+      window_option: "%{count} días"
+      window_hint: "Puede restaurar el secreto durante este período."
+      confirm_label:
+        secret: "Escriba el nombre del secreto para confirmar"
+        parameter: "Escriba el nombre del parámetro para confirmar"
+      confirm_aria: "Escriba %{name} para confirmar la eliminación"
+      confirm_scheduled: "Programar eliminación"
+      confirm_irreversible: "Eliminar definitivamente"
+      done: "Se eliminó %{name}"
+      done_scheduled: "La eliminación de %{name} está programada para el %{date}"
+      scheduled_detail: "%{name} se eliminó el %{deleted} con un período de recuperación de %{days} días. Su valor no se puede obtener hasta que se restaure."
+      row_deleted: "Eliminado"
+      row_deletes_on: "Se elimina el"
+    restore:
+      button: "Restaurar secreto"
+      done: "Se restauró %{name}"
 document_tree:
   search_placeholder: Buscar…
   view:

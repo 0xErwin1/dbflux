@@ -3657,6 +3657,30 @@ document:
       confirm: "Roll back"
       done: "%{name} now uses version %{version}"
       no_earlier_version: "%{name} has no earlier version to roll back to."
+    delete:
+      button: "Delete"
+      title:
+        secret: "Delete secret"
+        parameter: "Delete parameter"
+      lead_scheduled: "Delete %{name}? Applications that read it start failing when the recovery window ends."
+      lead_irreversible: "Delete %{name}? This cannot be undone. The parameter is removed at once, and applications that read it start failing immediately."
+      window_label: "Recovery window"
+      window_option: "%{count} days"
+      window_hint: "You can restore the secret during this window."
+      confirm_label:
+        secret: "Type the secret name to confirm"
+        parameter: "Type the parameter name to confirm"
+      confirm_aria: "Type %{name} to confirm the deletion"
+      confirm_scheduled: "Schedule deletion"
+      confirm_irreversible: "Delete permanently"
+      done: "Deleted %{name}"
+      done_scheduled: "Deletion of %{name} is scheduled for %{date}"
+      scheduled_detail: "%{name} was deleted on %{deleted} with a %{days} day recovery window. Its value cannot be retrieved until it is restored."
+      row_deleted: "Deleted"
+      row_deletes_on: "Deletes on"
+    restore:
+      button: "Restore secret"
+      done: "Restored %{name}"
 document_tree:
   search_placeholder: Search…
   view:

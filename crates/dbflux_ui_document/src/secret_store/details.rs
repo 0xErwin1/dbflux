@@ -238,6 +238,8 @@ impl SecretStoreDocument {
 
         let header = self.render_details_header(summary, cx);
 
+        let bar = self.render_action_bar(cx);
+
         div()
             .flex_1()
             .min_h_0()
@@ -257,6 +259,7 @@ impl SecretStoreDocument {
                     .py(SecretStoreMetrics::DETAILS_PADDING_Y)
                     .children(sections),
             )
+            .children(bar)
     }
 
     /// The secret's name with the pane's two actions: Copy name and Close.
@@ -270,6 +273,7 @@ impl SecretStoreDocument {
         let theme = cx.theme();
         let border = theme.border;
         let warning = theme.warning;
+        let danger = theme.danger;
         let strong = ChromeColors::strong(theme);
 
         div()
@@ -309,6 +313,21 @@ impl SecretStoreDocument {
                 .tab_stop(false)
                 .on_click(cx.listener(|this, _, _, cx| this.copy_selected_name(cx))),
             )
+            .when(self.supports_delete(), |header| {
+                header.child(
+                    Button::new(
+                        "secret-details-delete",
+                        dbflux_i18n::t!("document.secret_store.delete.button"),
+                    )
+                    .ghost()
+                    .icon(AppIcon::Delete)
+                    .icon_only()
+                    .text_color(danger)
+                    .tab_stop(false)
+                    .disabled(!self.can_delete_selected())
+                    .on_click(cx.listener(|this, _, window, cx| this.open_delete(window, cx))),
+                )
+            })
             .child(
                 Button::new(
                     "secret-details-close",
@@ -330,11 +349,27 @@ impl SecretStoreDocument {
         let typed = self.store.supports(SecretStoreCapabilities::TYPED_VALUES);
         let label = |key: &str| dbflux_i18n::t!(key);
 
-        let mut rows = vec![detail_row(
+        let mut rows = Vec::new();
+
+        // A scheduled deletion leads the details, as its state does.
+        if let Some(date) = summary.deletion_scheduled_for {
+            rows.push(detail_row(
+                label("document.secret_store.delete.row_deleted"),
+                format_optional_time(details.deleted_at),
+                cx,
+            ));
+            rows.push(detail_row(
+                label("document.secret_store.delete.row_deletes_on"),
+                format_optional_time(Some(date)),
+                cx,
+            ));
+        }
+
+        rows.push(detail_row(
             label("document.secret_store.details.resource_id"),
             or_unknown(details.resource_id.as_deref()),
             cx,
-        )];
+        ));
 
         if typed {
             rows.push(detail_row(
@@ -645,6 +680,55 @@ impl SecretStoreDocument {
             .into_any_element()
     }
 
+    /// The scheduled deletion of the secret: the date it takes effect, when
+    /// it was requested and with which window, and Restore.
+    fn render_pending_deletion(
+        &self,
+        summary: &SecretSummary,
+        date: dbflux_core::chrono::DateTime<dbflux_core::chrono::Utc>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let deleted_at = match &self.details {
+            DetailsState::Loaded(details) => details.deleted_at,
+            _ => None,
+        };
+
+        let body = match deleted_at {
+            Some(deleted_at) => dbflux_i18n::t!(
+                "document.secret_store.delete.scheduled_detail",
+                name = summary.name.as_str(),
+                deleted = format_optional_time(Some(deleted_at)),
+                days = (date - deleted_at).num_days().max(0)
+            ),
+            None => dbflux_i18n::t!("document.secret_store.value.deletion_scheduled_body"),
+        };
+
+        let mut banner = BannerBlock::new(
+            BannerVariant::Warning,
+            dbflux_i18n::t!(
+                "document.secret_store.value.deletion_scheduled",
+                date = super::render::format_time(date)
+            ),
+        )
+        .with_body(body);
+
+        if self.supports_restore() {
+            banner = banner.with_actions(
+                Button::new(
+                    "secret-restore",
+                    dbflux_i18n::t!("document.secret_store.restore.button"),
+                )
+                .primary()
+                .icon(AppIcon::RotateCcw)
+                .tab_stop(false)
+                .disabled(!self.can_restore_selected())
+                .on_click(cx.listener(|this, _, _, cx| this.restore_selected(cx))),
+            );
+        }
+
+        div().child(banner)
+    }
+
     fn render_value_section(
         &self,
         summary: &SecretSummary,
@@ -667,7 +751,8 @@ impl SecretStoreDocument {
             });
 
         let body: AnyElement = if let Some(date) = summary.deletion_scheduled_for {
-            pending_deletion_card(date, cx).into_any_element()
+            self.render_pending_deletion(summary, date, cx)
+                .into_any_element()
         } else {
             match &self.value {
                 ValueState::NotLoaded => self.render_value_not_loaded(cx).into_any_element(),
@@ -1273,22 +1358,6 @@ fn versions_table_header(with_actions: bool, cx: &App) -> Div {
         .when(with_actions, |header| {
             header.child(div().w(VERSION_ACTION_WIDTH).flex_shrink_0())
         })
-}
-
-fn pending_deletion_card(
-    date: dbflux_core::chrono::DateTime<dbflux_core::chrono::Utc>,
-    _cx: &App,
-) -> BannerBlock {
-    BannerBlock::new(
-        BannerVariant::Warning,
-        dbflux_i18n::t!(
-            "document.secret_store.value.deletion_scheduled",
-            date = super::render::format_time(date)
-        ),
-    )
-    .with_body(dbflux_i18n::t!(
-        "document.secret_store.value.deletion_scheduled_body"
-    ))
 }
 
 fn managed_card(name: &str, service: &str) -> BannerBlock {
