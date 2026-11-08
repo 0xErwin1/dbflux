@@ -1660,12 +1660,7 @@ fn an_unknown_current_version_is_not_called_older(cx: &mut TestAppContext) {
     opened.select(KEY_VALUE_SECRET);
     opened.update_view(|view, cx| view.activate_version(1, cx));
     opened.strip_reported_versions();
-    let profile_id = opened.read(|doc| doc.profile_id);
-    let app_state = opened.app_state.clone();
-    opened.window.update(|_, cx| {
-        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id));
-    });
-    opened.announce_state_change();
+    opened.fail_history();
 
     let text = opened.rendered_text();
     assert!(text.contains("Showing version"), "{text}");
@@ -6757,6 +6752,15 @@ impl Opened<'_> {
         self.window.run_until_parked();
     }
 
+    /// Leaves the history failed, so no version is known to be current while
+    /// the shown value stays.
+    fn fail_history(&mut self) {
+        self.update_view(|view, cx| {
+            view.versions = VersionsState::Failed("history unavailable".to_string());
+            cx.notify();
+        });
+    }
+
     fn strip_reported_versions(&mut self) {
         self.update(|doc, cx| {
             doc.view.update(cx, |view, _| {
@@ -7262,7 +7266,7 @@ fn a_failed_historical_retrieval_shows_no_older_value_banner(cx: &mut TestAppCon
     assert!(!opened.pane_action("secret-version-current").enabled);
 }
 
-/// A connection replaced while an older version is shown leaves the current
+/// A history that failed while an older version is shown leaves the current
 /// version unknown; the older value still names its version and can go back.
 #[gpui::test]
 fn an_older_value_keeps_its_banner_when_the_current_version_is_unknown(cx: &mut TestAppContext) {
@@ -7270,13 +7274,7 @@ fn an_older_value_keeps_its_banner_when_the_current_version_is_unknown(cx: &mut 
     opened.select(KEY_VALUE_SECRET);
     opened.update_view(|view, cx| view.activate_version(1, cx));
     opened.strip_reported_versions();
-
-    let profile_id = opened.read(|doc| doc.profile_id);
-    let app_state = opened.app_state.clone();
-    opened.window.update(|_, cx| {
-        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id));
-    });
-    opened.announce_state_change();
+    opened.fail_history();
 
     assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
     assert_eq!(

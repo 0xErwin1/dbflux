@@ -937,7 +937,25 @@ fn secrets_manager_delete_schedules_with_a_window_and_restore_brings_the_secret_
         );
         let details = secrets.describe("deletable")?;
         assert!(details.summary.is_pending_deletion());
-        assert!(details.deleted_at.is_some());
+        assert!(
+            details.deleted_at.is_none(),
+            "DescribeSecret does not report when the deletion was requested"
+        );
+
+        // `DeletedDate` is the day the deletion takes effect: about the
+        // requested window from now, and in the future.
+        let scheduled = details
+            .summary
+            .deletion_scheduled_for
+            .expect("the scheduled deletion date");
+        let now = dbflux_core::chrono::Utc::now();
+        let window = dbflux_core::chrono::Duration::days(i64::from(DEFAULT_RECOVERY_WINDOW_DAYS));
+        let slack = dbflux_core::chrono::Duration::hours(36);
+        assert!(scheduled > now, "{scheduled} is not in the future");
+        assert!(
+            scheduled >= now + window - slack && scheduled <= now + window + slack,
+            "{scheduled} is not about {window} from {now}"
+        );
         assert!(
             secrets.get_value("deletable", None).is_err(),
             "a secret pending deletion has no readable value"
