@@ -14,7 +14,9 @@ use crate::secret_store::{CallTiming, StoreCall};
 use dbflux_core::{
     Connection, DbError, SecretDetails, SecretStoreCapabilities, SecretValue, SecretVersionInfo,
 };
-use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
+use dbflux_ui_base::user_error::{
+    ErrorKind, UserFacingError, record_error, report_error, report_error_async,
+};
 use gpui::Context;
 use std::sync::Arc;
 use std::time::Instant;
@@ -92,15 +94,56 @@ impl SecretView {
             self.summary_cache = Some(details.summary.clone());
         }
 
+        let pending = result
+            .as_ref()
+            .ok()
+            .map(|details| details.summary.is_pending_deletion());
+
         self.details = match result {
             Ok(details) => DetailsState::Loaded(Box::new(details)),
             Err(error) => DetailsState::Failed(error.to_string()),
         };
+        self.reconcile_history_with_deletion(pending, cx);
         cx.emit(SecretViewEvent::StoreCalled(CallTiming {
             call: StoreCall::Describe,
             millis,
         }));
         cx.notify();
+    }
+
+    /// Whether the shown secret's deletion is scheduled, by the freshest
+    /// word available: a loaded describe over the listing's row, which a write
+    /// can outdate.
+    pub(crate) fn deletion_pending(&self) -> bool {
+        match &self.details {
+            DetailsState::Loaded(details) => details.summary.is_pending_deletion(),
+            _ => self
+                .selected_summary()
+                .is_some_and(|summary| summary.is_pending_deletion()),
+        }
+    }
+
+    /// Brings the history in line with what a describe just said about the
+    /// deletion: a scheduled one drops the history and stops asking for it, a
+    /// restore (or any describe of an active secret) resumes it. `None` is a
+    /// failed describe, which says nothing.
+    fn reconcile_history_with_deletion(&mut self, pending: Option<bool>, cx: &mut Context<Self>) {
+        let Some(name) = self.name.clone() else {
+            return;
+        };
+        let scheduled = matches!(self.versions, VersionsState::ScheduledForDeletion);
+
+        match pending {
+            Some(true) if !scheduled => {
+                self.versions_generation = self.versions_generation.wrapping_add(1);
+                self.versions = VersionsState::ScheduledForDeletion;
+                self.versions_session = None;
+            }
+            Some(false) if scheduled => {
+                self.request_versions(name, HistoryLoad::Automatic, cx);
+            }
+            _ => {}
+        }
     }
 
     /// Drops the history of the previous selection and invalidates any
@@ -137,16 +180,11 @@ impl SecretView {
 
         // The service refuses the history of a secret scheduled for
         // deletion, so it is not asked until the secret is restored.
-        if self
-            .selected_summary()
-            .is_some_and(|summary| summary.is_pending_deletion())
-        {
-            self.versions = VersionsState::ScheduledForDeletion;
-            self.versions_session = None;
-            return;
-        }
+        let pending = self.deletion_pending();
 
-        self.versions = VersionsState::Loading;
+        if !pending {
+            self.versions = VersionsState::Loading;
+        }
         self.versions_session = None;
 
         let Some(connection) = self.connection(cx) else {
@@ -164,6 +202,12 @@ impl SecretView {
         };
 
         self.missing_connection_reported = false;
+
+        if pending {
+            self.versions = VersionsState::ScheduledForDeletion;
+            return;
+        }
+
         self.versions_session = Some(connection.clone());
 
         let store_id = self.store.id.clone();
@@ -219,6 +263,9 @@ impl SecretView {
             Err(error) => {
                 // Shown inline in the section: a toast would cover the
                 // pane's own controls, and the history never blocks them.
+                // It is still recorded: audit trail, notification center
+                // and the error badge.
+                record_error(db_error_to_user_facing(&error), cx);
                 VersionsState::Failed(error.to_string())
             }
         };

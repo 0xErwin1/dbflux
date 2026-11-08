@@ -17,7 +17,7 @@ use super::{
 };
 use crate::secret_store::SecretOperation;
 use crate::secret_store::render::format_time;
-use crate::secret_store::view::SecretView;
+use crate::secret_store::view::{DetailsState, SecretView};
 use crate::secret_store::write::{delete_secret, restore_secret};
 use dbflux_components::controls::{Button, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
@@ -230,6 +230,12 @@ impl SecretView {
                 };
 
                 self.toast_written(message, cx);
+
+                // The refresh below must not ask for the history with the row
+                // this write outdated.
+                if let Some(date) = deletion.deletion_scheduled_for {
+                    self.mark_deletion_scheduled(name, date);
+                }
                 self.refresh_after_write(name, effect, cx);
             }
             Landing::Stands(failure) => {
@@ -238,6 +244,30 @@ impl SecretView {
                 self.refresh_after_write(name, effect, cx);
             }
             Landing::Rejected(failure) => self.report_write_failure(&failure, cx),
+        }
+    }
+
+    /// Records on the view's copies of the row that `name`'s deletion is
+    /// scheduled for `date`, until the describe and the listing say so
+    /// themselves.
+    fn mark_deletion_scheduled(
+        &mut self,
+        name: &str,
+        date: dbflux_core::chrono::DateTime<dbflux_core::chrono::Utc>,
+    ) {
+        if !self.is_for(name) {
+            return;
+        }
+
+        for summary in [self.listing_row.as_mut(), self.summary_cache.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            summary.deletion_scheduled_for = Some(date);
+        }
+
+        if let DetailsState::Loaded(details) = &mut self.details {
+            details.summary.deletion_scheduled_for = Some(date);
         }
     }
 

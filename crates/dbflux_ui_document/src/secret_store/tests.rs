@@ -2161,6 +2161,17 @@ impl Opened<'_> {
         })
     }
 
+    /// How many toasts the stack holds.
+    fn toast_count(&mut self) -> usize {
+        self.window.update(|_, cx| {
+            let host = cx
+                .global::<dbflux_ui_base::toast::ToastGlobal>()
+                .host
+                .clone();
+            host.read(cx).toast_count()
+        })
+    }
+
     /// The recorded audit events as records, for the fields a formatted
     /// dump would make awkward to read.
     /// The recorded audit events as DTOs, for the fields a formatted dump
@@ -7080,8 +7091,9 @@ fn a_history_response_of_a_replaced_session_is_dropped(cx: &mut TestAppContext) 
     assert_eq!(replacement.secret_store_calls().version_listings.len(), 1);
 }
 
-/// A history failure lands inline in the section, never as a toast, and only
-/// when it still applies: a superseded request's failure is dropped.
+/// A history failure lands inline in the section and is recorded (audit
+/// trail, notification center) without a toast, and only when it still
+/// applies: a superseded request's failure is dropped.
 #[gpui::test]
 fn a_history_failure_shows_inline_only_when_it_applies(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
@@ -7110,19 +7122,21 @@ fn a_history_failure_shows_inline_only_when_it_applies(cx: &mut TestAppContext) 
             cx,
         );
     });
-    assert!(opened.reported_errors().is_empty());
+    assert_eq!(opened.reported_errors().len(), 1, "recorded once");
+    assert_eq!(opened.toast_count(), 0, "and not as a toast");
     assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
 }
 
-/// A refused history shows inline and raises no toast.
+/// A refused history shows inline, is recorded once and raises no toast.
 #[gpui::test]
-fn a_refused_history_raises_no_toast(cx: &mut TestAppContext) {
+fn a_refused_history_is_recorded_without_a_toast(cx: &mut TestAppContext) {
     let driver = FakeDriver::new(DbKind::AwsSecrets)
         .with_secret_versions_error(KEY_VALUE_SECRET, "not authorized");
     let mut opened = open_with(cx, driver, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
 
-    assert!(opened.reported_errors().is_empty());
+    assert_eq!(opened.reported_errors().len(), 1);
+    assert_eq!(opened.toast_count(), 0);
     assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
 }
 

@@ -4057,25 +4057,14 @@ fn a_secret_scheduled_for_deletion_does_not_load_its_history(cx: &mut TestAppCon
     );
 }
 
-/// Restoring the secret lists its history again once the listing shows it
-/// is no longer scheduled.
+/// Restoring the secret through the pane lists its history again.
 #[gpui::test]
 fn restoring_a_scheduled_secret_loads_its_history(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.load_everything();
     opened.open_secret(PENDING_DELETION_SECRET);
 
-    opened.update(|doc, cx| {
-        if let Some(entry) = doc
-            .listing
-            .entries
-            .iter_mut()
-            .find(|entry| entry.name == PENDING_DELETION_SECRET)
-        {
-            entry.deletion_scheduled_for = None;
-        }
-        doc.push_listing_row(cx);
-    });
+    opened.update_view(|view, cx| view.restore_selected(cx));
 
     assert!(
         opened
@@ -4087,6 +4076,89 @@ fn restoring_a_scheduled_secret_loads_its_history(cx: &mut TestAppContext) {
         "the restored secret's history was requested"
     );
     assert!(!opened.version_ids().is_empty(), "and it loaded");
+}
+
+/// Scheduling a deletion refreshes the secret without asking for its history
+/// with the row the write outdated: the section reads scheduled-for-deletion
+/// and nothing is reported.
+#[gpui::test]
+fn scheduling_a_deletion_does_not_request_the_history_again(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    let listings = |opened: &mut Opened<'_>| {
+        opened
+            .driver
+            .secret_store_calls()
+            .version_listings
+            .iter()
+            .filter(|(_, name)| name == KEY_VALUE_SECRET)
+            .count()
+    };
+    let before = listings(&mut opened);
+
+    opened.click("secret-action-delete");
+    opened.type_text(KEY_VALUE_SECRET);
+    opened.confirm_open_dialog();
+
+    assert_eq!(opened.mutations().len(), 1, "{:?}", opened.mutations());
+    assert_eq!(listings(&mut opened), before, "no history request");
+    assert!(
+        opened.read_view(|view| matches!(view.versions(), VersionsState::ScheduledForDeletion))
+    );
+    assert!(opened.reported_errors().is_empty());
+}
+
+/// A scheduled secret selected with no connection still reports the missing
+/// connection, as the other history paths do, and asks for nothing.
+#[gpui::test]
+fn a_scheduled_secret_without_a_connection_is_reported(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    let profile_id = opened.read(|doc| doc.profile_id);
+    let app_state = opened.app_state.clone();
+    opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id))
+    });
+    let listings = opened.driver.secret_store_calls().version_listings.len();
+
+    opened.update_view(|view, cx| view.load_versions(PENDING_DELETION_SECRET.to_string(), cx));
+
+    assert_eq!(opened.reported_errors().len(), 1, "the missing connection");
+    assert_eq!(
+        opened.driver.secret_store_calls().version_listings.len(),
+        listings
+    );
+}
+
+/// A describe that confirms the secret is active again resumes its history,
+/// even when the listing row still says the deletion is scheduled.
+#[gpui::test]
+fn a_describe_confirming_a_restore_loads_the_history(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    assert!(
+        opened.read_view(|view| matches!(view.versions(), VersionsState::ScheduledForDeletion))
+    );
+
+    let connection = opened.live_connection();
+    connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("store")
+        .restore_secret(PENDING_DELETION_SECRET)
+        .expect("restored");
+    opened.update_view(|view, cx| view.describe(PENDING_DELETION_SECRET.to_string(), cx));
+
+    assert!(
+        opened.read_view(|view| view
+            .listed_summary()
+            .is_some_and(|summary| summary.is_pending_deletion())),
+        "the listing row is still the old one"
+    );
+    assert!(!opened.version_ids().is_empty(), "the history loaded");
+    assert!(opened.reported_errors().is_empty());
 }
 
 /// A store that declares tiers but no value types shows no type group and

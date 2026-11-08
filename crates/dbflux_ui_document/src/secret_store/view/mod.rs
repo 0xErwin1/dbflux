@@ -318,9 +318,7 @@ impl SecretView {
         // A restore that reached the listing makes the history available.
         if matches!(self.versions, VersionsState::ScheduledForDeletion)
             && let Some(name) = self.name.clone()
-            && !self
-                .selected_summary()
-                .is_some_and(|summary| summary.is_pending_deletion())
+            && !self.deletion_pending()
         {
             self.request_versions(name, crate::secret_store::HistoryLoad::Automatic, cx);
         }
