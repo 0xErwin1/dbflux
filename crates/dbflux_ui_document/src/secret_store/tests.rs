@@ -846,11 +846,11 @@ fn the_loaded_summary_names_what_the_store_holds() {
 
     assert_eq!(
         summary(true, PathMode::Tree, Some("/app/prod/shop/"), 2, 7),
-        "2 paths · 7 parameters under /app/prod/shop/"
+        "2 paths · 7 parameters loaded under /app/prod/shop/"
     );
     assert_eq!(
         summary(true, PathMode::Tree, None, 1, 1),
-        "1 path · 1 parameter under /"
+        "1 path · 1 parameter loaded under /"
     );
     assert_eq!(
         summary(true, PathMode::Flat, Some("/app/"), 3, 5),
@@ -877,7 +877,7 @@ fn the_footer_counts_paths_and_parameters_and_names_the_keys(cx: &mut TestAppCon
 
     let text = opened.rendered_text();
     let expected = format!(
-        "{paths} path{} · {parameters} parameter{} under /app/prod/",
+        "{paths} path{} · {parameters} parameter{} loaded under /app/prod/",
         if paths == 1 { "" } else { "s" },
         if parameters == 1 { "" } else { "s" }
     );
@@ -909,6 +909,25 @@ fn the_secrets_footer_and_rows_follow_the_design(cx: &mut TestAppContext) {
         !text.contains("2026-09-20"),
         "the long form is gone: {text}"
     );
+
+    // The fixture's change time, in local time and under the current-year
+    // rule, in the row of its own secret.
+    use dbflux_core::chrono::{Datelike as _, Local, TimeZone as _, Utc};
+    let changed = Utc
+        .with_ymd_and_hms(2026, 9, 20, 3, 0, 0)
+        .single()
+        .expect("fixture time");
+    let local = changed.with_timezone(&Local);
+    let expected = if local.year() == Local::now().year() {
+        local.format("%b %-d, %H:%M").to_string()
+    } else {
+        local.format("%b %-d, %Y, %H:%M").to_string()
+    };
+    assert!(
+        text.lines()
+            .any(|line| line.contains("prod/api/credentials") && line.contains(&expected)),
+        "{expected} in the row of prod/api/credentials: {text}"
+    );
 }
 
 /// The breadcrumb keeps its natural width when the document narrows: the
@@ -930,7 +949,7 @@ fn the_breadcrumb_keeps_its_width_while_the_search_narrows(cx: &mut TestAppConte
                 .unwrap_or_else(|| panic!("no element {id}"))
         };
 
-        (width_of("secret-breadcrumb"), width_of("secret-search"))
+        (width_of("secret-identity"), width_of("secret-search"))
     };
 
     opened
@@ -1062,7 +1081,7 @@ fn the_header_narrows_search_first_then_path_and_keeps_refresh(cx: &mut TestAppC
 fn the_status_bar_uses_the_footer_counts(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
     let expected = opened.read(|doc| doc.loaded_summary());
-    assert!(expected.contains("under /app/prod/"), "{expected}");
+    assert!(expected.contains("loaded under /app/prod/"), "{expected}");
 
     let segments: Vec<String> = opened.window.update(|_, cx| {
         opened
@@ -1146,6 +1165,204 @@ fn the_recorded_list_call_follows_the_store_kind(cx: &mut TestAppContext) {
         ),
         "{call:?}"
     );
+}
+
+/// Window-relative (left, right, width) of the outermost element named `id`.
+fn edges(opened: &mut Opened<'_>, id: &str) -> (f32, f32, f32) {
+    use dbflux_ui_base::keyboard_coverage::FrameCapture;
+
+    let capture = FrameCapture::observe(opened.window);
+    let frame = capture.frame(opened.window);
+    let suffix = format!(".{id}");
+    let bounds = frame
+        .nodes()
+        .filter(|(_, node)| node.path().ends_with(&suffix))
+        .min_by_key(|(_, node)| node.path().len())
+        .map(|(_, node)| node.bounds())
+        .unwrap_or_else(|| panic!("no element {id}"));
+
+    let left = f32::from(bounds.origin.x);
+    let width = f32::from(bounds.size.width);
+    (left, left + width, width)
+}
+
+fn resize(opened: &mut Opened<'_>, width: f32) {
+    opened
+        .window
+        .simulate_resize(gpui::size(gpui::px(width), gpui::px(800.0)));
+    opened.window.run_until_parked();
+}
+
+fn minimum_document_width(opened: &mut Opened<'_>) -> f32 {
+    use dbflux_components::tokens::SecretStoreMetrics;
+
+    let rem = opened.window.update(|window, _| window.rem_size());
+    f32::from(SecretStoreMetrics::LISTING_MIN_WIDTH.to_pixels(rem))
+        + f32::from(SecretStoreMetrics::DETAILS_MIN_WIDTH)
+}
+
+/// With a long profile name in a narrow document the identity segment gives
+/// way (its full text stays reachable), and the region chip stays inside the
+/// header at its natural width.
+#[gpui::test]
+fn a_long_profile_name_never_pushes_the_region_out(cx: &mut TestAppContext) {
+    let name = "production-payments-eu-west-primary-account-cluster-01";
+    let mut opened = open_named_region_store(
+        cx,
+        name,
+        FAKE_PARAMETER_STORE_ID,
+        Some("/app/prod/"),
+        &[OTHER_REGION, CURRENT_REGION],
+        None,
+    );
+
+    resize(&mut opened, 1500.0);
+    let wide_region = edges(&mut opened, "secret-region").2;
+    let wide_identity = edges(&mut opened, "secret-identity").2;
+
+    let minimum = minimum_document_width(&mut opened);
+    let mut width = 1500.0;
+    while width >= minimum {
+        resize(&mut opened, width);
+        let region = edges(&mut opened, "secret-region");
+        let refresh = edges(&mut opened, "secret-refresh");
+
+        assert_eq!(
+            region.2, wide_region,
+            "the region keeps its width at {width}"
+        );
+        assert!(
+            region.1 <= refresh.0 + 0.5,
+            "the region runs into Refresh at {width}: {} > {}",
+            region.1,
+            refresh.0
+        );
+        width -= 50.0;
+    }
+
+    resize(&mut opened, minimum);
+    assert!(
+        edges(&mut opened, "secret-identity").2 < wide_identity,
+        "the identity gives way at the minimum width"
+    );
+    assert!(
+        opened.rendered_text().contains(name),
+        "the full name stays reachable: {}",
+        opened.rendered_text()
+    );
+}
+
+/// The rotation chip stays inside its column while the listing narrows, so it
+/// never reaches Last changed.
+#[gpui::test]
+fn the_rotation_chip_stays_in_its_cell(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    let chip = "secret-rotation-chip-prod/api/credentials";
+    let cell = "secret-rotation-cell-prod/api/credentials";
+
+    let minimum = minimum_document_width(&mut opened);
+    let mut width = 1500.0;
+    let mut clipped = false;
+    while width >= minimum {
+        resize(&mut opened, width);
+        let chip_edges = edges(&mut opened, chip);
+        let cell_edges = edges(&mut opened, cell);
+
+        assert!(
+            chip_edges.1 <= cell_edges.1 + 0.5,
+            "the chip runs past its cell at {width}: {} > {}",
+            chip_edges.1,
+            cell_edges.1
+        );
+        clipped |= cell_edges.2 < 60.0;
+        width -= 50.0;
+    }
+
+    assert!(clipped, "the listing narrows enough to squeeze the cell");
+}
+
+/// The footer summary truncates while the key hints keep their width and
+/// stay inside the listing.
+#[gpui::test]
+fn the_footer_summary_truncates_and_the_hints_keep_their_space(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+    let hint = "secret-footer-hint-filter";
+
+    resize(&mut opened, 1500.0);
+    let wide_hint = edges(&mut opened, hint).2;
+    let wide_summary = edges(&mut opened, "secret-footer-summary").2;
+
+    let minimum = minimum_document_width(&mut opened);
+    let mut width = 1500.0;
+    while width >= minimum {
+        resize(&mut opened, width);
+        let hint_edges = edges(&mut opened, hint);
+        let summary = edges(&mut opened, "secret-footer-summary");
+
+        assert_eq!(
+            hint_edges.2, wide_hint,
+            "the hint keeps its width at {width}"
+        );
+        assert!(
+            summary.1 <= edges(&mut opened, "secret-footer-hint-open").0 + 0.5,
+            "the summary runs into the hints at {width}"
+        );
+        assert!(
+            hint_edges.1 <= width,
+            "the hints leave the window at {width}"
+        );
+        width -= 50.0;
+    }
+
+    resize(&mut opened, minimum);
+    assert!(
+        edges(&mut opened, "secret-footer-summary").2 < wide_summary,
+        "the summary gives way at the minimum width"
+    );
+    assert!(
+        opened.rendered_text().contains("loaded under /app/prod/"),
+        "the full summary stays reachable"
+    );
+}
+
+/// Refresh asks for the regions again after a failed discovery, and a
+/// successful answer brings the picker back.
+#[gpui::test]
+fn refresh_retries_a_failed_region_discovery(cx: &mut TestAppContext) {
+    let mut opened = open_region_doc(
+        cx,
+        &[OTHER_REGION, CURRENT_REGION],
+        Some("AccessDenied".to_string()),
+    );
+    assert!(matches!(
+        opened.read(|doc| doc.regions().clone()),
+        RegionListState::Failed(_)
+    ));
+    assert_eq!(opened.driver.available_regions_calls(), 1);
+
+    opened.driver.set_region_list_error(None);
+    opened.update(|doc, cx| doc.refresh(cx));
+    opened.window.run_until_parked();
+
+    assert_eq!(opened.driver.available_regions_calls(), 2);
+    assert!(matches!(
+        opened.read(|doc| doc.regions().clone()),
+        RegionListState::Loaded(_)
+    ));
+
+    use dbflux_ui_base::keyboard_coverage::{FrameCapture, clickable_elements};
+    let capture = FrameCapture::observe(opened.window);
+    let frame = capture.frame(opened.window);
+    assert!(
+        clickable_elements(&frame)
+            .into_iter()
+            .any(|element| element.path.ends_with("secret-region.dropdown-trigger")),
+        "the picker is interactive again"
+    );
+
+    // A refresh with a loaded list does not ask again.
+    opened.update(|doc, cx| doc.refresh(cx));
+    assert_eq!(opened.driver.available_regions_calls(), 2);
 }
 
 #[gpui::test]
@@ -2429,6 +2646,7 @@ const OTHER_REGION: &str = "eu-west-1";
 fn connected_aws_app_state(
     cx: &mut TestAppContext,
     driver: &FakeDriver,
+    name: &str,
 ) -> (Entity<AppStateEntity>, Uuid) {
     let profile_id = Uuid::new_v4();
 
@@ -2442,7 +2660,7 @@ fn connected_aws_app_state(
     });
 
     let profile = dbflux_core::ConnectionProfile::new(
-        "prod-aws",
+        name,
         dbflux_core::DbConfig::AwsSecrets {
             region: CURRENT_REGION.to_string(),
             profile: None,
@@ -2503,11 +2721,22 @@ fn open_region_store<'a>(
     regions: &[&str],
     list_error: Option<String>,
 ) -> Opened<'a> {
+    open_named_region_store(cx, "prod-aws", store_id, path, regions, list_error)
+}
+
+fn open_named_region_store<'a>(
+    cx: &'a mut TestAppContext,
+    profile_name: &str,
+    store_id: &str,
+    path: Option<&str>,
+    regions: &[&str],
+    list_error: Option<String>,
+) -> Opened<'a> {
     init_keyboard_runtime(cx);
 
     let driver = FakeDriver::new(DbKind::AwsSecrets).with_region_switch(regions);
     driver.set_region_list_error(list_error);
-    let (app_state, profile_id) = connected_aws_app_state(cx, &driver);
+    let (app_state, profile_id) = connected_aws_app_state(cx, &driver, profile_name);
 
     // `report_error` reaches the error seam through the `AppStateGlobal`
     // registration; without it a reported failure is invisible to these
@@ -2599,6 +2828,7 @@ fn a_failed_region_list_falls_back_to_the_configured_region_quietly(cx: &mut Tes
         !text.contains(&dbflux_i18n::t!("document.secret_store.region.retry")),
         "{text}"
     );
+    assert!(!text.contains("Retry"), "{text}");
     assert!(
         text.contains(CURRENT_REGION),
         "the configured region stays visible: {text}"

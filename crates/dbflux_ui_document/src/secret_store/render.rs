@@ -6,7 +6,7 @@ use super::list::{format_short_time, rotation_chip};
 use super::listing::{PathMode, child_path_label, path_segments, relative_name};
 use super::{RegionListState, SecretFocusMode, SecretRowKey, SecretStoreDocument, context_menu};
 use crate::chrome::{
-    connection_segment, document_bar, document_footer, footer_item, footer_key_hint, search_field,
+    connection_segment, document_bar, document_footer, footer_key_hint, search_field,
 };
 use crate::handle::DocumentEvent;
 use dbflux_app::keymap::{Command, ContextId};
@@ -17,7 +17,8 @@ use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Badge, BadgeTone, Icon, SegmentedControl, SegmentedItem};
 use dbflux_components::tokens::{
-    ChromeColors, DocumentMetrics, NavigationMetrics, ObjectStoreMetrics, SecretStoreMetrics,
+    ChromeColors, DocumentMetrics, NavigationMetrics, ObjectStoreMetrics, ResultMetrics,
+    SecretStoreMetrics,
 };
 use dbflux_core::chrono::{DateTime, Local, Utc};
 use dbflux_core::{SecretRotation, SecretStoreCapabilities, SecretSummary};
@@ -228,33 +229,54 @@ impl SecretStoreDocument {
     /// regions, the picker cannot be offered; the region then stays visible
     /// as a plain chip, so the listing never loses the answer to which region
     /// it was loaded under.
-    fn render_breadcrumb_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut row = div()
-            .flex()
-            .min_w_0()
-            .items_center()
-            .gap(NavigationMetrics::BREADCRUMB_GAP)
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .child(Breadcrumb::new(self.identity_segments(cx)).mono()),
-            );
+    fn breadcrumb_parts(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let connection_name = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&self.profile_id)
+            .map(|connected| format!("{} › ", connected.profile.name))
+            .unwrap_or_default();
+        let identity_text = format!("{connection_name}{}", self.store.label);
+
+        // The parts are direct children of the header bar, so the region chip
+        // is never inside a clipping container: only the identity and the
+        // path give way.
+        let mut parts: Vec<AnyElement> = vec![
+            // The identity gives way before the region chip does: it
+            // clips, and the full "connection › store" stays in the
+            // tooltip and the accessible name.
+            div()
+                .id("secret-identity")
+                .flex()
+                .flex_shrink_1()
+                .min_w_0()
+                .overflow_hidden()
+                .role(gpui::accesskit::Role::Label)
+                .aria_label(identity_text.clone())
+                .tooltip(move |window, cx| {
+                    gpui_component::tooltip::Tooltip::new(identity_text.clone()).build(window, cx)
+                })
+                .child(Breadcrumb::new(self.identity_segments(cx)).mono())
+                .into_any_element(),
+        ];
 
         if let Some(picker) = self.render_region_picker() {
-            row = row.child(picker);
+            parts.push(picker);
         } else if self.region_switchable
             && let Some(region) = self.region.clone()
         {
             // The configured region, drawn like the picker's label but with
             // no chevron: there is nothing to pick from.
-            row = row.child(
+            parts.push(
                 div()
                     .id("secret-region-plain")
                     .flex_shrink_0()
                     .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(NavigationMetrics::BREADCRUMB_FONT)
                     .text_color(cx.theme().muted_foreground)
-                    .child(region),
+                    .child(region)
+                    .into_any_element(),
             );
         }
 
@@ -267,23 +289,28 @@ impl SecretStoreDocument {
             // The path is the one part of the header that gives way: it
             // clips with an ellipsis, and its full text stays in the tooltip
             // and the accessible name.
-            row = row.child(Self::breadcrumb_separator(cx)).child(
+            parts.push(
                 div()
                     .id("secret-path")
                     .flex()
+                    .items_center()
+                    .gap(NavigationMetrics::BREADCRUMB_GAP)
                     .flex_shrink_1()
                     .min_w_0()
                     .overflow_hidden()
+                    .role(gpui::accesskit::Role::Label)
                     .aria_label(full_path)
                     .tooltip(move |window, cx| {
                         gpui_component::tooltip::Tooltip::new(tooltip_path.clone())
                             .build(window, cx)
                     })
-                    .child(Breadcrumb::new(path).mono()),
+                    .child(Self::breadcrumb_separator(cx))
+                    .child(Breadcrumb::new(path).mono())
+                    .into_any_element(),
             );
         }
 
-        row
+        parts
     }
 
     /// The region picker, once the connection listed its regions. It is the
@@ -371,14 +398,7 @@ impl SecretStoreDocument {
         search.style().flex_shrink = Some(SEARCH_SHRINK_WEIGHT);
 
         document_bar(DocumentMetrics::HEADER_HEIGHT_TALL, cx)
-            .child(
-                div()
-                    .id("secret-breadcrumb")
-                    .flex_shrink_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .child(self.render_breadcrumb_row(cx)),
-            )
+            .children(self.breadcrumb_parts(cx))
             .child(div().flex_1())
             .when(hierarchical, |bar| bar.child(self.render_path_mode(cx)))
             .child(search.child(search_field(
@@ -528,23 +548,41 @@ impl SecretStoreDocument {
     }
 
     /// The rotation column: a chip, success-toned while rotation is enabled.
-    fn rotation_cell(summary: &SecretSummary) -> Div {
+    fn rotation_cell(summary: &SecretSummary) -> Stateful<Div> {
         let chip = rotation_chip(summary.rotation.as_ref());
-        let mut badge =
-            Badge::new(chip.label, chip.tone).id(format!("secret-rotation-{}", summary.name));
+        let chip_label = chip.label.clone();
+        let mut badge = Badge::new(chip.label, chip.tone)
+            .id(format!("secret-rotation-{}", summary.name))
+            .aria_label(chip_label.clone());
 
         if chip.tone == BadgeTone::Success {
             badge = badge.icon(AppIcon::RefreshCcw);
         }
 
+        let tooltip = chip_label.clone();
+
+        // The chip clips inside its cell, so a narrow listing never lets it
+        // run over Last changed; the full label stays in the tooltip.
         div()
+            .id(format!("secret-rotation-cell-{}", summary.name))
             .flex()
             .items_center()
             .w(SecretStoreMetrics::ROTATION_WIDTH)
             .flex_shrink_1()
             .min_w_0()
+            .overflow_hidden()
             .pr(DocumentMetrics::GAP)
-            .child(badge)
+            .tooltip(move |window, cx| {
+                gpui_component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+            })
+            .child(
+                div()
+                    .id(format!("secret-rotation-chip-{}", summary.name))
+                    .flex()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(badge),
+            )
     }
 
     fn render_secret_row(
@@ -796,13 +834,34 @@ impl SecretStoreDocument {
             })
         });
 
+        let summary = self.loaded_summary();
+        let tooltip = summary.clone();
+
+        // The summary takes what the key hints leave and truncates; each hint
+        // keeps its width, so the keys stay readable in a narrow listing.
         document_footer(cx)
             .h(ObjectStoreMetrics::FOOTER_HEIGHT)
             .child(
-                footer_item(AppIcon::KeyRound, self.loaded_summary(), cx)
-                    .id("secret-footer-summary"),
+                div()
+                    .id("secret-footer-summary")
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .items_center()
+                    .gap(ResultMetrics::FOOTER_ITEM_GAP)
+                    .role(gpui::accesskit::Role::Label)
+                    .aria_label(summary.clone())
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+                    })
+                    .child(
+                        Icon::new(AppIcon::KeyRound)
+                            .size(ResultMetrics::FOOTER_ICON)
+                            .color(cx.theme().muted_foreground),
+                    )
+                    .child(div().min_w_0().truncate().child(summary)),
             )
-            .child(div().flex_1())
             .children(hints)
     }
 

@@ -79,7 +79,15 @@ impl SecretStoreDocument {
     }
 
     /// Refresh: lists the level again and drops the retrieved value.
+    ///
+    /// A region discovery that failed is asked again, so granting
+    /// `ec2:DescribeRegions` brings the picker back without reopening the
+    /// document.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.regions, super::RegionListState::Failed(_)) {
+            self.load_regions(cx);
+        }
+
         self.load_first_page(cx);
     }
 

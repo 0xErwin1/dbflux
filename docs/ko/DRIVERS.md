@@ -92,7 +92,7 @@ AWS S3와 S3 호환 엔드포인트(Cloudflare R2, MinIO)를 위한 개체 스�
 
 ### AWS Secrets
 
-AWS Secrets Manager와 Systems Manager Parameter Store를 위한 시크릿 저장소 드라이버이며, AWS 프로필/SSO 또는 정적 자격 증명과 선택적 엔드포인트 재정의로 인증합니다. 한 연결이 사이드바에 두 저장소를 모두 보여 줍니다. 목록은 이름 검색과 함께 서버 측에서 페이지를 나누고, Parameter Store 경로는 한 수준씩 탐색합니다. 목록과 세부 정보 패널은 값을 절대 가져오지 않습니다. 값은 사용자가 Retrieve value를 실행할 때만 읽히며, 이때 값 없이 감사 이벤트가 기록됩니다. 키/값 JSON 시크릿은 표로, 그 밖의 텍스트는 일반 텍스트로, 바이너리 시크릿은 base64로 표시되며, 다른 서비스가 소유한 시크릿은 읽기 전용으로 표시됩니다. `kms:Decrypt` 권한이 없으면 빈 값이 아니라 오류로 보고됩니다. 이 릴리스는 읽기 전용입니다. 자세한 내용은 [`crates/dbflux_driver_aws_secrets/README.md`](../crates/dbflux_driver_aws_secrets/README.md)를 참조하세요.
+AWS Secrets Manager와 Systems Manager Parameter Store를 위한 시크릿 저장소 드라이버이며, AWS 프로필/SSO 또는 정적 자격 증명과 선택적 엔드포인트 재정의로 인증합니다. 한 연결이 사이드바에 두 저장소를 모두 보여 줍니다. 목록은 이름 검색과 함께 서버 측에서 페이지를 나누고, Parameter Store 경로는 한 수준씩 탐색합니다. 목록과 세부 정보 패널은 값을 절대 가져오지 않습니다. 값은 사용자가 Retrieve value를 실행할 때만 읽히며, 이때 값 없이 감사 이벤트가 기록됩니다. 키/값 JSON 시크릿은 표로, 그 밖의 텍스트는 일반 텍스트로, 바이너리 시크릿은 base64로 표시되며, 다른 서비스가 소유한 시크릿은 읽기 전용으로 표시됩니다. `kms:Decrypt` 권한이 없으면 빈 값이 아니라 오류로 보고됩니다. 리전 선택기는 `ec2:DescribeRegions`가 반환하는 리전을 나열합니다. 자격 증명이 이를 호출할 수 없으면(해당 권한이 없는 IAM 사용자, EC2가 없는 LocalStack) 문서는 오류 알림 없이 연결에 설정된 리전을 선택기 없이 조용히 표시하고, 거부를 한 번 기록하며, Refresh가 다시 조회합니다. 이 릴리스는 읽기 전용입니다. 자세한 내용은 [`crates/dbflux_driver_aws_secrets/README.md`](../crates/dbflux_driver_aws_secrets/README.md)를 참조하세요.
 
 ## 외부 RPC 드라이버
 

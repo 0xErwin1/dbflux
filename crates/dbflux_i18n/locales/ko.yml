@@ -3464,7 +3464,7 @@ document:
       parameters:
         one: "파라미터 %{count}개"
         many: "파라미터 %{count}개"
-      tree_summary: "%{path} 아래 %{paths} · %{parameters}"
+      tree_summary: "%{path} 아래 %{paths} · %{parameters} 로드됨"
       flat_summary: "%{path} 아래 %{parameters}"
       hint:
         open: "열기"

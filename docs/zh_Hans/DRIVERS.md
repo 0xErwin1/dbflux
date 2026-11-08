@@ -93,7 +93,7 @@ AWS CloudWatch Logs 驱动程序，通过 `StartQuery` 执行查询，时间范�
 
 ### AWS Secrets
 
-面向 AWS Secrets Manager 与 Systems Manager Parameter Store 的密钥存储驱动程序，通过 AWS 配置文件/SSO 或静态凭据进行身份验证，并支持可选的端点覆盖。一个连接会在侧边栏中同时显示两个存储库。列表在服务端分页并支持按名称搜索，Parameter Store 路径按层级逐级浏览。列表和详情面板从不读取值：只有当用户执行 Retrieve value 时才会读取值，并记录一条不含该值的审计事件。键值 JSON 密钥以表格显示，其他文本以纯文本显示，二进制密钥以 base64 显示，由其他服务拥有的密钥标记为只读。缺少 `kms:Decrypt` 权限时会报告错误，绝不会返回空值。此版本为只读。参见 [`crates/dbflux_driver_aws_secrets/README.md`](../crates/dbflux_driver_aws_secrets/README.md)。
+面向 AWS Secrets Manager 与 Systems Manager Parameter Store 的密钥存储驱动程序，通过 AWS 配置文件/SSO 或静态凭据进行身份验证，并支持可选的端点覆盖。一个连接会在侧边栏中同时显示两个存储库。列表在服务端分页并支持按名称搜索，Parameter Store 路径按层级逐级浏览。列表和详情面板从不读取值：只有当用户执行 Retrieve value 时才会读取值，并记录一条不含该值的审计事件。键值 JSON 密钥以表格显示，其他文本以纯文本显示，二进制密钥以 base64 显示，由其他服务拥有的密钥标记为只读。缺少 `kms:Decrypt` 权限时会报告错误，绝不会返回空值。区域选择器会列出 `ec2:DescribeRegions` 返回的区域；当凭据无法调用它时（没有该权限的 IAM 用户、没有 EC2 的 LocalStack），文档会静默显示连接配置的区域，不显示选择器，仅记录一次拒绝，Refresh 会再次查询。此版本为只读。参见 [`crates/dbflux_driver_aws_secrets/README.md`](../crates/dbflux_driver_aws_secrets/README.md)。
 
 ## 外部 RPC 驱动程序
 

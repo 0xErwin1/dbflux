@@ -204,7 +204,12 @@ Retrieve value, que registra un evento de auditoría sin el valor. Los secretos
 JSON de clave/valor se muestran como tabla, el resto del texto como texto plano
 y los secretos binarios en base64, y los secretos que pertenecen a otro
 servicio se marcan como de solo lectura. La falta del permiso `kms:Decrypt` se
-informa como error, nunca como un valor vacío. Esta versión es de solo lectura.
+informa como error, nunca como un valor vacío. El selector de región lista las
+regiones que devuelve `ec2:DescribeRegions`; cuando las credenciales no pueden
+llamarlo (un usuario IAM sin ese permiso, LocalStack sin EC2) el documento
+muestra en silencio la región configurada de la conexión, sin selector, registra
+la denegación una vez, y Refresh vuelve a consultarlo. Esta versión es de solo
+lectura.
 Ver
 [`crates/dbflux_driver_aws_secrets/README.md`](../crates/dbflux_driver_aws_secrets/README.md).
 

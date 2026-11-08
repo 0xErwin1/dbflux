@@ -3464,7 +3464,7 @@ document:
       parameters:
         one: "%{count} parameter"
         many: "%{count} parameters"
-      tree_summary: "%{paths} · %{parameters} under %{path}"
+      tree_summary: "%{paths} · %{parameters} loaded under %{path}"
       flat_summary: "%{parameters} under %{path}"
       hint:
         open: "open"

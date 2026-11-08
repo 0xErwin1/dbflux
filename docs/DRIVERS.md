@@ -193,7 +193,11 @@ fetch a value: a value is read only when the user runs Retrieve value, which
 records an audit event without the value. Key/value JSON secrets render as a
 table, other text as plaintext and binary secrets as base64, and secrets owned
 by another service are marked read only. A missing `kms:Decrypt` permission is
-reported as an error, never as an empty value. This release is read only. See
+reported as an error, never as an empty value. The region picker lists the
+regions `ec2:DescribeRegions` returns; when the credentials cannot call it (an
+IAM user without that permission, LocalStack without EC2) the document quietly
+shows the connection's configured region without a picker, logs the denial
+once, and Refresh asks again. This release is read only. See
 [`crates/dbflux_driver_aws_secrets/README.md`](../crates/dbflux_driver_aws_secrets/README.md).
 
 ## External RPC drivers
