@@ -422,6 +422,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `x`                                           | Eliminar fila                              |
 | `r`                                           | Renombrar / editar                         |
 | `e`                                           | Editar el valor del secreto seleccionado en el documento de AWS Secrets, una vez recuperado su valor y solo cuando se puede editar (texto sin formato, no administrado por otro servicio, sin eliminación programada, en un almacén que acepta escrituras) |
+| `b` | Revertir el secreto seleccionado a su versión anterior más reciente en el documento de AWS Secrets (pregunta antes; solo en un almacén con etiquetas de etapa, para un secreto que no gestiona otro servicio ni tiene la eliminación programada) |
 | `o`                                           | Añadir fila                                |
 | `y`                                           | Copiar fila                                |
 | `i`                                           | Alternar la vista de registro (una fila)   |
