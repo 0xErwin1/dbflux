@@ -87,8 +87,32 @@ fn a_drag_from_the_document_island_does_not_resize_the_sidebar(cx: &mut TestAppC
 
 #[gpui::test]
 fn a_drag_from_a_tree_row_does_not_resize_the_sidebar(cx: &mut TestAppContext) {
-    let (before, after) = width_after_drag_from(cx, -100.0);
-    assert_eq!(after, before);
+    let (workspace, app_state, window) = new_workspace(cx);
+    add_profiles(window, &app_state);
+
+    let profile_id = window.update(|_, cx| {
+        app_state
+            .read(cx)
+            .profiles()
+            .first()
+            .expect("a profile was added")
+            .id
+    });
+    let row_selector: &'static str =
+        format!("row-{}", dbflux_core::SchemaNodeId::Profile { profile_id }).leak();
+    let row = window
+        .debug_bounds(row_selector)
+        .expect("the profile row is rendered");
+    let dock = dock_bounds(window);
+    let seam_start = dock.origin.x + dock.size.width - px(13.0);
+    assert!(
+        row.center().x < seam_start,
+        "the row's middle is outside the seam band"
+    );
+
+    let before = width(window, &workspace);
+    drag(window, row.center(), DRAG);
+    assert_eq!(width(window, &workspace), before);
 }
 
 #[gpui::test]
