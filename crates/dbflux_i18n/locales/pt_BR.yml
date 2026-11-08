@@ -3427,7 +3427,6 @@ document:
     loading_more: "Carregando a próxima página…"
     region:
       label: "Região"
-      retry: "Tentar novamente"
       switch_failed: "Não foi possível mudar para a região %{region}: %{error}"
     columns:
       name: "Nome"
@@ -3459,25 +3458,53 @@ document:
       loaded:
         one: "%{count} segredo carregado"
         many: "%{count} segredos carregados"
+      paths:
+        one: "%{count} caminho"
+        many: "%{count} caminhos"
+      parameters:
+        one: "%{count} parâmetro"
+        many: "%{count} parâmetros"
+      tree_summary: "%{paths} · %{parameters} carregados em %{path}"
+      flat_summary: "%{parameters} em %{path}"
       hint:
         open: "abrir"
         retrieve: "obter valor"
-        copy_id: "copiar ID"
+        copy_arn: "copiar ARN"
         filter: "filtrar"
         up: "subir"
     status:
       list_timing:
         one: "Listagem · %{count} segredo · %{millis} ms"
         many: "Listagem · %{count} segredos · %{millis} ms"
+      list_timing_parameters:
+        one: "Listagem · %{count} parâmetro · %{millis} ms"
+        many: "Listagem · %{count} parâmetros · %{millis} ms"
       describe_timing: "Descrição · %{millis} ms"
       retrieve_timing: "Obter valor · %{millis} ms"
       duration_tooltip: "Duração no cliente da última chamada ao cofre"
+    date:
+      short: "%{day} %{month}, %{time}"
+      short_with_year: "%{day} %{month} %{year}, %{time}"
+      months:
+        jan: "jan"
+        feb: "fev"
+        mar: "mar"
+        apr: "abr"
+        may: "mai"
+        jun: "jun"
+        jul: "jul"
+        aug: "ago"
+        sep: "set"
+        oct: "out"
+        nov: "nov"
+        dec: "dez"
     rotation:
       off: "Desativada"
       enabled: "Ativada"
       disabled: "Desativada"
       every_days: "A cada %{count} dias"
       every_hours: "A cada %{count} horas"
+      on_schedule: "Em agenda"
       schedule_with_window: "%{schedule} · janela %{window} (%{expression})"
       title: "Rotação"
       status: "Status"

@@ -3427,7 +3427,6 @@ document:
     loading_more: "다음 페이지를 불러오는 중…"
     region:
       label: "리전"
-      retry: "다시 시도"
       switch_failed: "리전 %{region}(으)로 전환하지 못했습니다: %{error}"
     columns:
       name: "이름"
@@ -3459,25 +3458,53 @@ document:
       loaded:
         one: "시크릿 %{count}개 불러옴"
         many: "시크릿 %{count}개 불러옴"
+      paths:
+        one: "경로 %{count}개"
+        many: "경로 %{count}개"
+      parameters:
+        one: "파라미터 %{count}개"
+        many: "파라미터 %{count}개"
+      tree_summary: "%{path} 아래 %{paths} · %{parameters} 로드됨"
+      flat_summary: "%{path} 아래 %{parameters}"
       hint:
         open: "열기"
         retrieve: "값 가져오기"
-        copy_id: "ID 복사"
+        copy_arn: "ARN 복사"
         filter: "필터"
         up: "위로"
     status:
       list_timing:
         one: "목록 · 시크릿 %{count}개 · %{millis} ms"
         many: "목록 · 시크릿 %{count}개 · %{millis} ms"
+      list_timing_parameters:
+        one: "목록 · 파라미터 %{count}개 · %{millis} ms"
+        many: "목록 · 파라미터 %{count}개 · %{millis} ms"
       describe_timing: "설명 · %{millis} ms"
       retrieve_timing: "값 가져오기 · %{millis} ms"
       duration_tooltip: "마지막 저장소 호출의 클라이언트 측 소요 시간"
+    date:
+      short: "%{month} %{day}일 %{time}"
+      short_with_year: "%{year}년 %{month} %{day}일 %{time}"
+      months:
+        jan: "1월"
+        feb: "2월"
+        mar: "3월"
+        apr: "4월"
+        may: "5월"
+        jun: "6월"
+        jul: "7월"
+        aug: "8월"
+        sep: "9월"
+        oct: "10월"
+        nov: "11월"
+        dec: "12월"
     rotation:
       off: "꺼짐"
       enabled: "사용"
       disabled: "사용 안 함"
       every_days: "%{count}일마다"
       every_hours: "%{count}시간마다"
+      on_schedule: "일정에 따름"
       schedule_with_window: "%{schedule} · 기간 %{window} (%{expression})"
       title: "교체"
       status: "상태"
