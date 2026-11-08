@@ -195,12 +195,19 @@ impl SecretView {
         self.versions_session = None;
 
         let Some(connection) = self.connection(cx) else {
+            // A reload nobody asked for finding no connection is a
+            // disconnect, not a failure: nothing is asked and nothing is
+            // reported, and the history loads again when it returns.
+            if trigger == HistoryLoad::Automatic {
+                self.versions = VersionsState::NotConnected;
+                return;
+            }
+
             let message = dbflux_i18n::t!("document.secret_store.error.connection_unavailable");
 
             // Only the first catch site reports: an editor path that found
-            // the same loss already did. A reload nobody asked for stays
-            // quiet about it; a listing the user asked for does not.
-            if trigger == HistoryLoad::Requested || !self.missing_connection_reported {
+            // the same loss already did.
+            if !self.missing_connection_reported || trigger == HistoryLoad::Requested {
                 self.missing_connection_reported = true;
                 report_error(UserFacingError::new(ErrorKind::User, message.clone()), cx);
             }

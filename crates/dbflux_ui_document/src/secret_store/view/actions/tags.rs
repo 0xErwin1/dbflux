@@ -204,6 +204,7 @@ impl SecretView {
     /// dialog starts from the tags the store reports and not from a guess.
     pub fn can_edit_tags(&self) -> bool {
         self.supports_tags()
+            && self.connection_present
             && !self.write_in_flight
             && !self.dialog_is_open()
             && self.write_refusal_reason().is_none()

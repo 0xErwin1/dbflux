@@ -232,7 +232,7 @@ impl SecretView {
     /// policy refuses writes keeps the editor — the refusal happens at Save,
     /// through the seam, where the decision is audited.
     pub fn can_edit_value(&self) -> bool {
-        if self.value_edit.is_some() {
+        if self.value_edit.is_some() || !self.connection_present {
             return false;
         }
 

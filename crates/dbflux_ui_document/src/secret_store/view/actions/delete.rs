@@ -86,6 +86,7 @@ impl SecretView {
     /// Whether Delete may open its dialog for the selection now.
     pub fn can_delete_selected(&self) -> bool {
         self.supports_delete()
+            && self.connection_present
             && !self.write_in_flight
             && !self.dialog_is_open()
             && self.write_refusal_reason().is_none()
@@ -282,6 +283,7 @@ impl SecretView {
     /// may cancel now.
     pub fn can_restore_selected(&self) -> bool {
         self.supports_restore()
+            && self.connection_present
             && !self.write_in_flight
             && !self.dialog_is_open()
             && self

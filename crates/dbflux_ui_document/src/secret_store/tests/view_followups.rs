@@ -232,3 +232,178 @@ fn a_scheduled_deletion_with_a_request_moment_keeps_showing_it(cx: &mut TestAppC
     assert!(text.contains("Deleted"), "{text}");
     assert!(text.contains("recovery window"), "{text}");
 }
+
+// -- A disconnect is not an error ---------------------------------------------
+
+impl Opened<'_> {
+    /// Removes the profile's connection and returns it, so a test can bring it back.
+    fn take_connection(&mut self) -> dbflux_app::app_state::ConnectedProfile {
+        let app_state = self.app_state.clone();
+        let profile_id = self.read(|doc| doc.profile_id);
+
+        self.window
+            .update(|_, cx| {
+                app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id))
+            })
+            .expect("the profile was connected")
+    }
+
+    fn restore_connection(&mut self, connected: dbflux_app::app_state::ConnectedProfile) {
+        let app_state = self.app_state.clone();
+        let profile_id = self.read(|doc| doc.profile_id);
+
+        self.window.update(|_, cx| {
+            app_state.update(cx, |state, _| {
+                state.connections_mut().insert(profile_id, connected);
+            })
+        });
+    }
+}
+
+/// A user-initiated disconnect reports nothing, asks for nothing, and the
+/// Versions section says the profile is not connected.
+#[gpui::test]
+fn a_disconnect_reports_nothing_and_shows_a_neutral_history(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    let listings = opened.driver.secret_store_calls().version_listings.len();
+
+    let _connected = opened.take_connection();
+    opened.announce_state_change();
+
+    assert!(
+        opened.reported_errors().is_empty(),
+        "{:?}",
+        opened.reported_errors()
+    );
+    assert_eq!(opened.toast_count(), 0);
+    assert!(
+        opened
+            .audit_records()
+            .iter()
+            .all(|event| event.action.as_deref() != Some("user_error"))
+    );
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::NotConnected)));
+    assert_eq!(
+        opened.driver.secret_store_calls().version_listings.len(),
+        listings
+    );
+    let text = opened.rendered_text();
+    assert!(text.contains("Not connected"), "{text}");
+    assert!(!text.contains("could not be loaded"), "{text}");
+    assert!(!text.contains("not available"), "{text}");
+}
+
+/// The history loads again when the connection returns.
+#[gpui::test]
+fn the_history_loads_again_on_reconnect(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let connected = opened.take_connection();
+    opened.announce_state_change();
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::NotConnected)));
+
+    opened.restore_connection(connected);
+    opened.announce_state_change();
+
+    assert!(!opened.version_ids().is_empty());
+    assert!(opened.reported_errors().is_empty());
+}
+
+/// Every action that needs the connection is disabled while there is none.
+#[gpui::test]
+fn the_actions_that_need_the_connection_are_disabled_while_disconnected(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+
+    let enabled = |opened: &mut Opened<'_>| {
+        opened.read_view(|view| {
+            [
+                view.can_retrieve_value(),
+                view.can_request_edit_value(),
+                view.can_delete_selected(),
+                view.can_rotate_now(),
+                view.can_edit_rotation(),
+                view.can_edit_tags(),
+                view.can_edit_description(),
+                view.can_roll_back_version(1),
+            ]
+        })
+    };
+    assert_eq!(
+        enabled(&mut opened),
+        [true; 8],
+        "all offered while connected"
+    );
+
+    let connected = opened.take_connection();
+    opened.announce_state_change();
+
+    assert_eq!(enabled(&mut opened), [false; 8]);
+
+    opened.restore_connection(connected);
+    opened.announce_state_change();
+    assert!(opened.read_view(|view| view.can_retrieve_value()));
+}
+
+/// Restore waits for a connection too.
+#[gpui::test]
+fn restore_is_disabled_while_disconnected(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    assert!(opened.read_view(|view| view.can_restore_selected()));
+
+    let _connected = opened.take_connection();
+    opened.announce_state_change();
+
+    assert!(!opened.read_view(|view| view.can_restore_selected()));
+}
+
+/// New secret waits for a connection.
+#[gpui::test]
+fn new_secret_is_disabled_while_disconnected(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    assert!(opened.read_cx(|doc, cx| doc.can_open_create(cx)));
+
+    let _connected = opened.take_connection();
+    opened.announce_state_change();
+
+    assert!(!opened.read_cx(|doc, cx| doc.can_open_create(cx)));
+}
+
+/// A write pressed after the connection dropped, before the view heard of it,
+/// is still reported.
+#[gpui::test]
+fn a_write_pressed_as_the_connection_drops_is_still_reported(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let _connected = opened.take_connection();
+
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+
+    assert_eq!(opened.reported_errors().len(), 1);
+    assert_eq!(opened.toast_count(), 1);
+}
+
+/// A history the user asked for, with no connection to ask, is reported once.
+#[gpui::test]
+fn a_requested_history_without_a_connection_is_reported_once(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let _connected = opened.take_connection();
+
+    opened.update_view(|view, cx| view.load_versions(KEY_VALUE_SECRET.to_string(), cx));
+
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].1.contains(&dbflux_i18n::t!(
+            "document.secret_store.error.connection_unavailable"
+        )),
+        "{errors:?}"
+    );
+}

@@ -20,6 +20,7 @@ impl SecretView {
     /// retrieved first.
     pub fn can_request_edit_value(&self) -> bool {
         if self.value_edit.is_some()
+            || !self.connection_present
             || self.dialog_is_open()
             || !self.store_allows(SecretStoreCapabilities::WRITE)
             || self.write_refusal_reason().is_some()
