@@ -3517,7 +3517,10 @@ fn choosing_a_menu_item_runs_it_and_closes_the_menu(cx: &mut TestAppContext) {
 
     assert_eq!(opened.clipboard(), Some(KEY_VALUE_SECRET.to_string()));
     assert!(
-        !opened.rendered_text().contains("Copy name"),
+        !opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.contains("secret-menu-")),
         "the menu closed after the choice"
     );
 }
@@ -3546,7 +3549,10 @@ fn escape_and_a_click_outside_close_the_menu(cx: &mut TestAppContext) {
 
     assert!(opened.command(Command::Cancel));
     assert!(
-        !opened.rendered_text().contains("Copy name"),
+        !opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.contains("secret-menu-")),
         "Escape closes the menu"
     );
 
@@ -3568,7 +3574,10 @@ fn escape_and_a_click_outside_close_the_menu(cx: &mut TestAppContext) {
     opened.window.run_until_parked();
 
     assert!(
-        !opened.rendered_text().contains("Copy name"),
+        !opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.contains("secret-menu-")),
         "a click outside closes the menu"
     );
 }
@@ -3588,7 +3597,10 @@ fn the_keyboard_runs_the_menu(cx: &mut TestAppContext) {
         "MenuSelect on the highlighted Retrieve value retrieves"
     );
     assert!(
-        !opened.rendered_text().contains("Copy name"),
+        !opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.contains("secret-menu-")),
         "the menu closed after the choice"
     );
 
@@ -3892,7 +3904,10 @@ fn switching_away_from_the_tab_closes_the_menu(cx: &mut TestAppContext) {
         "a deactivated tab's menu is closed"
     );
     assert!(
-        !opened.rendered_text().contains("Copy name"),
+        !opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.contains("secret-menu-")),
         "the frame no longer draws the menu"
     );
 
