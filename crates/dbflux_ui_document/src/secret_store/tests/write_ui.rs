@@ -4269,6 +4269,236 @@ fn a_queued_close_does_not_erase_a_create_form_opened_after_it(cx: &mut TestAppC
     );
 }
 
+// -- Value provenance (PR #1296 review) -----------------------------------------
+
+/// A connection that is not the one the document holds.
+fn other_session() -> Arc<dyn Connection> {
+    let profile = dbflux_core::ConnectionProfile::new(
+        "other-aws",
+        dbflux_core::DbConfig::SQLite {
+            path: std::path::PathBuf::from(":memory:"),
+            connection_id: None,
+        },
+    );
+
+    FakeDriver::new(DbKind::AwsSecrets)
+        .connect_arc(&profile)
+        .expect("connect")
+}
+
+impl Opened<'_> {
+    /// Starts a retrieval and leaves it in flight: the store call is made but
+    /// its answer is not landed until the window settles.
+    fn start_retrieval(&mut self) {
+        let doc = self.doc.clone();
+        self.window.update(|_, cx| {
+            let view = doc.read(cx).view.clone();
+            view.update(cx, |view, cx| view.retrieve_selected_value(cx));
+        });
+    }
+}
+
+/// A retrieval that lands after the connection was replaced belongs to the
+/// old session: the value is dropped, not shown under the new one, and the
+/// section is not left loading.
+#[gpui::test]
+fn a_retrieval_from_a_replaced_session_is_not_shown(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.start_retrieval();
+    let replacement = opened.replace_connection();
+    opened.window.run_until_parked();
+
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
+    assert!(!opened.read_view(|view| view.can_edit_value()));
+    assert!(
+        replacement.secret_store_calls().value_requests.is_empty(),
+        "the new session was not read"
+    );
+}
+
+/// The landing itself checks the session, before any frame could clean up
+/// after it: an answer asked of another session is refused on arrival.
+#[gpui::test]
+fn the_landing_refuses_an_answer_asked_of_another_session(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    let other = other_session();
+    let doc = opened.doc.clone();
+
+    let value = opened.window.update(|_, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, cx| {
+            let generation = view.value_generation;
+            view.apply_value(
+                super::super::view::ValueAsk {
+                    generation,
+                    name: PLAINTEXT_SECRET,
+                    requested_version: None,
+                    session: Some(other),
+                },
+                Ok(SecretValue::text(
+                    Some("v-1".to_string()),
+                    "stale".to_string(),
+                )),
+                0,
+                cx,
+            );
+            matches!(view.value(), ValueState::Loaded(_))
+        })
+    });
+
+    assert!(!value, "the stale answer was not shown");
+}
+
+/// A loaded value does not survive a session change: it is dropped when the
+/// connection is replaced, and cannot be edited afterwards.
+#[gpui::test]
+fn a_loaded_value_is_dropped_when_the_session_changes(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::Loaded(_))));
+
+    opened.replace_connection();
+    opened.announce_state_change();
+
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
+    assert!(!opened.read_view(|view| view.can_edit_value()));
+}
+
+/// An editor holding unsaved text keeps it across a session change, but the
+/// text can never be saved into the new session: the editor stays bound to
+/// the session its value came from.
+#[gpui::test]
+fn unsaved_text_survives_a_session_change_but_is_never_saved_to_the_new_session(
+    cx: &mut TestAppContext,
+) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+
+    let replacement = opened.replace_connection();
+    opened.announce_state_change();
+    assert!(
+        opened.read_view(|view| view.is_editing_value()),
+        "the text is kept"
+    );
+
+    opened.save_edit();
+
+    assert!(opened.written_values().is_empty());
+    assert!(
+        replacement.secret_store_calls().put_attempts.is_empty(),
+        "nothing reached the new session"
+    );
+    assert_eq!(opened.reported_errors().len(), 1);
+}
+
+/// Edit value on a value read from a session that was since replaced does not
+/// bind the editor to the live one.
+#[gpui::test]
+fn an_editor_is_not_opened_on_a_value_from_a_replaced_session(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    let other = other_session();
+    let doc = opened.doc.clone();
+
+    // In one update, so no frame drops the stale value first: the editor's
+    // own check is what refuses.
+    let editing = opened.window.update(|window, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, cx| {
+            view.value_session = Some(other);
+            view.start_value_edit(window, cx);
+            view.is_editing_value()
+        })
+    });
+
+    assert!(!editing);
+    assert_eq!(opened.reported_errors().len(), 1, "the user is told why");
+}
+
+/// The version a retrieval returned stays with the value: when the store
+/// rotates afterwards, the shown value reads as the older one.
+#[gpui::test]
+fn a_current_value_reads_as_older_once_the_store_rotates(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    assert!(opened.read_view(|view| view.shown_older_version().is_none()));
+    let shown = opened
+        .read_view(|view| match view.value() {
+            ValueState::Loaded(value) => value.version.clone(),
+            _ => None,
+        })
+        .expect("the retrieval returned its version");
+
+    opened.rotate_current(KEY_VALUE_SECRET, "rotated");
+    opened.update_view(|view, cx| {
+        view.describe(KEY_VALUE_SECRET.to_string(), cx);
+        view.load_versions(KEY_VALUE_SECRET.to_string(), cx);
+    });
+
+    assert_eq!(
+        opened.read_view(|view| view.shown_older_version().map(str::to_string)),
+        Some(shown)
+    );
+    assert!(opened.read_view(|view| view.can_return_to_current()));
+}
+
+/// The editor's save checks the region-switch guard before it reads the
+/// connection.
+#[gpui::test]
+fn an_editor_save_waits_for_a_region_switch(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+    opened.update(|doc, _| doc.region_switch_in_flight.set(true));
+
+    opened.save_edit();
+
+    assert!(opened.written_values().is_empty());
+    assert_eq!(opened.reported_errors().len(), 1, "the user is told why");
+    assert!(opened.read_view(|view| view.is_editing_value()));
+}
+
+/// A save that completes after the connection was replaced landed on the old
+/// session: it does not replace the new session's value or the editor's
+/// baseline, and the unsaved text stays.
+#[gpui::test]
+fn a_save_completing_on_a_replaced_session_leaves_the_editor_alone(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+    let doc = opened.doc.clone();
+    opened.window.update(|_, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, cx| view.save_value_edit(cx));
+    });
+    opened.replace_connection();
+    opened.window.run_until_parked();
+
+    assert!(
+        opened.read_view(|view| view.is_editing_value()),
+        "the text stays"
+    );
+    assert!(opened.dirty(), "and still differs from the baseline");
+    assert!(!opened.read_view(|view| view.is_saving_value_edit()));
+    assert_eq!(
+        opened.reported_errors().len(),
+        1,
+        "told it landed on the old session"
+    );
+}
+
 /// A store that declares tiers but no value types shows no type group and
 /// sends no value type.
 #[gpui::test]

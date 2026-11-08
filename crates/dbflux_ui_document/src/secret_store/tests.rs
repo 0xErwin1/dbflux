@@ -157,6 +157,8 @@ impl Opened<'_> {
         let value = RetrievedValue::new(&SecretValue::text(None, text.to_string()));
         self.update_view(|view, cx| {
             view.value = ValueState::Loaded(Box::new(value));
+            // As if retrieved from the session that is live now.
+            view.value_session = view.connection(cx);
             cx.notify();
         });
     }
@@ -1635,8 +1637,9 @@ fn a_post_save_history_reload_does_not_report_a_known_loss_again(cx: &mut TestAp
         version: Some("v-written".to_string()),
         payload: dbflux_core::SecretPayload::Text(EDITED_VALUE.into()),
     };
+    let saved_on = opened.read_view(|view| view.value_session.clone().expect("a retrieved value"));
     opened.update_view(|view, cx| {
-        view.apply_value_write(generation, PLAINTEXT_SECRET, Ok(written), cx)
+        view.apply_value_write(generation, PLAINTEXT_SECRET, Ok(written), &saved_on, cx)
     });
 
     assert!(

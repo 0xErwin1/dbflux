@@ -370,6 +370,8 @@ impl SecretStoreDocument {
             });
             this.view
                 .update(cx, |view, cx| view.adopt_details_session(cx));
+            this.view
+                .update(cx, |view, cx| view.drop_value_of_replaced_session(cx));
         })
     }
 

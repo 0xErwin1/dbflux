@@ -16,6 +16,8 @@ mod inputs;
 mod menu;
 mod pane_actions;
 
+#[cfg(test)]
+pub(super) use data::ValueAsk;
 pub(super) use pane_actions::callback_action;
 
 #[cfg(test)]
@@ -129,6 +131,10 @@ pub struct SecretView {
     pub(super) value_version: Option<String>,
     pub(super) value: ValueState,
     pub(super) value_generation: u64,
+    /// The connection session the shown value was retrieved from. A value is
+    /// accepted only for that session and is dropped when the profile's
+    /// connection is replaced; the editor built on it keeps this session.
+    pub(super) value_session: Option<Arc<dyn Connection>>,
     /// One read-only, secret-marked input per drawn value field, built on
     /// the render pass after a retrieval (an input needs a `Window`).
     pub(super) value_inputs: Vec<Entity<InputState>>,
@@ -209,6 +215,7 @@ impl SecretView {
             value_version: None,
             value: ValueState::NotLoaded,
             value_generation: 0,
+            value_session: None,
             value_inputs: Vec::new(),
             value_input_masks: Vec::new(),
             value_inputs_view: None,
@@ -235,6 +242,10 @@ impl SecretView {
     /// that show a retrieved value, and the editor a pending Edit value
     /// opens once its retrieval landed.
     pub(super) fn prepare_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // An editor that kept unsaved text across a session change may have
+        // closed since; its value must not outlive the session either.
+        self.drop_value_of_replaced_session(cx);
+
         // The editor of an open edit replaces the value's fields, so the
         // read-only inputs of the closed presentation are not rebuilt while
         // it holds a second copy of the value.
@@ -324,6 +335,24 @@ impl SecretView {
         }
     }
 
+    /// Drops a shown value that came from a connection the profile no longer
+    /// holds, unless the editor still has unsaved text: that text stays, bound
+    /// to its own session, and its save is refused against the new one.
+    pub(super) fn drop_value_of_replaced_session(&mut self, cx: &mut Context<Self>) {
+        let Some(origin) = &self.value_session else {
+            return;
+        };
+
+        let replaced = self
+            .connection(cx)
+            .is_some_and(|live| !Arc::ptr_eq(origin, &live));
+
+        if replaced && !self.has_unsaved_value_edits(cx) {
+            self.clear_value();
+            cx.notify();
+        }
+    }
+
     /// Whether Retrieve value may run for the shown secret: one whose
     /// deletion is not pending, with no retrieval in flight.
     pub fn can_retrieve_value(&self) -> bool {
@@ -408,6 +437,7 @@ impl SecretView {
         self.edit_after_retrieve = false;
         self.value = ValueState::NotLoaded;
         self.value_version = None;
+        self.value_session = None;
         self.value_edit = None;
         self.value_inputs.clear();
         self.value_input_masks.clear();

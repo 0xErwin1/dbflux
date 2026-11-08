@@ -332,13 +332,24 @@ impl SecretView {
             return None;
         }
 
-        let shown = self.value_version.as_deref()?;
+        // A retrieval of the current value asked for no version, but the
+        // store named the one it served: that id stays with the value, so a
+        // rotation that moves the current version later still shows it as
+        // the older one.
+        let (shown, asked_for_it) = match self.value_version.as_deref() {
+            Some(requested) => (requested, true),
+            None => match &self.value {
+                ValueState::Loaded(value) => (value.version.as_deref()?, false),
+                _ => return None,
+            },
+        };
 
-        // Without a known current version the shown one stays named and
-        // returnable: the retrieval asked for a version, not for the current.
+        // Without a known current version a version the retrieval asked for
+        // stays named and returnable; one the store merely served is not
+        // called older on a guess.
         match self.current_version_id() {
             Some(current) => (shown != current).then_some(shown),
-            None => Some(shown),
+            None => asked_for_it.then_some(shown),
         }
     }
 
@@ -426,9 +437,12 @@ impl SecretView {
 
         let Some(connection) = self.connection(cx) else {
             self.apply_value(
-                generation,
-                &name,
-                version.as_deref(),
+                ValueAsk {
+                    generation,
+                    name: &name,
+                    requested_version: version.as_deref(),
+                    session: None,
+                },
                 Err(DbError::connection_failed(dbflux_i18n::t!(
                     "document.secret_store.error.connection_unavailable"
                 ))),
@@ -438,6 +452,7 @@ impl SecretView {
             return;
         };
 
+        let session = connection.clone();
         let store_id = self.store.id.clone();
         let entity = cx.entity().clone();
 
@@ -460,7 +475,17 @@ impl SecretView {
 
             cx.update(|cx| {
                 entity.update(cx, |view, cx| {
-                    view.apply_value(generation, &name, version.as_deref(), result, millis, cx)
+                    view.apply_value(
+                        ValueAsk {
+                            generation,
+                            name: &name,
+                            requested_version: version.as_deref(),
+                            session: Some(session),
+                        },
+                        result,
+                        millis,
+                        cx,
+                    )
                 });
             });
         })
@@ -472,14 +497,32 @@ impl SecretView {
     /// dropped instead of shown.
     pub(crate) fn apply_value(
         &mut self,
-        generation: u64,
-        name: &str,
-        requested_version: Option<&str>,
+        ask: ValueAsk<'_>,
         result: Result<SecretValue, DbError>,
         millis: u128,
         cx: &mut Context<Self>,
     ) {
-        let is_current = generation == self.value_generation && self.is_for(name);
+        let ValueAsk {
+            generation,
+            name,
+            requested_version,
+            session,
+        } = ask;
+        let asked = generation == self.value_generation && self.is_for(name);
+
+        // The answer belongs to the session it was asked of. After the
+        // connection was replaced it is not shown under the new one, and the
+        // section does not stay loading for it.
+        let same_session = session.as_ref().is_none_or(|asked_of| {
+            self.connection(cx)
+                .is_none_or(|live| Arc::ptr_eq(asked_of, &live))
+        });
+        let is_current = asked && same_session;
+
+        if asked && !same_session {
+            self.value = ValueState::NotLoaded;
+            self.value_version = None;
+        }
 
         let driver_id = self
             .connection(cx)
@@ -503,6 +546,7 @@ impl SecretView {
 
                 if is_current {
                     self.value = ValueState::Loaded(Box::new(RetrievedValue::new(&value)));
+                    self.value_session = session;
                 }
             }
             Err(error) => {
@@ -539,4 +583,14 @@ impl SecretView {
             log::warn!("[secret store] failed to record value retrieval audit event: {error}");
         }
     }
+}
+
+/// What a retrieval was asked, to judge its answer against when it lands.
+pub(crate) struct ValueAsk<'a> {
+    pub generation: u64,
+    pub name: &'a str,
+    /// The version the retrieval named, `None` for the current value.
+    pub requested_version: Option<&'a str>,
+    /// The session it was asked of; `None` when there was no connection.
+    pub session: Option<Arc<dyn Connection>>,
 }

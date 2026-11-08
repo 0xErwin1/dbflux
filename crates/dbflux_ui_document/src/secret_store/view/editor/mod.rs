@@ -363,7 +363,7 @@ impl SecretView {
             return;
         }
 
-        let Some(connection) = self.connection(cx) else {
+        let Some(live) = self.connection(cx) else {
             self.missing_connection_reported = true;
             report_error(
                 UserFacingError::new(
@@ -374,6 +374,27 @@ impl SecretView {
             );
             return;
         };
+
+        // The editor is bound to the session the value was read from, not to
+        // whichever one is live now: a value of a replaced session is dropped
+        // instead of edited.
+        let Some(connection) = self.value_session.clone() else {
+            return;
+        };
+
+        if !Arc::ptr_eq(&connection, &live) {
+            self.clear_value();
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::User,
+                    dbflux_i18n::t!("document.secret_store.edit.connection_replaced"),
+                )
+                .with_severity(EventSeverity::Warn),
+                cx,
+            );
+            cx.notify();
+            return;
+        }
 
         let ValueState::Loaded(value) = &self.value else {
             return;
@@ -616,6 +637,12 @@ impl SecretView {
         value_connection: &Arc<dyn Connection>,
         cx: &mut Context<Self>,
     ) -> Option<ValueWriteSession> {
+        // A region switch is about to replace the session this would write
+        // to: the shared guard comes before the connection is read.
+        if self.region_switch_blocks_writes(cx) {
+            return None;
+        }
+
         let connected = self.app_state.read(cx).connections().get(&self.profile_id);
 
         let Some(connected) = connected else {
@@ -659,6 +686,7 @@ impl SecretView {
         text: String,
         cx: &mut Context<Self>,
     ) {
+        let saved_on = session.connection.clone();
         let ValueWriteSession {
             connection,
             policy,
@@ -714,7 +742,7 @@ impl SecretView {
             cx.update(|cx| {
                 entity.update(cx, |view, cx| {
                     view.editor_save_in_flight = false;
-                    view.apply_value_write(generation, &name, result, cx);
+                    view.apply_value_write(generation, &name, result, &saved_on, cx);
                 });
             });
         })
@@ -734,9 +762,36 @@ impl SecretView {
         generation: u64,
         name: &str,
         result: Result<SecretValue, SecretWriteFailure>,
+        saved_on: &Arc<dyn Connection>,
         cx: &mut Context<Self>,
     ) {
         let is_current = generation == self.value_write_generation && self.is_for(name);
+
+        // The save ran on the session captured when it started. If the
+        // connection was replaced since, the displayed value and the editor
+        // belong to whatever the user sees now: nothing of them is touched,
+        // the unsaved text stays, and the user is told where the write went.
+        let replaced = self
+            .connection(cx)
+            .is_some_and(|live| !Arc::ptr_eq(&live, saved_on));
+
+        if replaced {
+            match result {
+                Ok(_) => self.report_write_warning(
+                    dbflux_i18n::t!("document.secret_store.write.landed_on_previous_session"),
+                    cx,
+                ),
+                Err(failure) => {
+                    self.report_seam_write_failure(write_failure_to_user_facing(&failure), cx)
+                }
+            }
+
+            if let Some(edit) = &mut self.value_edit {
+                edit.saving = false;
+            }
+            cx.notify();
+            return;
+        }
 
         match result {
             Ok(written) => {
@@ -744,6 +799,7 @@ impl SecretView {
                     self.value = ValueState::Loaded(Box::new(
                         crate::secret_store::RetrievedValue::new(&written),
                     ));
+                    self.value_session = Some(saved_on.clone());
                     // The saved text is the current version now, whatever
                     // version the pane was showing.
                     self.value_version = None;
