@@ -9,9 +9,10 @@
 use super::{
     DialogShell, FooterSpec, Landing, WriteDialog, WriteEffect, dialog_footer, dialog_modal,
 };
+use crate::secret_store::DetailsState;
 use crate::secret_store::SecretOperation;
+use crate::secret_store::view::SecretView;
 use crate::secret_store::write::update_secret_description;
-use crate::secret_store::{DetailsState, SecretRowKey, SecretStoreDocument};
 use dbflux_components::controls::{Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::parts::modal_field;
@@ -48,7 +49,7 @@ impl DescriptionDialog {
     }
 }
 
-impl SecretStoreDocument {
+impl SecretView {
     /// Whether the store can change descriptions at all.
     pub fn supports_description_edit(&self) -> bool {
         self.store_allows(DESCRIPTION_CAPABILITIES)
@@ -72,7 +73,7 @@ impl SecretStoreDocument {
             && !self.write_in_flight
             && !self.dialog_is_open()
             && self.write_refusal_reason().is_none()
-            && matches!(self.selected, Some(SecretRowKey::Secret(_)))
+            && self.name.is_some()
             && matches!(self.details, DetailsState::Loaded(_))
     }
 

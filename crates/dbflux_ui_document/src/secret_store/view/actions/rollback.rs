@@ -9,9 +9,10 @@ use super::{
     DialogShell, FooterSpec, Landing, WriteDialog, WriteEffect, dialog_footer, dialog_modal,
 };
 use crate::secret_store::SecretOperation;
-use crate::secret_store::details::short_version_id;
+use crate::secret_store::VersionsState;
+use crate::secret_store::view::SecretView;
+use crate::secret_store::view::details::short_version_id;
 use crate::secret_store::write::roll_back_secret;
-use crate::secret_store::{SecretRowKey, SecretStoreDocument, VersionsState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::parts::modal_lead;
 use dbflux_components::primitives::Text;
@@ -36,7 +37,7 @@ pub(in crate::secret_store) struct RollBackDialog {
 const ROLL_BACK_CAPABILITIES: SecretStoreCapabilities =
     SecretStoreCapabilities::WRITE.union(SecretStoreCapabilities::VERSION_LABELS);
 
-impl SecretStoreDocument {
+impl SecretView {
     /// Whether the store can roll a secret back at all.
     pub fn supports_roll_back(&self) -> bool {
         self.store_allows(ROLL_BACK_CAPABILITIES)
@@ -109,7 +110,7 @@ impl SecretStoreDocument {
     /// Roll back to the most recent earlier version: the `b` key. Says why
     /// when there is nothing to roll back to.
     pub fn roll_back_to_previous(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.supports_roll_back() || !matches!(self.selected, Some(SecretRowKey::Secret(_))) {
+        if !self.supports_roll_back() || self.name.is_none() {
             return;
         }
 

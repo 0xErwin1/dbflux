@@ -103,14 +103,14 @@ impl SecretStoreDocument {
             // active_context
             {
                 let e = entity.clone();
-                Box::new(move |cx| e.read(cx).active_context())
+                Box::new(move |cx| e.read(cx).active_context(cx))
             },
             // change_summary — the open editor holds unsaved value edits
             // while it differs from the stored text, and the tab's dirty dot
             // and the close prompt read it from here.
             {
                 let e = entity.clone();
-                Box::new(move |cx| e.read(cx).unsaved_change_summary(cx))
+                Box::new(move |cx| e.read(cx).view.read(cx).unsaved_change_summary(cx))
             },
             // refresh_policy
             {
@@ -151,7 +151,7 @@ impl SecretStoreDocument {
 
         pane.pane_actions = Some({
             let e = entity.clone();
-            Box::new(move |cx| e.read(cx).pane_actions(&e))
+            Box::new(move |cx| e.read(cx).pane_actions(&e, cx))
         });
 
         pane.status_segments = Some({
@@ -169,8 +169,9 @@ impl SecretStoreDocument {
         pane.on_close = Some({
             let e = entity.clone();
             Box::new(move |cx| {
-                e.update(cx, |d, cx| {
-                    d.clear_value();
+                let view = e.read(cx).view.clone();
+                view.update(cx, |view, cx| {
+                    view.clear_value();
                     cx.notify();
                 })
             })

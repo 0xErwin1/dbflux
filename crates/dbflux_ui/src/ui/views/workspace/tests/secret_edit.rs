@@ -105,17 +105,19 @@ fn e_opens_the_secret_editor_through_the_workspace_dispatch(cx: &mut TestAppCont
         window.update(|_, cx| {
             doc.update(cx, |doc, cx| {
                 doc.select_row(row, cx);
-                doc.retrieve_selected_value(cx);
+                doc.view()
+                    .clone()
+                    .update(cx, |view, cx| view.retrieve_selected_value(cx));
             });
         });
         window.run_until_parked();
-        if window.update(|_, cx| doc.read(cx).can_edit_value()) {
+        if window.update(|_, cx| doc.read(cx).view().read(cx).can_edit_value()) {
             editable = true;
             break;
         }
     }
     assert!(editable, "the fixtures hold an editable secret");
-    assert!(!window.update(|_, cx| doc.read(cx).is_editing_value()));
+    assert!(!window.update(|_, cx| doc.read(cx).view().read(cx).is_editing_value()));
 
     window.update(|window, cx| {
         workspace.update(cx, |workspace, cx| {
@@ -125,7 +127,7 @@ fn e_opens_the_secret_editor_through_the_workspace_dispatch(cx: &mut TestAppCont
     window.run_until_parked();
 
     assert!(
-        window.update(|_, cx| doc.read(cx).is_editing_value()),
+        window.update(|_, cx| doc.read(cx).view().read(cx).is_editing_value()),
         "the workspace routes `e` to the active secret store"
     );
 }

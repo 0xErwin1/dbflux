@@ -4,7 +4,8 @@
 //! own state refuses (another service manages it, or its deletion is
 //! scheduled) is drawn disabled, with the reason in its tooltip.
 
-use crate::secret_store::{SecretStoreDocument, ValueState};
+use crate::secret_store::ValueState;
+use crate::secret_store::view::SecretView;
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::tokens::{ChromeColors, DocumentMetrics, SecretStoreMetrics};
@@ -13,7 +14,7 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
-impl SecretStoreDocument {
+impl SecretView {
     /// Whether Edit value may be pressed: the secret takes writes, no editor
     /// or dialog is open, and the value is either loaded as text or can be
     /// retrieved first.
@@ -83,85 +84,20 @@ impl SecretStoreDocument {
         }
 
         let refusal = self.write_refusal_reason();
-        let blocked = |button: Button| match &refusal {
-            Some(reason) => button.disabled(true).tooltip(reason.clone()),
-            None => button,
-        };
+        let refusal = refusal.as_deref();
 
-        let mut buttons: Vec<AnyElement> = Vec::new();
-
-        buttons.push(
-            blocked(
-                Button::new(
-                    "secret-action-edit-value",
-                    dbflux_i18n::t!("document.secret_store.edit.open"),
-                )
-                .icon(AppIcon::Pencil)
-                .tab_stop(false)
-                .disabled(!self.can_request_edit_value())
-                .on_click(cx.listener(|this, _, window, cx| this.request_edit_value(window, cx))),
-            )
-            .into_any_element(),
-        );
+        let mut buttons: Vec<AnyElement> = vec![self.edit_value_button(refusal, cx)];
 
         if self.supports_description_edit() && self.description_edit_rewrites_value() {
-            buttons.push(
-                blocked(
-                    Button::new(
-                        "secret-action-edit-description",
-                        dbflux_i18n::t!("document.secret_store.description_edit.button"),
-                    )
-                    .icon(AppIcon::Pencil)
-                    .tab_stop(false)
-                    .disabled(!self.can_edit_description())
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.open_edit_description(window, cx)),
-                    ),
-                )
-                .into_any_element(),
-            );
+            buttons.push(self.edit_description_button(refusal, cx));
         }
 
         if self.supports_rotation() {
-            buttons.push(
-                {
-                    let button = Button::new(
-                        "secret-action-rotate-now",
-                        dbflux_i18n::t!("document.secret_store.rotate.button"),
-                    )
-                    .icon(AppIcon::Zap)
-                    .tab_stop(false)
-                    .disabled(!self.can_rotate_now())
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.rotate_selected_now(window, cx)),
-                    );
-
-                    match self.rotate_now_block_reason() {
-                        Some(reason) => {
-                            crate::secret_store::details::rotate_with_reason(button, reason)
-                        }
-                        None => button,
-                    }
-                }
-                .into_any_element(),
-            );
+            buttons.push(self.rotate_now_button(cx));
         }
 
         if self.supports_delete() {
-            buttons.push(
-                blocked(
-                    Button::new(
-                        "secret-action-delete",
-                        dbflux_i18n::t!("document.secret_store.delete.button"),
-                    )
-                    .danger()
-                    .icon(AppIcon::Delete)
-                    .tab_stop(false)
-                    .disabled(!self.can_delete_selected())
-                    .on_click(cx.listener(|this, _, window, cx| this.open_delete(window, cx))),
-                )
-                .into_any_element(),
-            );
+            buttons.push(self.delete_button(refusal, cx));
         }
 
         let theme = cx.theme();
@@ -180,5 +116,77 @@ impl SecretStoreDocument {
                 .text_color(ChromeColors::strong(theme))
                 .children(buttons),
         )
+    }
+
+    fn edit_value_button(&self, refusal: Option<&str>, cx: &mut Context<Self>) -> AnyElement {
+        blocked(
+            Button::new(
+                "secret-action-edit-value",
+                dbflux_i18n::t!("document.secret_store.edit.open"),
+            )
+            .icon(AppIcon::Pencil)
+            .tab_stop(false)
+            .disabled(!self.can_request_edit_value())
+            .on_click(cx.listener(|this, _, window, cx| this.request_edit_value(window, cx))),
+            refusal,
+        )
+        .into_any_element()
+    }
+
+    fn edit_description_button(&self, refusal: Option<&str>, cx: &mut Context<Self>) -> AnyElement {
+        blocked(
+            Button::new(
+                "secret-action-edit-description",
+                dbflux_i18n::t!("document.secret_store.description_edit.button"),
+            )
+            .icon(AppIcon::Pencil)
+            .tab_stop(false)
+            .disabled(!self.can_edit_description())
+            .on_click(cx.listener(|this, _, window, cx| this.open_edit_description(window, cx))),
+            refusal,
+        )
+        .into_any_element()
+    }
+
+    fn rotate_now_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let button = Button::new(
+            "secret-action-rotate-now",
+            dbflux_i18n::t!("document.secret_store.rotate.button"),
+        )
+        .icon(AppIcon::Zap)
+        .tab_stop(false)
+        .disabled(!self.can_rotate_now())
+        .on_click(cx.listener(|this, _, window, cx| this.rotate_selected_now(window, cx)));
+
+        match self.rotate_now_block_reason() {
+            Some(reason) => crate::secret_store::view::details::rotate_with_reason(button, reason),
+            None => button,
+        }
+        .into_any_element()
+    }
+
+    fn delete_button(&self, refusal: Option<&str>, cx: &mut Context<Self>) -> AnyElement {
+        blocked(
+            Button::new(
+                "secret-action-delete",
+                dbflux_i18n::t!("document.secret_store.delete.button"),
+            )
+            .danger()
+            .icon(AppIcon::Delete)
+            .tab_stop(false)
+            .disabled(!self.can_delete_selected())
+            .on_click(cx.listener(|this, _, window, cx| this.open_delete(window, cx))),
+            refusal,
+        )
+        .into_any_element()
+    }
+}
+
+/// A button the secret's own state refuses, disabled with the reason as its
+/// tooltip.
+fn blocked(button: Button, refusal: Option<&str>) -> Button {
+    match refusal {
+        Some(reason) => button.disabled(true).tooltip(reason.to_string()),
+        None => button,
     }
 }

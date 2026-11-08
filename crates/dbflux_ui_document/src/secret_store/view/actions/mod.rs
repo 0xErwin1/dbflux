@@ -1,11 +1,12 @@
 //! The write actions of the details pane and the row menu: roll back,
-//! delete and restore, rotate, edit tags and description, and create.
+//! delete and restore, rotate, edit tags and description, and the write half
+//! of create.
 //!
-//! Every action runs through the governed write seam (`super::write`): the
-//! document never calls the store itself. An action that needs the user's
-//! input opens a dialog (`WriteDialog`) over the document; the dialog's
+//! Every action runs through the governed write seam
+//! (`crate::secret_store::write`): the view never calls the store itself. An action that needs the user's
+//! input opens a dialog (`WriteDialog`) over the host; the dialog's
 //! confirm button builds the request, hands it to
-//! [`SecretStoreDocument::run_governed_write`] on the background executor and
+//! [`SecretView::run_governed_write`] on the background executor and
 //! lands the answer here. A refusal or a failure is reported once, through
 //! the same pieces the value editor reports a refused save with, and keeps
 //! the dialog open; a write that landed closes it and refreshes what the
@@ -23,11 +24,11 @@ mod rotation;
 mod tags;
 
 use super::editor::write_failure_to_user_facing;
-use super::write::{
+use super::{DetailsState, SecretView, SecretViewEvent};
+use crate::secret_store::write::{
     SecretOperation, SecretWriteFailure, SecretWriteFailureKind, WriteContext, WriteTarget,
     store_unavailable_failure,
 };
-use super::{DetailsState, SecretRowKey, SecretStoreDocument};
 use dbflux_audit::AuditService;
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
@@ -44,38 +45,43 @@ use gpui::*;
 use std::sync::Arc;
 use uuid::Uuid;
 
-pub(super) use create::CreateDialog;
-pub(super) use delete::{DeleteDialog, DeleteKind};
-pub(super) use description::DescriptionDialog;
-pub(super) use rollback::RollBackDialog;
-pub(super) use rotation::{RotateNowDialog, RotationDialog, RotationNotice};
-pub(super) use tags::TagsDialog;
+pub(in crate::secret_store) use delete::DeleteDialog;
+#[cfg(test)]
+pub(in crate::secret_store) use delete::DeleteKind;
+pub(in crate::secret_store) use description::DescriptionDialog;
+pub(in crate::secret_store) use rollback::RollBackDialog;
+pub(in crate::secret_store) use rotation::{RotateNowDialog, RotationDialog, RotationNotice};
+pub(in crate::secret_store) use tags::TagsDialog;
+pub(in crate::secret_store) use tags::{TagRow, new_tag_row};
 
-/// The dialog open over the document, if any. Only one is ever open: a
+/// The dialog open over the host, if any. Only one is ever open: a
 /// dialog is modal, and opening another waits for it to close.
-pub(super) enum WriteDialog {
+pub(in crate::secret_store) enum WriteDialog {
     RollBack(RollBackDialog),
     Delete(DeleteDialog),
     Rotation(RotationDialog),
     RotateNow(RotateNowDialog),
     Tags(TagsDialog),
     Description(DescriptionDialog),
-    Create(CreateDialog),
+    /// The host's New secret dialog: its fields belong to the host, the
+    /// view only holds the slot so that one dialog is open at a time and the
+    /// write waits for its landing.
+    Create,
 }
 
 /// What an open dialog was opened on: the connection session and the row. A
 /// confirm that finds either changed writes nothing, so a dialog can never
 /// land on a session or a secret other than the ones it was opened on.
-pub(super) struct DialogPin {
+pub(in crate::secret_store) struct DialogPin {
     connection: Option<Arc<dyn Connection>>,
-    selected: Option<SecretRowKey>,
+    selected: Option<String>,
 }
 
-/// Everything a governed write takes from the document, captured on the
+/// Everything a governed write takes from the view, captured on the
 /// foreground so the write itself can run on the background executor: the
 /// connection session, the connection's resolved mutation policy and the
 /// audit service.
-pub(super) struct WriteSession {
+pub(in crate::secret_store) struct WriteSession {
     connection: Arc<dyn Connection>,
     policy: MutationPolicy,
     read_only_reason: Option<ReadOnlyReason>,
@@ -86,8 +92,8 @@ pub(super) struct WriteSession {
     profile_id: Uuid,
 }
 
-/// How a governed write ended, as the document lands it.
-pub(super) enum Landing<T> {
+/// How a governed write ended, as the view lands it.
+pub(in crate::secret_store) enum Landing<T> {
     /// The store accepted the write and its audit event was recorded.
     Done(T),
 
@@ -103,7 +109,7 @@ pub(super) enum Landing<T> {
 }
 
 impl<T> Landing<T> {
-    pub(super) fn of(result: Result<T, SecretWriteFailure>) -> Self {
+    pub(in crate::secret_store) fn of(result: Result<T, SecretWriteFailure>) -> Self {
         match result {
             Ok(value) => Self::Done(value),
             Err(failure) => match failure.kind {
@@ -118,9 +124,9 @@ impl<T> Landing<T> {
     }
 }
 
-/// What a landed write changed, which decides what the document reloads.
+/// What a landed write changed, which decides what the view reloads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum WriteEffect {
+pub(in crate::secret_store) enum WriteEffect {
     /// The versions of the secret: the shown value is stale.
     Versions,
 
@@ -131,16 +137,26 @@ pub(super) enum WriteEffect {
     Removed,
 }
 
-impl SecretStoreDocument {
-    /// Whether a write dialog is open over the document.
+impl SecretView {
+    /// Whether a write dialog is open over the host.
     pub fn dialog_is_open(&self) -> bool {
         self.dialog.is_some()
+    }
+
+    /// Whether a governed write is in flight.
+    pub fn write_in_flight(&self) -> bool {
+        self.write_in_flight
+    }
+
+    /// The focus handle a dialog holds the keyboard with.
+    pub(in crate::secret_store) fn dialog_focus_handle(&self) -> &FocusHandle {
+        self.dialog_focus.handle()
     }
 
     /// The refusal the secret's own state imposes on every write: another
     /// service manages it, or its deletion is scheduled. The listing and the
     /// freshest describe agree on both.
-    pub(super) fn write_refusal_reason(&self) -> Option<String> {
+    pub(in crate::secret_store) fn write_refusal_reason(&self) -> Option<String> {
         let summary = self.selected_summary()?;
 
         let described = match &self.details {
@@ -169,22 +185,29 @@ impl SecretStoreDocument {
     }
 
     /// Whether the store advertises every capability of a write action.
-    pub(super) fn store_allows(&self, required: SecretStoreCapabilities) -> bool {
+    pub(in crate::secret_store) fn store_allows(&self, required: SecretStoreCapabilities) -> bool {
         self.store.supports(required)
     }
 
-    /// Reports a write the document will not start, as a decision of the
+    /// Reports a write the view will not start, as a decision of the
     /// kind the editor reports a refused save with.
-    pub(super) fn report_write_warning(&self, reason: String, cx: &mut Context<Self>) {
+    pub(in crate::secret_store) fn report_write_warning(
+        &self,
+        reason: String,
+        cx: &mut Context<Self>,
+    ) {
         report_error(
             UserFacingError::new(ErrorKind::User, reason).with_severity(EventSeverity::Warn),
             cx,
         );
     }
 
-    /// Captures what a governed write needs from the document. A connection
+    /// Captures what a governed write needs from the view. A connection
     /// that is gone is reported, as a save without one is.
-    pub(super) fn write_session(&mut self, cx: &mut Context<Self>) -> Option<WriteSession> {
+    pub(in crate::secret_store) fn write_session(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<WriteSession> {
         if self.region_switch_blocks_writes(cx) || self.editor_save_blocks_writes(cx) {
             return None;
         }
@@ -221,7 +244,7 @@ impl SecretStoreDocument {
     /// synchronous — and lands its answer on the foreground through `land`.
     /// `operation` and `name` say what the write is, for the audit row of a
     /// write whose connection turns out to have no such store.
-    pub(super) fn run_governed_write<T: Send + 'static>(
+    pub(in crate::secret_store) fn run_governed_write<T: Send + 'static>(
         &mut self,
         session: WriteSession,
         operation: SecretOperation,
@@ -286,19 +309,19 @@ impl SecretStoreDocument {
             let result = task.await;
 
             cx.update(|cx| {
-                entity.update(cx, |doc, cx| {
-                    doc.write_in_flight = false;
+                entity.update(cx, |view, cx| {
+                    view.write_in_flight = false;
 
-                    // The document describes the live session; a write that
+                    // The view describes the live session; a write that
                     // finished on another one changes none of it.
-                    let same_session = doc
+                    let same_session = view
                         .connection(cx)
                         .is_some_and(|live| Arc::ptr_eq(&live, &captured));
 
                     if same_session {
-                        land(doc, result, cx);
+                        land(view, result, cx);
                     } else {
-                        doc.land_on_replaced_session(result, cx);
+                        view.land_on_replaced_session(result, cx);
                     }
                 });
             });
@@ -308,7 +331,7 @@ impl SecretStoreDocument {
 
     /// Reports the outcome of a write that finished after the connection was
     /// replaced. The write happened (or failed) on the previous session, so
-    /// the document is not touched beyond closing its dialog.
+    /// the view is not touched beyond closing its dialog.
     fn land_on_replaced_session<T>(&mut self, landing: Landing<T>, cx: &mut Context<Self>) {
         self.dismiss_dialog(cx);
 
@@ -324,7 +347,7 @@ impl SecretStoreDocument {
     }
 
     /// Whether the details of the selection were read from the live session.
-    pub(super) fn details_session_is_live(&self, cx: &Context<Self>) -> bool {
+    pub(in crate::secret_store) fn details_session_is_live(&self, cx: &Context<Self>) -> bool {
         match (&self.details_session, self.connection(cx)) {
             (Some(loaded), Some(live)) => Arc::ptr_eq(loaded, &live),
             _ => false,
@@ -333,19 +356,22 @@ impl SecretStoreDocument {
 
     /// Reads the selected secret again from the live session: its details,
     /// its history and its listing row.
-    pub(super) fn refresh_selection_for_session(&mut self, cx: &mut Context<Self>) {
-        let Some(SecretRowKey::Secret(name)) = self.selected.clone() else {
+    pub(in crate::secret_store) fn refresh_selection_for_session(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(name) = self.name.clone() else {
             return;
         };
 
         self.describe(name.clone(), cx);
-        self.request_versions(name, super::HistoryLoad::Automatic, cx);
-        self.reload_listing_in_place(cx);
+        self.request_versions(name, crate::secret_store::HistoryLoad::Automatic, cx);
+        cx.emit(SecretViewEvent::ReloadListing);
     }
 
     /// After a reconnect that kept the region, the selection still describes
     /// the previous session: read it again without waiting for the user.
-    pub(super) fn adopt_details_session(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::secret_store) fn adopt_details_session(&mut self, cx: &mut Context<Self>) {
         // Details first requested with no connection leave no session at
         // all, which is as stale as one from a replaced connection.
         let stale = self.connection(cx).is_some() && !self.details_session_is_live(cx);
@@ -354,10 +380,10 @@ impl SecretStoreDocument {
         // (`adopt_connection_session`); only the details and the row are left.
         if stale
             && !self.write_in_flight
-            && let Some(SecretRowKey::Secret(name)) = self.selected.clone()
+            && let Some(name) = self.name.clone()
         {
             self.describe(name, cx);
-            self.reload_listing_in_place(cx);
+            cx.emit(SecretViewEvent::ReloadListing);
         }
     }
 
@@ -375,7 +401,7 @@ impl SecretStoreDocument {
     }
 
     /// Reports a failure the seam already audited, once.
-    pub(super) fn report_write_failure(
+    pub(in crate::secret_store) fn report_write_failure(
         &self,
         failure: &SecretWriteFailure,
         cx: &mut Context<Self>,
@@ -386,7 +412,7 @@ impl SecretStoreDocument {
     }
 
     /// Tells the user a write landed.
-    pub(super) fn toast_written(&self, message: String, cx: &mut Context<Self>) {
+    pub(in crate::secret_store) fn toast_written(&self, message: String, cx: &mut Context<Self>) {
         Toast::success(message).meta_right(now_hms()).push(cx);
     }
 
@@ -394,33 +420,37 @@ impl SecretStoreDocument {
     /// the secret are read again when it is still the selection, and the
     /// listing is reloaded in place so a row's rotation, description or
     /// deletion date follows the store.
-    pub(super) fn refresh_after_write(
+    pub(in crate::secret_store) fn refresh_after_write(
         &mut self,
         name: &str,
         effect: WriteEffect,
         cx: &mut Context<Self>,
     ) {
         if effect == WriteEffect::Removed {
-            self.forget_removed_secret(name);
-        } else if self.selected == Some(SecretRowKey::Secret(name.to_string())) {
+            self.forget_removed_secret(name, cx);
+        } else if self.is_for(name) {
             if effect == WriteEffect::Versions {
                 self.clear_value();
             }
 
             self.describe(name.to_string(), cx);
-            self.request_versions(name.to_string(), super::HistoryLoad::Automatic, cx);
+            self.request_versions(
+                name.to_string(),
+                crate::secret_store::HistoryLoad::Automatic,
+                cx,
+            );
         }
 
-        self.reload_listing_in_place(cx);
+        cx.emit(SecretViewEvent::ReloadListing);
         cx.notify();
     }
 
     // -- Dialog plumbing --------------------------------------------------
 
-    /// Opens `dialog` over the document and moves focus into it. `focus` is
+    /// Opens `dialog` over the host and moves focus into it. `focus` is
     /// the control that should hold the keyboard first, if the dialog has
     /// one.
-    pub(super) fn open_dialog(
+    pub(in crate::secret_store) fn open_dialog(
         &mut self,
         dialog: WriteDialog,
         focus: Option<FocusHandle>,
@@ -434,7 +464,7 @@ impl SecretStoreDocument {
         // A dialog about an existing secret needs details read from the live
         // session: after a reconnect they describe another account's secret
         // of the same name.
-        if !matches!(dialog, WriteDialog::Create(_)) && !self.details_session_is_live(cx) {
+        if !matches!(dialog, WriteDialog::Create) && !self.details_session_is_live(cx) {
             self.report_write_warning(
                 dbflux_i18n::t!("document.secret_store.write.details_stale"),
                 cx,
@@ -443,10 +473,10 @@ impl SecretStoreDocument {
             return;
         }
 
-        self.drop_context_menu();
+        cx.emit(SecretViewEvent::DialogOpened);
         self.dialog_pin = Some(DialogPin {
             connection: self.connection(cx),
-            selected: self.selected.clone(),
+            selected: self.name.clone(),
         });
         self.dialog = Some(dialog);
         self.dialog_focus.focus(focus.as_ref(), window, cx);
@@ -464,30 +494,34 @@ impl SecretStoreDocument {
 
     /// Drops the dialog whether or not a write is in flight: the landing of
     /// a write that already left must still close what it belongs to.
-    pub(super) fn dismiss_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::secret_store) fn dismiss_dialog(&mut self, cx: &mut Context<Self>) {
         self.dialog_pin = None;
 
         if self.dialog.take().is_some() {
             self.dialog_focus.restore(cx);
+            cx.emit(SecretViewEvent::DialogClosed);
             cx.notify();
         }
     }
 
     /// Whether the open dialog's write is in flight.
-    pub(super) fn dialog_is_submitting(&self) -> bool {
+    pub(in crate::secret_store) fn dialog_is_submitting(&self) -> bool {
         self.dialog.is_some() && self.write_in_flight
     }
 
     /// Closes the open dialog because the selection or the listing is moving
     /// on, even while a write is in flight: its landing still reports.
-    pub(super) fn close_dialog_for_navigation(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::secret_store) fn close_dialog_for_navigation(&mut self, cx: &mut Context<Self>) {
         self.dismiss_dialog(cx);
     }
 
     /// A region switch is reconnecting, so the session a write would land on
     /// is about to be replaced: nothing starts, and the user is told why.
-    pub(super) fn region_switch_blocks_writes(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.region_switch_in_flight {
+    pub(in crate::secret_store) fn region_switch_blocks_writes(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.region_switching.get() {
             return false;
         }
 
@@ -500,7 +534,10 @@ impl SecretStoreDocument {
 
     /// Closes the open dialog when the connection it was opened on is no
     /// longer the live one, without waiting for a confirm.
-    pub(super) fn close_dialog_if_session_replaced(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::secret_store) fn close_dialog_if_session_replaced(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
         let replaced = match (&self.dialog_pin, self.connection(cx)) {
             (
                 Some(DialogPin {
@@ -539,7 +576,7 @@ impl SecretStoreDocument {
         };
         // Creating names no existing secret, so the selection does not matter.
         let same_row =
-            matches!(self.dialog, Some(WriteDialog::Create(_))) || pin.selected == self.selected;
+            matches!(self.dialog, Some(WriteDialog::Create)) || pin.selected == self.name;
 
         if same_session && same_row {
             return true;
@@ -555,9 +592,12 @@ impl SecretStoreDocument {
 
     /// Confirms the open dialog: the one primary action of whichever dialog
     /// is up, as its button and Enter both run it.
-    pub fn confirm_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    ///
+    /// Returns whether the confirmed dialog is the host's own (New secret),
+    /// which the host sends itself; every other dialog is sent from here.
+    pub fn confirm_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.dialog_is_submitting() || !self.dialog_pin_holds(cx) {
-            return;
+            return false;
         }
 
         match &self.dialog {
@@ -567,28 +607,51 @@ impl SecretStoreDocument {
             Some(WriteDialog::RotateNow(_)) => self.submit_rotate_now(window, cx),
             Some(WriteDialog::Tags(_)) => self.submit_tags(window, cx),
             Some(WriteDialog::Description(_)) => self.submit_description(window, cx),
-            Some(WriteDialog::Create(_)) => self.submit_create(window, cx),
+            Some(WriteDialog::Create) => return true,
             None => {}
         }
+
+        false
     }
 
-    pub(super) fn render_write_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(in crate::secret_store) fn render_write_dialog(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let dialog = self.dialog.as_ref()?;
 
         Some(match dialog {
+            WriteDialog::Create => return None,
             WriteDialog::RollBack(dialog) => self.render_roll_back_dialog(dialog, cx),
             WriteDialog::Delete(dialog) => self.render_delete_dialog(dialog, cx),
             WriteDialog::Rotation(dialog) => self.render_rotation_dialog(dialog, cx),
             WriteDialog::RotateNow(dialog) => self.render_rotate_now_dialog(dialog, cx),
             WriteDialog::Tags(dialog) => self.render_tags_dialog(dialog, cx),
             WriteDialog::Description(dialog) => self.render_description_dialog(dialog, cx),
-            WriteDialog::Create(dialog) => self.render_create_dialog(dialog, cx),
         })
     }
 }
 
+/// What a dialog's modal and footer call back into: the entity that owns
+/// the dialog, the view for its own dialogs and a host for the one it draws
+/// itself.
+pub(in crate::secret_store) trait DialogHost: Sized + 'static {
+    fn close_dialog_from_modal(&mut self, cx: &mut Context<Self>);
+    fn confirm_dialog_from_modal(&mut self, window: &mut Window, cx: &mut Context<Self>);
+}
+
+impl DialogHost for SecretView {
+    fn close_dialog_from_modal(&mut self, cx: &mut Context<Self>) {
+        self.close_dialog(cx);
+    }
+
+    fn confirm_dialog_from_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.confirm_dialog(window, cx);
+    }
+}
+
 /// The chrome every write dialog shares.
-pub(super) struct DialogShell {
+pub(in crate::secret_store) struct DialogShell {
     /// Element id of the backdrop.
     pub id: &'static str,
     pub title: String,
@@ -601,12 +664,12 @@ pub(super) struct DialogShell {
 
 /// One dialog in its `Modal`: Escape and the close button cancel it, Enter
 /// confirms it while the confirm button is enabled.
-pub(super) fn dialog_modal(
+pub(in crate::secret_store) fn dialog_modal<H: DialogHost>(
     shell: DialogShell,
     body: impl IntoElement,
     footer: impl IntoElement,
     focus: &FocusHandle,
-    cx: &mut Context<SecretStoreDocument>,
+    cx: &mut Context<H>,
 ) -> AnyElement {
     let entity = cx.entity().downgrade();
 
@@ -625,13 +688,13 @@ pub(super) fn dialog_modal(
             let entity = entity.clone();
             move |_, cx| {
                 entity
-                    .update(cx, |this, cx| this.close_dialog(cx))
+                    .update(cx, |this, cx| this.close_dialog_from_modal(cx))
                     .log_err();
             }
         })
         .on_confirm(move |window, cx| {
             entity
-                .update(cx, |this, cx| this.confirm_dialog(window, cx))
+                .update(cx, |this, cx| this.confirm_dialog_from_modal(window, cx))
                 .log_err();
         })
         .confirm_enabled(shell.confirm_enabled)
@@ -639,7 +702,7 @@ pub(super) fn dialog_modal(
 }
 
 /// What a dialog's footer draws.
-pub(super) struct FooterSpec {
+pub(in crate::secret_store) struct FooterSpec {
     pub cancel_id: &'static str,
     pub confirm_id: &'static str,
     pub confirm_label: String,
@@ -657,7 +720,10 @@ pub(super) struct FooterSpec {
 
 /// The Cancel and primary buttons of a dialog. Cancel sits out while a write
 /// is in flight, and the primary button until the request can be sent.
-pub(super) fn dialog_footer(spec: FooterSpec, cx: &mut Context<SecretStoreDocument>) -> Div {
+pub(in crate::secret_store) fn dialog_footer<H: DialogHost>(
+    spec: FooterSpec,
+    cx: &mut Context<H>,
+) -> Div {
     let confirm = Button::new(spec.confirm_id, spec.confirm_label)
         .icon(if spec.submitting {
             AppIcon::Loader
@@ -665,7 +731,7 @@ pub(super) fn dialog_footer(spec: FooterSpec, cx: &mut Context<SecretStoreDocume
             spec.confirm_icon
         })
         .disabled(!spec.enabled || spec.submitting)
-        .on_click(cx.listener(|this, _, window, cx| this.confirm_dialog(window, cx)));
+        .on_click(cx.listener(|this, _, window, cx| this.confirm_dialog_from_modal(window, cx)));
 
     div()
         .flex()
@@ -677,7 +743,7 @@ pub(super) fn dialog_footer(spec: FooterSpec, cx: &mut Context<SecretStoreDocume
                 dbflux_i18n::t!("document.secret_store.dialog.cancel"),
             )
             .disabled(spec.submitting)
-            .on_click(cx.listener(|this, _, _, cx| this.close_dialog(cx))),
+            .on_click(cx.listener(|this, _, _, cx| this.close_dialog_from_modal(cx))),
         )
         .child(if spec.danger {
             confirm.danger()

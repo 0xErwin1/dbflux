@@ -152,7 +152,7 @@ impl SecretStoreDocument {
     /// stores and the selected region untouched.
     pub fn switch_region(&mut self, region: String, cx: &mut Context<Self>) {
         if !self.region_switchable
-            || self.region_switch_in_flight
+            || self.region_switch_in_flight.get()
             || self.region.as_deref() == Some(region.as_str())
         {
             return;
@@ -170,7 +170,7 @@ impl SecretStoreDocument {
             }
         };
 
-        self.region_switch_in_flight = true;
+        self.region_switch_in_flight.set(true);
         cx.notify();
 
         let entity = cx.entity().clone();
@@ -193,7 +193,7 @@ impl SecretStoreDocument {
         result: Result<SwitchRegionResult, String>,
         cx: &mut Context<Self>,
     ) {
-        self.region_switch_in_flight = false;
+        self.region_switch_in_flight.set(false);
 
         match result {
             Ok(switch) => {

@@ -11,11 +11,10 @@
 //! "Open in tab" waits for a per-secret document target: the value pane is
 //! deliberately scoped to this tab.
 
-use super::{DetailsState, SecretRowKey, SecretStoreDocument, copied_toast};
+use super::{SecretRowKey, SecretStoreDocument};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::composites::{MenuItem, render_menu_container, render_menu_item};
 use dbflux_components::icons::AppIcon;
-use dbflux_core::chrono::{DateTime, Local, Utc};
 use gpui::*;
 
 /// One open menu: the row it acts on, where it opened, its entries and the
@@ -77,14 +76,9 @@ impl SecretMenuAction {
     }
 }
 
-/// A deletion date the way the listing's badge spells it.
-fn short_date(date: DateTime<Utc>) -> String {
-    date.with_timezone(&Local).format("%Y-%m-%d").to_string()
-}
-
 /// The hint a menu row shows, formatted like the other keycaps in the app,
 /// resolved from the effective keymap the way the data table's rows do it.
-fn menu_shortcut(command: Command) -> Option<SharedString> {
+pub(super) fn menu_shortcut(command: Command) -> Option<SharedString> {
     dbflux_ui_base::keymap::effective_keymap()
         .chord_for_command(ContextId::Results, command)
         .map(|chord| {
@@ -95,7 +89,7 @@ fn menu_shortcut(command: Command) -> Option<SharedString> {
 }
 
 impl SecretMenuItem {
-    fn new(action: SecretMenuAction, label: SharedString, icon: AppIcon) -> Self {
+    pub(super) fn new(action: SecretMenuAction, label: SharedString, icon: AppIcon) -> Self {
         Self {
             action,
             label,
@@ -107,17 +101,17 @@ impl SecretMenuItem {
         }
     }
 
-    fn danger(mut self) -> Self {
+    pub(super) fn danger(mut self) -> Self {
         self.danger = true;
         self
     }
 
-    fn with_shortcut(mut self, command: Command) -> Self {
+    pub(super) fn with_shortcut(mut self, command: Command) -> Self {
         self.shortcut = menu_shortcut(command);
         self
     }
 
-    fn disabled_with_reason(mut self, reason: SharedString) -> Self {
+    pub(super) fn disabled_with_reason(mut self, reason: SharedString) -> Self {
         self.disabled = true;
         self.detail = Some(reason);
         self
@@ -128,101 +122,9 @@ impl SecretStoreDocument {
     /// The entries of the menu for `target`. Parameter rows (the entries of
     /// a hierarchical store) offer no ARN item: their entries carry no
     /// resource identifier the document copies.
-    pub(super) fn build_menu_items(&self, target: &SecretRowKey) -> Vec<SecretMenuItem> {
+    pub(super) fn build_menu_items(&self, target: &SecretRowKey, cx: &App) -> Vec<SecretMenuItem> {
         match target {
-            SecretRowKey::Secret(name) => {
-                let mut items = vec![
-                    self.retrieve_item(name),
-                    SecretMenuItem::new(
-                        SecretMenuAction::CopyName,
-                        dbflux_i18n::t!("document.secret_store.context_menu.copy_name").into(),
-                        AppIcon::Copy,
-                    ),
-                ];
-
-                if !self.hierarchical() {
-                    items.push(self.copy_arn_item());
-                }
-
-                // The design's Edit value entry: offered for a value that
-                // can be edited, dispatching to the editor the details pane
-                // already opens. The menu is built from the selected row's
-                // state, which is the state the editor opens on.
-                if self.can_edit_value() {
-                    items.push(
-                        SecretMenuItem::new(
-                            SecretMenuAction::EditValue,
-                            dbflux_i18n::t!("document.secret_store.edit.open").into(),
-                            AppIcon::Pencil,
-                        )
-                        .with_shortcut(Command::EditValue),
-                    );
-                }
-
-                // Rotate now starts a rotation of a secret that rotates.
-                if self.supports_rotation() {
-                    let rotate = SecretMenuItem::new(
-                        SecretMenuAction::RotateNow,
-                        dbflux_i18n::t!("document.secret_store.rotate.button").into(),
-                        AppIcon::Zap,
-                    );
-
-                    items.push(match self.rotate_now_block_reason() {
-                        Some(reason) => rotate.disabled_with_reason(reason.into()),
-                        None => self.write_item(rotate, self.can_rotate_now(), true),
-                    });
-                }
-
-                // Edit tags opens the dialog the Tags section's button opens.
-                if self.supports_tags() {
-                    items.push(self.write_item(
-                        SecretMenuItem::new(
-                            SecretMenuAction::EditTags,
-                            dbflux_i18n::t!("document.secret_store.tags_edit.button").into(),
-                            AppIcon::Tag,
-                        ),
-                        self.can_edit_tags(),
-                        true,
-                    ));
-                }
-
-                // Restore cancels a scheduled deletion; Delete schedules or
-                // makes one. Each is drawn disabled, with the reason, when
-                // the secret's own state refuses it.
-                if self.supports_restore()
-                    && self
-                        .selected_summary()
-                        .is_some_and(|summary| summary.is_pending_deletion())
-                {
-                    items.push(self.write_item(
-                        SecretMenuItem::new(
-                            SecretMenuAction::Restore,
-                            dbflux_i18n::t!("document.secret_store.restore.button").into(),
-                            AppIcon::RotateCcw,
-                        ),
-                        self.can_restore_selected(),
-                        false,
-                    ));
-                }
-
-                if self.supports_delete() {
-                    items.push(
-                        self.write_item(
-                            SecretMenuItem::new(
-                                SecretMenuAction::Delete,
-                                dbflux_i18n::t!("document.secret_store.delete.button").into(),
-                                AppIcon::Delete,
-                            )
-                            .danger()
-                            .with_shortcut(Command::Delete),
-                            self.can_delete_selected(),
-                            true,
-                        ),
-                    );
-                }
-
-                items
-            }
+            SecretRowKey::Secret(name) => self.view.read(cx).secret_menu_items(name),
             SecretRowKey::Path(_) => vec![
                 SecretMenuItem::new(
                     SecretMenuAction::CopyPath,
@@ -238,107 +140,6 @@ impl SecretStoreDocument {
             ],
             SecretRowKey::LoadMore => Vec::new(),
         }
-    }
-
-    /// A write entry: enabled when `allowed`; otherwise disabled with the
-    /// reason the secret's own state gives, when it has one. `refuse_state`
-    /// asks for that reason (a restore is for a secret whose deletion is
-    /// scheduled, so that state is no reason to refuse it).
-    fn write_item(
-        &self,
-        item: SecretMenuItem,
-        allowed: bool,
-        refuse_state: bool,
-    ) -> SecretMenuItem {
-        if allowed {
-            return item;
-        }
-
-        match refuse_state.then(|| self.write_refusal_reason()).flatten() {
-            Some(reason) => item.disabled_with_reason(reason.into()),
-            None => SecretMenuItem {
-                disabled: true,
-                ..item
-            },
-        }
-    }
-
-    fn retrieve_item(&self, name: &str) -> SecretMenuItem {
-        let deletion_date = self
-            .listing
-            .find(name)
-            .and_then(|summary| summary.deletion_scheduled_for);
-
-        // A scheduled deletion keeps the value unreachable: the retrieval is
-        // already blocked by the document, so the entry says why instead of
-        // running into that block.
-        let (detail, disabled) = match deletion_date {
-            Some(date) => (
-                Some(
-                    dbflux_i18n::t!(
-                        "document.secret_store.value.deletion_scheduled",
-                        date = short_date(date)
-                    )
-                    .into(),
-                ),
-                true,
-            ),
-            None => (None, !self.can_retrieve_value()),
-        };
-
-        SecretMenuItem {
-            action: SecretMenuAction::RetrieveValue,
-            label: dbflux_i18n::t!("document.secret_store.value.retrieve").into(),
-            icon: AppIcon::Eye,
-            shortcut: menu_shortcut(Command::ToggleValuePanel),
-            detail,
-            disabled,
-            danger: false,
-        }
-    }
-
-    /// Why the resource identifier cannot be copied now: still arriving,
-    /// failed to load, or not reported by the store.
-    pub(super) fn resource_id_unavailable_reason(&self) -> String {
-        match &self.details {
-            DetailsState::Loaded(_) => {
-                dbflux_i18n::t!("document.secret_store.context_menu.arn_missing")
-            }
-            DetailsState::Failed(error) => dbflux_i18n::t!(
-                "document.secret_store.context_menu.arn_failed",
-                error = error.as_str()
-            ),
-            _ => dbflux_i18n::t!("document.secret_store.context_menu.arn_loading"),
-        }
-        .to_string()
-    }
-
-    /// Copy ARN is only meaningful once the describe delivered the resource
-    /// identifier. Until then it stays disabled and names what is missing —
-    /// an identifier still arriving is not the same as a describe that
-    /// failed, and a failure is said the way the value section says its own.
-    fn copy_arn_item(&self) -> SecretMenuItem {
-        let known = matches!(
-            &self.details,
-            DetailsState::Loaded(details) if details.resource_id.is_some()
-        );
-
-        if known {
-            return SecretMenuItem::new(
-                SecretMenuAction::CopyArn,
-                dbflux_i18n::t!("document.secret_store.action.copy_resource_id").into(),
-                AppIcon::Copy,
-            );
-        }
-
-        let reason: SharedString = self.resource_id_unavailable_reason().into();
-
-        SecretMenuItem::new(
-            SecretMenuAction::CopyArn,
-            dbflux_i18n::t!("document.secret_store.action.copy_resource_id").into(),
-            AppIcon::Copy,
-        )
-        .disabled_with_reason(reason)
     }
 
     /// Opens the menu for the right-clicked row. The row is selected first,
@@ -361,7 +162,7 @@ impl SecretStoreDocument {
 
         self.select_row(row.clone(), cx);
 
-        let items = self.build_menu_items(&row);
+        let items = self.build_menu_items(&row, cx);
 
         if items.is_empty() {
             return;
@@ -480,37 +281,45 @@ impl SecretStoreDocument {
             // refuses (unsaved edits, a stale selection) opens nothing, and
             // then the document gets the keyboard back like any other entry.
             SecretMenuAction::EditValue => {
-                self.start_value_edit(window, cx);
+                self.view
+                    .update(cx, |view, cx| view.start_value_edit(window, cx));
 
-                if self.is_editing_value() {
+                if self.view.read(cx).is_editing_value() {
                     return;
                 }
             }
             SecretMenuAction::Delete => {
-                self.open_delete(window, cx);
+                self.view
+                    .update(cx, |view, cx| view.open_delete(window, cx));
 
-                if self.dialog_is_open() {
+                if self.view.read(cx).dialog_is_open() {
                     return;
                 }
             }
             SecretMenuAction::RotateNow => {
-                self.rotate_selected_now(window, cx);
+                self.view
+                    .update(cx, |view, cx| view.rotate_selected_now(window, cx));
 
-                if self.dialog_is_open() {
+                if self.view.read(cx).dialog_is_open() {
                     return;
                 }
             }
             SecretMenuAction::EditTags => {
-                self.open_edit_tags(window, cx);
+                self.view
+                    .update(cx, |view, cx| view.open_edit_tags(window, cx));
 
-                if self.dialog_is_open() {
+                if self.view.read(cx).dialog_is_open() {
                     return;
                 }
             }
-            SecretMenuAction::Restore => self.restore_selected(cx),
-            SecretMenuAction::RetrieveValue => self.retrieve_selected_value(cx),
-            SecretMenuAction::CopyName => self.copy_selected_name(cx),
-            SecretMenuAction::CopyArn => self.copy_resource_id(cx),
+            SecretMenuAction::Restore => self.view.update(cx, |view, cx| view.restore_selected(cx)),
+            SecretMenuAction::RetrieveValue => self
+                .view
+                .update(cx, |view, cx| view.retrieve_selected_value(cx)),
+            SecretMenuAction::CopyName => {
+                self.view.update(cx, |view, cx| view.copy_selected_name(cx))
+            }
+            SecretMenuAction::CopyArn => self.view.update(cx, |view, cx| view.copy_resource_id(cx)),
             SecretMenuAction::CopyPath => self.copy_selected_path(cx),
             SecretMenuAction::Refresh => self.refresh(cx),
         }

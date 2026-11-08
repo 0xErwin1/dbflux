@@ -9,21 +9,17 @@
 //! already holds is refused before anything is sent, and a name the listing
 //! does not show is refused by the store, never overwritten.
 
-use super::tags::TagRow;
-use super::{
-    DialogShell, FooterSpec, Landing, WriteDialog, WriteEffect, dialog_footer, dialog_modal,
+use crate::secret_store::view::{
+    DialogHost, DialogShell, FooterSpec, TagRow, WriteDialog, WriteEffect, dialog_footer,
+    dialog_modal, new_tag_row,
 };
-use crate::secret_store::SecretOperation;
-use crate::secret_store::write::create_secret;
 use crate::secret_store::{SecretRowKey, SecretStoreDocument};
 use dbflux_components::controls::{Button, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::parts::modal_field;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::{ModalMetrics, Spacing};
-use dbflux_core::{
-    MAX_TAGS, SecretCreateChoices, SecretCreateRequest, SecretCreated, SecretStoreCapabilities,
-};
+use dbflux_core::{MAX_TAGS, SecretCreateChoices, SecretCreateRequest, SecretStoreCapabilities};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -36,7 +32,7 @@ const CREATE_CAPABILITIES: SecretStoreCapabilities =
 /// What the document showed when a create was sent: the level, the filter and
 /// the selection, so its landing can tell that the user moved on.
 #[derive(PartialEq, Eq)]
-struct ListingView {
+pub(super) struct ListingView {
     path: Option<String>,
     path_mode: crate::secret_store::PathMode,
     name_filter: String,
@@ -44,7 +40,7 @@ struct ListingView {
 }
 
 /// The New secret dialog.
-pub(in crate::secret_store) struct CreateDialog {
+pub(super) struct CreateDialog {
     pub(in crate::secret_store) name: Entity<InputState>,
     pub(in crate::secret_store) value: Entity<TextareaState>,
     description: Entity<InputState>,
@@ -141,12 +137,14 @@ impl CreateDialog {
 impl SecretStoreDocument {
     /// Whether the store can create secrets at all.
     pub fn supports_create(&self) -> bool {
-        self.store_allows(CREATE_CAPABILITIES)
+        self.store.supports(CREATE_CAPABILITIES)
     }
 
     /// Whether New may open its dialog now.
-    pub fn can_open_create(&self) -> bool {
-        self.supports_create() && !self.write_in_flight && !self.dialog_is_open()
+    pub fn can_open_create(&self, cx: &App) -> bool {
+        let view = self.view.read(cx);
+
+        self.supports_create() && !view.write_in_flight() && !view.dialog_is_open()
     }
 
     /// Why the dialog cannot send its request yet: a name the listing holds,
@@ -172,7 +170,7 @@ impl SecretStoreDocument {
     /// Opens the New secret dialog. A hierarchical store starts the name at
     /// the path being listed. Nothing is written until it is confirmed.
     pub fn open_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.can_open_create() {
+        if !self.can_open_create(cx) {
             return;
         }
 
@@ -239,33 +237,43 @@ impl SecretStoreDocument {
         let focus = name.read(cx).focus_handle(cx);
         let choices = self.store.create_choices.clone();
 
-        self.open_dialog(
-            WriteDialog::Create(CreateDialog {
-                name,
-                value,
-                description,
-                key,
-                tags: Vec::new(),
-                value_type: choices
-                    .as_ref()
-                    .map(|choices| choices.default_value_type().to_string())
-                    .unwrap_or_default(),
-                tier: choices
-                    .as_ref()
-                    .and_then(|choices| choices.default_tier().map(str::to_string)),
-                choices,
-                touched: false,
-                _subscriptions: subscriptions,
-            }),
-            Some(focus),
-            window,
-            cx,
-        );
+        self.create_dialog = Some(CreateDialog {
+            name,
+            value,
+            description,
+            key,
+            tags: Vec::new(),
+            value_type: choices
+                .as_ref()
+                .map(|choices| choices.default_value_type().to_string())
+                .unwrap_or_default(),
+            tier: choices
+                .as_ref()
+                .and_then(|choices| choices.default_tier().map(str::to_string)),
+            choices,
+            touched: false,
+            _subscriptions: subscriptions,
+        });
+
+        self.view.update(cx, |view, cx| {
+            view.open_dialog(WriteDialog::Create, Some(focus), window, cx)
+        });
+
+        // The view refuses a dialog while a region switch or an editor save
+        // is pending, and the dialog it did not open is not kept.
+        if !self.view.read(cx).dialog_is_open() {
+            self.create_dialog = None;
+        }
+    }
+
+    /// Drops the New secret dialog's fields once the view closed its slot.
+    pub(super) fn drop_create_dialog(&mut self) {
+        self.create_dialog = None;
     }
 
     /// A field of the open dialog changed: its problems are worth showing.
     fn touch_create_dialog(&mut self, cx: &mut Context<Self>) {
-        if let Some(WriteDialog::Create(dialog)) = &mut self.dialog {
+        if let Some(dialog) = &mut self.create_dialog {
             dialog.touched = true;
         }
 
@@ -274,11 +282,11 @@ impl SecretStoreDocument {
 
     /// Picks the value type of the open dialog.
     pub fn set_create_value_type(&mut self, value_type: &str, cx: &mut Context<Self>) {
-        if self.write_in_flight {
+        if self.view.read(cx).write_in_flight() {
             return;
         }
 
-        if let Some(WriteDialog::Create(dialog)) = &mut self.dialog
+        if let Some(dialog) = &mut self.create_dialog
             && let Some(choices) = &dialog.choices
             && let Some(chosen) = choices
                 .value_types()
@@ -293,11 +301,11 @@ impl SecretStoreDocument {
 
     /// Picks the tier of the open dialog.
     pub fn set_create_tier(&mut self, tier: &str, cx: &mut Context<Self>) {
-        if self.write_in_flight {
+        if self.view.read(cx).write_in_flight() {
             return;
         }
 
-        if let Some(WriteDialog::Create(dialog)) = &mut self.dialog
+        if let Some(dialog) = &mut self.create_dialog
             && let Some(choices) = &dialog.choices
             && let Some(chosen) = choices.tiers().iter().find(|known| known.as_str() == tier)
         {
@@ -309,11 +317,11 @@ impl SecretStoreDocument {
 
     /// Adds an empty tag row to the open dialog.
     pub fn add_create_tag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.write_in_flight {
+        if self.view.read(cx).write_in_flight() {
             return;
         }
 
-        let Some(WriteDialog::Create(dialog)) = &self.dialog else {
+        let Some(dialog) = &self.create_dialog else {
             return;
         };
 
@@ -321,10 +329,10 @@ impl SecretStoreDocument {
             return;
         }
 
-        let row = Self::new_tag_row("", "", window, cx);
+        let row = new_tag_row("", "", window, cx, Self::touch_create_dialog);
         let focus = row.key.read(cx).focus_handle(cx);
 
-        if let Some(WriteDialog::Create(dialog)) = &mut self.dialog {
+        if let Some(dialog) = &mut self.create_dialog {
             dialog.tags.push(row);
             dialog.touched = true;
         }
@@ -335,11 +343,11 @@ impl SecretStoreDocument {
 
     /// Removes the tag row at `index` from the open dialog.
     pub fn remove_create_tag(&mut self, index: usize, cx: &mut Context<Self>) {
-        if self.write_in_flight {
+        if self.view.read(cx).write_in_flight() {
             return;
         }
 
-        if let Some(WriteDialog::Create(dialog)) = &mut self.dialog
+        if let Some(dialog) = &mut self.create_dialog
             && index < dialog.tags.len()
         {
             dialog.tags.remove(index);
@@ -349,12 +357,8 @@ impl SecretStoreDocument {
     }
 
     /// Sends the creation the dialog confirmed, through the seam.
-    pub(in crate::secret_store) fn submit_create(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(WriteDialog::Create(dialog)) = &self.dialog else {
+    pub(super) fn submit_create(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = &self.create_dialog else {
             return;
         };
 
@@ -365,46 +369,34 @@ impl SecretStoreDocument {
         }
 
         let request = dialog.request(cx);
-        let name = request.name.clone();
-        let view = self.listing_view();
+        let origin = self.listing_view();
 
-        let Some(session) = self.write_session(cx) else {
+        let started = self
+            .view
+            .update(cx, |view, cx| view.start_create(request, cx));
+
+        if started {
+            self.create_origin = Some(origin);
+        }
+    }
+
+    /// The create the view sent landed: tells the user and shows the new
+    /// secret, unless the user moved on while it was in flight.
+    pub(super) fn land_create(&mut self, name: &str, stands: bool, cx: &mut Context<Self>) {
+        let Some(origin) = self.create_origin.take() else {
             return;
         };
 
-        self.run_governed_write(
-            session,
-            SecretOperation::Create,
-            name.clone(),
-            move |context| Landing::of(create_secret(context, &request)),
-            move |doc, landing, cx| doc.land_create(&name, view, landing, cx),
-            cx,
-        );
-    }
-
-    fn land_create(
-        &mut self,
-        name: &str,
-        sent_from: ListingView,
-        landing: Landing<SecretCreated>,
-        cx: &mut Context<Self>,
-    ) {
-        match landing {
-            Landing::Done(_) => {
-                self.dismiss_dialog(cx);
-                self.toast_written(
-                    dbflux_i18n::t!("document.secret_store.create.done", name = name),
-                    cx,
-                );
-                self.show_created(name, &sent_from, cx);
-            }
-            Landing::Stands(failure) => {
-                self.dismiss_dialog(cx);
-                self.report_write_failure(&failure, cx);
-                self.show_created(name, &sent_from, cx);
-            }
-            Landing::Rejected(failure) => self.report_write_failure(&failure, cx),
+        if !stands {
+            dbflux_ui_base::toast::Toast::success(dbflux_i18n::t!(
+                "document.secret_store.create.done",
+                name = name
+            ))
+            .meta_right(dbflux_ui_base::toast::now_hms())
+            .push(cx);
         }
+
+        self.show_created(name, &origin, cx);
     }
 
     /// What the user is looking at: the level, the filter and the selection.
@@ -424,13 +416,17 @@ impl SecretStoreDocument {
     /// even be in the listing in view.
     fn show_created(&mut self, name: &str, sent_from: &ListingView, cx: &mut Context<Self>) {
         if self.listing_view() != *sent_from {
-            self.refresh_after_write(name, WriteEffect::Metadata, cx);
+            self.view.update(cx, |view, cx| {
+                view.refresh_after_write(name, WriteEffect::Metadata, cx)
+            });
             return;
         }
 
         self.widen_scope_to(name);
         self.select_row(SecretRowKey::Secret(name.to_string()), cx);
-        self.refresh_after_write(name, WriteEffect::Metadata, cx);
+        self.view.update(cx, |view, cx| {
+            view.refresh_after_write(name, WriteEffect::Metadata, cx)
+        });
     }
 
     /// Moves the listing's scope to where `name` shows up: the name filter is
@@ -470,6 +466,8 @@ impl SecretStoreDocument {
     ) -> AnyElement {
         let problem = self.create_problem(dialog, cx);
         let body = self.render_create_body(dialog, problem.as_ref(), cx);
+        let submitting = self.view.read(cx).write_in_flight();
+        let focus = self.view.read(cx).dialog_focus_handle().clone();
 
         let title_key = if self.hierarchical() {
             "document.secret_store.create.title_parameter"
@@ -485,7 +483,7 @@ impl SecretStoreDocument {
                 confirm_icon: AppIcon::Plus,
                 danger: false,
                 enabled: problem.is_none(),
-                submitting: self.write_in_flight,
+                submitting,
             },
             cx,
         );
@@ -496,11 +494,11 @@ impl SecretStoreDocument {
                 title: dbflux_i18n::t!(title_key),
                 icon: AppIcon::Plus,
                 danger: false,
-                confirm_enabled: problem.is_none() && !self.write_in_flight,
+                confirm_enabled: problem.is_none() && !submitting,
             },
             body,
             footer,
-            self.dialog_focus.handle(),
+            &focus,
             cx,
         )
     }
@@ -512,6 +510,7 @@ impl SecretStoreDocument {
         problem: Option<&CreateProblem>,
         cx: &mut Context<Self>,
     ) -> Div {
+        let locked = self.view.read(cx).write_in_flight();
         let touched = dialog.touched || !dialog.value.read(cx).value().is_empty();
         let shown = problem
             .filter(|problem| touched || matches!(problem, CreateProblem::Exists(_)))
@@ -526,32 +525,16 @@ impl SecretStoreDocument {
                 Input::new(&dialog.name)
                     .id("secret-create-name-input")
                     .aria_label(dbflux_i18n::t!("document.secret_store.create.name"))
-                    .disabled(self.write_in_flight)
+                    .disabled(locked)
                     .w_full(),
                 cx,
             ));
 
-        if let Some(choices) = dialog
-            .choices
-            .as_ref()
-            .filter(|_| dialog.offers_value_types())
-        {
-            body = body.child(modal_field(
-                dbflux_i18n::t!("document.secret_store.create.type"),
-                self.render_choice_group(
-                    "secret-create-type",
-                    choices.value_types(),
-                    &dialog.value_type,
-                    |this, choice, cx| this.set_create_value_type(choice, cx),
-                    cx,
-                ),
-                cx,
-            ));
-        }
+        body = body.children(self.render_create_type_field(dialog, locked, cx));
 
         body = body.child(modal_field(
             dbflux_i18n::t!("document.secret_store.create.value"),
-            render_value_input(&dialog.value, self.write_in_flight, cx),
+            render_value_input(&dialog.value, locked, cx),
             cx,
         ));
 
@@ -560,28 +543,12 @@ impl SecretStoreDocument {
             Input::new(&dialog.description)
                 .id("secret-create-description-input")
                 .aria_label(dbflux_i18n::t!("document.secret_store.create.description"))
-                .disabled(self.write_in_flight)
+                .disabled(locked)
                 .w_full(),
             cx,
         ));
 
-        if let Some(choices) = dialog
-            .choices
-            .as_ref()
-            .filter(|choices| !choices.tiers().is_empty())
-        {
-            body = body.child(modal_field(
-                dbflux_i18n::t!("document.secret_store.create.tier"),
-                self.render_choice_group(
-                    "secret-create-tier",
-                    choices.tiers(),
-                    dialog.tier.as_deref().unwrap_or_default(),
-                    |this, choice, cx| this.set_create_tier(choice, cx),
-                    cx,
-                ),
-                cx,
-            ));
-        }
+        body = body.children(self.render_create_tier_field(dialog, locked, cx));
 
         if dialog.takes_key() {
             body = body.child(modal_field(
@@ -589,13 +556,13 @@ impl SecretStoreDocument {
                 Input::new(&dialog.key)
                     .id("secret-create-key-input")
                     .aria_label(dbflux_i18n::t!("document.secret_store.create.key"))
-                    .disabled(self.write_in_flight)
+                    .disabled(locked)
                     .w_full(),
                 cx,
             ));
         }
 
-        body = body.child(self.render_create_tags(dialog, cx));
+        body = body.child(self.render_create_tags(dialog, locked, cx));
 
         if let Some(message) = shown {
             body = body.child(
@@ -608,6 +575,58 @@ impl SecretStoreDocument {
         body
     }
 
+    /// The value type picker, for a store that declares value types.
+    fn render_create_type_field(
+        &self,
+        dialog: &CreateDialog,
+        locked: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
+        let choices = dialog
+            .choices
+            .as_ref()
+            .filter(|_| dialog.offers_value_types())?;
+
+        Some(modal_field(
+            dbflux_i18n::t!("document.secret_store.create.type"),
+            self.render_choice_group(
+                "secret-create-type",
+                choices.value_types(),
+                &dialog.value_type,
+                |this, choice, cx| this.set_create_value_type(choice, cx),
+                locked,
+                cx,
+            ),
+            cx,
+        ))
+    }
+
+    /// The tier picker, for a store that declares tiers.
+    fn render_create_tier_field(
+        &self,
+        dialog: &CreateDialog,
+        locked: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
+        let choices = dialog
+            .choices
+            .as_ref()
+            .filter(|choices| !choices.tiers().is_empty())?;
+
+        Some(modal_field(
+            dbflux_i18n::t!("document.secret_store.create.tier"),
+            self.render_choice_group(
+                "secret-create-tier",
+                choices.tiers(),
+                dialog.tier.as_deref().unwrap_or_default(),
+                |this, choice, cx| this.set_create_tier(choice, cx),
+                locked,
+                cx,
+            ),
+            cx,
+        ))
+    }
+
     /// A row of buttons of which one is chosen: the type and the tier. Each
     /// is a button of the dialog, so Tab reaches it and Space or Enter picks
     /// it.
@@ -617,6 +636,7 @@ impl SecretStoreDocument {
         choices: &[String],
         chosen: &str,
         on_pick: fn(&mut SecretStoreDocument, &str, &mut Context<SecretStoreDocument>),
+        locked: bool,
         cx: &mut Context<Self>,
     ) -> Div {
         let theme = cx.theme();
@@ -632,7 +652,7 @@ impl SecretStoreDocument {
                     .ghost()
                     .selected(choice == chosen)
                     .toggled(choice == chosen)
-                    .disabled(self.write_in_flight)
+                    .disabled(locked)
                     .on_click(cx.listener(move |this, _, _, cx| on_pick(this, &picked, cx)))
             })
             .collect();
@@ -653,7 +673,12 @@ impl SecretStoreDocument {
     }
 
     /// The tag rows of the dialog and the button that adds one.
-    fn render_create_tags(&self, dialog: &CreateDialog, cx: &mut Context<Self>) -> Div {
+    fn render_create_tags(
+        &self,
+        dialog: &CreateDialog,
+        locked: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let rows: Vec<AnyElement> = dialog
             .tags
             .iter()
@@ -671,7 +696,7 @@ impl SecretStoreDocument {
                                     "document.secret_store.tags_edit.key_label",
                                     row = index + 1
                                 ))
-                                .disabled(self.write_in_flight)
+                                .disabled(locked)
                                 .w_full(),
                         ),
                     )
@@ -685,7 +710,7 @@ impl SecretStoreDocument {
                                     "document.secret_store.tags_edit.value_label",
                                     row = index + 1
                                 ))
-                                .disabled(self.write_in_flight)
+                                .disabled(locked)
                                 .w_full(),
                         ),
                     )
@@ -697,7 +722,7 @@ impl SecretStoreDocument {
                         .ghost()
                         .icon(AppIcon::X)
                         .icon_only()
-                        .disabled(self.write_in_flight)
+                        .disabled(locked)
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.remove_create_tag(index, cx)),
                         ),
@@ -720,7 +745,7 @@ impl SecretStoreDocument {
                             dbflux_i18n::t!("document.secret_store.tags_edit.add"),
                         )
                         .icon(AppIcon::Plus)
-                        .disabled(dialog.tags.len() >= MAX_TAGS || self.write_in_flight)
+                        .disabled(dialog.tags.len() >= MAX_TAGS || locked)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.add_create_tag(window, cx)),
                         ),
@@ -753,4 +778,50 @@ fn render_value_input(value: &Entity<TextareaState>, locked: bool, cx: &App) -> 
                 .bordered(false)
                 .w_full(),
         )
+}
+
+impl SecretStoreDocument {
+    /// Whether a write dialog is open over the document.
+    pub fn dialog_is_open(&self, cx: &App) -> bool {
+        self.view.read(cx).dialog_is_open()
+    }
+
+    /// Closes the open dialog without writing, and hands the keyboard back.
+    pub fn close_dialog(&mut self, cx: &mut Context<Self>) {
+        self.view.update(cx, |view, cx| view.close_dialog(cx));
+    }
+
+    /// Confirms the open dialog: the one primary action of whichever dialog
+    /// is up, as its button and Enter both run it. The view sends its own
+    /// dialogs; New secret is the document's to send.
+    pub fn confirm_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let create_confirmed = self
+            .view
+            .update(cx, |view, cx| view.confirm_dialog(window, cx));
+
+        if create_confirmed {
+            self.submit_create(cx);
+        }
+    }
+
+    /// The dialog drawn over the document: New secret when it is open, else
+    /// whichever the selected secret's view has open.
+    pub(super) fn render_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if let Some(dialog) = &self.create_dialog {
+            return Some(self.render_create_dialog(dialog, cx));
+        }
+
+        self.view
+            .update(cx, |view, cx| view.render_write_dialog(cx))
+    }
+}
+
+impl DialogHost for SecretStoreDocument {
+    fn close_dialog_from_modal(&mut self, cx: &mut Context<Self>) {
+        self.close_dialog(cx);
+    }
+
+    fn confirm_dialog_from_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.confirm_dialog(window, cx);
+    }
 }
