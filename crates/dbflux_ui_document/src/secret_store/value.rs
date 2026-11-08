@@ -77,6 +77,113 @@ impl ValueContent {
     }
 }
 
+/// What a retrieved value is, derived from its content alone. It holds
+/// counts, never text, so it is safe to draw next to a masked value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ValueKind {
+    /// Every non-empty, non-comment line is `KEY=VALUE`.
+    Dotenv {
+        lines: usize,
+    },
+    JsonObject {
+        keys: usize,
+    },
+    JsonArray {
+        items: usize,
+    },
+    Text {
+        lines: usize,
+    },
+    Binary,
+}
+
+impl ValueKind {
+    fn of(content: &ValueContent) -> Self {
+        let (ValueContent::KeyValue { text, .. } | ValueContent::Plaintext(text)) = content else {
+            return Self::Binary;
+        };
+
+        let text = text.expose_secret();
+
+        match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(serde_json::Value::Object(map)) => return Self::JsonObject { keys: map.len() },
+            Ok(serde_json::Value::Array(items)) => {
+                return Self::JsonArray { items: items.len() };
+            }
+            _ => {}
+        }
+
+        let lines = text.lines().count();
+
+        if is_dotenv(text) {
+            Self::Dotenv { lines }
+        } else {
+            Self::Text { lines }
+        }
+    }
+
+    /// "dotenv · 9 lines", "JSON · 6 keys", "text · 1 line".
+    pub fn label(self) -> String {
+        let (one, many, count) = match self {
+            Self::Dotenv { lines } => (
+                "document.secret_store.value.kind.dotenv.one",
+                "document.secret_store.value.kind.dotenv.many",
+                lines,
+            ),
+            Self::JsonObject { keys } => (
+                "document.secret_store.value.kind.json_keys.one",
+                "document.secret_store.value.kind.json_keys.many",
+                keys,
+            ),
+            Self::JsonArray { items } => (
+                "document.secret_store.value.kind.json_items.one",
+                "document.secret_store.value.kind.json_items.many",
+                items,
+            ),
+            Self::Text { lines } => (
+                "document.secret_store.value.kind.text.one",
+                "document.secret_store.value.kind.text.many",
+                lines,
+            ),
+            Self::Binary => return dbflux_i18n::t!("document.secret_store.value.kind.binary"),
+        };
+
+        dbflux_i18n::t!(if count == 1 { one } else { many }, count = count)
+    }
+}
+
+/// At least one assignment, and every line that is not blank or a comment
+/// is one. A value starting with `=` is not an assignment: it is how base64
+/// padding looks.
+fn is_dotenv(text: &str) -> bool {
+    let mut assignments = 0;
+
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let assignment = line.strip_prefix("export ").unwrap_or(line);
+        let Some((key, value)) = assignment.split_once('=') else {
+            return false;
+        };
+
+        let mut chars = key.chars();
+        let valid_key = chars
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+
+        if !valid_key || value.starts_with('=') {
+            return false;
+        }
+
+        assignments += 1;
+    }
+
+    assignments > 0
+}
+
 /// Which view of a key/value secret is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueView {
@@ -126,6 +233,7 @@ pub struct RetrievedValue {
     pub content: ValueContent,
     pub retrieved_at: DateTime<Local>,
     pub view: ValueView,
+    kind: ValueKind,
     /// What the multi-line viewer draws, `None` when the value keeps the
     /// single-line field.
     viewer: Option<ViewerText>,
@@ -147,6 +255,7 @@ impl RetrievedValue {
         let mut retrieved = Self {
             version: value.version.clone(),
             viewer: ViewerText::new(&content),
+            kind: ValueKind::of(&content),
             content,
             retrieved_at: Local::now(),
             view,
@@ -192,6 +301,14 @@ impl RetrievedValue {
         } else {
             vec![MASK.to_string(); text.lines().count()]
         }
+    }
+
+    pub fn kind(&self) -> ValueKind {
+        self.kind
+    }
+
+    pub fn kind_label(&self) -> String {
+        self.kind.label()
     }
 
     pub fn field_count(&self) -> usize {

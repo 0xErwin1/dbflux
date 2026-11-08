@@ -3487,6 +3487,7 @@ document:
       last: "Última rotação"
     details:
       none: "Selecione um segredo para ver os detalhes"
+      close: "Fechar"
       loading: "Carregando os detalhes…"
       failed: "Não foi possível carregar os detalhes"
       title: "Detalhes do segredo"
@@ -3551,7 +3552,21 @@ document:
       view:
         key_value: "Chave/valor"
         plaintext: "Texto simples"
-      plaintext_only: "Chave/valor só abre quando o valor é um objeto JSON de um nível com valores escalares. JSON aninhado, arrays e qualquer outro texto abrem como texto simples."
+        key_value_unavailable: "Chave/valor não está disponível: o valor não é um objeto JSON de um nível com valores escalares."
+      kind:
+        dotenv:
+          one: "dotenv · %{count} linha"
+          many: "dotenv · %{count} linhas"
+        json_keys:
+          one: "JSON · %{count} chave"
+          many: "JSON · %{count} chaves"
+        json_items:
+          one: "JSON · %{count} item"
+          many: "JSON · %{count} itens"
+        text:
+          one: "texto · %{count} linha"
+          many: "texto · %{count} linhas"
+        binary: "binário"
       binary_size: "Binário · %{size}"
       read_only: "Somente leitura"
       binary_note: "Valores binários são gravados por outras ferramentas. O DBFlux os mostra em base64 e não os edita."

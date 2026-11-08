@@ -565,6 +565,22 @@ impl SecretStoreDocument {
         cx.notify();
     }
 
+    /// Closes the details pane: deselects the secret and drops its value,
+    /// the way moving to another secret does. Refused while the editor holds
+    /// unsaved text.
+    pub fn close_details(&mut self, cx: &mut Context<Self>) {
+        if self.selected.is_none() || self.block_unsaved_value_edits(cx) {
+            return;
+        }
+
+        self.clear_value();
+        self.details_generation = self.details_generation.wrapping_add(1);
+        self.details = DetailsState::Idle;
+        self.reset_versions();
+        self.selected = None;
+        cx.notify();
+    }
+
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
         let rows = self.rows();
 
@@ -931,6 +947,15 @@ impl SecretStoreDocument {
                 "secret-copy-name",
                 "document.secret_store.context_menu.copy_name",
                 Self::copy_selected_name,
+            ));
+        }
+
+        if self.selected.is_some() {
+            actions.push(callback_action(
+                &target,
+                "secret-details-close",
+                "document.secret_store.details.close",
+                Self::close_details,
             ));
         }
 

@@ -3487,6 +3487,7 @@ document:
       last: "上次轮换"
     details:
       none: "选择一个密钥以查看其详细信息"
+      close: "关闭"
       loading: "正在加载详细信息…"
       failed: "无法加载详细信息"
       title: "密钥详细信息"
@@ -3551,7 +3552,21 @@ document:
       view:
         key_value: "键/值"
         plaintext: "纯文本"
-      plaintext_only: "仅当值可解析为只含标量值的单层 JSON 对象时才会打开键/值视图。嵌套 JSON、数组和其他任何文本都以纯文本打开。"
+        key_value_unavailable: "键/值视图不可用：该值不是只含标量值的单层 JSON 对象。"
+      kind:
+        dotenv:
+          one: "dotenv · %{count} 行"
+          many: "dotenv · %{count} 行"
+        json_keys:
+          one: "JSON · %{count} 个键"
+          many: "JSON · %{count} 个键"
+        json_items:
+          one: "JSON · %{count} 项"
+          many: "JSON · %{count} 项"
+        text:
+          one: "文本 · %{count} 行"
+          many: "文本 · %{count} 行"
+        binary: "二进制"
       binary_size: "二进制 · %{size}"
       read_only: "只读"
       binary_note: "二进制值由其他工具写入。DBFlux 以 base64 显示且不会编辑它们。"
