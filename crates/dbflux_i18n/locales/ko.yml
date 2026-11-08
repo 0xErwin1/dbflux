@@ -3514,6 +3514,7 @@ document:
       last: "마지막 교체"
     details:
       none: "세부 정보를 보려면 시크릿을 선택하세요"
+      close: "닫기"
       loading: "세부 정보를 불러오는 중…"
       failed: "세부 정보를 불러올 수 없습니다"
       title: "시크릿 세부 정보"
@@ -3579,7 +3580,21 @@ document:
       view:
         key_value: "키/값"
         plaintext: "일반 텍스트"
-      plaintext_only: "키/값 보기는 값이 스칼라 값만 있는 1단계 JSON 객체일 때만 열립니다. 중첩된 JSON, 배열 및 기타 텍스트는 일반 텍스트로 열립니다."
+        key_value_unavailable: "키/값 보기를 사용할 수 없습니다: 값이 스칼라 값만 있는 1단계 JSON 객체가 아닙니다."
+      kind:
+        dotenv:
+          one: "dotenv · %{count}줄"
+          many: "dotenv · %{count}줄"
+        json_keys:
+          one: "JSON · 키 %{count}개"
+          many: "JSON · 키 %{count}개"
+        json_items:
+          one: "JSON · 항목 %{count}개"
+          many: "JSON · 항목 %{count}개"
+        text:
+          one: "텍스트 · %{count}줄"
+          many: "텍스트 · %{count}줄"
+        binary: "바이너리"
       binary_size: "바이너리 · %{size}"
       read_only: "읽기 전용"
       binary_note: "바이너리 값은 다른 도구가 작성합니다. DBFlux는 base64로 표시하며 편집하지 않습니다."

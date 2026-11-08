@@ -3514,6 +3514,7 @@ document:
       last: "Last rotated"
     details:
       none: "Select a secret to see its details"
+      close: "Close"
       loading: "Loading the details…"
       failed: "The details could not be loaded"
       title: "Secret details"
@@ -3579,7 +3580,21 @@ document:
       view:
         key_value: "Key/value"
         plaintext: "Plaintext"
-      plaintext_only: "Key/value opens only when the value parses as a one-level JSON object with scalar values. Nested JSON, arrays and any other text open as plaintext."
+        key_value_unavailable: "Key/value is not available: the value is not a one-level JSON object with scalar values."
+      kind:
+        dotenv:
+          one: "dotenv · %{count} line"
+          many: "dotenv · %{count} lines"
+        json_keys:
+          one: "JSON · %{count} key"
+          many: "JSON · %{count} keys"
+        json_items:
+          one: "JSON · %{count} item"
+          many: "JSON · %{count} items"
+        text:
+          one: "text · %{count} line"
+          many: "text · %{count} lines"
+        binary: "binary"
       binary_size: "Binary · %{size}"
       read_only: "Read only"
       binary_note: "Binary values are written by other tools. DBFlux shows them as base64 and does not edit them."
