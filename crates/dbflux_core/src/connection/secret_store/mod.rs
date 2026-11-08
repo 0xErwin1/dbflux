@@ -29,8 +29,8 @@ pub use operations::{
     DEFAULT_RECOVERY_WINDOW_DAYS, MAX_RECOVERY_WINDOW_DAYS, MAX_TAGS, MIN_RECOVERY_WINDOW_DAYS,
     SecretCreateRequest, SecretCreated, SecretDeleteRequest, SecretDeletion,
     SecretDescriptionChange, SecretDescriptionUpdate, SecretRollback, SecretRollbackRequest,
-    SecretRotationStart, SecretRotationUpdate, SecretTagsUpdate, validate_rotation_function,
-    validate_rotation_schedule, validate_rotation_window, validate_tag,
+    SecretRotationStart, SecretRotationUpdate, SecretTagsUpdate, require_name,
+    validate_rotation_function, validate_rotation_schedule, validate_rotation_window, validate_tag,
 };
 
 bitflags! {

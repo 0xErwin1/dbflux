@@ -14,6 +14,18 @@ use crate::DbError;
 
 use super::{SecretPayload, SecretTag};
 
+/// Refuses a blank or whitespace-only secret name, which no request type can
+/// act on and which would otherwise reach a store as an empty identifier.
+pub fn require_name(name: &str) -> Result<(), DbError> {
+    if name.trim().is_empty() {
+        return Err(DbError::constraint_violation(
+            "A secret operation needs the name of the secret.",
+        ));
+    }
+
+    Ok(())
+}
+
 /// A request to make an earlier version of a secret the current one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretRollbackRequest {
@@ -34,6 +46,8 @@ impl SecretRollbackRequest {
 
     /// Refuses a request that names no version.
     pub fn validate(&self) -> Result<(), DbError> {
+        require_name(&self.name)?;
+
         if self.version_id.trim().is_empty() {
             return Err(DbError::constraint_violation(format!(
                 "Rolling back \"{}\" needs the version to roll back to.",
@@ -126,6 +140,8 @@ impl SecretDeleteRequest {
     /// Refuses a window outside the days the service accepts, and an
     /// irreversible deletion whose confirmation is not the exact name.
     pub fn validate(&self) -> Result<(), DbError> {
+        require_name(self.name())?;
+
         match self {
             Self::Scheduled {
                 name,
@@ -229,6 +245,7 @@ impl SecretRotationUpdate {
                 self.name
             ))
         };
+        require_name(&self.name)?;
 
         if !self.enabled {
             if self.schedule.is_some() || self.window.is_some() || self.function.is_some() {
@@ -425,6 +442,7 @@ impl SecretTagsUpdate {
                 self.name
             ))
         };
+        require_name(&self.name)?;
 
         if self.set.is_empty() && self.remove.is_empty() {
             return Err(refuse(
@@ -521,6 +539,11 @@ impl SecretDescriptionUpdate {
             name: name.into(),
             description: description.into(),
         }
+    }
+
+    /// Refuses a blank name.
+    pub fn validate(&self) -> Result<(), DbError> {
+        require_name(&self.name)
     }
 }
 

@@ -99,7 +99,7 @@ pub use connection::secret_store::{
     SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
     SecretRotation, SecretRotationStart, SecretRotationUpdate, SecretStoreCapabilities,
     SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag, SecretTagsUpdate,
-    SecretValue, SecretVersionInfo, SecretVersionStage, validate_rotation_function,
+    SecretValue, SecretVersionInfo, SecretVersionStage, require_name, validate_rotation_function,
     validate_rotation_schedule, validate_rotation_window, validate_tag,
 };
 

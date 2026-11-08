@@ -1821,3 +1821,28 @@ fn the_approval_refusal_keeps_its_wording_per_operation() {
         "{roll_back}"
     );
 }
+
+#[test]
+fn a_blank_name_refuses_restore_rotate_and_description_before_any_call() {
+    let sink = Sink::default();
+    let store = OperationStore::new(
+        SecretStoreCapabilities::WRITE
+            | SecretStoreCapabilities::SOFT_DELETE
+            | SecretStoreCapabilities::ROTATION
+            | SecretStoreCapabilities::DESCRIPTION,
+    );
+    let ctx = context(&store, &sink, MutationPolicy::Allowed, None);
+
+    let failures = [
+        restore_secret(&ctx, "  ").expect_err("blank"),
+        rotate_secret_now(&ctx, "").expect_err("blank"),
+        update_secret_description(&ctx, &SecretDescriptionUpdate::new(" ", "text"))
+            .expect_err("blank"),
+    ];
+
+    for failure in failures {
+        assert_eq!(failure.kind, SecretWriteFailureKind::Refused);
+    }
+    assert_eq!(store.calls(), 0);
+    assert_eq!(sink.events().len(), 3);
+}

@@ -735,3 +735,106 @@ fn the_default_create_secret_refuses_instead_of_succeeding_silently() {
     assert!(message.contains("prod/api/new"), "{message}");
     assert!(!message.contains("create-value"), "{message}");
 }
+
+// --- Blank names ---
+
+#[test]
+fn every_request_type_refuses_a_blank_or_whitespace_name() {
+    for name in ["", "   ", "\t\n"] {
+        let refusals = [
+            SecretRollbackRequest::new(name, "v-1").validate(),
+            SecretDeleteRequest::scheduled(name, 30).validate(),
+            SecretDeleteRequest::irreversible(name, name).validate(),
+            SecretRotationUpdate::disable(name).validate(),
+            SecretRotationUpdate::enable(name, "rate(30 days)").validate(),
+            SecretTagsUpdate::new(name).set("env", "prod").validate(),
+            SecretDescriptionUpdate::new(name, "text").validate(),
+            SecretCreateRequest::text(name, "value").validate(),
+            require_name(name),
+        ];
+
+        for refusal in refusals {
+            let error = refusal.expect_err("a blank name is refused");
+            assert!(
+                matches!(error, DbError::ConstraintViolation(_)),
+                "{name:?}: {error}"
+            );
+        }
+    }
+
+    require_name("prod/api").expect("a real name passes");
+}
+
+// --- Adversarial inputs ---
+
+mod adversarial_inputs {
+    use crate::{
+        SecretCreateRequest, SecretDeleteRequest, SecretRotationUpdate, SecretTagsUpdate,
+        validate_rotation_schedule, validate_tag,
+    };
+
+    #[test]
+    fn debug_of_a_create_never_renders_the_value() {
+        let request = SecretCreateRequest::text("n", "vp-secret-\"q\"\nline").with_tag("k", "v");
+        assert!(!format!("{request:?} {request:#?}").contains("vp-secret"));
+    }
+
+    #[test]
+    fn irreversible_confirmation_refuses_every_near_miss() {
+        for typed in ["", " /a", "/a ", "/A", "/a\u{200b}", "\u{ff0f}a"] {
+            assert!(
+                SecretDeleteRequest::irreversible("/a", typed)
+                    .validate()
+                    .is_err(),
+                "{typed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_window_bounds() {
+        for days in [0u32, 6, 31, u32::MAX] {
+            assert!(
+                SecretDeleteRequest::scheduled("n", days)
+                    .validate()
+                    .is_err()
+            );
+        }
+        for days in [7u32, 30] {
+            assert!(SecretDeleteRequest::scheduled("n", days).validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn schedules_tags_and_rotation_limits() {
+        for bad in [
+            "rate(0 days)",
+            "rate(3 hours)",
+            "rate(1 days)",
+            "rate(2 day)",
+            "cron(0 0 * * ?)",
+            "",
+        ] {
+            assert!(validate_rotation_schedule(bad).is_err(), "{bad}");
+        }
+        assert!(validate_tag("AWS:x", "v").is_err());
+        assert!(
+            SecretTagsUpdate::new("n")
+                .remove("aws:x")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            SecretRotationUpdate::enable("n", "rate(1 day)")
+                .with_window("25h")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            SecretRotationUpdate::enable("n", "rate(1 day)")
+                .with_function("arn:aws:lambda:us-east-1:123:function:f")
+                .validate()
+                .is_err()
+        );
+    }
+}

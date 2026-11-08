@@ -9,7 +9,7 @@ use dbflux_core::{
     SecretStoreCapabilities, SecretTagsUpdate,
 };
 
-use dbflux_core::{DbError, SecretCreateRequest, SecretCreated};
+use dbflux_core::{DbError, SecretCreateRequest, SecretCreated, require_name};
 
 use super::{Attempt, SecretOperation, SecretWriteFailure, WriteContext, govern};
 
@@ -163,7 +163,9 @@ pub fn restore_secret(context: &WriteContext<'_>, name: &str) -> Result<(), Secr
         Attempt {
             operation: SecretOperation::Restore,
             name,
-            invalid: None,
+            invalid: require_name(name)
+                .err()
+                .map(|error| ("invalid_request", error)),
             submitted: None,
             details: serde_json::Map::new(),
             call: Box::new(|store| store.restore_secret(name)),
@@ -190,7 +192,9 @@ pub fn rotate_secret_now(
         Attempt {
             operation: SecretOperation::RotateNow,
             name,
-            invalid: None,
+            invalid: require_name(name)
+                .err()
+                .map(|error| ("invalid_request", error)),
             submitted: None,
             details: serde_json::Map::new(),
             call: Box::new(|store| store.rotate_now(name)),
@@ -332,7 +336,10 @@ pub fn update_secret_description(
         Attempt {
             operation: SecretOperation::EditDescription,
             name: &update.name,
-            invalid: None,
+            invalid: update
+                .validate()
+                .err()
+                .map(|error| ("invalid_request", error)),
             submitted: None,
             details,
             call: Box::new(|store| store.update_description(update)),
