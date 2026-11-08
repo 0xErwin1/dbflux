@@ -77,7 +77,11 @@ pub enum DetailsState {
 /// The last store call and how long it took, for the status bar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoreCall {
-    List { count: usize },
+    /// `hierarchical` picks the noun the status bar uses for the entries.
+    List {
+        count: usize,
+        hierarchical: bool,
+    },
     Describe,
     Retrieve,
 }

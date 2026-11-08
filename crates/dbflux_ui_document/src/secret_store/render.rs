@@ -95,11 +95,15 @@ pub(super) fn call_timing_label(timing: super::CallTiming) -> String {
     let millis = timing.millis.to_string();
 
     match timing.call {
-        super::StoreCall::List { count } => dbflux_i18n::t!(
-            if count == 1 {
-                "document.secret_store.status.list_timing.one"
-            } else {
-                "document.secret_store.status.list_timing.many"
+        super::StoreCall::List {
+            count,
+            hierarchical,
+        } => dbflux_i18n::t!(
+            match (hierarchical, count == 1) {
+                (false, true) => "document.secret_store.status.list_timing.one",
+                (false, false) => "document.secret_store.status.list_timing.many",
+                (true, true) => "document.secret_store.status.list_timing_parameters.one",
+                (true, false) => "document.secret_store.status.list_timing_parameters.many",
             },
             count = count,
             millis = millis.as_str()
@@ -112,6 +116,16 @@ pub(super) fn call_timing_label(timing: super::CallTiming) -> String {
             "document.secret_store.status.retrieve_timing",
             millis = millis.as_str()
         ),
+    }
+}
+
+/// A version that is a plain number reads "v3"; an opaque version id (a UUID)
+/// is shown as the store reports it.
+pub(super) fn version_label(version: Option<&str>) -> String {
+    match version {
+        Some(version) if version.parse::<u64>().is_ok() => format!("v{version}"),
+        Some(version) => version.to_string(),
+        None => UNKNOWN.to_string(),
     }
 }
 
@@ -590,7 +604,7 @@ impl SecretStoreDocument {
                 ))
                 .child(meta_cell(
                     SecretStoreMetrics::VERSION_WIDTH,
-                    or_unknown(&summary.version),
+                    version_label(summary.version.as_deref()),
                     muted,
                 ))
                 .child(meta_cell(

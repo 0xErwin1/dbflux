@@ -3476,6 +3476,9 @@ document:
       list_timing:
         one: "Listado · %{count} secreto · %{millis} ms"
         many: "Listado · %{count} secretos · %{millis} ms"
+      list_timing_parameters:
+        one: "Listado · %{count} parámetro · %{millis} ms"
+        many: "Listado · %{count} parámetros · %{millis} ms"
       describe_timing: "Descripción · %{millis} ms"
       retrieve_timing: "Obtener valor · %{millis} ms"
       duration_tooltip: "Duración en el cliente de la última llamada al almacén"

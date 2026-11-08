@@ -3476,6 +3476,9 @@ document:
       list_timing:
         one: "Listagem · %{count} segredo · %{millis} ms"
         many: "Listagem · %{count} segredos · %{millis} ms"
+      list_timing_parameters:
+        one: "Listagem · %{count} parâmetro · %{millis} ms"
+        many: "Listagem · %{count} parâmetros · %{millis} ms"
       describe_timing: "Descrição · %{millis} ms"
       retrieve_timing: "Obter valor · %{millis} ms"
       duration_tooltip: "Duração no cliente da última chamada ao cofre"

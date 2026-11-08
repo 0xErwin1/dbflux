@@ -3476,6 +3476,9 @@ document:
       list_timing:
         one: "列出 · %{count} 个密钥 · %{millis} ms"
         many: "列出 · %{count} 个密钥 · %{millis} ms"
+      list_timing_parameters:
+        one: "列出 · %{count} 个参数 · %{millis} ms"
+        many: "列出 · %{count} 个参数 · %{millis} ms"
       describe_timing: "描述 · %{millis} ms"
       retrieve_timing: "获取值 · %{millis} ms"
       duration_tooltip: "上次存储调用的客户端耗时"

@@ -17,8 +17,8 @@ use super::write::{
     SECRET_VALUE_WRITTEN_ACTION, SecretWriteFailure, put_secret_value,
 };
 use super::{
-    DetailsState, PathMode, SecretRowKey, SecretStoreDocument, VALUE_RETRIEVE_FAILED_ACTION,
-    VALUE_RETRIEVED_ACTION, ValueState, ValueView,
+    DetailsState, PathMode, SecretRowKey, SecretStoreDocument, StoreCall,
+    VALUE_RETRIEVE_FAILED_ACTION, VALUE_RETRIEVED_ACTION, ValueState, ValueView,
 };
 use crate::keyboard_test_support::{connected_app_state, init_keyboard_runtime};
 use dbflux_app::keymap::Command;
@@ -1078,6 +1078,73 @@ fn the_status_bar_uses_the_footer_counts(cx: &mut TestAppContext) {
     assert!(
         !segments.iter().any(|text| text.contains("secrets loaded")),
         "{segments:?}"
+    );
+}
+
+#[test]
+fn a_numeric_version_reads_with_a_v_and_an_opaque_one_is_kept() {
+    use super::render::version_label;
+
+    assert_eq!(version_label(Some("3")), "v3");
+    assert_eq!(version_label(Some("11")), "v11");
+    assert_eq!(
+        version_label(Some("a1b2c3d4-0000-4000-8000-000000000000")),
+        "a1b2c3d4-0000-4000-8000-000000000000"
+    );
+    assert_eq!(version_label(None), "—");
+}
+
+/// The status bar names the listed entries as the footer does: parameters on
+/// a hierarchical store, secrets otherwise.
+#[test]
+fn the_list_timing_uses_the_footer_noun() {
+    use super::render::call_timing_label;
+    use super::{CallTiming, StoreCall};
+
+    let timing = |count, hierarchical| {
+        call_timing_label(CallTiming {
+            call: StoreCall::List {
+                count,
+                hierarchical,
+            },
+            millis: 13,
+        })
+    };
+
+    assert_eq!(timing(4, true), "List · 4 parameters · 13 ms");
+    assert_eq!(timing(1, true), "List · 1 parameter · 13 ms");
+    assert_eq!(timing(4, false), "List · 4 secrets · 13 ms");
+    assert_eq!(timing(1, false), "List · 1 secret · 13 ms");
+}
+
+/// The listing records which noun its call used.
+#[gpui::test]
+fn the_recorded_list_call_follows_the_store_kind(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+    let call = opened.read(|doc| doc.last_call().map(|timing| timing.call));
+    assert!(
+        matches!(
+            call,
+            Some(StoreCall::List {
+                hierarchical: true,
+                ..
+            })
+        ),
+        "{call:?}"
+    );
+    drop(opened);
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    let call = opened.read(|doc| doc.last_call().map(|timing| timing.call));
+    assert!(
+        matches!(
+            call,
+            Some(StoreCall::List {
+                hierarchical: false,
+                ..
+            })
+        ),
+        "{call:?}"
     );
 }
 

@@ -3476,6 +3476,9 @@ document:
       list_timing:
         one: "목록 · 시크릿 %{count}개 · %{millis} ms"
         many: "목록 · 시크릿 %{count}개 · %{millis} ms"
+      list_timing_parameters:
+        one: "목록 · 파라미터 %{count}개 · %{millis} ms"
+        many: "목록 · 파라미터 %{count}개 · %{millis} ms"
       describe_timing: "설명 · %{millis} ms"
       retrieve_timing: "값 가져오기 · %{millis} ms"
       duration_tooltip: "마지막 저장소 호출의 클라이언트 측 소요 시간"

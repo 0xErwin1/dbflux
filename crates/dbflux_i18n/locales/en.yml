@@ -3476,6 +3476,9 @@ document:
       list_timing:
         one: "List · %{count} secret · %{millis} ms"
         many: "List · %{count} secrets · %{millis} ms"
+      list_timing_parameters:
+        one: "List · %{count} parameter · %{millis} ms"
+        many: "List · %{count} parameters · %{millis} ms"
       describe_timing: "Describe · %{millis} ms"
       retrieve_timing: "Retrieve value · %{millis} ms"
       duration_tooltip: "Client-side duration of the last store call"

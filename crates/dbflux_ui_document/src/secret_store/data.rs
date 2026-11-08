@@ -140,7 +140,10 @@ impl SecretStoreDocument {
 
                 if applied {
                     self.last_call = Some(CallTiming {
-                        call: StoreCall::List { count },
+                        call: StoreCall::List {
+                            count,
+                            hierarchical: self.hierarchical(),
+                        },
                         millis,
                     });
                 }
