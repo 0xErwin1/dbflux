@@ -100,13 +100,7 @@ impl SecretView {
         staged: bool,
         cx: &mut Context<Self>,
     ) -> Div {
-        let shown = match self.value {
-            ValueState::Loading | ValueState::Loaded(_) => self
-                .value_version
-                .as_deref()
-                .or_else(|| self.current_version_id()),
-            _ => None,
-        };
+        let shown = self.highlighted_version();
 
         let rows: Vec<AnyElement> = versions
             .iter()

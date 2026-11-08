@@ -4,6 +4,8 @@
 mod write_probes;
 // The write actions of the details pane, driven through the rendered UI.
 mod write_ui;
+// Follow-ups to the extracted single-secret view.
+mod view_followups;
 
 use super::listing::{
     AUTO_CONTINUE_ENTRY_LIMIT, LARGEST_PAGE_ENTRIES, SecretListing, child_path_label,

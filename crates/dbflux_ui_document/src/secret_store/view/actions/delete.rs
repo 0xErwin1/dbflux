@@ -328,13 +328,16 @@ impl SecretView {
         );
     }
 
-    fn land_restore(&mut self, name: &str, landing: Landing<()>, cx: &mut Context<Self>) {
+    pub(in crate::secret_store) fn land_restore(&mut self, name: &str, landing: Landing<()>, cx: &mut Context<Self>) {
         match landing {
             Landing::Done(()) => {
                 self.toast_written(
                     dbflux_i18n::t!("document.secret_store.restore.done", name = name),
                     cx,
                 );
+                // The reads below may fail or come back stale: the guards
+                // must not keep reading the deletion this write cancelled.
+                self.mark_restored(name);
                 self.refresh_after_write(name, WriteEffect::Versions, cx);
             }
             Landing::Stands(failure) => {
@@ -342,6 +345,26 @@ impl SecretView {
                 self.refresh_after_write(name, WriteEffect::Versions, cx);
             }
             Landing::Rejected(failure) => self.report_write_failure(&failure, cx),
+        }
+    }
+
+    /// Records on the view's copies of the row that `name`'s deletion is
+    /// cancelled, until the describe and the listing say so themselves.
+    pub(in crate::secret_store) fn mark_restored(&mut self, name: &str) {
+        if !self.is_for(name) {
+            return;
+        }
+
+        for summary in [self.listing_row.as_mut(), self.summary_cache.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            summary.deletion_scheduled_for = None;
+        }
+
+        if let DetailsState::Loaded(details) = &mut self.details {
+            details.summary.deletion_scheduled_for = None;
+            details.deleted_at = None;
         }
     }
 

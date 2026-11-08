@@ -131,6 +131,13 @@ impl SecretView {
         let Some(name) = self.name.clone() else {
             return;
         };
+
+        // A store without a history has nothing to schedule or resume: it
+        // keeps saying so, pending or not.
+        if !self.store.supports(SecretStoreCapabilities::VERSIONS) {
+            return;
+        }
+
         let scheduled = matches!(self.versions, VersionsState::ScheduledForDeletion);
 
         match pending {
@@ -353,6 +360,26 @@ impl SecretView {
         }
     }
 
+    /// The version the Versions table highlights: the one the value section
+    /// shows or is retrieving.
+    pub(crate) fn highlighted_version(&self) -> Option<&str> {
+        match &self.value {
+            ValueState::Loading => self
+                .value_version
+                .as_deref()
+                .or_else(|| self.current_version_id()),
+            // The store named the version it served even when the retrieval
+            // asked for the current one, and a rotation since may have moved
+            // the current version on.
+            ValueState::Loaded(value) => self
+                .value_version
+                .as_deref()
+                .or(value.version.as_deref())
+                .or_else(|| self.current_version_id()),
+            _ => None,
+        }
+    }
+
     fn history_current_version(&self) -> Option<&str> {
         let VersionsState::Loaded(versions) = &self.versions else {
             return None;
@@ -513,19 +540,24 @@ impl SecretView {
         // The answer belongs to the session it was asked of. After the
         // connection was replaced it is not shown under the new one, and the
         // section does not stay loading for it.
+        let live = self.connection(cx);
         let same_session = session.as_ref().is_none_or(|asked_of| {
-            self.connection(cx)
-                .is_none_or(|live| Arc::ptr_eq(asked_of, &live))
+            live.as_ref()
+                .is_some_and(|live| Arc::ptr_eq(asked_of, live))
         });
         let is_current = asked && same_session;
 
         if asked && !same_session {
             self.value = ValueState::NotLoaded;
             self.value_version = None;
+            cx.notify();
         }
 
-        let driver_id = self
-            .connection(cx)
+        // The store that was read is the originating session's, even when
+        // the profile holds no connection any more.
+        let driver_id = session
+            .as_ref()
+            .or(live.as_ref())
             .map(|connection| connection.metadata().id.clone())
             .unwrap_or_default();
 

@@ -327,10 +327,17 @@ impl SecretView {
         self.listing_row = row;
 
         // A restore that reached the listing makes the history available.
-        if matches!(self.versions, VersionsState::ScheduledForDeletion)
+        // The listing is the later word: the describe it outdates is lifted
+        // too, or the guards would keep reading the old deletion.
+        if refresh_cache
+            && matches!(self.versions, VersionsState::ScheduledForDeletion)
             && let Some(name) = self.name.clone()
-            && !self.deletion_pending()
+            && self
+                .listing_row
+                .as_ref()
+                .is_some_and(|row| row.name == name && !row.is_pending_deletion())
         {
+            self.mark_restored(&name);
             self.request_versions(name, crate::secret_store::HistoryLoad::Automatic, cx);
         }
     }
@@ -343,9 +350,10 @@ impl SecretView {
             return;
         };
 
+        // No connection at all is as much a change of session as another one.
         let replaced = self
             .connection(cx)
-            .is_some_and(|live| !Arc::ptr_eq(origin, &live));
+            .is_none_or(|live| !Arc::ptr_eq(origin, &live));
 
         if replaced && !self.has_unsaved_value_edits(cx) {
             self.clear_value();

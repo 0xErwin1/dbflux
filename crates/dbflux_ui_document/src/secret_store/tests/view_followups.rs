@@ -1,0 +1,190 @@
+//! Follow-ups to the extracted single-secret view: what a disconnect does to
+//! a retrieved value, how a stale answer is discarded, which version the
+//! Versions table highlights, and how a restore reconciles the guards.
+
+use super::super::view::Landing;
+use super::*;
+use std::cell::Cell;
+use std::rc::Rc;
+
+impl Opened<'_> {
+    /// Drops the profile's live connection, as a disconnect does.
+    fn disconnect(&mut self) {
+        let app_state = self.app_state.clone();
+        let profile_id = self.read(|doc| doc.profile_id);
+
+        self.window.update(|_, cx| {
+            app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id))
+        });
+    }
+
+    /// Counts the times the view asks for a redraw from now on.
+    fn count_view_notifications(&mut self) -> Rc<Cell<usize>> {
+        let doc = self.doc.clone();
+        let counter = Rc::new(Cell::new(0));
+        let seen = counter.clone();
+
+        self.window.update(|_, cx| {
+            let view = doc.read(cx).view.clone();
+            cx.observe(&view, move |_, _| seen.set(seen.get() + 1))
+                .detach();
+        });
+
+        counter
+    }
+}
+
+/// A value retrieved from a connection the profile no longer holds is
+/// dropped when the profile disconnects, so it cannot be revealed or copied.
+#[gpui::test]
+fn a_disconnect_drops_the_retrieved_value(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    assert!(opened.shown_password().is_some(), "the value was retrieved");
+
+    opened.disconnect();
+    opened.announce_state_change();
+
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
+    assert_eq!(opened.shown_password(), None);
+    assert!(!opened.read_view(|view| view.can_edit_value()));
+}
+
+/// A retrieval that lands after the disconnect leaves no value, and the
+/// section does not stay loading.
+#[gpui::test]
+fn a_retrieval_landing_after_a_disconnect_leaves_no_value(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.start_retrieval();
+    opened.disconnect();
+    opened.window.run_until_parked();
+
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
+    assert_eq!(opened.shown_password(), None);
+}
+
+/// The stale answer is discarded with a redraw, so the section stops
+/// showing "retrieving" at once.
+#[gpui::test]
+fn discarding_a_stale_retrieval_redraws_the_view(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.start_retrieval();
+    opened.replace_connection();
+    let redraws = opened.count_view_notifications();
+    opened.window.run_until_parked();
+
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
+    assert!(redraws.get() > 0, "the view was never told to redraw");
+}
+
+/// The retrieval is audited against the driver of the session it read,
+/// whether or not the profile still holds a connection.
+#[gpui::test]
+fn the_retrieval_audit_names_the_driver_of_the_originating_session(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let driver_id = opened.live_connection().metadata().id.clone();
+    assert!(!driver_id.is_empty());
+
+    opened.start_retrieval();
+    opened.disconnect();
+    opened.window.run_until_parked();
+
+    let recorded: Vec<Option<String>> = opened
+        .audit_records()
+        .into_iter()
+        .filter(|event| event.action.as_deref() == Some(VALUE_RETRIEVED_ACTION))
+        .map(|event| event.driver_id)
+        .collect();
+    assert_eq!(recorded, vec![Some(driver_id)]);
+}
+
+/// The Versions table highlights the version of the value on display, which
+/// stays the retrieved one after a rotation made another current.
+#[gpui::test]
+fn the_versions_highlight_follows_the_displayed_value(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    let shown = opened
+        .read_view(|view| match view.value() {
+            ValueState::Loaded(value) => value.version.clone(),
+            _ => None,
+        })
+        .expect("the retrieval returned its version");
+
+    opened.rotate_current(KEY_VALUE_SECRET, "rotated");
+    opened.update_view(|view, cx| {
+        view.describe(KEY_VALUE_SECRET.to_string(), cx);
+        view.load_versions(KEY_VALUE_SECRET.to_string(), cx);
+    });
+
+    assert!(opened.read_view(|view| view.shown_older_version().is_some()));
+    assert_eq!(
+        opened.read_view(|view| view.highlighted_version().map(str::to_string)),
+        Some(shown)
+    );
+}
+
+/// A store without a version history keeps saying so for a secret whose
+/// deletion is scheduled.
+#[gpui::test]
+fn a_store_without_versions_stays_unsupported_for_a_pending_secret(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.update_view(|view, _| view.store.capabilities.remove(SecretStoreCapabilities::VERSIONS));
+    opened.open_secret(PENDING_DELETION_SECRET);
+
+    assert!(opened.read_view(|view| view.deletion_pending()));
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::NotSupported)));
+}
+
+/// A confirmed restore lifts the deletion from the view's copies of the row
+/// at once, so the retrieval and history guards do not wait for reads that
+/// may fail or come back stale.
+#[gpui::test]
+fn a_confirmed_restore_unblocks_the_guards_before_any_read_lands(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    assert!(!opened.read_view(|view| view.can_retrieve_value()));
+
+    let doc = opened.doc.clone();
+    opened.window.update(|_, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, cx| {
+            view.land_restore(PENDING_DELETION_SECRET, Landing::Done(()), cx)
+        });
+    });
+
+    assert!(!opened.read_view(|view| view.deletion_pending()));
+    assert!(opened.read_view(|view| view.can_retrieve_value()));
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Loading)));
+}
+
+/// A listing that shows the secret active again is the authority over the
+/// describe it outdates: the history resumes.
+#[gpui::test]
+fn a_listing_showing_the_secret_active_resumes_the_history(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::ScheduledForDeletion)));
+
+    opened
+        .live_connection()
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("store")
+        .restore_secret(PENDING_DELETION_SECRET)
+        .expect("restored");
+    let mut active = opened
+        .read_view(|view| view.listed_summary().cloned())
+        .expect("the listing holds the row");
+    active.deletion_scheduled_for = None;
+    opened.update_view(|view, cx| view.set_listing_row(Some(active), true, cx));
+
+    assert!(!opened.version_ids().is_empty(), "the history loaded");
+    assert!(opened.reported_errors().is_empty());
+}
