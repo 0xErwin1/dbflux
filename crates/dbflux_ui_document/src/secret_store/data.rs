@@ -198,6 +198,19 @@ impl SecretStoreDocument {
 
         cx.notify();
 
+        // A failed page ends the chain: the retained rows are not progress, and
+        // asking for the old next page would clear the error and mix pages of
+        // two different loads.
+        if self.listing.error.is_some() {
+            return;
+        }
+
+        if let Some(SecretRowKey::Secret(name)) = &self.selected
+            && let Some(summary) = self.listing.find(name)
+        {
+            self.selected_cache = Some(summary.clone());
+        }
+
         // A page that landed under the limit asks for the next one instead of
         // making the user click for it; the manual row remains for the rest.
         //
@@ -271,6 +284,10 @@ impl SecretStoreDocument {
 
         if !is_current {
             return;
+        }
+
+        if let Ok(details) = &result {
+            self.selected_cache = Some(details.summary.clone());
         }
 
         self.details = match result {

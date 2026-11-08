@@ -54,7 +54,7 @@ pub(in crate::secret_store) struct CreateDialog {
     /// The store's values are typed, so the type and the tier are asked.
     typed: bool,
     value_type: &'static str,
-    tier: &'static str,
+    pub(in crate::secret_store) tier: &'static str,
 
     /// A field was edited since the dialog opened, so an incomplete request
     /// is worth reporting.
@@ -256,6 +256,10 @@ impl SecretStoreDocument {
 
     /// Picks the value type of the open dialog.
     pub fn set_create_value_type(&mut self, value_type: &str, cx: &mut Context<Self>) {
+        if self.write_in_flight {
+            return;
+        }
+
         let Some(chosen) = VALUE_TYPES.iter().find(|known| **known == value_type) else {
             return;
         };
@@ -271,6 +275,10 @@ impl SecretStoreDocument {
 
     /// Picks the tier of the open dialog.
     pub fn set_create_tier(&mut self, tier: &str, cx: &mut Context<Self>) {
+        if self.write_in_flight {
+            return;
+        }
+
         let Some(chosen) = TIERS.iter().find(|known| **known == tier) else {
             return;
         };
@@ -286,6 +294,10 @@ impl SecretStoreDocument {
 
     /// Adds an empty tag row to the open dialog.
     pub fn add_create_tag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.write_in_flight {
+            return;
+        }
+
         let Some(WriteDialog::Create(dialog)) = &self.dialog else {
             return;
         };
@@ -308,6 +320,10 @@ impl SecretStoreDocument {
 
     /// Removes the tag row at `index` from the open dialog.
     pub fn remove_create_tag(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.write_in_flight {
+            return;
+        }
+
         if let Some(WriteDialog::Create(dialog)) = &mut self.dialog
             && index < dialog.tags.len()
         {
@@ -370,8 +386,35 @@ impl SecretStoreDocument {
     /// Selects the new secret and reads the listing again, so it shows up in
     /// its row with its details.
     fn show_created(&mut self, name: &str, cx: &mut Context<Self>) {
+        self.widen_scope_to(name);
         self.select_row(SecretRowKey::Secret(name.to_string()), cx);
         self.refresh_after_write(name, WriteEffect::Metadata, cx);
+    }
+
+    /// Moves the listing's scope to where `name` shows up: the name filter is
+    /// cleared, and a hierarchical store lists the level the name is under.
+    fn widen_scope_to(&mut self, name: &str) {
+        if !self.name_filter.is_empty() {
+            self.name_filter.clear();
+            self.clear_search_input = true;
+        }
+
+        if !self.hierarchical() {
+            return;
+        }
+
+        let level = name.rfind('/').map(|index| name[..=index].to_string());
+        let visible = match (&self.path, self.path_mode) {
+            (Some(path), crate::secret_store::PathMode::Tree) => name
+                .strip_prefix(path.as_str())
+                .is_some_and(|rest| !rest.contains('/')),
+            (Some(path), crate::secret_store::PathMode::Flat) => name.starts_with(path.as_str()),
+            (None, _) => true,
+        };
+
+        if !visible {
+            self.path = level;
+        }
     }
 
     pub(in crate::secret_store) fn render_create_dialog(
@@ -437,6 +480,7 @@ impl SecretStoreDocument {
                 Input::new(&dialog.name)
                     .id("secret-create-name-input")
                     .aria_label(dbflux_i18n::t!("document.secret_store.create.name"))
+                    .disabled(self.write_in_flight)
                     .w_full(),
                 cx,
             ));
@@ -457,7 +501,7 @@ impl SecretStoreDocument {
 
         body = body.child(modal_field(
             dbflux_i18n::t!("document.secret_store.create.value"),
-            render_value_input(&dialog.value, cx),
+            render_value_input(&dialog.value, self.write_in_flight, cx),
             cx,
         ));
 
@@ -466,6 +510,7 @@ impl SecretStoreDocument {
             Input::new(&dialog.description)
                 .id("secret-create-description-input")
                 .aria_label(dbflux_i18n::t!("document.secret_store.create.description"))
+                .disabled(self.write_in_flight)
                 .w_full(),
             cx,
         ));
@@ -490,6 +535,7 @@ impl SecretStoreDocument {
                 Input::new(&dialog.key)
                     .id("secret-create-key-input")
                     .aria_label(dbflux_i18n::t!("document.secret_store.create.key"))
+                    .disabled(self.write_in_flight)
                     .w_full(),
                 cx,
             ));
@@ -532,6 +578,7 @@ impl SecretStoreDocument {
                     .ghost()
                     .selected(choice == chosen)
                     .toggled(choice == chosen)
+                    .disabled(self.write_in_flight)
                     .on_click(cx.listener(move |this, _, _, cx| on_pick(this, choice, cx)))
             })
             .collect();
@@ -570,6 +617,7 @@ impl SecretStoreDocument {
                                     "document.secret_store.tags_edit.key_label",
                                     row = index + 1
                                 ))
+                                .disabled(self.write_in_flight)
                                 .w_full(),
                         ),
                     )
@@ -583,6 +631,7 @@ impl SecretStoreDocument {
                                     "document.secret_store.tags_edit.value_label",
                                     row = index + 1
                                 ))
+                                .disabled(self.write_in_flight)
                                 .w_full(),
                         ),
                     )
@@ -594,6 +643,7 @@ impl SecretStoreDocument {
                         .ghost()
                         .icon(AppIcon::X)
                         .icon_only()
+                        .disabled(self.write_in_flight)
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.remove_create_tag(index, cx)),
                         ),
@@ -616,7 +666,7 @@ impl SecretStoreDocument {
                             dbflux_i18n::t!("document.secret_store.tags_edit.add"),
                         )
                         .icon(AppIcon::Plus)
-                        .disabled(dialog.tags.len() >= MAX_TAGS)
+                        .disabled(dialog.tags.len() >= MAX_TAGS || self.write_in_flight)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.add_create_tag(window, cx)),
                         ),
@@ -631,7 +681,7 @@ impl SecretStoreDocument {
 /// element is hidden from the accessibility tree and redacted in the frame
 /// automation reads, so neither the typed value nor its length leaves the
 /// dialog.
-fn render_value_input(value: &Entity<TextareaState>, cx: &App) -> Stateful<Div> {
+fn render_value_input(value: &Entity<TextareaState>, locked: bool, cx: &App) -> Stateful<Div> {
     let theme = cx.theme();
 
     div()
@@ -643,6 +693,7 @@ fn render_value_input(value: &Entity<TextareaState>, cx: &App) -> Stateful<Div> 
         .border_color(theme.border)
         .child(
             Textarea::new(value)
+                .disabled(locked)
                 .redacted(true)
                 .appearance(false)
                 .bordered(false)

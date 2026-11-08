@@ -337,11 +337,12 @@ impl SecretStoreDocument {
 
         // The history follows the connection on its own
         // (`adopt_connection_session`); only the details and the row are left.
-        if stale && !self.write_in_flight {
-            if let Some(SecretRowKey::Secret(name)) = self.selected.clone() {
-                self.describe(name, cx);
-                self.reload_listing_in_place(cx);
-            }
+        if stale
+            && !self.write_in_flight
+            && let Some(SecretRowKey::Secret(name)) = self.selected.clone()
+        {
+            self.describe(name, cx);
+            self.reload_listing_in_place(cx);
         }
     }
 

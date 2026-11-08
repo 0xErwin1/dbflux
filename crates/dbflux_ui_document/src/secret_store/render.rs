@@ -1141,6 +1141,11 @@ impl Render for SecretStoreDocument {
         // opens now that it landed.
         self.open_pending_edit(window, cx);
 
+        if std::mem::take(&mut self.clear_search_input) {
+            self.search_input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+        }
+
         // A menu entry chosen by click is queued and runs here, which has
         // the window the actions' focus changes need.
         if let Some(action) = self.pending_menu_action.take() {
@@ -1178,6 +1183,17 @@ impl Render for SecretStoreDocument {
 
             if let Some(menu) = self.context_menu.as_mut() {
                 menu.items = items;
+                // The entries can shrink under the highlight (a restore that
+                // landed); keep it on a row that exists.
+                menu.selected_index = menu.selected_index.min(menu.items.len().saturating_sub(1));
+            }
+
+            if self
+                .context_menu
+                .as_ref()
+                .is_some_and(|menu| menu.items.is_empty())
+            {
+                self.context_menu = None;
             }
         }
 

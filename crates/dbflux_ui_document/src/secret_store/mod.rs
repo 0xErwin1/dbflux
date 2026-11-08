@@ -194,6 +194,11 @@ pub struct SecretStoreDocument {
     /// Moves the keyboard into the dialog when it opens and hands it back
     /// when it closes.
     dialog_focus: ModalFocus,
+    /// The selected secret's last known summary, kept for the moment a reload
+    /// leaves its row off the pages loaded so far.
+    selected_cache: Option<SecretSummary>,
+    /// Clears the search field on the next render, which has the window.
+    clear_search_input: bool,
     /// The connection the selected secret's details were loaded from.
     details_session: Option<Arc<dyn Connection>>,
     /// Scroll position of the details pane's sections.
@@ -379,6 +384,8 @@ impl SecretStoreDocument {
             dialog_pin: None,
             details_scroll: ScrollHandle::new(),
             details_session: None,
+            selected_cache: None,
+            clear_search_input: false,
             write_in_flight: false,
             rotation_notice: None,
             edit_after_retrieve: false,
@@ -555,7 +562,11 @@ impl SecretStoreDocument {
     /// The selected secret's listing row, when a secret is selected.
     pub fn selected_summary(&self) -> Option<&SecretSummary> {
         match &self.selected {
-            Some(SecretRowKey::Secret(name)) => self.listing.find(name),
+            Some(SecretRowKey::Secret(name)) => self.listing.find(name).or_else(|| {
+                self.selected_cache
+                    .as_ref()
+                    .filter(|summary| &summary.name == name)
+            }),
             _ => None,
         }
     }
@@ -625,6 +636,7 @@ impl SecretStoreDocument {
 
         if let SecretRowKey::Secret(name) = &row {
             let name = name.clone();
+            self.selected_cache = self.listing.find(&name).cloned();
             self.selected = Some(row);
             self.describe(name.clone(), cx);
             self.load_versions(name, cx);
@@ -1328,7 +1340,7 @@ impl SecretStoreDocument {
                     },
                 )
                 .icon(AppIcon::Pencil)
-                .enabled(self.can_start_rotation_action()),
+                .enabled(self.can_edit_rotation()),
             );
         }
 
@@ -1408,8 +1420,8 @@ impl SecretStoreDocument {
             Command::CycleDocumentView if self.hierarchical() => self.toggle_path_mode(cx),
             Command::ColumnLeft if self.hierarchical() => self.navigate_up(cx),
             Command::ResultsNextPage => self.load_more(cx),
-            Command::EditValue if self.can_edit_value() => {
-                self.start_value_edit(window, cx);
+            Command::EditValue if self.can_request_edit_value() => {
+                self.request_edit_value(window, cx);
             }
             Command::RollBackVersion if self.supports_roll_back() => {
                 self.roll_back_to_previous(window, cx);

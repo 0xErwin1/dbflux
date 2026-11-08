@@ -435,15 +435,10 @@ impl SecretStoreDocument {
                 // selected_index stays within `items`: it starts at 0 on
                 // open, the MenuUp/MenuDown arms keep it modulo the count,
                 // and rebuilds keep the entry order.
-                #[expect(
-                    clippy::indexing_slicing,
-                    reason = "selected_index starts at 0 on open and the MenuUp/MenuDown arms keep it modulo menu.items.len(), which this dispatch does not re-check"
-                )]
-                let selected = self.context_menu.as_ref().map(|menu| {
-                    (
-                        menu.items[menu.selected_index].action,
-                        menu.items[menu.selected_index].disabled,
-                    )
+                let selected = self.context_menu.as_ref().and_then(|menu| {
+                    menu.items
+                        .get(menu.selected_index)
+                        .map(|item| (item.action, item.disabled))
                 });
 
                 match selected {
@@ -480,29 +475,37 @@ impl SecretStoreDocument {
         self.context_menu = None;
 
         match action {
+            // These open an editor or a dialog that takes the keyboard; the
+            // common refocus below would take it straight back. An opener that
+            // refuses (unsaved edits, a stale selection) opens nothing, and
+            // then the document gets the keyboard back like any other entry.
             SecretMenuAction::EditValue => {
-                // The editor takes the keyboard when it opens; the common
-                // refocus below would take it straight back.
                 self.start_value_edit(window, cx);
-                return;
+
+                if self.is_editing_value() {
+                    return;
+                }
             }
             SecretMenuAction::Delete => {
-                // The dialog takes the keyboard when it opens; the common
-                // refocus below would take it straight back.
                 self.open_delete(window, cx);
-                return;
+
+                if self.dialog_is_open() {
+                    return;
+                }
             }
             SecretMenuAction::RotateNow => {
-                // The dialog takes the keyboard when it opens; the common
-                // refocus below would take it straight back.
                 self.rotate_selected_now(window, cx);
-                return;
+
+                if self.dialog_is_open() {
+                    return;
+                }
             }
             SecretMenuAction::EditTags => {
-                // The dialog takes the keyboard when it opens; the common
-                // refocus below would take it straight back.
                 self.open_edit_tags(window, cx);
-                return;
+
+                if self.dialog_is_open() {
+                    return;
+                }
             }
             SecretMenuAction::Restore => self.restore_selected(cx),
             SecretMenuAction::RetrieveValue => self.retrieve_selected_value(cx),

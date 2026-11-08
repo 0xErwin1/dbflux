@@ -5842,17 +5842,20 @@ fn the_edit_value_command_opens_the_editor_on_the_stored_text(cx: &mut TestAppCo
 }
 
 /// With nothing editable the command falls through and opens nothing: the
-/// value is not loaded, or the secret is managed by another service.
+/// secret is managed by another service. A value that is not loaded is
+/// retrieved first, like the pane action does.
 #[gpui::test]
 fn the_edit_value_command_falls_through_when_nothing_can_be_edited(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
 
     opened.select(PLAINTEXT_SECRET);
     assert!(
-        !opened.command(Command::EditValue),
-        "the value is not loaded"
+        opened.command(Command::EditValue),
+        "the value is not loaded: it is retrieved first"
     );
-    assert!(!opened.read(|doc| doc.is_editing_value()));
+    assert!(opened.read(|doc| doc.is_editing_value()));
+
+    opened.update(|doc, _| doc.value_edit = None);
 
     opened.select(MANAGED_SECRET);
     opened.update(|doc, cx| doc.retrieve_selected_value(cx));

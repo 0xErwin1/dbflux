@@ -831,7 +831,7 @@ impl SecretStoreDocument {
             )
             .icon(AppIcon::Pencil)
             .tab_stop(false)
-            .disabled(!self.can_start_rotation_action())
+            .disabled(!self.can_edit_rotation())
             .on_click(cx.listener(|this, _, window, cx| this.open_edit_rotation(window, cx)));
             let rotate = Button::new(
                 "secret-rotation-rotate-now",

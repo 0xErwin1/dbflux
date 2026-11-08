@@ -46,6 +46,10 @@ pub(in crate::secret_store) struct RotationNotice {
     pub version: String,
 }
 
+/// Seconds between the follow-up reads of a started rotation (cumulative
+/// 3, 10 and 30).
+const ROTATION_FOLLOW_UP_SECONDS: [u64; 3] = [3, 7, 20];
+
 /// The confirmation of one Rotate now.
 pub(in crate::secret_store) struct RotateNowDialog {
     pub name: String,
@@ -145,6 +149,12 @@ impl SecretStoreDocument {
             && !self.dialog_is_open()
             && self.write_refusal_reason().is_none()
             && matches!(self.selected, Some(SecretRowKey::Secret(_)))
+    }
+
+    /// Whether Edit rotation may open: the details are loaded, so the dialog
+    /// starts from the rotation the store reports and not from a guess.
+    pub fn can_edit_rotation(&self) -> bool {
+        self.can_start_rotation_action() && matches!(self.details, DetailsState::Loaded(_))
     }
 
     /// Why Rotate now cannot run for the selection, when something says so:
@@ -254,6 +264,7 @@ impl SecretStoreDocument {
             Landing::Done(start) => {
                 self.dismiss_dialog(cx);
                 self.rotation_notice = None;
+                self.follow_up_rotation(name, cx);
 
                 let message = match start.version {
                     Some(version) => dbflux_i18n::t!(
@@ -274,6 +285,64 @@ impl SecretStoreDocument {
             }
             Landing::Rejected(failure) => self.report_write_failure(&failure, cx),
         }
+    }
+
+    /// The rotation runs on the service and may finish after the refresh that
+    /// follows the request, so the selected secret is read again a few times
+    /// while it stays selected on the same connection.
+    fn follow_up_rotation(&mut self, name: &str, cx: &mut Context<Self>) {
+        let entity = cx.entity().clone();
+        let name = name.to_string();
+        let session = self.connection(cx);
+
+        cx.spawn(async move |_this, cx| {
+            for seconds in ROTATION_FOLLOW_UP_SECONDS {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(seconds))
+                    .await;
+
+                let keep_going = cx.update(|cx| {
+                    entity.update(cx, |doc, cx| {
+                        doc.refresh_rotation_follow_up(&name, &session, cx)
+                    })
+                });
+
+                if !keep_going {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// One follow-up read of a rotating secret. Returns whether more should
+    /// follow: not once the user moved on or the connection changed.
+    fn refresh_rotation_follow_up(
+        &mut self,
+        name: &str,
+        session: &Option<std::sync::Arc<dyn dbflux_core::Connection>>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let same_session = match (session, self.connection(cx)) {
+            (Some(started), Some(live)) => std::sync::Arc::ptr_eq(started, &live),
+            _ => false,
+        };
+
+        if !same_session || self.selected != Some(SecretRowKey::Secret(name.to_string())) {
+            return false;
+        }
+
+        if !self.write_in_flight {
+            self.describe(name.to_string(), cx);
+            self.request_versions(
+                name.to_string(),
+                crate::secret_store::HistoryLoad::Automatic,
+                cx,
+            );
+            self.reload_listing_in_place(cx);
+        }
+
+        true
     }
 
     pub(in crate::secret_store) fn render_rotate_now_dialog(
@@ -335,7 +404,7 @@ impl SecretStoreDocument {
     /// Opens the Edit rotation dialog on the selected secret's current
     /// settings. Nothing is written until it is confirmed.
     pub fn open_edit_rotation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.can_start_rotation_action() {
+        if !self.can_edit_rotation() {
             return;
         }
 

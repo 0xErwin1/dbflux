@@ -3157,3 +3157,277 @@ fn a_missing_store_write_is_reported_once(cx: &mut TestAppContext) {
 
     assert_eq!(opened.reported_errors().len(), 1);
 }
+
+// -- Review: remaining behaviours --------------------------------------------------------
+
+/// A created secret the active filter would hide, or one below the listed
+/// level, still shows up selected: creating moves the listing's scope to it.
+#[gpui::test]
+fn a_created_secret_is_shown_whatever_the_filter(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    opened.update(|doc, cx| doc.apply_name_filter("staging".to_string(), cx));
+    opened.click("secret-new");
+    opened.type_text("prod/new/credentials");
+    opened.set_create_value(CREATED_VALUE);
+    opened.click("secret-create-confirm");
+
+    assert!(
+        opened
+            .entry_names()
+            .contains(&"prod/new/credentials".to_string())
+    );
+    assert!(opened.read(|doc| doc.selected_summary().is_some()));
+}
+
+#[gpui::test]
+fn a_parameter_created_below_the_level_moves_the_path(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.tall();
+    opened.click("secret-new");
+    opened.type_text("sub/token");
+    opened.set_create_value(CREATED_VALUE);
+    opened.click("secret-create-confirm");
+
+    assert_eq!(
+        opened.read(|doc| doc.path().map(str::to_string)).as_deref(),
+        Some("/app/prod/db/sub/")
+    );
+    assert!(
+        opened
+            .entry_names()
+            .contains(&"/app/prod/db/sub/token".to_string())
+    );
+    assert!(opened.read(|doc| doc.selected_summary().is_some()));
+}
+
+/// Nothing of the create form can change once it was confirmed.
+#[gpui::test]
+fn the_create_form_is_locked_while_it_is_sent(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.tall();
+    opened.click("secret-new");
+    opened.update(|doc, _| doc.write_in_flight = true);
+    opened.window.run_until_parked();
+
+    assert!(opened.is_disabled("secret-create-type-String"));
+    assert!(opened.is_disabled("secret-create-tag-add"));
+
+    opened.update(|doc, cx| doc.set_create_tier("Advanced", cx));
+    let tier = opened.read(|doc| match &doc.dialog {
+        Some(WriteDialog::Create(dialog)) => dialog.tier,
+        _ => "",
+    });
+    assert_eq!(tier, "Standard", "a pick during the write is ignored");
+}
+
+/// Edit rotation needs loaded details: with the describe still loading, the
+/// action is disabled and nothing opens.
+#[gpui::test]
+fn edit_rotation_waits_for_the_details(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.update(|doc, _| doc.details = DetailsState::Loading);
+
+    let enabled = opened.window.update(|_, cx| {
+        opened
+            .doc
+            .read(cx)
+            .pane_actions(&opened.doc)
+            .into_iter()
+            .find(|action| action.id == "secret-edit-rotation")
+            .map(|action| action.enabled)
+    });
+    assert_eq!(enabled, Some(false));
+
+    let doc = opened.doc.clone();
+    opened
+        .window
+        .update(|window, cx| doc.update(cx, |doc, cx| doc.open_edit_rotation(window, cx)));
+    assert!(!opened.dialog_open());
+}
+
+/// A menu entry whose opener refuses (unsaved edits) gives the keyboard back
+/// to the document.
+#[gpui::test]
+fn a_refused_menu_write_restores_focus(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+
+    opened.right_click(&format!("secret-row-{PLAINTEXT_SECRET}"));
+    let index = opened
+        .menu_actions()
+        .iter()
+        .position(|action| action == "Delete")
+        .expect("the menu offers Delete");
+    opened.click_menu_item(&format!("secret-menu-delete-item-{index}"));
+
+    assert!(!opened.dialog_open());
+    let doc = opened.doc.clone();
+    let focused = opened
+        .window
+        .update(|window, cx| doc.read(cx).focus_handle.is_focused(window));
+    assert!(focused, "the document has the keyboard back");
+}
+
+/// `e` with the value not loaded retrieves it and opens the editor, like the
+/// pane action it advertises.
+#[gpui::test]
+fn the_e_key_edits_a_value_that_is_not_loaded(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+
+    assert!(opened.command(Command::EditValue));
+    opened.window.run_until_parked();
+
+    assert!(opened.read(|doc| doc.is_editing_value()));
+}
+
+/// A rotation that finishes after the immediate refresh is picked up by the
+/// follow-up refreshes.
+#[gpui::test]
+fn a_started_rotation_is_followed_up(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-action-rotate-now");
+    opened.click("secret-rotate-confirm");
+    let before = opened.driver.secret_store_calls().described.len();
+
+    cx_advance(&mut opened, 31);
+
+    assert!(
+        opened.driver.secret_store_calls().described.len() > before,
+        "the details were read again after the rotation could have finished"
+    );
+}
+
+fn cx_advance(opened: &mut Opened<'_>, seconds: u64) {
+    opened
+        .window
+        .executor()
+        .advance_clock(std::time::Duration::from_secs(seconds));
+    opened.window.run_until_parked();
+}
+
+/// The menu's keyboard index stays valid when the items shrink under it.
+#[gpui::test]
+fn the_menu_selection_follows_a_shrinking_menu(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    opened.right_click(&format!("secret-row-{PENDING_DELETION_SECRET}"));
+    let last = opened.read(|doc| {
+        doc.context_menu
+            .as_ref()
+            .map_or(0, |menu| menu.items.len() - 1)
+    });
+    opened.update(|doc, _| {
+        if let Some(menu) = doc.context_menu.as_mut() {
+            menu.selected_index = last;
+        }
+        if let Some(entry) = doc
+            .listing
+            .entries
+            .iter_mut()
+            .find(|entry| entry.name == PENDING_DELETION_SECRET)
+        {
+            entry.deletion_scheduled_for = None;
+        }
+        if let DetailsState::Loaded(details) = &mut doc.details {
+            details.summary.deletion_scheduled_for = None;
+        }
+    });
+    opened.window.run_until_parked();
+    let _ = opened.rendered_text();
+
+    let (index, count) = opened.read(|doc| {
+        doc.context_menu
+            .as_ref()
+            .map_or((0, 1), |menu| (menu.selected_index, menu.items.len()))
+    });
+    assert!(index < count, "{index} of {count}");
+    opened.command(Command::MenuSelect);
+}
+
+/// A failed reload does not page on: the error stays and no further page is
+/// asked for.
+#[gpui::test]
+fn a_failed_reload_does_not_request_the_next_page(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+    let before = opened.driver.secret_store_calls().list_requests.len();
+    opened.update(|doc, cx| {
+        doc.listing.next_page_token = Some("2".to_string());
+        let generation = doc.listing.begin_reload();
+        doc.apply_list(
+            generation,
+            Err(dbflux_core::DbError::query_failed("list failed")),
+            0,
+            cx,
+        );
+    });
+
+    assert_eq!(
+        opened.driver.secret_store_calls().list_requests.len(),
+        before
+    );
+    assert!(opened.read(|doc| doc.listing().error.is_some()));
+}
+
+/// The selected secret's pane survives a reload whose first page does not
+/// hold it.
+#[gpui::test]
+fn the_selected_summary_survives_a_reload_that_drops_its_row(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.update(|doc, _| {
+        doc.listing
+            .entries
+            .retain(|entry| entry.name != KEY_VALUE_SECRET);
+    });
+
+    assert!(opened.read(|doc| doc.selected_summary().is_some()));
+}
+
+/// A pending deletion disables Rotate now and Edit tags even when its rotation
+/// is on, so the rotation-off guard cannot be what disables them.
+#[gpui::test]
+fn a_pending_deletion_disables_rotate_now_and_edit_tags_with_rotation_on(cx: &mut TestAppContext) {
+    use super::super::context_menu::SecretMenuAction;
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    opened.update(|doc, _| {
+        if let DetailsState::Loaded(details) = &mut doc.details {
+            details.summary.rotation = Some(dbflux_core::SecretRotation {
+                enabled: true,
+                schedule: Some("rate(30 days)".to_string()),
+                function: Some(FAKE_ROTATION_FUNCTION.to_string()),
+                ..Default::default()
+            });
+        }
+    });
+    opened.right_click(&format!("secret-row-{PENDING_DELETION_SECRET}"));
+
+    let disabled = |action: SecretMenuAction, opened: &mut Opened<'_>| {
+        opened.read(|doc| {
+            doc.context_menu
+                .as_ref()
+                .and_then(|menu| menu.items.iter().find(|item| item.action == action))
+                .map(|item| item.disabled)
+        })
+    };
+    assert_eq!(
+        disabled(SecretMenuAction::RotateNow, &mut opened),
+        Some(true)
+    );
+    assert_eq!(
+        disabled(SecretMenuAction::EditTags, &mut opened),
+        Some(true)
+    );
+    assert_eq!(disabled(SecretMenuAction::Delete, &mut opened), Some(true));
+}
