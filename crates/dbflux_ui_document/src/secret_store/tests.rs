@@ -1260,9 +1260,20 @@ fn a_long_profile_name_never_pushes_the_region_out(cx: &mut TestAppContext) {
     }
 
     resize(&mut opened, minimum);
+    let identity = edges(&mut opened, "secret-identity");
     assert!(
-        edges(&mut opened, "secret-identity").2 < wide_identity,
+        identity.2 < wide_identity,
         "the identity gives way at the minimum width"
+    );
+    assert!(
+        identity.2 > 20.0, // guardrail-allow: test threshold, not spacing
+        "the identity keeps its icon and a few characters: {}",
+        identity.2
+    );
+    let refresh = edges(&mut opened, "secret-refresh");
+    assert!(
+        refresh.1 <= minimum + 0.5,
+        "Refresh stays inside the document"
     );
     assert!(
         opened.rendered_text().contains(name),
@@ -1318,23 +1329,15 @@ fn clipped_identity_and_footer_summary_show_their_full_text_on_hover(cx: &mut Te
     let wide_identity = edges(&mut opened, "secret-identity").2;
     let wide_summary = edges(&mut opened, "secret-footer-summary").2;
 
-    // The widest document at which both are clipped yet still have room to
-    // be hovered: at the minimum width the identity gives way entirely.
     let minimum = minimum_document_width(&mut opened);
-    let mut width = 1500.0;
-    while width > minimum {
-        width -= 25.0;
-        resize(&mut opened, width);
-
-        let identity = edges(&mut opened, "secret-identity").2;
-        let summary = edges(&mut opened, "secret-footer-summary").2;
-
-        if identity < wide_identity && identity > 20.0 && summary < wide_summary && summary > 20.0 {
-            break;
-        }
-    }
+    resize(&mut opened, minimum);
     assert!(edges(&mut opened, "secret-identity").2 < wide_identity);
-    assert!(edges(&mut opened, "secret-footer-summary").2 < wide_summary);
+    let summary_width = edges(&mut opened, "secret-footer-summary").2;
+    assert!(summary_width < wide_summary);
+    assert!(
+        summary_width > 20.0, // guardrail-allow: test threshold, not spacing
+        "the summary keeps its icon and a few characters: {summary_width}"
+    );
 
     let identity = hover_tooltip(&mut opened, "secret-identity");
     assert!(identity.contains(name), "{identity}");

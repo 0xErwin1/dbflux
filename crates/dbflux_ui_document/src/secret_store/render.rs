@@ -32,6 +32,13 @@ use gpui_component::scroll::ScrollableElement;
 /// narrowing until it reaches its minimum width.
 const SEARCH_SHRINK_WEIGHT: f32 = 1000.0;
 
+/// The narrowest the identity gets: the store icon and a few characters
+/// before the ellipsis, so it stays visible and hoverable for its tooltip.
+const IDENTITY_MIN_WIDTH: Rems = dbflux_components::tokens::ui(72.0);
+
+/// The narrowest the footer summary gets, for the same reason.
+const SUMMARY_MIN_WIDTH: Rems = dbflux_components::tokens::ui(48.0);
+
 /// Placeholder for a field the store did not report.
 pub(super) const UNKNOWN: &str = "—";
 
@@ -250,7 +257,7 @@ impl SecretStoreDocument {
                 .id("secret-identity")
                 .flex()
                 .flex_shrink_1()
-                .min_w_0()
+                .min_w(IDENTITY_MIN_WIDTH)
                 .overflow_hidden()
                 .role(gpui::accesskit::Role::Label)
                 .aria_label(identity_text.clone())
@@ -846,7 +853,7 @@ impl SecretStoreDocument {
                     .id("secret-footer-summary")
                     .flex()
                     .flex_1()
-                    .min_w_0()
+                    .min_w(SUMMARY_MIN_WIDTH)
                     .overflow_hidden()
                     .items_center()
                     .gap(ResultMetrics::FOOTER_ITEM_GAP)
