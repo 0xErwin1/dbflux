@@ -534,6 +534,16 @@ impl SecretStoreDocument {
             return;
         }
 
+        // A save out of an editor that is gone still answers: a second one
+        // would let the first answer release the guard under it.
+        if self.editor_save_in_flight {
+            self.report_write_warning(
+                dbflux_i18n::t!("document.secret_store.write.in_progress"),
+                cx,
+            );
+            return;
+        }
+
         if self.write_in_flight {
             self.report_write_warning(
                 dbflux_i18n::t!("document.secret_store.write.in_progress"),

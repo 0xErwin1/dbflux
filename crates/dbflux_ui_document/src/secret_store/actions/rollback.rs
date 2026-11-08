@@ -77,37 +77,23 @@ impl SecretStoreDocument {
     }
 
     /// The index of the most recent version created before the current one,
-    /// which `b` rolls back to. The current version is not always the newest
-    /// (after a roll back it is an older one), so a newer version is never
-    /// "previous": only the versions older than the current one count. A
-    /// version with no creation date is placed by its position in the
-    /// history, which lists newest first.
+    /// which `b` rolls back to. The history lists newest first, so the
+    /// versions after the current one are the older ones and the first that
+    /// can be rolled back to is the most recent of them. The current version
+    /// is not always the first row (after a roll back it is an older one), so
+    /// a newer version is never "previous". The order decides, not the dates:
+    /// a version with no creation date keeps its place.
     pub(in crate::secret_store) fn previous_version_index(&self) -> Option<usize> {
         let VersionsState::Loaded(versions) = &self.versions else {
             return None;
         };
 
-        let current = versions
+        let first_older = versions
             .iter()
-            .position(|version| self.is_current_version(&version.id));
-        let current_created = current
-            .and_then(|index| versions.get(index))
-            .and_then(|version| version.created);
+            .position(|version| self.is_current_version(&version.id))
+            .map_or(0, |current| current + 1);
 
-        let is_older = |index: usize, created| match (current, current_created, created) {
-            (_, Some(current_created), Some(created)) => created < current_created,
-            (Some(current), ..) => index > current,
-            (None, ..) => true,
-        };
-
-        versions
-            .iter()
-            .enumerate()
-            .filter(|(index, version)| {
-                is_older(*index, version.created) && self.version_to_roll_back(*index).is_some()
-            })
-            .min_by_key(|(index, version)| (std::cmp::Reverse(version.created), *index))
-            .map(|(index, _)| index)
+        (first_older..versions.len()).find(|index| self.version_to_roll_back(*index).is_some())
     }
 
     fn has_pending_earlier_version(&self) -> bool {

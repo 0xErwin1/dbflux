@@ -92,6 +92,13 @@ impl CreateDialog {
             .is_none_or(|choices| choices.takes_encryption_key(&self.value_type))
     }
 
+    /// Whether the store declares value types to pick from.
+    fn offers_value_types(&self) -> bool {
+        self.choices
+            .as_ref()
+            .is_some_and(|choices| !choices.value_types().is_empty())
+    }
+
     /// The text of a single-line field, `None` when it is empty.
     fn field(input: &Entity<InputState>, cx: &App) -> Option<String> {
         let text = input.read(cx).value().trim().to_string();
@@ -109,7 +116,7 @@ impl CreateDialog {
             request = request.with_description(description);
         }
 
-        if self.choices.is_some() {
+        if self.offers_value_types() {
             request = request.with_value_type(self.value_type.as_str());
         }
 
@@ -524,7 +531,11 @@ impl SecretStoreDocument {
                 cx,
             ));
 
-        if let Some(choices) = &dialog.choices {
+        if let Some(choices) = dialog
+            .choices
+            .as_ref()
+            .filter(|_| dialog.offers_value_types())
+        {
             body = body.child(modal_field(
                 dbflux_i18n::t!("document.secret_store.create.type"),
                 self.render_choice_group(

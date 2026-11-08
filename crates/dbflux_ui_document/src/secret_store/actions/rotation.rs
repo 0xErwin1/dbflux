@@ -301,6 +301,11 @@ impl SecretStoreDocument {
         let name = name.to_string();
         let session = self.connection(cx);
 
+        // A newer rotation takes over: the older schedule stops at its next
+        // tick, and the latest one still ends with its own final read.
+        self.rotation_follow_up_generation = self.rotation_follow_up_generation.wrapping_add(1);
+        let generation = self.rotation_follow_up_generation;
+
         cx.spawn(async move |_this, cx| {
             for seconds in ROTATION_FOLLOW_UP_SECONDS {
                 cx.background_executor()
@@ -309,7 +314,8 @@ impl SecretStoreDocument {
 
                 let keep_going = cx.update(|cx| {
                     entity.update(cx, |doc, cx| {
-                        doc.refresh_rotation_follow_up(&name, &session, cx)
+                        doc.rotation_follow_up_generation == generation
+                            && doc.refresh_rotation_follow_up(&name, &session, cx)
                     })
                 });
 

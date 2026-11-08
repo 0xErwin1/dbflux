@@ -3591,10 +3591,19 @@ fn a_create_finishing_after_navigation_keeps_the_newer_selection(cx: &mut TestAp
             doc.confirm_dialog(window, cx);
             doc.navigate_to(Some("/app/prod/".to_string()), cx);
             doc.select_row(SecretRowKey::Secret("/app/prod/region".to_string()), cx);
+            // Loaded before the create lands, so a landing that clears it shows.
+            doc.value = ValueState::Loaded(Box::new(RetrievedValue::new(&SecretValue::text(
+                None,
+                "newer-selection-value".to_string(),
+            ))));
         })
     });
     opened.window.run_until_parked();
 
+    assert!(
+        opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))),
+        "the newer selection keeps its loaded value"
+    );
     assert_eq!(opened.created().len(), 1, "the create reached the store");
     assert_eq!(
         opened.read(|doc| doc.selected().cloned()),
@@ -3812,4 +3821,139 @@ fn a_missing_store_save_is_recorded_as_a_value_write_attempt(cx: &mut TestAppCon
         failed[0].correlation_id.as_deref(),
         Some(errors[0].0.to_string().as_str())
     );
+}
+
+/// A second editor save is refused while one is pending, even when the
+/// editor that started the first is gone: no second request, one report.
+#[gpui::test]
+fn a_second_editor_save_is_refused_while_one_is_pending(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+    opened.update(|doc, _| doc.editor_save_in_flight = true);
+
+    opened.save_edit();
+
+    assert!(opened.written_values().is_empty(), "no second request");
+    assert_eq!(opened.reported_errors().len(), 1, "reported once");
+    assert!(
+        opened.read(|doc| !doc.is_saving_value_edit()),
+        "the refused save does not mark the editor saving"
+    );
+    assert!(opened.read(|doc| doc.editor_save_in_flight));
+}
+
+/// Without dates the history's newest-first order decides: the version right
+/// after the current one is previous, not a dated one further down.
+#[gpui::test]
+fn b_follows_the_history_order_when_dates_are_missing(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.update(|doc, _| {
+        if let VersionsState::Loaded(versions) = &mut doc.versions {
+            versions[0].created = None;
+            versions[1].created = None;
+        }
+    });
+
+    assert_eq!(opened.read(|doc| doc.previous_version_index()), Some(1));
+}
+
+/// Two rotations landing close together share one follow-up schedule.
+#[gpui::test]
+fn overlapping_rotation_follow_ups_are_coalesced(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let stands = || super::super::SecretWriteFailure {
+        error: dbflux_core::DbError::query_failed("audit event lost"),
+        correlation_id: None,
+        kind: super::super::SecretWriteFailureKind::AuditLost,
+        audit_unrecorded: false,
+    };
+
+    for _ in 0..2 {
+        opened.update(|doc, cx| {
+            doc.land_rotate_now(
+                KEY_VALUE_SECRET,
+                super::super::actions::Landing::Stands(stands()),
+                cx,
+            )
+        });
+    }
+    let before = opened.driver.secret_store_calls().described.len();
+
+    cx_advance(&mut opened, 31);
+
+    let reads = opened.driver.secret_store_calls().described.len() - before;
+    assert_eq!(reads, 3, "one schedule of three reads, not two");
+}
+
+/// A store that declares tiers but no value types shows no type group and
+/// sends no value type.
+#[gpui::test]
+fn a_store_without_declared_value_types_sends_none(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.tall();
+    opened.update(|doc, _| {
+        doc.store.create_choices = Some(
+            dbflux_core::SecretCreateChoices::new(Vec::<String>::new(), "")
+                .with_tiers(["Low", "High"], "High"),
+        );
+    });
+    opened.click("secret-new");
+
+    assert!(
+        !opened.is_drawn("secret-create-type"),
+        "no empty type group"
+    );
+    assert!(opened.is_drawn("secret-create-tier"));
+
+    opened.type_text("untyped");
+    opened.set_create_value(CREATED_VALUE);
+    opened.click("secret-create-confirm");
+
+    let request = opened
+        .mutations()
+        .into_iter()
+        .find_map(|mutation| match mutation {
+            FakeSecretMutation::Create(request) => Some(request),
+            _ => None,
+        })
+        .expect("the create reached the store");
+    assert_eq!(request.value_type, None);
+    assert_eq!(request.tier.as_deref(), Some("High"));
+}
+
+/// Types and tiers the store declares, however unlike AWS's, reach the
+/// request: the picked type and the untouched non-first default tier. The
+/// fake refuses them, so the attempt is read from the recorded mutations.
+#[gpui::test]
+fn provider_defined_choices_reach_the_create_request(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.tall();
+    opened.update(|doc, _| {
+        doc.store.create_choices = Some(
+            dbflux_core::SecretCreateChoices::new(["Plain", "Sealed"], "Plain")
+                .with_tiers(["Low", "Mid", "High"], "Mid"),
+        );
+    });
+    opened.click("secret-new");
+    opened.click("secret-create-type-Sealed");
+    opened.type_text("custom");
+    opened.set_create_value(CREATED_VALUE);
+
+    opened.click("secret-create-confirm");
+
+    let request = opened
+        .mutations()
+        .into_iter()
+        .find_map(|mutation| match mutation {
+            FakeSecretMutation::Create(request) => Some(request),
+            _ => None,
+        })
+        .expect("the attempt reached the store");
+    assert_eq!(request.value_type.as_deref(), Some("Sealed"));
+    assert_eq!(request.tier.as_deref(), Some("Mid"));
 }

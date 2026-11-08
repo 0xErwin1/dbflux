@@ -212,6 +212,9 @@ pub struct SecretStoreDocument {
     /// refresh or a reselection clears while the save is still out, so an
     /// action write waits for the answer whatever became of the editor.
     editor_save_in_flight: bool,
+    /// Bumped by every started rotation follow-up; an older schedule stops at
+    /// its next tick, so overlapping rotations share the latest one.
+    rotation_follow_up_generation: u64,
     /// A rotation cancelled before it finished, shown in the Rotation
     /// section while its secret stays selected.
     rotation_notice: Option<RotationNotice>,
@@ -392,6 +395,7 @@ impl SecretStoreDocument {
             clear_search_input: false,
             write_in_flight: false,
             editor_save_in_flight: false,
+            rotation_follow_up_generation: 0,
             rotation_notice: None,
             edit_after_retrieve: false,
             _subscriptions: subscriptions,
