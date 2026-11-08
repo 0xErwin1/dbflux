@@ -243,85 +243,143 @@ const REDACTED: &str = "[redacted]";
 
 /// Removes a submitted value from a put error before it reaches the user.
 /// A service message that echoes the submitted value would print the very
-/// secret the write was carrying, so every field a `FormattedError` renders
-/// is scrubbed: the text value verbatim, a binary value as its lossy UTF-8
-/// rendering, the form a service echoing received bytes would produce. An
-/// empty value scrubs nothing, so `replace` cannot mangle the message.
+/// secret the write was carrying, so every field an error renders — the
+/// message, detail, hint, code and every location field — is scrubbed of
+/// the text value verbatim and of the JSON-escaped form a serializer writes
+/// inside a request body; a binary value as its lossy UTF-8 rendering, the
+/// form a service echoing received bytes would produce, in both forms. An
+/// empty form scrubs nothing, so `replace` cannot mangle the message.
+///
+/// The governed seam scrubs again with the same rules; this one exists so a
+/// driver error is clean before it leaves the driver.
 pub(crate) fn scrub_submitted_value(error: DbError, payload: &SecretPayload) -> DbError {
     let submitted = match payload {
         SecretPayload::Text(text) => text.expose_secret().to_owned(),
         SecretPayload::Binary(bytes) => String::from_utf8_lossy(bytes.expose_secret()).into_owned(),
     };
+    let escaped = json_escaped(&submitted);
 
-    scrub_value_from_message(error, &submitted)
+    scrub_value_from_message(error, &[&submitted, &escaped])
 }
 
-fn scrub_value_from_message(error: DbError, value: &str) -> DbError {
-    if value.is_empty() {
-        return error;
+/// The JSON-escaped form of a value, without the surrounding quotes: what a
+/// serializer writes for it inside a JSON body. Empty when it adds nothing
+/// over the verbatim value.
+fn json_escaped(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                escaped.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => escaped.push(c),
+        }
     }
 
-    let scrub = |formatted: &mut FormattedError| {
-        formatted.message = formatted.message.replace(value, REDACTED);
-        if let Some(detail) = &mut formatted.detail {
-            *detail = detail.replace(value, REDACTED);
-        }
-        if let Some(hint) = &mut formatted.hint {
-            *hint = hint.replace(value, REDACTED);
-        }
-    };
-    let scrub_string = |message: &mut String| *message = message.replace(value, REDACTED);
+    if escaped == value {
+        String::new()
+    } else {
+        escaped
+    }
+}
 
+fn scrub_string(field: &mut String, needles: &[&str]) {
+    for needle in needles {
+        if !needle.is_empty() && *needle != REDACTED {
+            *field = field.replace(needle, REDACTED);
+        }
+    }
+}
+
+fn scrub_formatted(formatted: &mut FormattedError, needles: &[&str]) {
+    scrub_string(&mut formatted.message, needles);
+    for field in [
+        &mut formatted.detail,
+        &mut formatted.hint,
+        &mut formatted.code,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        scrub_string(field, needles);
+    }
+    if let Some(location) = &mut formatted.location {
+        for field in [
+            &mut location.schema,
+            &mut location.table,
+            &mut location.column,
+            &mut location.constraint,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            scrub_string(field, needles);
+        }
+    }
+}
+
+fn scrub_value_from_message(error: DbError, needles: &[&str]) -> DbError {
     match error {
         DbError::ConnectionFailed(mut formatted) => {
-            scrub(&mut formatted);
+            scrub_formatted(&mut formatted, needles);
             DbError::ConnectionFailed(formatted)
         }
         DbError::QueryFailed(mut formatted) => {
-            scrub(&mut formatted);
+            scrub_formatted(&mut formatted, needles);
             DbError::QueryFailed(formatted)
         }
         DbError::AuthFailed(mut formatted) => {
-            scrub(&mut formatted);
+            scrub_formatted(&mut formatted, needles);
             DbError::AuthFailed(formatted)
         }
         DbError::ConstraintViolation(mut formatted) => {
-            scrub(&mut formatted);
+            scrub_formatted(&mut formatted, needles);
             DbError::ConstraintViolation(formatted)
         }
         DbError::SyntaxError(mut formatted) => {
-            scrub(&mut formatted);
+            scrub_formatted(&mut formatted, needles);
             DbError::SyntaxError(formatted)
         }
         DbError::PermissionDenied(mut formatted) => {
-            scrub(&mut formatted);
+            scrub_formatted(&mut formatted, needles);
             DbError::PermissionDenied(formatted)
         }
         DbError::ObjectNotFound(mut formatted) => {
-            scrub(&mut formatted);
+            scrub_formatted(&mut formatted, needles);
             DbError::ObjectNotFound(formatted)
         }
         DbError::NotSupported(mut message) => {
-            scrub_string(&mut message);
+            scrub_string(&mut message, needles);
             DbError::NotSupported(message)
         }
         DbError::InvalidProfile(mut message) => {
-            scrub_string(&mut message);
+            scrub_string(&mut message, needles);
             DbError::InvalidProfile(message)
         }
         DbError::ValueResolutionFailed(mut message) => {
-            scrub_string(&mut message);
+            scrub_string(&mut message, needles);
             DbError::ValueResolutionFailed(message)
         }
         DbError::Parse(mut message) => {
-            scrub_string(&mut message);
+            scrub_string(&mut message, needles);
             DbError::Parse(message)
         }
         DbError::Unsupported(mut message) => {
-            scrub_string(&mut message);
+            scrub_string(&mut message, needles);
             DbError::Unsupported(message)
         }
-        other => other,
+        DbError::IoError(error) => {
+            let kind = error.kind();
+            let mut message = error.to_string();
+            scrub_string(&mut message, needles);
+            DbError::IoError(std::io::Error::new(kind, message))
+        }
+        other @ (DbError::Timeout | DbError::Cancelled) => other,
     }
 }
 

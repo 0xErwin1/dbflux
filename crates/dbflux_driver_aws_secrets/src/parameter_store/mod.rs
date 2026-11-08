@@ -530,9 +530,7 @@ impl SecretStoreSource for ParameterStore {
 
         let payload = SecretPayload::Text(value);
         let output = runtime().block_on(fluent.send()).map_err(|error| {
-            // The service may echo the re-sent value in its own message; the
-            // error never carries it onward.
-            scrub_submitted_value(self.operation_error(&error, Some(&update.name)), &payload)
+            description_write_error(self.operation_error(&error, Some(&update.name)), &payload)
         })?;
 
         ensure_written_after(plan.read_version, output.version(), &update.name)?;
@@ -645,6 +643,13 @@ pub(crate) fn plan_create(request: &SecretCreateRequest) -> Result<CreateParamet
         description: request.description.clone(),
         tags: ssm_tags(&request.tags)?,
     })
+}
+
+/// The error of a description rewrite. The call re-sends the decrypted
+/// current value, so the service may echo that value in its own message;
+/// it is scrubbed in every form before the error leaves the driver.
+pub(crate) fn description_write_error(error: DbError, resent: &SecretPayload) -> DbError {
+    scrub_submitted_value(error, resent)
 }
 
 /// Most characters a parameter description holds.

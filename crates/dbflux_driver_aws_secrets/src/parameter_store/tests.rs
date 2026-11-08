@@ -1,16 +1,16 @@
 use aws_sdk_ssm::config::{BehaviorVersion, Builder as ConfigBuilder, Credentials, Region};
 use aws_sdk_ssm::types::{ParameterMetadata, ParameterType};
 use dbflux_core::{
-    DbError, SecretCreateRequest, SecretDeleteRequest, SecretPutRequest, SecretStoreCapabilities,
-    SecretStoreSource, SecretVersionStage,
+    DbError, SecretCreateRequest, SecretDeleteRequest, SecretPayload, SecretPutRequest,
+    SecretStoreCapabilities, SecretStoreSource, SecretVersionStage,
 };
 
 use super::hierarchy::{group_level, normalize_path, path_filter_value};
 use super::{
-    ParameterStore, confirmed_deletion_name, ensure_unchanged_while_reading, ensure_written_after,
-    existing_key_id, find_parameter_on_pages, list_versions_on_pages, overwrite_type,
-    page_versions, plan_create, plan_description_write, put_parameter_call, put_text,
-    sort_newest_first, ssm_tags,
+    ParameterStore, confirmed_deletion_name, description_write_error,
+    ensure_unchanged_while_reading, ensure_written_after, existing_key_id, find_parameter_on_pages,
+    list_versions_on_pages, overwrite_type, page_versions, plan_create, plan_description_write,
+    put_parameter_call, put_text, sort_newest_first, ssm_tags,
 };
 use crate::driver::AwsSecretsProfileConfig;
 
@@ -765,4 +765,46 @@ fn a_parameter_create_refuses_what_the_service_would_before_any_call() {
         "create-value-probe",
     ))
     .expect("fifteen levels are the maximum");
+}
+
+fn text_payload(value: &str) -> SecretPayload {
+    SecretPayload::Text(dbflux_core::secrecy::SecretString::from(value.to_string()))
+}
+
+/// The value as typed, and the form a serializer writes for it inside a
+/// JSON request body (`"` as `\"`, a newline as `\n`).
+const RESENT: &str = "pa\"ss\nword";
+const RESENT_JSON: &str = "pa\\\"ss\\nword";
+
+#[test]
+fn a_description_write_error_never_renders_the_resent_value_in_any_form() {
+    let error = description_write_error(
+        DbError::query_failed(format!("bad {RESENT_JSON} / {RESENT}")),
+        &text_payload(RESENT),
+    );
+
+    let rendered = error.to_string();
+    assert!(!rendered.contains(RESENT), "{rendered}");
+    assert!(!rendered.contains(RESENT_JSON), "{rendered}");
+    assert!(rendered.contains("[redacted]"), "{rendered}");
+}
+
+#[test]
+fn a_description_write_error_is_scrubbed_in_the_code_and_location_fields_too() {
+    let formatted = dbflux_core::FormattedError::new("rejected")
+        .with_detail(format!("detail {RESENT}"))
+        .with_hint(format!("hint {RESENT_JSON}"))
+        .with_code(format!("code:{RESENT}"))
+        .with_location(dbflux_core::ErrorLocation {
+            schema: Some(RESENT.to_string()),
+            table: Some(format!("t {RESENT_JSON}")),
+            column: Some(RESENT.to_string()),
+            constraint: Some(RESENT_JSON.to_string()),
+        });
+
+    let error = description_write_error(DbError::QueryFailed(formatted), &text_payload(RESENT));
+
+    let rendered = format!("{error:?}");
+    assert!(!rendered.contains("word"), "{rendered}");
+    assert!(!rendered.contains("pa\\\"ss"), "{rendered}");
 }
