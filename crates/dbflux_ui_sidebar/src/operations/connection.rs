@@ -1685,26 +1685,34 @@ mod tests {
         });
     }
 
+    /// Clicks the row twice through the real element. The events are
+    /// dispatched without parking the scheduler, so a connect the click starts
+    /// stays in flight until the test lets the executor run.
     fn double_click_row(item_id: &str, cx: &mut VisualTestContext) {
-        use gpui::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent};
+        use gpui::{InputEvent, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent};
 
         let selector: &'static str = Box::leak(format!("row-{item_id}").into_boxed_str());
         let bounds = cx.debug_bounds(selector).expect("the profile row is drawn");
         let position = bounds.center();
 
         for click_count in [1, 2] {
-            cx.simulate_event(MouseDownEvent {
+            let down = MouseDownEvent {
                 position,
                 modifiers: Modifiers::default(),
                 button: MouseButton::Left,
                 click_count,
                 first_mouse: false,
-            });
-            cx.simulate_event(MouseUpEvent {
+            };
+            let up = MouseUpEvent {
                 position,
                 modifiers: Modifiers::default(),
                 button: MouseButton::Left,
                 click_count,
+            };
+
+            cx.update(|window, cx| {
+                window.dispatch_event(down.to_platform_input(), cx);
+                window.dispatch_event(up.to_platform_input(), cx);
             });
         }
     }
@@ -1718,22 +1726,59 @@ mod tests {
         })
     }
 
+    /// The number of toasts on the stack and the title of the newest.
+    fn toast_stack(cx: &mut VisualTestContext) -> (usize, Option<String>) {
+        cx.update(|_, cx| {
+            let host = cx
+                .global::<dbflux_ui_base::toast::ToastGlobal>()
+                .host
+                .read(cx);
+            (host.toast_count(), host.last_toast_title())
+        })
+    }
+
     #[gpui::test]
     fn double_click_on_a_connection_connects_once_without_an_error(cx: &mut TestAppContext) {
         let (fixture, cx) = password_fixture(true, cx);
-        let item_id = dbflux_core::SchemaNodeId::Profile {
-            profile_id: fixture.profile_id,
-        }
-        .to_string();
+        let profile_id = fixture.profile_id;
+        let item_id = dbflux_core::SchemaNodeId::Profile { profile_id }.to_string();
+        let pending_title = crate::labels::connection_already_pending_toast_label();
 
         cx.run_until_parked();
+
+        // The connect runs on the background executor, which does not advance
+        // until the scheduler is parked: the first attempt holds its pending
+        // slot while the second double click arrives.
         double_click_row(&item_id, cx);
+        fixture.state.read_with(cx, |state, _| {
+            assert!(state.is_operation_pending(profile_id, None));
+        });
+        assert!(recorded(&fixture.passwords).is_empty());
+
+        double_click_row(&item_id, cx);
+        fixture.state.read_with(cx, |state, _| {
+            assert!(
+                state.is_operation_pending(profile_id, None),
+                "the second request met the first attempt's pending slot"
+            );
+        });
+        let (during_count, during_title) = toast_stack(cx);
+        assert_ne!(during_title, Some(pending_title.clone()));
+
         cx.run_until_parked();
 
         assert_eq!(recorded(&fixture.passwords).len(), 1);
-        assert_ne!(
-            last_toast_title(cx),
-            Some(crate::labels::connection_already_pending_toast_label())
+        fixture.state.read_with(cx, |state, _| {
+            assert!(state.connections().contains_key(&profile_id));
+        });
+        // An earlier error toast would sit under the success one, so the
+        // whole stack is counted, not only its top.
+        let (count, title) = toast_stack(cx);
+        assert_ne!(title, Some(pending_title));
+        assert_eq!(
+            count,
+            during_count + 1,
+            "only the success toast was added; no error hides beneath it"
         );
     }
 
