@@ -362,8 +362,10 @@ impl SecretStoreDocument {
     /// listing on what the connection actually reaches.
     fn watch_app_state(app_state: &Entity<AppStateEntity>, cx: &mut Context<Self>) -> Subscription {
         cx.subscribe(app_state, |this, _, _: &AppStateChanged, cx| {
-            this.view
-                .update(cx, |view, cx| view.close_dialog_if_session_replaced(cx));
+            this.view.update(cx, |view, cx| {
+                view.sync_connection_presence(cx);
+                view.close_dialog_if_session_replaced(cx)
+            });
             this.adopt_connection_region(cx);
             this.view.update(cx, |view, cx| {
                 view.adopt_connection_session(HistoryLoad::Automatic, cx)

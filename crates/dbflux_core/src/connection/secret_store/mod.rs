@@ -413,8 +413,10 @@ pub struct SecretDetails {
 
     pub tags: Vec<SecretTag>,
 
-    /// When the deletion was requested. Set together with
-    /// `SecretSummary::deletion_scheduled_for`.
+    /// When the deletion was requested, for a store that reports that moment.
+    /// A store that reports only the date the deletion takes effect
+    /// (`SecretSummary::deletion_scheduled_for`) leaves it `None`: the moment
+    /// and the recovery window are then unknown, and neither is inferred.
     pub deleted_at: Option<DateTime<Utc>>,
 }
 

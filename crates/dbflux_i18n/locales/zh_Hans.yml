@@ -3546,6 +3546,7 @@ document:
       loading: "正在加载版本…"
       failed: "无法加载版本"
       scheduled_for_deletion: "已计划删除；恢复后即可查看其版本"
+      not_connected: "未连接；连接后即可查看版本"
       retrieve: "获取版本 %{version}"
       back_to_current: "返回当前版本"
       shown: "正在显示版本 %{version}"
@@ -3617,6 +3618,7 @@ document:
       metadata_loaded: "元数据已加载 · 仅值获取失败"
       deletion_scheduled: "计划于 %{date} 删除"
       deletion_scheduled_body: "在恢复之前无法获取其值。"
+      deletion_scheduled_unknown: "已计划删除"
 
     edit:
       open: "编辑值"

@@ -48,6 +48,7 @@ impl SecretView {
     /// nobody else manages and whose deletion is not pending.
     pub fn can_roll_back_version(&self, index: usize) -> bool {
         self.supports_roll_back()
+            && self.connection_present
             && self.write_refusal_reason().is_none()
             && !self.dialog_is_open()
             && !self.write_in_flight

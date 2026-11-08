@@ -92,6 +92,10 @@ impl SecretStoreDocument {
             return;
         }
 
+        // An explicit refresh believes the store over what a write confirmed.
+        self.view
+            .update(cx, |view, _| view.clear_confirmed_deletions());
+
         if matches!(self.regions, super::RegionListState::Failed(_)) {
             self.load_regions(cx);
         }

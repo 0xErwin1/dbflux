@@ -3546,6 +3546,7 @@ document:
       loading: "Carregando as versões…"
       failed: "Não foi possível carregar as versões"
       scheduled_for_deletion: "Agendado para exclusão; restaure-o para ver as versões"
+      not_connected: "Sem conexão; conecte-se para ver as versões"
       retrieve: "Recuperar a versão %{version}"
       back_to_current: "Voltar para a atual"
       shown: "Exibindo a versão %{version}"
@@ -3617,6 +3618,7 @@ document:
       metadata_loaded: "Metadados carregados · só o valor falhou"
       deletion_scheduled: "Exclusão agendada para %{date}"
       deletion_scheduled_body: "O valor não pode ser obtido até que seja restaurado."
+      deletion_scheduled_unknown: "Exclusão agendada"
 
     edit:
       open: "Editar valor"

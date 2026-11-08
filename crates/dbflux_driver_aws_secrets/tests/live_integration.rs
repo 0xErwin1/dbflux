@@ -926,10 +926,12 @@ fn secrets_manager_delete_schedules_with_a_window_and_restore_brings_the_secret_
         let connection = connect(&endpoint)?;
         let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
 
+        let before_delete = dbflux_core::chrono::Utc::now();
         let deletion = secrets.delete_secret(&SecretDeleteRequest::scheduled(
             "deletable",
             DEFAULT_RECOVERY_WINDOW_DAYS,
         ))?;
+        let after_delete = dbflux_core::chrono::Utc::now();
 
         assert!(
             deletion.deletion_scheduled_for.is_some(),
@@ -937,7 +939,25 @@ fn secrets_manager_delete_schedules_with_a_window_and_restore_brings_the_secret_
         );
         let details = secrets.describe("deletable")?;
         assert!(details.summary.is_pending_deletion());
-        assert!(details.deleted_at.is_some());
+        assert!(
+            details.deleted_at.is_none(),
+            "DescribeSecret does not report when the deletion was requested"
+        );
+
+        // `DeletedDate` is when the deletion takes effect: the requested
+        // window after the delete call, to within clock and rounding noise,
+        // far under a day.
+        let scheduled = details
+            .summary
+            .deletion_scheduled_for
+            .expect("the scheduled deletion date");
+        let window = dbflux_core::chrono::Duration::days(i64::from(DEFAULT_RECOVERY_WINDOW_DAYS));
+        let tolerance = dbflux_core::chrono::Duration::minutes(5);
+        assert!(
+            scheduled >= before_delete + window - tolerance
+                && scheduled <= after_delete + window + tolerance,
+            "{scheduled} is not {window} after the delete call ({before_delete} to {after_delete})"
+        );
         assert!(
             secrets.get_value("deletable", None).is_err(),
             "a secret pending deletion has no readable value"

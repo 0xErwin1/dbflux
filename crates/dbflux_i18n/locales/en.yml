@@ -3546,6 +3546,7 @@ document:
       loading: "Loading the versions…"
       failed: "The versions could not be loaded"
       scheduled_for_deletion: "Scheduled for deletion; restore it to see its versions"
+      not_connected: "Not connected; connect to see the versions"
       retrieve: "Retrieve version %{version}"
       back_to_current: "Back to current"
       shown: "Showing version %{version}"
@@ -3617,6 +3618,7 @@ document:
       metadata_loaded: "Metadata loaded · only the value failed"
       deletion_scheduled: "Deletion scheduled for %{date}"
       deletion_scheduled_body: "Its value cannot be retrieved until it is restored."
+      deletion_scheduled_unknown: "Deletion scheduled"
 
     edit:
       open: "Edit value"

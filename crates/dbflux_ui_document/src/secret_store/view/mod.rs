@@ -10,6 +10,7 @@
 
 mod actions;
 mod data;
+mod deletion;
 pub(super) mod details;
 pub(super) mod editor;
 mod inputs;
@@ -69,6 +70,8 @@ pub enum VersionsState {
     /// The secret is scheduled for deletion: the service refuses its
     /// history, so it is not asked until the secret is restored.
     ScheduledForDeletion,
+    /// The profile has no live connection: nothing is asked until it returns.
+    NotConnected,
 }
 
 /// What a view tells its host.
@@ -126,6 +129,12 @@ pub struct SecretView {
     /// current selection, so the next one to find the same loss stays quiet.
     /// Cleared when a connection is found again or the selection is reset.
     pub(super) missing_connection_reported: bool,
+    /// The deletion state this view's own writes confirmed, by secret name.
+    confirmed_deletions: HashMap<String, deletion::ConfirmedDeletion>,
+    /// Whether the profile held a live connection when the view last heard of
+    /// a state change. The actions that need one are disabled while it is
+    /// false; a path that still reaches the store reports the loss.
+    connection_present: bool,
     /// The version whose value the value section shows or is retrieving,
     /// `None` for the current value.
     pub(super) value_version: Option<String>,
@@ -197,6 +206,8 @@ impl SecretView {
         region_switching: Rc<Cell<bool>>,
         cx: &mut Context<Self>,
     ) -> Self {
+        let connection_present = app_state.read(cx).connections().contains_key(&profile_id);
+
         Self {
             profile_id,
             store,
@@ -212,6 +223,8 @@ impl SecretView {
             value_view_sets: 0,
             versions_session: None,
             missing_connection_reported: false,
+            confirmed_deletions: HashMap::new(),
+            connection_present,
             value_version: None,
             value: ValueState::NotLoaded,
             value_generation: 0,
@@ -238,10 +251,28 @@ impl SecretView {
         }
     }
 
+    /// Whether the profile had a live connection at the last state change.
+    pub fn is_connected(&self) -> bool {
+        self.connection_present
+    }
+
+    /// Follows the profile's connection coming and going, so the actions that
+    /// need it enable and disable with it.
+    pub(super) fn sync_connection_presence(&mut self, cx: &mut Context<Self>) {
+        let present = self.connection(cx).is_some();
+
+        if present != self.connection_present {
+            self.connection_present = present;
+            cx.notify();
+        }
+    }
+
     /// Runs what the view needs a window for before it draws: the inputs
     /// that show a retrieved value, and the editor a pending Edit value
     /// opens once its retrieval landed.
     pub(super) fn prepare_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_connection_presence(cx);
+
         // An editor that kept unsaved text across a session change may have
         // closed since; its value must not outlive the session either.
         self.drop_value_of_replaced_session(cx);
@@ -320,18 +351,32 @@ impl SecretView {
         refresh_cache: bool,
         cx: &mut Context<Self>,
     ) {
+        if let Some(summary) = &row {
+            self.observe_deletion(summary);
+        }
+
         if refresh_cache && let Some(summary) = &row {
             self.summary_cache = Some(summary.clone());
         }
 
         self.listing_row = row;
 
-        // A restore that reached the listing makes the history available.
-        if matches!(self.versions, VersionsState::ScheduledForDeletion)
+        // Without a confirmed state the listing is the later word: a row
+        // that shows the secret active lifts the describe it outdates, or
+        // the guards would keep reading the old deletion, whatever the
+        // store's history support.
+        if refresh_cache
             && let Some(name) = self.name.clone()
-            && !self.deletion_pending()
+            && self
+                .listing_row
+                .as_ref()
+                .is_some_and(|row| row.name == name && !self.is_deletion_pending(row))
         {
-            self.request_versions(name, crate::secret_store::HistoryLoad::Automatic, cx);
+            self.lift_stale_deletion(&name);
+
+            if matches!(self.versions, VersionsState::ScheduledForDeletion) {
+                self.request_versions(name, crate::secret_store::HistoryLoad::Automatic, cx);
+            }
         }
     }
 
@@ -343,9 +388,10 @@ impl SecretView {
             return;
         };
 
+        // No connection at all is as much a change of session as another one.
         let replaced = self
             .connection(cx)
-            .is_some_and(|live| !Arc::ptr_eq(origin, &live));
+            .is_none_or(|live| !Arc::ptr_eq(origin, &live));
 
         if replaced && !self.has_unsaved_value_edits(cx) {
             self.clear_value();
@@ -356,8 +402,10 @@ impl SecretView {
     /// Whether Retrieve value may run for the shown secret: one whose
     /// deletion is not pending, with no retrieval in flight.
     pub fn can_retrieve_value(&self) -> bool {
-        self.selected_summary()
-            .is_some_and(|summary| !summary.is_pending_deletion())
+        self.connection_present
+            && self
+                .selected_summary()
+                .is_some_and(|summary| !self.is_deletion_pending(summary))
             && !matches!(self.value, ValueState::Loading)
     }
 

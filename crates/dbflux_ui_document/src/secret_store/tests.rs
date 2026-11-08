@@ -4,6 +4,8 @@
 mod write_probes;
 // The write actions of the details pane, driven through the rendered UI.
 mod write_ui;
+// Follow-ups to the extracted single-secret view.
+mod view_followups;
 
 use super::listing::{
     AUTO_CONTINUE_ENTRY_LIMIT, LARGEST_PAGE_ENTRIES, SecretListing, child_path_label,
@@ -1615,10 +1617,11 @@ fn the_footer_stays_inside_the_listing_at_the_minimum_width(cx: &mut TestAppCont
     }
 }
 
-/// A write landing after the connection is gone lists the history
-/// automatically: a loss the editor already reported is not reported again.
+/// A write landing after the connection is gone reloads the history on its
+/// own: that is a disconnect, so it shows the inline not-connected state and
+/// raises no toast, notification or audit row of its own.
 #[gpui::test]
-fn a_post_save_history_reload_does_not_report_a_known_loss_again(cx: &mut TestAppContext) {
+fn a_post_save_history_reload_without_a_connection_stays_silent(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
     opened.update_view(|view, cx| view.retrieve_selected_value(cx));
@@ -1638,8 +1641,10 @@ fn a_post_save_history_reload_does_not_report_a_known_loss_again(cx: &mut TestAp
         payload: dbflux_core::SecretPayload::Text(EDITED_VALUE.into()),
     };
     let saved_on = opened.read_view(|view| view.value_session.clone().expect("a retrieved value"));
-    opened.update_view(|view, cx| {
-        view.apply_value_write(generation, PLAINTEXT_SECRET, Ok(written), &saved_on, cx)
+    let ((), events) = dbflux_ui_base::user_error::capture::capture_user_error_events(|| {
+        opened.update_view(|view, cx| {
+            view.apply_value_write(generation, PLAINTEXT_SECRET, Ok(written), &saved_on, cx)
+        });
     });
 
     assert!(
@@ -1647,7 +1652,12 @@ fn a_post_save_history_reload_does_not_report_a_known_loss_again(cx: &mut TestAp
         "{:?}",
         opened.reported_errors()
     );
-    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
+    assert_eq!(opened.toast_count(), 0);
+    assert!(
+        events.is_empty(),
+        "no user_error event, so no row: {events:?}"
+    );
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::NotConnected)));
 }
 
 /// With the current version unknown, the shown version is named and can go
@@ -1658,12 +1668,7 @@ fn an_unknown_current_version_is_not_called_older(cx: &mut TestAppContext) {
     opened.select(KEY_VALUE_SECRET);
     opened.update_view(|view, cx| view.activate_version(1, cx));
     opened.strip_reported_versions();
-    let profile_id = opened.read(|doc| doc.profile_id);
-    let app_state = opened.app_state.clone();
-    opened.window.update(|_, cx| {
-        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id));
-    });
-    opened.announce_state_change();
+    opened.fail_history();
 
     let text = opened.rendered_text();
     assert!(text.contains("Showing version"), "{text}");
@@ -6755,6 +6760,15 @@ impl Opened<'_> {
         self.window.run_until_parked();
     }
 
+    /// Leaves the history failed, so no version is known to be current while
+    /// the shown value stays.
+    fn fail_history(&mut self) {
+        self.update_view(|view, cx| {
+            view.versions = VersionsState::Failed("history unavailable".to_string());
+            cx.notify();
+        });
+    }
+
     fn strip_reported_versions(&mut self) {
         self.update(|doc, cx| {
             doc.view.update(cx, |view, _| {
@@ -7155,7 +7169,9 @@ fn the_history_is_retried_when_the_connection_returns(cx: &mut TestAppContext) {
         app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id))
     });
     opened.announce_state_change();
-    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::NotConnected)));
+    assert!(opened.reported_errors().is_empty());
+    assert_eq!(opened.toast_count(), 0);
 
     let replacement_driver = FakeDriver::new(DbKind::AwsSecrets);
     let mut connected = removed.expect("was connected");
@@ -7207,10 +7223,10 @@ fn back_to_current_stays_a_pane_action_while_the_history_loads_or_fails(cx: &mut
     }
 }
 
-/// The history retry that finds no connection says so through the error
-/// seam, once: later state changes with the connection still gone stay quiet.
+/// A history retry that finds no connection is a disconnect, not a failure:
+/// it reports nothing however often the state changes.
 #[gpui::test]
-fn a_history_retry_without_a_connection_is_reported_once(cx: &mut TestAppContext) {
+fn a_history_retry_without_a_connection_reports_nothing(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
     assert!(opened.reported_errors().is_empty());
@@ -7224,14 +7240,10 @@ fn a_history_retry_without_a_connection_is_reported_once(cx: &mut TestAppContext
     opened.announce_state_change();
 
     let errors = opened.reported_errors();
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    assert!(
-        errors[0].1.contains(&dbflux_i18n::t!(
-            "document.secret_store.error.connection_unavailable"
-        )),
-        "{errors:?}"
-    );
-    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(opened.toast_count(), 0);
+    assert!(opened.audit_records().is_empty(), "no audit row");
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::NotConnected)));
 }
 
 /// A historical retrieval that fails replaces the loaded historical value
@@ -7260,7 +7272,7 @@ fn a_failed_historical_retrieval_shows_no_older_value_banner(cx: &mut TestAppCon
     assert!(!opened.pane_action("secret-version-current").enabled);
 }
 
-/// A connection replaced while an older version is shown leaves the current
+/// A history that failed while an older version is shown leaves the current
 /// version unknown; the older value still names its version and can go back.
 #[gpui::test]
 fn an_older_value_keeps_its_banner_when_the_current_version_is_unknown(cx: &mut TestAppContext) {
@@ -7268,13 +7280,7 @@ fn an_older_value_keeps_its_banner_when_the_current_version_is_unknown(cx: &mut 
     opened.select(KEY_VALUE_SECRET);
     opened.update_view(|view, cx| view.activate_version(1, cx));
     opened.strip_reported_versions();
-
-    let profile_id = opened.read(|doc| doc.profile_id);
-    let app_state = opened.app_state.clone();
-    opened.window.update(|_, cx| {
-        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id));
-    });
-    opened.announce_state_change();
+    opened.fail_history();
 
     assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
     assert_eq!(

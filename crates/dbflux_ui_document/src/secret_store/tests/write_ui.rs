@@ -51,7 +51,7 @@ impl Opened<'_> {
     }
 
     /// Types `text` where the keyboard is, the way a user does.
-    fn type_text(&mut self, text: &str) {
+    pub(super) fn type_text(&mut self, text: &str) {
         self.window.simulate_input(text);
         self.window.run_until_parked();
     }
@@ -75,12 +75,42 @@ impl Opened<'_> {
     }
 
     /// Left-clicks the drawn element `id`, press and release on its bounds.
-    fn click(&mut self, id: &str) {
+    pub(super) fn click(&mut self, id: &str) {
         let bounds = self.bounds_of(id);
 
         self.window
             .simulate_click(bounds.center(), gpui::Modifiers::default());
         self.window.run_until_parked();
+    }
+
+    /// Confirms the open dialog and leaves the write in flight: the store
+    /// call is spawned but its answer lands only when the window settles.
+    fn submit_unsettled(&mut self) {
+        let doc = self.doc.clone();
+        self.window
+            .update(|window, cx| doc.update(cx, |doc, cx| doc.confirm_dialog(window, cx)));
+    }
+
+    /// The frame the window draws while a write is still in flight.
+    fn frame_unsettled(&mut self) -> gpui::AccessibilityFrame {
+        struct Latest(Mutex<Option<gpui::AccessibilityFrame>>);
+
+        impl gpui::FrameObserver for Latest {
+            fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
+                if let Ok(mut latest) = self.0.lock() {
+                    *latest = Some(frame.clone());
+                }
+            }
+        }
+
+        let latest = Arc::new(Latest(Mutex::new(None)));
+        self.window.update(|window, cx| {
+            window.observe_frames(&latest);
+            window.draw(cx).clear(cx);
+        });
+
+        let frame = latest.0.lock().ok().and_then(|frame| frame.clone());
+        frame.expect("a frame was drawn while the write was in flight")
     }
 
     /// Every write operation that reached the stores, accepted or not.
@@ -106,7 +136,7 @@ impl Opened<'_> {
     }
 
     /// Selects `name` and lets its details and history load.
-    fn open_secret(&mut self, name: &str) {
+    pub(super) fn open_secret(&mut self, name: &str) {
         self.tall();
         self.select(name);
         self.window.run_until_parked();
@@ -4163,45 +4193,76 @@ fn a_describe_confirming_a_restore_loads_the_history(cx: &mut TestAppContext) {
 
 /// While a tag save is in flight the dialog keeps what the request carries:
 /// the fields, Add and Remove are locked, so a later edit cannot be lost to
-/// the landing that closes the dialog.
+/// the landing that closes the dialog. The save is a real submission whose
+/// answer has not landed yet.
 #[gpui::test]
 fn the_tags_dialog_is_locked_while_its_save_is_in_flight(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(KEY_VALUE_SECRET);
     opened.click("secret-tags-edit");
+    opened.fill_input("secret-tags-value-0", "billing");
+    assert!(!opened.is_disabled("secret-tags-add"));
     assert!(!opened.is_disabled("secret-tags-key-0"));
     let rows = opened.read_view(|view| match &view.dialog {
         Some(WriteDialog::Tags(dialog)) => dialog.rows.len(),
         _ => panic!("the tags dialog is open"),
     });
 
-    opened.update_view(|view, cx| {
-        view.write_in_flight = true;
-        cx.notify();
-    });
-    opened.update_view(|view, cx| view.remove_tag_row(0, cx));
+    opened.submit_unsettled();
+    assert!(opened.read_view(|view| view.write_in_flight));
 
-    for id in ["secret-tags-add", "secret-tags-remove-0"] {
-        assert!(opened.is_disabled(id), "{id} is locked");
+    let frame = opened.frame_unsettled();
+    for id in [
+        "secret-tags-add",
+        "secret-tags-remove-0",
+        "secret-tags-confirm",
+    ] {
+        let node = frame
+            .nodes()
+            .find(|(_, node)| node.id() == id)
+            .and_then(|(_, node)| frame.accessibility_node(node))
+            .unwrap_or_else(|| panic!("`{id}` is drawn while the save is in flight"));
+        assert!(node.is_disabled(), "{id} is locked");
     }
-    let key_input = opened.read_view(|view| match &view.dialog {
-        Some(WriteDialog::Tags(dialog)) => dialog.rows[0].key.clone(),
-        _ => panic!("the tags dialog is open"),
+
+    let doc = opened.doc.clone();
+    opened.window.update(|_, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, cx| view.remove_tag_row(0, cx));
     });
-    let before = opened
-        .window
-        .update(|_, cx| key_input.read(cx).value().to_string());
-    opened.click("secret-tags-key-0");
-    opened.type_text("zz");
-    let typed = opened
-        .window
-        .update(|_, cx| key_input.read(cx).value().to_string());
-    assert_eq!(typed, before, "typing into a locked field did nothing");
     let after = opened.read_view(|view| match &view.dialog {
         Some(WriteDialog::Tags(dialog)) => dialog.rows.len(),
-        _ => panic!("the tags dialog is open"),
+        _ => panic!("the tags dialog is still open"),
     });
     assert_eq!(after, rows, "Remove did nothing");
+
+    // The value field still holds the keyboard from the edit above.
+    let value_input = opened.read_view(|view| match &view.dialog {
+        Some(WriteDialog::Tags(dialog)) => dialog.rows[0].value.clone(),
+        _ => panic!("the tags dialog is open"),
+    });
+    opened.window.simulate_input("zz");
+    opened.window.run_until_parked();
+    let typed = opened
+        .window
+        .update(|_, cx| value_input.read(cx).value().to_string());
+    assert_eq!(typed, "billing", "typing into a locked field did nothing");
+
+    let mutations = opened.mutations();
+    assert_eq!(mutations.len(), 1, "{mutations:?}");
+    let FakeSecretMutation::UpdateTags(update) = &mutations[0] else {
+        panic!("{mutations:?}");
+    };
+    assert_eq!(
+        update
+            .set
+            .iter()
+            .map(|tag| (tag.key.as_str(), tag.value.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("team", "billing")]
+    );
+    assert!(update.remove.is_empty(), "the locked Remove sent nothing");
+    assert!(!opened.dialog_open());
 }
 
 /// The Edit rotation form is locked the same way.
@@ -4211,35 +4272,59 @@ fn the_rotation_dialog_is_locked_while_its_save_is_in_flight(cx: &mut TestAppCon
     opened.open_secret(KEY_VALUE_SECRET);
     opened.click("secret-rotation-edit");
     assert!(!opened.is_disabled("secret-rotation-schedule-input"));
+    opened.fill_input("secret-rotation-schedule-input", "rate(7 days)");
     let enabled = opened.read_view(|view| match &view.dialog {
         Some(WriteDialog::Rotation(dialog)) => dialog.enabled,
         _ => panic!("the rotation dialog is open"),
     });
 
-    opened.update_view(|view, cx| {
-        view.write_in_flight = true;
-        cx.notify();
-    });
-    opened.update_view(|view, cx| view.set_rotation_enabled(!enabled, cx));
+    opened.submit_unsettled();
+    assert!(opened.read_view(|view| view.write_in_flight));
 
+    let frame = opened.frame_unsettled();
+    let confirm = frame
+        .nodes()
+        .find(|(_, node)| node.id() == "secret-rotation-confirm")
+        .and_then(|(_, node)| frame.accessibility_node(node))
+        .expect("the confirm button is drawn while the save is in flight");
+    assert!(confirm.is_disabled(), "Save is locked");
+
+    let doc = opened.doc.clone();
+    opened.window.update(|_, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, cx| view.set_rotation_enabled(!enabled, cx));
+    });
+    let after = opened.read_view(|view| match &view.dialog {
+        Some(WriteDialog::Rotation(dialog)) => dialog.enabled,
+        _ => panic!("the rotation dialog is still open"),
+    });
+    assert_eq!(after, enabled, "the switch did nothing");
+
+    // The schedule field still holds the keyboard from the edit above.
     let schedule = opened.read_view(|view| match &view.dialog {
         Some(WriteDialog::Rotation(dialog)) => dialog.schedule.clone(),
         _ => panic!("the rotation dialog is open"),
     });
-    let before = opened
-        .window
-        .update(|_, cx| schedule.read(cx).value().to_string());
-    opened.click("secret-rotation-schedule-input");
-    opened.type_text("zz");
+    opened.window.simulate_input("zz");
+    opened.window.run_until_parked();
     let typed = opened
         .window
         .update(|_, cx| schedule.read(cx).value().to_string());
-    assert_eq!(typed, before, "typing into a locked field did nothing");
-    let after = opened.read_view(|view| match &view.dialog {
-        Some(WriteDialog::Rotation(dialog)) => dialog.enabled,
-        _ => panic!("the rotation dialog is open"),
-    });
-    assert_eq!(after, enabled, "the switch did nothing");
+    assert_eq!(
+        typed, "rate(7 days)",
+        "typing into a locked field did nothing"
+    );
+
+    let mutations = opened.mutations();
+    assert_eq!(mutations.len(), 1, "{mutations:?}");
+    assert!(
+        matches!(
+            &mutations[0],
+            FakeSecretMutation::UpdateRotation(update)
+                if update.enabled == enabled && update.schedule.as_deref() == Some("rate(7 days)")
+        ),
+        "{mutations:?}"
+    );
 }
 
 /// Closing the New secret dialog and opening it again in the same update
@@ -4269,7 +4354,7 @@ fn a_queued_close_does_not_erase_a_create_form_opened_after_it(cx: &mut TestAppC
     );
 }
 
-// -- Value provenance (PR #1296 review) -----------------------------------------
+// -- Value provenance ---------------------------------------------------------
 
 /// A connection that is not the one the document holds.
 fn other_session() -> Arc<dyn Connection> {
@@ -4289,7 +4374,7 @@ fn other_session() -> Arc<dyn Connection> {
 impl Opened<'_> {
     /// Starts a retrieval and leaves it in flight: the store call is made but
     /// its answer is not landed until the window settles.
-    fn start_retrieval(&mut self) {
+    pub(super) fn start_retrieval(&mut self) {
         let doc = self.doc.clone();
         self.window.update(|_, cx| {
             let view = doc.read(cx).view.clone();
@@ -4384,8 +4469,9 @@ fn unsaved_text_survives_a_session_change_but_is_never_saved_to_the_new_session(
     opened.announce_state_change();
     assert!(
         opened.read_view(|view| view.is_editing_value()),
-        "the text is kept"
+        "the editor is kept"
     );
+    assert_eq!(opened.editor_text(), EDITED_VALUE, "and so is its text");
 
     opened.save_edit();
 
@@ -4483,19 +4569,36 @@ fn a_save_completing_on_a_replaced_session_leaves_the_editor_alone(cx: &mut Test
         let view = doc.read(cx).view.clone();
         view.update(cx, |view, cx| view.save_value_edit(cx));
     });
-    opened.replace_connection();
+    let replacement = opened.replace_connection();
     opened.window.run_until_parked();
 
     assert!(
         opened.read_view(|view| view.is_editing_value()),
-        "the text stays"
+        "the editor stays"
     );
-    assert!(opened.dirty(), "and still differs from the baseline");
+    assert_eq!(opened.editor_text(), EDITED_VALUE, "with its text");
+    assert_eq!(
+        opened.editing().map(|(baseline, _)| baseline).as_deref(),
+        Some(FAKE_SECRET_PLAINTEXT),
+        "the baseline is still the value the session read"
+    );
+    assert!(opened.dirty(), "and the text still differs from it");
     assert!(!opened.read_view(|view| view.is_saving_value_edit()));
     assert_eq!(
-        opened.reported_errors().len(),
-        1,
-        "told it landed on the old session"
+        opened.written_values(),
+        vec![(PLAINTEXT_SECRET.to_string(), EDITED_VALUE.to_string())],
+        "the original session accepted the save"
+    );
+    assert!(
+        replacement.secret_store_calls().put_attempts.is_empty(),
+        "the replacement received no write"
+    );
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].1.contains("written on the previous connection"),
+        "{}",
+        errors[0].1
     );
 }
 

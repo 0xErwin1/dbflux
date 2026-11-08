@@ -178,7 +178,7 @@ impl SecretView {
                 ));
             }
 
-            if candidate.deletion_scheduled_for.is_some() {
+            if self.is_deletion_pending(candidate) {
                 return Some(dbflux_i18n::t!(
                     "document.secret_store.write.refused_deletion",
                     name = candidate.name.as_str()

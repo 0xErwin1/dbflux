@@ -147,6 +147,7 @@ impl SecretView {
     /// Whether a rotation action may start now.
     pub fn can_start_rotation_action(&self) -> bool {
         self.supports_rotation()
+            && self.connection_present
             && !self.write_in_flight
             && !self.dialog_is_open()
             && self.write_refusal_reason().is_none()

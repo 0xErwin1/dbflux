@@ -815,3 +815,33 @@ fn the_version_holding_the_current_stage_is_marked_current() {
         .collect();
     assert_eq!(current, ["v-current"]);
 }
+
+#[test]
+fn a_described_deletion_reports_the_scheduled_date_and_no_request_moment() {
+    let scheduled = SmithyDateTime::from_secs(1_800_000_000);
+    let output = DescribeSecretOutput::builder()
+        .name("prod/api/key")
+        .deleted_date(scheduled)
+        .build();
+
+    let details = details_from_describe("prod/api/key", &output);
+
+    assert_eq!(
+        details.summary.deletion_scheduled_for,
+        smithy_datetime_to_chrono(&scheduled)
+    );
+    assert!(
+        details.deleted_at.is_none(),
+        "DeletedDate is when the deletion takes effect, not when it was requested"
+    );
+}
+
+#[test]
+fn a_secret_that_is_not_being_deleted_reports_no_deletion() {
+    let output = DescribeSecretOutput::builder().name("prod/api/key").build();
+
+    let details = details_from_describe("prod/api/key", &output);
+
+    assert!(details.summary.deletion_scheduled_for.is_none());
+    assert!(details.deleted_at.is_none());
+}

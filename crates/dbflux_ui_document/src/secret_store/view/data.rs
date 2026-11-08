@@ -91,13 +91,14 @@ impl SecretView {
         }
 
         if let Ok(details) = &result {
+            self.observe_deletion(&details.summary);
             self.summary_cache = Some(details.summary.clone());
         }
 
         let pending = result
             .as_ref()
             .ok()
-            .map(|details| details.summary.is_pending_deletion());
+            .map(|details| self.is_deletion_pending(&details.summary));
 
         self.details = match result {
             Ok(details) => DetailsState::Loaded(Box::new(details)),
@@ -116,10 +117,10 @@ impl SecretView {
     /// can outdate.
     pub(crate) fn deletion_pending(&self) -> bool {
         match &self.details {
-            DetailsState::Loaded(details) => details.summary.is_pending_deletion(),
+            DetailsState::Loaded(details) => self.is_deletion_pending(&details.summary),
             _ => self
                 .selected_summary()
-                .is_some_and(|summary| summary.is_pending_deletion()),
+                .is_some_and(|summary| self.is_deletion_pending(summary)),
         }
     }
 
@@ -131,6 +132,13 @@ impl SecretView {
         let Some(name) = self.name.clone() else {
             return;
         };
+
+        // A store without a history has nothing to schedule or resume: it
+        // keeps saying so, pending or not.
+        if !self.store.supports(SecretStoreCapabilities::VERSIONS) {
+            return;
+        }
+
         let scheduled = matches!(self.versions, VersionsState::ScheduledForDeletion);
 
         match pending {
@@ -188,12 +196,19 @@ impl SecretView {
         self.versions_session = None;
 
         let Some(connection) = self.connection(cx) else {
+            // A reload nobody asked for finding no connection is a
+            // disconnect, not a failure: nothing is asked and nothing is
+            // reported, and the history loads again when it returns.
+            if trigger == HistoryLoad::Automatic {
+                self.versions = VersionsState::NotConnected;
+                return;
+            }
+
             let message = dbflux_i18n::t!("document.secret_store.error.connection_unavailable");
 
             // Only the first catch site reports: an editor path that found
-            // the same loss already did. A reload nobody asked for stays
-            // quiet about it; a listing the user asked for does not.
-            if trigger == HistoryLoad::Requested || !self.missing_connection_reported {
+            // the same loss already did.
+            if !self.missing_connection_reported || trigger == HistoryLoad::Requested {
                 self.missing_connection_reported = true;
                 report_error(UserFacingError::new(ErrorKind::User, message.clone()), cx);
             }
@@ -353,6 +368,26 @@ impl SecretView {
         }
     }
 
+    /// The version the Versions table highlights: the one the value section
+    /// shows or is retrieving.
+    pub(crate) fn highlighted_version(&self) -> Option<&str> {
+        match &self.value {
+            ValueState::Loading => self
+                .value_version
+                .as_deref()
+                .or_else(|| self.current_version_id()),
+            // The store named the version it served even when the retrieval
+            // asked for the current one, and a rotation since may have moved
+            // the current version on.
+            ValueState::Loaded(value) => self
+                .value_version
+                .as_deref()
+                .or(value.version.as_deref())
+                .or_else(|| self.current_version_id()),
+            _ => None,
+        }
+    }
+
     fn history_current_version(&self) -> Option<&str> {
         let VersionsState::Loaded(versions) = &self.versions else {
             return None;
@@ -417,6 +452,24 @@ impl SecretView {
     /// against the latest current-version information when it is drawn.
     pub(crate) fn retrieve_version(&mut self, version: Option<String>, cx: &mut Context<Self>) {
         if !self.can_retrieve_value() {
+            // The button is disabled without a connection; a command that
+            // still reaches here says why nothing happened.
+            if !self.connection_present
+                && !matches!(self.value, ValueState::Loading)
+                && self
+                    .selected_summary()
+                    .is_some_and(|summary| !self.is_deletion_pending(summary))
+            {
+                self.missing_connection_reported = true;
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::User,
+                        dbflux_i18n::t!("document.secret_store.error.connection_unavailable"),
+                    ),
+                    cx,
+                );
+            }
+
             return;
         }
 
@@ -513,19 +566,24 @@ impl SecretView {
         // The answer belongs to the session it was asked of. After the
         // connection was replaced it is not shown under the new one, and the
         // section does not stay loading for it.
+        let live = self.connection(cx);
         let same_session = session.as_ref().is_none_or(|asked_of| {
-            self.connection(cx)
-                .is_none_or(|live| Arc::ptr_eq(asked_of, &live))
+            live.as_ref()
+                .is_some_and(|live| Arc::ptr_eq(asked_of, live))
         });
         let is_current = asked && same_session;
 
         if asked && !same_session {
             self.value = ValueState::NotLoaded;
             self.value_version = None;
+            cx.notify();
         }
 
-        let driver_id = self
-            .connection(cx)
+        // The store that was read is the originating session's, even when
+        // the profile holds no connection any more.
+        let driver_id = session
+            .as_ref()
+            .or(live.as_ref())
             .map(|connection| connection.metadata().id.clone())
             .unwrap_or_default();
 

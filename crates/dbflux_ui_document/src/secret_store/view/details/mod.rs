@@ -384,18 +384,23 @@ impl SecretView {
 
         let mut rows = Vec::new();
 
-        // A scheduled deletion leads the details, as its state does.
-        if let Some(date) = summary.deletion_scheduled_for {
-            rows.push(detail_row(
-                label("document.secret_store.delete.row_deleted"),
-                format_optional_time(details.deleted_at),
-                cx,
-            ));
-            rows.push(detail_row(
-                label("document.secret_store.delete.row_deletes_on"),
-                format_optional_time(Some(date)),
-                cx,
-            ));
+        // A scheduled deletion leads the details, as its state does. The
+        // moment it was requested is shown only when the store reports it.
+        if let Some(date) = self.deletion_of(summary) {
+            if let Some(requested) = details.deleted_at {
+                rows.push(detail_row(
+                    label("document.secret_store.delete.row_deleted"),
+                    format_optional_time(Some(requested)),
+                    cx,
+                ));
+            }
+            if date.is_some() {
+                rows.push(detail_row(
+                    label("document.secret_store.delete.row_deletes_on"),
+                    format_optional_time(date),
+                    cx,
+                ));
+            }
         }
 
         rows.push(detail_row(

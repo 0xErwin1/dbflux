@@ -18,7 +18,7 @@ use super::{
 use crate::secret_store::SecretOperation;
 use crate::secret_store::render::format_time;
 use crate::secret_store::view::{DetailsState, SecretView};
-use crate::secret_store::write::{delete_secret, restore_secret};
+use crate::secret_store::write::{SecretWriteFailureKind, delete_secret, restore_secret};
 use dbflux_components::controls::{Button, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::parts::{modal_field, modal_lead};
@@ -86,6 +86,7 @@ impl SecretView {
     /// Whether Delete may open its dialog for the selection now.
     pub fn can_delete_selected(&self) -> bool {
         self.supports_delete()
+            && self.connection_present
             && !self.write_in_flight
             && !self.dialog_is_open()
             && self.write_refusal_reason().is_none()
@@ -204,7 +205,7 @@ impl SecretView {
         );
     }
 
-    fn land_delete(
+    pub(in crate::secret_store) fn land_delete(
         &mut self,
         name: &str,
         kind: DeleteKind,
@@ -234,40 +235,26 @@ impl SecretView {
                 // The refresh below must not ask for the history with the row
                 // this write outdated.
                 if let Some(date) = deletion.deletion_scheduled_for {
-                    self.mark_deletion_scheduled(name, date);
+                    self.confirm_deletion_scheduled(name, Some(date));
                 }
                 self.refresh_after_write(name, effect, cx);
             }
             Landing::Stands(failure) => {
                 self.dismiss_dialog(cx);
+
+                // The store applied a scheduled delete and only its audit row
+                // was lost: the deletion stands, with no date to show. An
+                // indeterminate failure says nothing and the refresh reads
+                // the store.
+                if matches!(kind, DeleteKind::Scheduled { .. })
+                    && failure.kind == SecretWriteFailureKind::AuditLost
+                {
+                    self.confirm_deletion_scheduled(name, None);
+                }
                 self.report_write_failure(&failure, cx);
                 self.refresh_after_write(name, effect, cx);
             }
             Landing::Rejected(failure) => self.report_write_failure(&failure, cx),
-        }
-    }
-
-    /// Records on the view's copies of the row that `name`'s deletion is
-    /// scheduled for `date`, until the describe and the listing say so
-    /// themselves.
-    fn mark_deletion_scheduled(
-        &mut self,
-        name: &str,
-        date: dbflux_core::chrono::DateTime<dbflux_core::chrono::Utc>,
-    ) {
-        if !self.is_for(name) {
-            return;
-        }
-
-        for summary in [self.listing_row.as_mut(), self.summary_cache.as_mut()]
-            .into_iter()
-            .flatten()
-        {
-            summary.deletion_scheduled_for = Some(date);
-        }
-
-        if let DetailsState::Loaded(details) = &mut self.details {
-            details.summary.deletion_scheduled_for = Some(date);
         }
     }
 
@@ -282,11 +269,12 @@ impl SecretView {
     /// may cancel now.
     pub fn can_restore_selected(&self) -> bool {
         self.supports_restore()
+            && self.connection_present
             && !self.write_in_flight
             && !self.dialog_is_open()
             && self
                 .selected_summary()
-                .is_some_and(|summary| summary.is_pending_deletion())
+                .is_some_and(|summary| self.is_deletion_pending(summary))
     }
 
     /// Cancels the scheduled deletion of the selected secret through the
@@ -328,20 +316,54 @@ impl SecretView {
         );
     }
 
-    fn land_restore(&mut self, name: &str, landing: Landing<()>, cx: &mut Context<Self>) {
+    pub(in crate::secret_store) fn land_restore(
+        &mut self,
+        name: &str,
+        landing: Landing<()>,
+        cx: &mut Context<Self>,
+    ) {
         match landing {
             Landing::Done(()) => {
                 self.toast_written(
                     dbflux_i18n::t!("document.secret_store.restore.done", name = name),
                     cx,
                 );
+                // The reads below may fail or come back stale: the guards
+                // must not keep reading the deletion this write cancelled.
+                self.confirm_restored(name);
                 self.refresh_after_write(name, WriteEffect::Versions, cx);
             }
             Landing::Stands(failure) => {
+                // The store applied the restore and only its audit row was
+                // lost: the cancellation stands. An indeterminate failure
+                // says nothing, and the refresh below reads the store.
+                if failure.kind == SecretWriteFailureKind::AuditLost {
+                    self.confirm_restored(name);
+                }
                 self.report_write_failure(&failure, cx);
                 self.refresh_after_write(name, WriteEffect::Versions, cx);
             }
             Landing::Rejected(failure) => self.report_write_failure(&failure, cx),
+        }
+    }
+
+    /// A newer listing row shows `name` active: the describe and the cached
+    /// row it outdates stop saying the deletion is scheduled.
+    pub(in crate::secret_store) fn lift_stale_deletion(&mut self, name: &str) {
+        if !self.is_for(name) {
+            return;
+        }
+
+        for summary in [self.listing_row.as_mut(), self.summary_cache.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            summary.deletion_scheduled_for = None;
+        }
+
+        if let DetailsState::Loaded(details) = &mut self.details {
+            details.summary.deletion_scheduled_for = None;
+            details.deleted_at = None;
         }
     }
 

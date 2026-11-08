@@ -43,7 +43,7 @@ impl SecretView {
                 header.child(Text::caption(meta).muted_foreground())
             });
 
-        let body: AnyElement = if let Some(date) = summary.deletion_scheduled_for {
+        let body: AnyElement = if let Some(date) = self.deletion_of(summary) {
             self.render_pending_deletion(summary, date, cx)
                 .into_any_element()
         } else {

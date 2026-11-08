@@ -144,7 +144,10 @@ impl SecretStoreDocument {
     pub fn can_open_create(&self, cx: &App) -> bool {
         let view = self.view.read(cx);
 
-        self.supports_create() && !view.write_in_flight() && !view.dialog_is_open()
+        self.supports_create()
+            && view.is_connected()
+            && !view.write_in_flight()
+            && !view.dialog_is_open()
     }
 
     /// Why the dialog cannot send its request yet: a name the listing holds,

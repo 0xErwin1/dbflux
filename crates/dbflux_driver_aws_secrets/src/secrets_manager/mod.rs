@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use aws_sdk_secretsmanager::Client;
+use aws_sdk_secretsmanager::operation::describe_secret::DescribeSecretOutput;
 use aws_sdk_secretsmanager::primitives::Blob;
 use aws_sdk_secretsmanager::types::{
     Filter, FilterNameStringType, RotationRulesType, SecretListEntry, SecretVersionsListEntry, Tag,
@@ -227,11 +228,7 @@ impl SecretsManagerStore {
     /// `DescribeSecret`, refusing a secret another service owns: DBFlux
     /// keeps those read only and AWS does not enforce it, so every write
     /// that is not a value put asks first and names the owner.
-    fn describe_unmanaged(
-        &self,
-        name: &str,
-    ) -> Result<aws_sdk_secretsmanager::operation::describe_secret::DescribeSecretOutput, DbError>
-    {
+    fn describe_unmanaged(&self, name: &str) -> Result<DescribeSecretOutput, DbError> {
         let metadata = runtime()
             .block_on(self.client.describe_secret().secret_id(name).send())
             .map_err(|error| self.operation_error(&error, Some(name)))?;
@@ -361,43 +358,7 @@ impl SecretStoreSource for SecretsManagerStore {
             .block_on(self.client.describe_secret().secret_id(name).send())
             .map_err(|error| self.operation_error(&error, Some(name)))?;
 
-        let versions = output.version_ids_to_stages();
-
-        let summary = SecretSummary {
-            name: output.name().unwrap_or(name).to_string(),
-            description: output.description().map(ToString::to_string),
-            value_type: None,
-            tier: None,
-            version: versions.and_then(current_version),
-            last_changed: output
-                .last_changed_date()
-                .and_then(smithy_datetime_to_chrono),
-            rotation: rotation(&RotationFields {
-                enabled: output.rotation_enabled(),
-                rules: output.rotation_rules(),
-                function: output.rotation_lambda_arn(),
-                last_rotated: output.last_rotated_date(),
-                next_rotation: output.next_rotation_date(),
-            }),
-            owning_service: output.owning_service().map(ToString::to_string),
-            deletion_scheduled_for: output.deleted_date().and_then(smithy_datetime_to_chrono),
-        };
-
-        Ok(SecretDetails {
-            summary,
-            resource_id: output.arn().map(ToString::to_string),
-            encryption_key: Some(output.kms_key_id().unwrap_or(DEFAULT_KMS_KEY).to_string()),
-            data_type: None,
-            created: output.created_date().and_then(smithy_datetime_to_chrono),
-            last_changed_by: None,
-            last_accessed: output
-                .last_accessed_date()
-                .and_then(smithy_datetime_to_chrono),
-            version_count: versions.map(|versions| saturating_count(versions.len())),
-            version_labels: versions.map(version_labels).unwrap_or_default(),
-            tags: tags(output.tags()),
-            deleted_at: output.deleted_date().and_then(smithy_datetime_to_chrono),
-        })
+        Ok(details_from_describe(name, &output))
     }
 
     fn get_value(&self, name: &str, version: Option<&str>) -> Result<SecretValue, DbError> {
@@ -1014,6 +975,51 @@ pub(crate) fn ensure_scheduled(
         None => Err(DbError::query_failed(format!(
             "Secrets Manager secret \"{name}\" is not scheduled for deletion"
         ))),
+    }
+}
+
+/// The details a `DescribeSecret` answer reports.
+///
+/// `DeletedDate` is the date the deletion takes effect, so it fills the
+/// scheduled date only: the service reports neither the moment the deletion
+/// was requested nor the recovery window, and neither is inferred.
+pub(crate) fn details_from_describe(name: &str, output: &DescribeSecretOutput) -> SecretDetails {
+    let versions = output.version_ids_to_stages();
+
+    let summary = SecretSummary {
+        name: output.name().unwrap_or(name).to_string(),
+        description: output.description().map(ToString::to_string),
+        value_type: None,
+        tier: None,
+        version: versions.and_then(current_version),
+        last_changed: output
+            .last_changed_date()
+            .and_then(smithy_datetime_to_chrono),
+        rotation: rotation(&RotationFields {
+            enabled: output.rotation_enabled(),
+            rules: output.rotation_rules(),
+            function: output.rotation_lambda_arn(),
+            last_rotated: output.last_rotated_date(),
+            next_rotation: output.next_rotation_date(),
+        }),
+        owning_service: output.owning_service().map(ToString::to_string),
+        deletion_scheduled_for: output.deleted_date().and_then(smithy_datetime_to_chrono),
+    };
+
+    SecretDetails {
+        summary,
+        resource_id: output.arn().map(ToString::to_string),
+        encryption_key: Some(output.kms_key_id().unwrap_or(DEFAULT_KMS_KEY).to_string()),
+        data_type: None,
+        created: output.created_date().and_then(smithy_datetime_to_chrono),
+        last_changed_by: None,
+        last_accessed: output
+            .last_accessed_date()
+            .and_then(smithy_datetime_to_chrono),
+        version_count: versions.map(|versions| saturating_count(versions.len())),
+        version_labels: versions.map(version_labels).unwrap_or_default(),
+        tags: tags(output.tags()),
+        deleted_at: None,
     }
 }
 
