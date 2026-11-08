@@ -5,13 +5,13 @@
 
 use dbflux_core::{
     SecretDeleteRequest, SecretDeletion, SecretDescriptionChange, SecretDescriptionUpdate,
-    SecretRollback, SecretRollbackRequest, SecretRotationStart, SecretRotationUpdate,
-    SecretStoreCapabilities, SecretTagsUpdate,
+    SecretRollback, SecretRollbackRequest, SecretRotationChange, SecretRotationStart,
+    SecretRotationUpdate, SecretStoreCapabilities, SecretTagsUpdate,
 };
 
 use dbflux_core::{DbError, SecretCreateRequest, SecretCreated, require_name};
 
-use super::{Attempt, SecretOperation, SecretWriteFailure, WriteContext, govern};
+use super::{Attempt, SecretOperation, SecretWriteFailure, Submitted, WriteContext, govern};
 
 /// Rolls `request.name` back to `request.version_id` through the governed
 /// path: classification `Write`, capabilities `WRITE` and `VERSION_LABELS`.
@@ -43,7 +43,7 @@ pub fn roll_back_secret(
                 .validate()
                 .err()
                 .map(|error| ("invalid_request", error)),
-            submitted: None,
+            submitted: Vec::new(),
             details,
             call: Box::new(|store| store.roll_back(request)),
             landed: Box::new(|rollback: &SecretRollback| {
@@ -130,7 +130,7 @@ pub fn delete_secret(
             operation,
             name: request.name(),
             invalid,
-            submitted: None,
+            submitted: Vec::new(),
             details,
             call: Box::new(|store| store.delete_secret(request)),
             landed: Box::new(|deletion: &SecretDeletion| {
@@ -166,7 +166,7 @@ pub fn restore_secret(context: &WriteContext<'_>, name: &str) -> Result<(), Secr
             invalid: require_name(name)
                 .err()
                 .map(|error| ("invalid_request", error)),
-            submitted: None,
+            submitted: Vec::new(),
             details: serde_json::Map::new(),
             call: Box::new(|store| store.restore_secret(name)),
             landed: Box::new(|_: &()| serde_json::Map::new()),
@@ -195,7 +195,7 @@ pub fn rotate_secret_now(
             invalid: require_name(name)
                 .err()
                 .map(|error| ("invalid_request", error)),
-            submitted: None,
+            submitted: Vec::new(),
             details: serde_json::Map::new(),
             call: Box::new(|store| store.rotate_now(name)),
             landed: Box::new(|start: &SecretRotationStart| {
@@ -227,7 +227,7 @@ pub fn rotate_secret_now(
 pub fn update_secret_rotation(
     context: &WriteContext<'_>,
     update: &SecretRotationUpdate,
-) -> Result<(), SecretWriteFailure> {
+) -> Result<SecretRotationChange, SecretWriteFailure> {
     let mut details = serde_json::Map::new();
     details.insert(
         "enabled".to_string(),
@@ -252,10 +252,19 @@ pub fn update_secret_rotation(
                 .validate()
                 .err()
                 .map(|error| ("invalid_request", error)),
-            submitted: None,
+            submitted: Vec::new(),
             details,
             call: Box::new(|store| store.update_rotation(update)),
-            landed: Box::new(|_: &()| serde_json::Map::new()),
+            landed: Box::new(|change: &SecretRotationChange| {
+                let mut fields = serde_json::Map::new();
+                if let Some(version) = &change.unfinished_version {
+                    fields.insert(
+                        "unfinished_version".to_string(),
+                        serde_json::Value::String(version.clone()),
+                    );
+                }
+                fields
+            }),
         },
     )
 }
@@ -300,7 +309,11 @@ pub fn update_secret_tags(
                 .validate()
                 .err()
                 .map(|error| ("invalid_request", error)),
-            submitted: None,
+            submitted: update
+                .set
+                .iter()
+                .map(|added| Submitted::Text(&added.value))
+                .collect(),
             details,
             call: Box::new(|store| store.update_tags(update)),
             landed: Box::new(|_: &()| serde_json::Map::new()),
@@ -340,7 +353,7 @@ pub fn update_secret_description(
                 .validate()
                 .err()
                 .map(|error| ("invalid_request", error)),
-            submitted: None,
+            submitted: vec![Submitted::Text(&update.description)],
             details,
             call: Box::new(|store| store.update_description(update)),
             landed: Box::new(|change: &SecretDescriptionChange| {
@@ -409,7 +422,7 @@ pub fn create_secret(
                 .validate()
                 .err()
                 .map(|error| ("invalid_request", error)),
-            submitted: Some(&request.payload),
+            submitted: create_submissions(request),
             details,
             call: Box::new(|store| store.create_secret(request)),
             landed: Box::new(|created: &SecretCreated| {
@@ -430,4 +443,22 @@ pub fn create_secret(
             }),
         },
     )
+}
+
+/// Everything a create submits that an error must not echo: the value, the
+/// description and the tag values.
+fn create_submissions(request: &SecretCreateRequest) -> Vec<Submitted<'_>> {
+    let mut submitted = vec![Submitted::Payload(&request.payload)];
+
+    if let Some(description) = &request.description {
+        submitted.push(Submitted::Text(description));
+    }
+    submitted.extend(
+        request
+            .tags
+            .iter()
+            .map(|added| Submitted::Text(&added.value)),
+    );
+
+    submitted
 }

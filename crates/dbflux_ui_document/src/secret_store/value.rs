@@ -7,6 +7,7 @@
 //! refreshed or the tab closes.
 
 use dbflux_core::chrono::{DateTime, Local, Utc};
+pub use dbflux_core::encode_base64;
 use dbflux_core::observability::{EventCategory, EventOutcome, EventRecord, EventSeverity};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{SecretPayload, SecretValue};
@@ -331,34 +332,4 @@ pub fn value_retrieval_event(
     }
 
     event
-}
-
-/// Standard base64 with padding (RFC 4648).
-pub fn encode_base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
-
-    for chunk in bytes.chunks(3) {
-        let first = chunk.first().copied().unwrap_or(0);
-        let second = chunk.get(1).copied();
-        let third = chunk.get(2).copied();
-
-        let triple = (u32::from(first) << 16)
-            | (u32::from(second.unwrap_or(0)) << 8)
-            | u32::from(third.unwrap_or(0));
-
-        let symbol = |shift: u32| {
-            ALPHABET
-                .get(((triple >> shift) & 0x3f) as usize)
-                .map_or('=', |symbol| char::from(*symbol))
-        };
-
-        encoded.push(symbol(18));
-        encoded.push(symbol(12));
-        encoded.push(if second.is_some() { symbol(6) } else { '=' });
-        encoded.push(if third.is_some() { symbol(0) } else { '=' });
-    }
-
-    encoded
 }

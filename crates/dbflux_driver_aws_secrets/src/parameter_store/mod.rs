@@ -11,13 +11,13 @@ use dbflux_core::{
     SecretDescriptionUpdate, SecretDetails, SecretListPage, SecretListRequest, SecretPayload,
     SecretPutRequest, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
     SecretSummary, SecretTag, SecretTagsUpdate, SecretValue, SecretVersionInfo, SecretVersionStage,
+    scrub_submitted_payload,
 };
 use dbflux_core::{SecretCreateRequest, SecretCreated};
 
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
 use crate::error_formatter::{
     ErrorTarget, classify_connection_error, classify_operation_error, format_service_error,
-    scrub_submitted_value,
 };
 
 use hierarchy::{group_level, normalize_path, path_filter_value};
@@ -86,6 +86,66 @@ impl ParameterStore {
         };
 
         classify_operation_error(format_service_error(error, &self.config, &target))
+    }
+
+    /// The keys of the tags a parameter carries now.
+    fn tag_keys(&self, name: &str) -> Result<Vec<String>, DbError> {
+        let output = runtime()
+            .block_on(
+                self.client
+                    .list_tags_for_resource()
+                    .resource_type(ResourceTypeForTagging::Parameter)
+                    .resource_id(name)
+                    .send(),
+            )
+            .map_err(|error| self.operation_error(&error, Some(name)))?;
+
+        Ok(output
+            .tag_list()
+            .iter()
+            .map(|existing| existing.key().to_string())
+            .collect())
+    }
+
+    /// `AddTagsToResource` for the tags of the update, when it sets any.
+    fn tag(&self, update: &SecretTagsUpdate) -> Result<(), DbError> {
+        if update.set.is_empty() {
+            return Ok(());
+        }
+
+        runtime()
+            .block_on(
+                self.client
+                    .add_tags_to_resource()
+                    .resource_type(ResourceTypeForTagging::Parameter)
+                    .resource_id(&update.name)
+                    .set_tags(Some(ssm_tags(&update.set)?))
+                    .send(),
+            )
+            .map_err(|error| self.operation_error(&error, Some(&update.name)))?;
+
+        Ok(())
+    }
+
+    /// `RemoveTagsFromResource` for the keys of the update, when it removes
+    /// any.
+    fn untag(&self, update: &SecretTagsUpdate) -> Result<(), DbError> {
+        if update.remove.is_empty() {
+            return Ok(());
+        }
+
+        runtime()
+            .block_on(
+                self.client
+                    .remove_tags_from_resource()
+                    .resource_type(ResourceTypeForTagging::Parameter)
+                    .resource_id(&update.name)
+                    .set_tag_keys(Some(update.remove.clone()))
+                    .send(),
+            )
+            .map_err(|error| self.operation_error(&error, Some(&update.name)))?;
+
+        Ok(())
     }
 
     fn describe_metadata(&self, name: &str) -> Result<ParameterMetadata, DbError> {
@@ -319,7 +379,7 @@ impl SecretStoreSource for ParameterStore {
         let output = runtime().block_on(fluent.send()).map_err(|error| {
             // The service may echo the submitted value in its own
             // message; a put error never carries it onward.
-            scrub_submitted_value(
+            scrub_submitted_payload(
                 self.operation_error(&error, Some(&request.name)),
                 &request.payload,
             )
@@ -364,7 +424,7 @@ impl SecretStoreSource for ParameterStore {
             "create",
             &request.name,
         )?;
-        let plan = plan_create(request)?;
+        let plan = plan_create(request, &self.config.region)?;
 
         let SecretPayload::Text(text) = &request.payload else {
             return Err(DbError::constraint_violation(format!(
@@ -389,7 +449,7 @@ impl SecretStoreSource for ParameterStore {
                     .send(),
             )
             .map_err(|error| {
-                scrub_submitted_value(
+                scrub_submitted_payload(
                     self.operation_error(&error, Some(&request.name)),
                     &request.payload,
                 )
@@ -417,44 +477,34 @@ impl SecretStoreSource for ParameterStore {
         // the tags of a different one could have been named; asking first
         // keeps the answer the same `ParameterNotFound` a read gives.
         self.describe_metadata(&update.name)?;
+        let existing_keys = self.tag_keys(&update.name)?;
+        update.check_quota(&existing_keys)?;
 
-        if !update.set.is_empty() {
-            runtime()
-                .block_on(
-                    self.client
-                        .add_tags_to_resource()
-                        .resource_type(ResourceTypeForTagging::Parameter)
-                        .resource_id(&update.name)
-                        .set_tags(Some(ssm_tags(&update.set)?))
-                        .send(),
-                )
-                .map_err(|error| self.operation_error(&error, Some(&update.name)))?;
+        // A parameter at its quota cannot take a new key before the old one
+        // is gone, so the removal goes first and a failure after it says so.
+        if update.removes_first(&existing_keys) {
+            self.untag(update)?;
+
+            return self.tag(update).map_err(|error| {
+                DbError::query_failed(format!(
+                    "The tags of \"{}\" were removed, but setting the others failed: {error}",
+                    update.name
+                ))
+            });
         }
 
-        if !update.remove.is_empty() {
-            runtime()
-                .block_on(
-                    self.client
-                        .remove_tags_from_resource()
-                        .resource_type(ResourceTypeForTagging::Parameter)
-                        .resource_id(&update.name)
-                        .set_tag_keys(Some(update.remove.clone()))
-                        .send(),
-                )
-                .map_err(|error| {
-                    let error = self.operation_error(&error, Some(&update.name));
-                    if update.set.is_empty() {
-                        error
-                    } else {
-                        DbError::query_failed(format!(
-                            "The tags of \"{}\" were set, but removing the others failed: {error}",
-                            update.name
-                        ))
-                    }
-                })?;
-        }
+        self.tag(update)?;
 
-        Ok(())
+        self.untag(update).map_err(|error| {
+            if update.set.is_empty() {
+                error
+            } else {
+                DbError::query_failed(format!(
+                    "The tags of \"{}\" were set, but removing the others failed: {error}",
+                    update.name
+                ))
+            }
+        })
     }
 
     /// A parameter's description can only be changed by `PutParameter` with
@@ -512,6 +562,21 @@ impl SecretStoreSource for ParameterStore {
             ))
         })?);
 
+        let current = runtime()
+            .block_on(
+                self.client
+                    .get_parameter()
+                    .name(&update.name)
+                    .with_decryption(false)
+                    .send(),
+            )
+            .map_err(|error| self.operation_error(&error, Some(&update.name)))?;
+        ensure_unchanged_before_writing(
+            plan.read_version,
+            current.parameter.map(|parameter| parameter.version),
+            &update.name,
+        )?;
+
         let mut fluent = self
             .client
             .put_parameter()
@@ -561,11 +626,16 @@ const MAX_PARAMETER_LEVELS: usize = 15;
 
 /// Decides a parameter create, refusing before any call what the service
 /// would reject, with messages that name the parameter and never the value:
-/// an invalid name (letters, digits and `_ . - /`, at most 2048 characters
-/// and 15 levels, no empty level, not starting with `aws` or `ssm`), a type
+/// an invalid name (letters, digits and `_ . - /`, a leading slash when it
+/// has levels, at most 15 levels, no empty level, not starting with `aws` or
+/// `ssm`, and short enough to fit with its ARN in the 1011 characters the
+/// service counts), a type
 /// or tier the service does not have, a key on a parameter that is not a
 /// `SecureString`, a description past the limit, and invalid tags.
-pub(crate) fn plan_create(request: &SecretCreateRequest) -> Result<CreateParameterPlan, DbError> {
+pub(crate) fn plan_create(
+    request: &SecretCreateRequest,
+    region: &str,
+) -> Result<CreateParameterPlan, DbError> {
     request.validate()?;
 
     let name = &request.name;
@@ -577,17 +647,28 @@ pub(crate) fn plan_create(request: &SecretCreateRequest) -> Result<CreateParamet
     let lowered = unprefixed.to_ascii_lowercase();
     let levels: Vec<&str> = unprefixed.split('/').collect();
 
-    if name.chars().count() > 2048
-        || !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "_.-/".contains(c))
+    if !name
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || "_.-/".contains(character))
         || levels.iter().any(|level| level.is_empty())
     {
         return Err(refuse(
-            "a parameter name is letters, digits and _ . - / (up to 2048 characters, with no \
-             empty level)."
+            "a parameter name is letters, digits and _ . - / (with no empty level).".to_string(),
+        ));
+    }
+    if name.contains('/') && !name.starts_with('/') {
+        return Err(refuse(
+            "a parameter name with levels needs its leading slash; the service would store it \
+             under a different name than the one asked for."
                 .to_string(),
         ));
+    }
+    let longest = longest_name(name, region);
+    if name.chars().count() > longest {
+        return Err(refuse(format!(
+            "with its ARN a parameter name is at most {MAX_QUALIFIED_NAME_CHARACTERS} \
+             characters, so in {region} the name takes at most {longest}."
+        )));
     }
     if lowered.starts_with("aws") || lowered.starts_with("ssm") {
         return Err(refuse(
@@ -645,11 +726,34 @@ pub(crate) fn plan_create(request: &SecretCreateRequest) -> Result<CreateParamet
     })
 }
 
+/// Most characters the service counts for a parameter name together with
+/// the ARN it prepends.
+const MAX_QUALIFIED_NAME_CHARACTERS: usize = 1011;
+
+/// The longest name that fits with its ARN: `arn:<partition>:ssm:<region>:
+/// <12-digit account>:parameter`, plus the slash a flat name gets between
+/// `parameter` and the name.
+fn longest_name(name: &str, region: &str) -> usize {
+    let partition = match region {
+        region if region.starts_with("cn-") => "aws-cn",
+        region if region.starts_with("us-gov-") => "aws-us-gov",
+        region if region.starts_with("us-isob-") => "aws-iso-b",
+        region if region.starts_with("us-isof-") => "aws-iso-f",
+        region if region.starts_with("us-iso-") => "aws-iso",
+        region if region.starts_with("eu-isoe-") => "aws-iso-e",
+        _ => "aws",
+    };
+    let arn = format!("arn:{partition}:ssm:{region}:123456789012:parameter");
+    let separator = usize::from(!name.starts_with('/'));
+
+    MAX_QUALIFIED_NAME_CHARACTERS.saturating_sub(arn.len() + separator)
+}
+
 /// The error of a description rewrite. The call re-sends the decrypted
 /// current value, so the service may echo that value in its own message;
 /// it is scrubbed in every form before the error leaves the driver.
 pub(crate) fn description_write_error(error: DbError, resent: &SecretPayload) -> DbError {
-    scrub_submitted_value(error, resent)
+    scrub_submitted_payload(error, resent)
 }
 
 /// Most characters a parameter description holds.
@@ -698,6 +802,13 @@ pub(crate) fn plan_description_write(
              could not keep them; refused."
         )));
     }
+    if metadata.data_type() == Some("aws:ec2:image") {
+        return Err(DbError::query_failed(format!(
+            "Parameter \"{name}\" is an aws:ec2:image parameter: the service validates the \
+             image after it answers a write, so a rewrite could report success while the \
+             description stays unchanged; refused."
+        )));
+    }
 
     let parameter_type = overwrite_type(metadata.r#type(), name)?;
     let data_type = overwrite_data_type(metadata.data_type(), name)?;
@@ -740,6 +851,28 @@ pub(crate) fn ensure_unchanged_while_reading(
     }
 
     Ok(())
+}
+
+/// Refuses a description write when the parameter's version, read again
+/// right before the write, is not the one the value was read at. This
+/// narrows the window `PutParameter`'s lack of a compare-and-swap leaves
+/// open to the time between this read and the write; it cannot close it.
+pub(crate) fn ensure_unchanged_before_writing(
+    read: i64,
+    current: Option<i64>,
+    name: &str,
+) -> Result<(), DbError> {
+    match current {
+        Some(current) if current == read => Ok(()),
+        Some(current) => Err(DbError::query_failed(format!(
+            "Parameter \"{name}\" changed just before it was rewritten (version {read} became \
+             {current}); nothing was written. Try again."
+        ))),
+        None => Err(DbError::query_failed(format!(
+            "Parameter Store returned no parameter for \"{name}\" when its version was checked \
+             before the write; nothing was written."
+        ))),
+    }
 }
 
 /// Checks that a description write produced the very next version. Any

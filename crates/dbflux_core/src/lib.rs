@@ -97,10 +97,12 @@ pub use connection::secret_store::{
     SecretCreateRequest, SecretCreated, SecretDeleteRequest, SecretDeletion,
     SecretDescriptionChange, SecretDescriptionUpdate, SecretDetails, SecretListPage,
     SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
-    SecretRotation, SecretRotationStart, SecretRotationUpdate, SecretStoreCapabilities,
-    SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag, SecretTagsUpdate,
-    SecretValue, SecretVersionInfo, SecretVersionStage, require_name, validate_rotation_function,
-    validate_rotation_schedule, validate_rotation_window, validate_tag,
+    SecretRotation, SecretRotationChange, SecretRotationStart, SecretRotationUpdate,
+    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
+    SecretTagsUpdate, SecretValue, SecretVersionInfo, SecretVersionStage, encode_base64,
+    require_name, scrub_echoed_values, scrub_submitted_payload, validate_rotation_function,
+    validate_rotation_schedule, validate_rotation_window, validate_rotation_window_fits,
+    validate_tag,
 };
 
 pub use connection::dump_analysis::{

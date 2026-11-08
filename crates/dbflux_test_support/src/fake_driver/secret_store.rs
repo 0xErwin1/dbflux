@@ -160,7 +160,12 @@ impl FakeSecretStore {
 
         for secret in secrets.iter() {
             let name = &secret.details.summary.name;
-            let Some(rest) = name.strip_prefix(path.as_str()) else {
+            let rooted = if name.starts_with('/') {
+                name.clone()
+            } else {
+                format!("/{name}")
+            };
+            let Some(rest) = rooted.strip_prefix(path.as_str()) else {
                 continue;
             };
 
@@ -544,6 +549,13 @@ impl SecretStoreSource for FakeSecretStore {
                     ))
                 })?;
 
+            if unfinished_rotation_version(&secret.history).is_some() {
+                return Err(DbError::query_failed(format!(
+                    "Rotation of \"{name}\" is already in progress"
+                )));
+            }
+            let next_rotation = next_rotation_after(fake_now(), rotation.schedule.as_deref())?;
+
             let current = secret.details.summary.version.clone().unwrap_or_default();
             let payload = secret
                 .versions
@@ -561,7 +573,7 @@ impl SecretStoreSource for FakeSecretStore {
             secret.details.version_labels = distinct_labels(&secret.history);
             secret.details.summary.rotation = Some(SecretRotation {
                 last_rotated: fake_now(),
-                next_rotation: next_rotation_after(fake_now(), rotation.schedule.as_deref()),
+                next_rotation,
                 ..rotation
             });
 
@@ -577,7 +589,10 @@ impl SecretStoreSource for FakeSecretStore {
     /// Turns rotation on with the new settings, keeping the window and the
     /// function the secret already has when the update names none, or off.
     /// Nothing is rotated.
-    fn update_rotation(&self, update: &SecretRotationUpdate) -> Result<(), DbError> {
+    fn update_rotation(
+        &self,
+        update: &SecretRotationUpdate,
+    ) -> Result<SecretRotationChange, DbError> {
         let mutation = FakeSecretMutation::UpdateRotation(update.clone());
         self.begin_mutation(
             mutation.clone(),
@@ -587,7 +602,7 @@ impl SecretStoreSource for FakeSecretStore {
         )?;
         update.validate()?;
 
-        {
+        let change = {
             let mut stored = rwlock_write(&self.secrets);
             let secret = find_mut(&mut stored, &update.name, "Secret")?;
             refuse_unwritable(secret, &update.name)?;
@@ -612,7 +627,7 @@ impl SecretStoreSource for FakeSecretStore {
                     window: update.window.clone().or(existing.window),
                     function: Some(function),
                     last_rotated: existing.last_rotated,
-                    next_rotation: next_rotation_after(fake_now(), update.schedule.as_deref()),
+                    next_rotation: next_rotation_after(fake_now(), update.schedule.as_deref())?,
                 }
             } else {
                 let existing = existing
@@ -631,11 +646,21 @@ impl SecretStoreSource for FakeSecretStore {
                 }
             };
             secret.details.summary.rotation = Some(rotation);
-        }
+
+            // Cancelling does not clear a stage the cancelled rotation left.
+            SecretRotationChange {
+                unfinished_version: if update.enabled {
+                    None
+                } else {
+                    unfinished_rotation_version(&secret.history)
+                },
+            }
+        };
 
         self.accept_mutation(mutation);
-        Ok(())
+        Ok(change)
     }
+
     /// Applies a tag edit: removals first, then each tag set overwrites the
     /// value of an existing key in place or is appended, and the secret may
     /// not end up with more than [`MAX_TAGS`] tags. No version is touched.
@@ -722,6 +747,7 @@ impl SecretStoreSource for FakeSecretStore {
             } else {
                 refuse_unwritable(secret, &update.name)?;
                 secret.details.summary.description = description;
+                secret.details.summary.last_changed = fake_now();
                 None
             }
         };
@@ -758,7 +784,6 @@ impl SecretStoreSource for FakeSecretStore {
 }
 
 impl FakeSecretStore {
-    /// Adds a new entry, refusing a name that is taken.
     fn insert_new(&self, secret: FakeSecret) -> Result<(), DbError> {
         let mut stored = rwlock_write(&self.secrets);
         let name = secret.details.summary.name.clone();
@@ -783,7 +808,7 @@ impl FakeSecretStore {
         if name.chars().count() > 512
             || !name
                 .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "/_+=.@-".contains(c))
+                .all(|character| character.is_ascii_alphanumeric() || "/_+=.@-".contains(character))
         {
             return Err(DbError::constraint_violation(format!(
                 "\"{name}\" is not a valid secret name: 1 to 512 letters, digits and / _ + = . @ -"
@@ -850,13 +875,20 @@ impl FakeSecretStore {
         if name.chars().count() > 2048
             || !name
                 .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "_.-/".contains(c))
+                .all(|character| character.is_ascii_alphanumeric() || "_.-/".contains(character))
+            || reserved.is_empty()
             || reserved.starts_with("aws")
             || reserved.starts_with("ssm")
         {
             return Err(DbError::constraint_violation(format!(
                 "\"{name}\" is not a valid parameter name: letters, digits and _ . - /, \
                  not starting with aws or ssm"
+            )));
+        }
+
+        if name.contains('/') && !name.starts_with('/') {
+            return Err(DbError::constraint_violation(format!(
+                "\"{name}\" has levels but no leading slash"
             )));
         }
 
@@ -882,6 +914,17 @@ impl FakeSecretStore {
             return Err(DbError::constraint_violation(
                 "Only a SecureString parameter takes an encryption key".to_string(),
             ));
+        }
+        let value_bytes = match &request.payload {
+            SecretPayload::Text(text) => text.expose_secret().len(),
+            SecretPayload::Binary(bytes) => bytes.expose_secret().len(),
+        };
+        let tier = resolve_tier(&tier, value_bytes);
+        if tier == "Standard" && value_bytes > STANDARD_TIER_VALUE_BYTES {
+            return Err(DbError::constraint_violation(format!(
+                "The value of {name} is longer than the {STANDARD_TIER_VALUE_BYTES} bytes the \
+                 standard tier takes"
+            )));
         }
         if request
             .description
@@ -982,32 +1025,73 @@ fn rewrite_with_description(
     Ok(next)
 }
 
+/// Most bytes a standard-tier parameter value holds.
+const STANDARD_TIER_VALUE_BYTES: usize = 4096;
+
+/// The tier a parameter is stored in. `Intelligent-Tiering` is a way to
+/// choose, not a tier: the service stores a parameter in the standard tier
+/// while its value fits and in the advanced tier when it does not.
+fn resolve_tier(requested: &str, value_bytes: usize) -> String {
+    match requested {
+        "Intelligent-Tiering" if value_bytes > STANDARD_TIER_VALUE_BYTES => "Advanced".to_string(),
+        "Intelligent-Tiering" => "Standard".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// The version a rotation left holding the pending stage without ever
+/// becoming current.
+fn unfinished_rotation_version(history: &[SecretVersionInfo]) -> Option<String> {
+    history
+        .iter()
+        .find(|entry| {
+            entry.labels.iter().any(|label| label == "AWSPENDING")
+                && !entry.labels.iter().any(|label| label == "AWSCURRENT")
+        })
+        .map(|entry| entry.id.clone())
+}
+
 /// When the next rotation falls after `from`, for the schedules the fake
 /// understands: `rate(N days)` and `rate(N hours)` exactly, and a day for a
 /// `cron(...)` expression, which the fake does not evaluate.
 fn next_rotation_after(
     from: Option<chrono::DateTime<chrono::Utc>>,
     schedule: Option<&str>,
-) -> Option<chrono::DateTime<chrono::Utc>> {
-    let from = from?;
-    let schedule = schedule?;
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, DbError> {
+    let (Some(from), Some(schedule)) = (from, schedule) else {
+        return Ok(None);
+    };
+    let out_of_range = || {
+        DbError::constraint_violation(format!(
+            "The next rotation of \"{schedule}\" falls outside the dates a rotation can be set for"
+        ))
+    };
 
     let Some((count, unit)) = schedule
         .strip_prefix("rate(")
         .and_then(|inner| inner.strip_suffix(')'))
         .and_then(|inner| inner.split_once(' '))
     else {
-        return Some(from + chrono::Duration::days(1));
+        return from
+            .checked_add_signed(chrono::Duration::days(1))
+            .map(Some)
+            .ok_or_else(out_of_range);
     };
-    let count = count.parse::<i64>().ok()?;
+    let Ok(count) = count.parse::<i64>() else {
+        return Ok(None);
+    };
 
-    Some(match unit {
-        "hour" | "hours" => from + chrono::Duration::hours(count),
-        _ => from + chrono::Duration::days(count),
-    })
+    let interval = match unit {
+        "hour" | "hours" => chrono::Duration::try_hours(count),
+        _ => chrono::Duration::try_days(count),
+    }
+    .ok_or_else(out_of_range)?;
+
+    from.checked_add_signed(interval)
+        .map(Some)
+        .ok_or_else(out_of_range)
 }
 
-/// The stored secret `name`, or the not-found answer of the service.
 fn find_mut<'a>(
     secrets: &'a mut [FakeSecret],
     name: &str,
@@ -1121,7 +1205,6 @@ impl FakeSecretStore {
         }
     }
 
-    /// Records an operation the modeled service accepted.
     fn accept_mutation(&self, mutation: FakeSecretMutation) {
         mutex_lock(&self.state.secret_store_calls)
             .mutations

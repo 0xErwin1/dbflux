@@ -838,3 +838,165 @@ mod adversarial_inputs {
         );
     }
 }
+
+// --- Scrubbing a submitted value from an error ---
+
+fn scrubbed_message(message: &str, values: &[&str]) -> String {
+    match scrub_echoed_values(DbError::query_failed(message), values) {
+        DbError::QueryFailed(formatted) => formatted.message,
+        other => panic!("expected QueryFailed, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_value_is_scrubbed_in_every_json_nesting_depth() {
+    let value = "pa\"ss\\word\nline";
+    let escape = |text: &str| {
+        text.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+    };
+    let mut echoed = value.to_string();
+
+    for _ in 0..=4 {
+        let message = format!("body {{\"Value\":\"{echoed}\"}} rejected");
+        assert_eq!(
+            scrubbed_message(&message, &[value]),
+            "body {\"Value\":\"[redacted]\"} rejected"
+        );
+        echoed = escape(&echoed);
+    }
+}
+
+#[test]
+fn short_and_unicode_escapes_of_one_value_are_scrubbed_together() {
+    let value = "a\u{8}b\u{c}c\u{1f600}";
+
+    for echoed in [
+        "a\\bb\\fc\\ud83d\\ude00",
+        "a\\u0008b\\u000cc\\ud83d\\ude00",
+        "a\\u0008b\\fc\\uD83D\\uDE00",
+    ] {
+        assert_eq!(
+            scrubbed_message(&format!("echo {echoed} end"), &[value]),
+            "echo [redacted] end",
+            "{echoed}"
+        );
+    }
+}
+
+#[test]
+fn overlapping_occurrences_are_removed_as_one_region() {
+    assert_eq!(
+        scrubbed_message("got abcdefg end", &["abcd", "cdefg"]),
+        "got [redacted] end"
+    );
+    assert_eq!(
+        scrubbed_message("got abcdefg end", &["cdefg", "abcd"]),
+        "got [redacted] end"
+    );
+}
+
+#[test]
+fn an_empty_value_and_text_without_the_value_change_nothing() {
+    assert_eq!(scrubbed_message("plain message", &[""]), "plain message");
+    assert_eq!(
+        scrubbed_message("plain message", &["absent"]),
+        "plain message"
+    );
+    assert_eq!(
+        scrubbed_message("keeps a \\q and a trailing \\", &["absent"]),
+        "keeps a \\q and a trailing \\"
+    );
+}
+
+#[test]
+fn a_binary_payload_is_scrubbed_as_text_and_as_base64() {
+    let payload = SecretPayload::Binary(SecretSlice::from(b"topsecret".to_vec()));
+    let error = DbError::query_failed(format!(
+        "saw topsecret and {} end",
+        encode_base64(b"topsecret")
+    ));
+
+    let rendered = scrub_submitted_payload(error, &payload).to_string();
+
+    assert_eq!(rendered, "saw [redacted] and [redacted] end");
+}
+
+#[test]
+fn a_tag_accepts_unicode_separators_but_not_control_characters() {
+    validate_tag("cost\u{a0}center", "a\u{2003}b").expect("separators are allowed");
+    validate_tag("kostenstelle-ü", "値").expect("letters are allowed");
+
+    for bad in ["tab\there", "line\nbreak", "next\u{85}line"] {
+        validate_tag(bad, "value").expect_err("a control character is refused");
+        validate_tag("env", bad).expect_err("a control character is refused");
+    }
+}
+
+#[test]
+fn a_rotation_window_must_fit_inside_an_hourly_interval() {
+    validate_rotation_window_fits("rate(4 hours)", "4h").expect("equal fits");
+    validate_rotation_window_fits("rate(12 hours)", "3h").expect("shorter fits");
+    validate_rotation_window_fits("rate(1 day)", "24h").expect("a day holds any window");
+    validate_rotation_window_fits("rate(30 days)", "24h").expect("a day holds any window");
+    validate_rotation_window_fits("cron(0 8 1 * ? *)", "24h").expect("no interval to compare");
+
+    let error = validate_rotation_window_fits("rate(4 hours)", "24h").expect_err("too long");
+    assert!(error.contains("4h"), "{error}");
+    assert!(error.contains("rate(4 hours)"), "{error}");
+
+    let update = SecretRotationUpdate::enable("prod/api", "rate(4 hours)").with_window("24h");
+    assert!(matches!(
+        update
+            .validate()
+            .expect_err("an incompatible pair is refused"),
+        DbError::ConstraintViolation(_)
+    ));
+}
+
+fn names(keys: &[&str]) -> Vec<String> {
+    keys.iter().map(ToString::to_string).collect()
+}
+
+#[test]
+fn a_tag_replacement_at_the_quota_removes_before_it_adds() {
+    let full: Vec<String> = (0..MAX_TAGS).map(|index| format!("name-{index}")).collect();
+    let swap = SecretTagsUpdate::new("prod/api")
+        .set("new-name", "v")
+        .remove("name-0");
+
+    assert_eq!(swap.tags_after(&full), MAX_TAGS);
+    assert!(swap.removes_first(&full));
+
+    let overwrite = SecretTagsUpdate::new("prod/api")
+        .set("name-1", "v")
+        .remove("name-0");
+    assert!(!overwrite.removes_first(&full), "an overwrite adds no key");
+
+    let add_only = SecretTagsUpdate::new("prod/api").set("new-name", "v");
+    assert_eq!(add_only.tags_after(&full), MAX_TAGS + 1);
+    assert!(!add_only.removes_first(&full), "nothing to remove first");
+
+    let roomy = names(&["a", "b"]);
+    assert!(!swap.removes_first(&roomy));
+    assert_eq!(swap.tags_after(&roomy), 3);
+}
+
+#[test]
+fn a_tag_update_that_ends_past_the_quota_is_refused_before_any_call() {
+    let full: Vec<String> = (0..MAX_TAGS).map(|index| format!("name-{index}")).collect();
+
+    SecretTagsUpdate::new("prod/api")
+        .set("new-name", "v")
+        .remove("name-0")
+        .check_quota(&full)
+        .expect("a replacement ends at the quota");
+
+    let error = SecretTagsUpdate::new("prod/api")
+        .set("new-name", "v")
+        .check_quota(&full)
+        .expect_err("one more than the quota");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    assert!(error.to_string().contains("51"), "{error}");
+}

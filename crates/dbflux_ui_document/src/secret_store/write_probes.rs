@@ -14,7 +14,6 @@
 
 use super::super::encode_base64;
 use super::super::value::{RetrievalTarget, value_retrieval_event};
-// Every governed entry point, descriptor and action name the seam exports.
 use super::super::write::*;
 use dbflux_core::observability::{EventCategory, EventRecord, EventSink, EventSinkError};
 use dbflux_core::secrecy::ExposeSecret;
@@ -22,9 +21,9 @@ use dbflux_core::{
     DbError, MutationPolicy, ReadOnlyReason, SecretCreateRequest, SecretCreated,
     SecretDeleteRequest, SecretDeletion, SecretDescriptionChange, SecretDescriptionUpdate,
     SecretDetails, SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest,
-    SecretRollback, SecretRollbackRequest, SecretRotationStart, SecretRotationUpdate,
-    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretTagsUpdate,
-    SecretValue, SecretVersionStage,
+    SecretRollback, SecretRollbackRequest, SecretRotationChange, SecretRotationStart,
+    SecretRotationUpdate, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
+    SecretTagsUpdate, SecretValue, SecretVersionStage,
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -879,6 +878,10 @@ struct OperationStore {
     descriptor: SecretStoreDescriptor,
     calls: AtomicUsize,
     failure: Option<Box<dyn Fn() -> DbError + Send + Sync>>,
+
+    /// The store method each call reached and the request it carried.
+    routes: Mutex<Vec<(&'static str, String)>>,
+    unfinished_version: Option<String>,
 }
 
 impl OperationStore {
@@ -887,6 +890,20 @@ impl OperationStore {
             descriptor: SecretStoreDescriptor::new("probe", "Probe", capabilities),
             calls: AtomicUsize::new(0),
             failure: None,
+            routes: Mutex::new(Vec::new()),
+            unfinished_version: None,
+        }
+    }
+
+    fn leaving_unfinished(mut self, version: &str) -> Self {
+        self.unfinished_version = Some(version.to_string());
+        self
+    }
+
+    fn routes(&self) -> Vec<(&'static str, String)> {
+        match self.routes.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
         }
     }
 
@@ -899,9 +916,11 @@ impl OperationStore {
         self.calls.load(Ordering::Relaxed)
     }
 
-    /// Counts the call and answers with the configured failure, if any.
-    fn answer(&self) -> Result<(), DbError> {
+    fn answer(&self, method: &'static str, request: &dyn std::fmt::Debug) -> Result<(), DbError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut routes) = self.routes.lock() {
+            routes.push((method, format!("{request:?}")));
+        }
 
         match &self.failure {
             Some(failure) => Err(failure()),
@@ -924,33 +943,39 @@ impl SecretStoreSource for OperationStore {
         Err(DbError::NotSupported("unused".into()))
     }
     fn roll_back(&self, request: &SecretRollbackRequest) -> Result<SecretRollback, DbError> {
-        self.answer()?;
+        self.answer("roll_back", request)?;
         Ok(SecretRollback {
             current_version: request.version_id.clone(),
             previous_version: Some("v-before".to_string()),
         })
     }
-    fn delete_secret(&self, _request: &SecretDeleteRequest) -> Result<SecretDeletion, DbError> {
-        self.answer()?;
+    fn delete_secret(&self, request: &SecretDeleteRequest) -> Result<SecretDeletion, DbError> {
+        self.answer("delete_secret", request)?;
         Ok(SecretDeletion::default())
     }
-    fn restore_secret(&self, _name: &str) -> Result<(), DbError> {
-        self.answer()
+    fn restore_secret(&self, name: &str) -> Result<(), DbError> {
+        self.answer("restore_secret", &name)
     }
-    fn rotate_now(&self, _name: &str) -> Result<SecretRotationStart, DbError> {
-        self.answer()?;
+    fn rotate_now(&self, name: &str) -> Result<SecretRotationStart, DbError> {
+        self.answer("rotate_now", &name)?;
         Ok(SecretRotationStart {
             version: Some("v-rotated".to_string()),
         })
     }
-    fn update_rotation(&self, _update: &SecretRotationUpdate) -> Result<(), DbError> {
-        self.answer()
+    fn update_rotation(
+        &self,
+        update: &SecretRotationUpdate,
+    ) -> Result<SecretRotationChange, DbError> {
+        self.answer("update_rotation", update)?;
+        Ok(SecretRotationChange {
+            unfinished_version: self.unfinished_version.clone(),
+        })
     }
-    fn update_tags(&self, _update: &SecretTagsUpdate) -> Result<(), DbError> {
-        self.answer()
+    fn update_tags(&self, update: &SecretTagsUpdate) -> Result<(), DbError> {
+        self.answer("update_tags", update)
     }
-    fn create_secret(&self, _request: &SecretCreateRequest) -> Result<SecretCreated, DbError> {
-        self.answer()?;
+    fn create_secret(&self, request: &SecretCreateRequest) -> Result<SecretCreated, DbError> {
+        self.answer("create_secret", request)?;
         Ok(SecretCreated {
             version: Some("v-created".to_string()),
             resource_id: Some("arn:probe:secret:created".to_string()),
@@ -958,9 +983,9 @@ impl SecretStoreSource for OperationStore {
     }
     fn update_description(
         &self,
-        _update: &SecretDescriptionUpdate,
+        update: &SecretDescriptionUpdate,
     ) -> Result<SecretDescriptionChange, DbError> {
-        self.answer()?;
+        self.answer("update_description", update)?;
         Ok(SecretDescriptionChange {
             version: Some("4".to_string()),
         })
@@ -968,6 +993,13 @@ impl SecretStoreSource for OperationStore {
 }
 
 fn operation_cases() -> Vec<OperationCase> {
+    let mut cases = lifecycle_cases();
+    cases.extend(rotation_cases());
+    cases.extend(metadata_cases());
+    cases
+}
+
+fn lifecycle_cases() -> Vec<OperationCase> {
     vec![
         OperationCase {
             label: "roll back",
@@ -1009,6 +1041,18 @@ fn operation_cases() -> Vec<OperationCase> {
             values: Vec::new(),
         },
         OperationCase {
+            label: "restore",
+            operation: SecretOperation::Restore,
+            name: "prod/api/credentials",
+            run: Box::new(|context| restore_secret(context, "prod/api/credentials")),
+            values: Vec::new(),
+        },
+    ]
+}
+
+fn rotation_cases() -> Vec<OperationCase> {
+    vec![
+        OperationCase {
             label: "rotate now",
             operation: SecretOperation::RotateNow,
             name: "prod/api/credentials",
@@ -1025,9 +1069,15 @@ fn operation_cases() -> Vec<OperationCase> {
                     &SecretRotationUpdate::enable("prod/api/credentials", "rate(30 days)")
                         .with_window("4h"),
                 )
+                .map(|_| ())
             }),
             values: Vec::new(),
         },
+    ]
+}
+
+fn metadata_cases() -> Vec<OperationCase> {
+    vec![
         OperationCase {
             label: "edit tags",
             operation: SecretOperation::EditTags,
@@ -1036,11 +1086,11 @@ fn operation_cases() -> Vec<OperationCase> {
                 update_secret_tags(
                     context,
                     &SecretTagsUpdate::new("prod/api/credentials")
-                        .set("env", "prod")
+                        .set("env", "tag-value-probe")
                         .remove("legacy"),
                 )
             }),
-            values: Vec::new(),
+            values: vec!["tag-value-probe"],
         },
         OperationCase {
             label: "edit description",
@@ -1049,11 +1099,11 @@ fn operation_cases() -> Vec<OperationCase> {
             run: Box::new(|context| {
                 update_secret_description(
                     context,
-                    &SecretDescriptionUpdate::new("prod/api/credentials", "Payments API"),
+                    &SecretDescriptionUpdate::new("prod/api/credentials", "description-probe"),
                 )
                 .map(|_| ())
             }),
-            values: Vec::new(),
+            values: vec!["description-probe"],
         },
         OperationCase {
             label: "create",
@@ -1063,19 +1113,16 @@ fn operation_cases() -> Vec<OperationCase> {
                 create_secret(
                     context,
                     &SecretCreateRequest::text("prod/billing/api-key", "create-value-probe")
-                        .with_description("Billing")
-                        .with_tag("env", "prod"),
+                        .with_description("create-description-probe")
+                        .with_tag("env", "create-tag-probe"),
                 )
                 .map(|_| ())
             }),
-            values: vec!["create-value-probe"],
-        },
-        OperationCase {
-            label: "restore",
-            operation: SecretOperation::Restore,
-            name: "prod/api/credentials",
-            run: Box::new(|context| restore_secret(context, "prod/api/credentials")),
-            values: Vec::new(),
+            values: vec![
+                "create-value-probe",
+                "create-description-probe",
+                "create-tag-probe",
+            ],
         },
     ]
 }
@@ -1230,6 +1277,17 @@ fn every_operation_refuses_a_store_that_lacks_a_capability_before_any_call() {
                 OperationStore::new(SecretStoreCapabilities::WRITE),
                 "operation_not_supported",
             ));
+        }
+        if case.operation == SecretOperation::DeleteScheduled {
+            for capability in [
+                SecretStoreCapabilities::DELETE,
+                SecretStoreCapabilities::SOFT_DELETE,
+            ] {
+                stores.push((
+                    OperationStore::new(SecretStoreCapabilities::WRITE | capability),
+                    "operation_not_supported",
+                ));
+            }
         }
 
         for (store, audited) in stores {
@@ -1831,12 +1889,12 @@ fn a_blank_name_refuses_restore_rotate_and_description_before_any_call() {
             | SecretStoreCapabilities::ROTATION
             | SecretStoreCapabilities::DESCRIPTION,
     );
-    let ctx = context(&store, &sink, MutationPolicy::Allowed, None);
+    let write_context = context(&store, &sink, MutationPolicy::Allowed, None);
 
     let failures = [
-        restore_secret(&ctx, "  ").expect_err("blank"),
-        rotate_secret_now(&ctx, "").expect_err("blank"),
-        update_secret_description(&ctx, &SecretDescriptionUpdate::new(" ", "text"))
+        restore_secret(&write_context, "  ").expect_err("blank"),
+        rotate_secret_now(&write_context, "").expect_err("blank"),
+        update_secret_description(&write_context, &SecretDescriptionUpdate::new(" ", "text"))
             .expect_err("blank"),
     ];
 
@@ -1845,4 +1903,332 @@ fn a_blank_name_refuses_restore_rotate_and_description_before_any_call() {
     }
     assert_eq!(store.calls(), 0);
     assert_eq!(sink.events().len(), 3);
+}
+
+// --- Review follow-ups ---
+
+fn escape_json_text(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+}
+
+#[test]
+fn a_put_failure_that_echoes_the_value_json_escaped_once_or_twice_is_scrubbed() {
+    let value = "pa\"ss\\word\nline";
+    let once = escape_json_text(value);
+    let twice = escape_json_text(&once);
+
+    for echoed in [value.to_string(), once.clone(), twice.clone()] {
+        let sink = Sink::default();
+        let store = ProbeStore::new(Box::new(move |_request| {
+            Err(DbError::query_failed(format!(
+                "rejected body {{\"Value\":\"{echoed}\"}}"
+            )))
+        }));
+
+        let failure = run(
+            &store,
+            &sink,
+            MutationPolicy::Allowed,
+            None,
+            &SecretPutRequest::text("prod/token", value),
+        )
+        .expect_err("the store fails");
+
+        let recorded = format!("{:?}", sink.events());
+        for form in [value, once.as_str(), twice.as_str()] {
+            assert!(!failure.to_string().contains(form), "{form}: {failure}");
+            assert!(!recorded.contains(form), "{form}: {recorded}");
+        }
+    }
+}
+
+#[test]
+fn a_tag_or_description_echoed_by_a_failure_is_scrubbed_from_the_error_and_the_event() {
+    let tag_value = "tag \"quoted\" value";
+    let description = "describes \"things\"";
+
+    for (label, echoed) in [
+        ("plain", tag_value.to_string()),
+        ("escaped", escape_json_text(tag_value)),
+        ("twice", escape_json_text(&escape_json_text(tag_value))),
+    ] {
+        let sink = Sink::default();
+        let store = OperationStore::new(SecretOperation::EditTags.required_capabilities())
+            .failing(move || DbError::query_failed(format!("rejected tag {echoed}")));
+
+        let failure = update_secret_tags(
+            &context(&store, &sink, MutationPolicy::Allowed, None),
+            &SecretTagsUpdate::new("prod/api/credentials").set("env", tag_value),
+        )
+        .expect_err("the store fails");
+
+        let recorded = format!("{:?}", sink.events());
+        assert!(
+            !failure.to_string().contains("quoted"),
+            "{label}: {failure}"
+        );
+        assert!(!recorded.contains("quoted"), "{label}: {recorded}");
+    }
+
+    let sink = Sink::default();
+    let store = OperationStore::new(SecretOperation::EditDescription.required_capabilities())
+        .failing(move || {
+            DbError::query_failed(format!("rejected {}", escape_json_text(description)))
+        });
+    let failure = update_secret_description(
+        &context(&store, &sink, MutationPolicy::Allowed, None),
+        &SecretDescriptionUpdate::new("prod/api/credentials", description),
+    )
+    .expect_err("the store fails");
+    assert!(!failure.to_string().contains("things"), "{failure}");
+    assert!(!format!("{:?}", sink.events()).contains("things"));
+}
+
+#[test]
+fn a_cancelled_rotation_reports_and_audits_the_version_it_left_unfinished() {
+    let store = OperationStore::new(SecretOperation::EditRotation.required_capabilities())
+        .leaving_unfinished("v-pending");
+    let sink = Sink::default();
+
+    let change = update_secret_rotation(
+        &context(&store, &sink, MutationPolicy::Allowed, None),
+        &SecretRotationUpdate::disable("prod/api/credentials"),
+    )
+    .expect("applied");
+
+    assert_eq!(change.unfinished_version.as_deref(), Some("v-pending"));
+    assert_eq!(
+        details_of(&sink.events()[0])["unfinished_version"],
+        "v-pending"
+    );
+
+    let clean = OperationStore::new(SecretOperation::EditRotation.required_capabilities());
+    let sink = Sink::default();
+    let change = update_secret_rotation(
+        &context(&clean, &sink, MutationPolicy::Allowed, None),
+        &SecretRotationUpdate::disable("prod/api/credentials"),
+    )
+    .expect("applied");
+    assert_eq!(change.unfinished_version, None);
+    assert!(
+        details_of(&sink.events()[0])
+            .get("unfinished_version")
+            .is_none()
+    );
+}
+
+#[test]
+fn a_blank_name_is_refused_before_the_store_and_its_event_passes_audit_validation() {
+    let sink = Sink::default();
+    let store = ProbeStore::new(Box::new(|request| succeed(request)));
+
+    let failure = run(
+        &store,
+        &sink,
+        MutationPolicy::Allowed,
+        None,
+        &SecretPutRequest::text("  ", "blank-name-value"),
+    )
+    .expect_err("a blank name");
+
+    assert_eq!(failure.kind, SecretWriteFailureKind::Refused);
+    assert_eq!(store.calls(), 0);
+    let events = sink.events();
+    assert_eq!(events.len(), 1);
+    dbflux_audit::AuditService::validate_event(&events[0]).expect("a recordable refusal");
+    assert!(!format!("{events:?}").contains("blank-name-value"));
+
+    let sink = Sink::default();
+    let operations = OperationStore::new(
+        SecretStoreCapabilities::WRITE
+            | SecretStoreCapabilities::SOFT_DELETE
+            | SecretStoreCapabilities::ROTATION
+            | SecretStoreCapabilities::DESCRIPTION,
+    );
+    let write_context = context(&operations, &sink, MutationPolicy::Allowed, None);
+    restore_secret(&write_context, "").expect_err("blank");
+    rotate_secret_now(&write_context, " ").expect_err("blank");
+    update_secret_description(&write_context, &SecretDescriptionUpdate::new("", "text"))
+        .expect_err("blank");
+
+    for event in sink.events() {
+        dbflux_audit::AuditService::validate_event(&event)
+            .unwrap_or_else(|error| panic!("{}: {error}", event.action));
+    }
+}
+
+#[test]
+fn every_operation_reaches_its_own_store_method_with_its_request() {
+    let expected: [(SecretOperation, &str, &[&str]); 9] = [
+        (SecretOperation::RollBack, "roll_back", &["v-oldest"]),
+        (
+            SecretOperation::DeleteScheduled,
+            "delete_secret",
+            &["Scheduled", "30"],
+        ),
+        (
+            SecretOperation::DeleteIrreversible,
+            "delete_secret",
+            &["Irreversible"],
+        ),
+        (
+            SecretOperation::Restore,
+            "restore_secret",
+            &["prod/api/credentials"],
+        ),
+        (
+            SecretOperation::RotateNow,
+            "rotate_now",
+            &["prod/api/credentials"],
+        ),
+        (
+            SecretOperation::EditRotation,
+            "update_rotation",
+            &["rate(30 days)", "4h"],
+        ),
+        (
+            SecretOperation::EditTags,
+            "update_tags",
+            &["tag-value-probe", "legacy"],
+        ),
+        (
+            SecretOperation::EditDescription,
+            "update_description",
+            &["description-probe"],
+        ),
+        (
+            SecretOperation::Create,
+            "create_secret",
+            &["prod/billing/api-key", "create-tag-probe"],
+        ),
+    ];
+
+    for case in operation_cases() {
+        let store = OperationStore::new(case.operation.required_capabilities());
+
+        (case.run)(&context(
+            &store,
+            &Sink::default(),
+            MutationPolicy::Allowed,
+            None,
+        ))
+        .expect_err_or_ok(case.label);
+
+        let (_, method, fragments) = expected
+            .iter()
+            .find(|(operation, _, _)| *operation == case.operation)
+            .unwrap_or_else(|| panic!("{}: no expectation", case.label));
+        let routes = store.routes();
+        assert_eq!(routes.len(), 1, "{}", case.label);
+        assert_eq!(routes[0].0, *method, "{}", case.label);
+        for fragment in *fragments {
+            assert!(
+                routes[0].1.contains(fragment),
+                "{}: {fragment} in {}",
+                case.label,
+                routes[0].1
+            );
+        }
+    }
+}
+
+trait ExpectOk {
+    fn expect_err_or_ok(self, label: &str);
+}
+
+impl ExpectOk for Result<(), SecretWriteFailure> {
+    fn expect_err_or_ok(self, label: &str) {
+        if let Err(failure) = self {
+            panic!("{label}: {failure}");
+        }
+    }
+}
+
+#[test]
+fn a_failure_that_may_have_landed_is_indeterminate_and_says_to_check_before_retrying() {
+    for error in [
+        DbError::Timeout,
+        DbError::IoError(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "reset",
+        )),
+        DbError::QueryFailed(
+            dbflux_core::FormattedError::new("AWS SDK dispatch failure").with_retriable(true),
+        ),
+    ] {
+        let sink = Sink::default();
+        let rendered = error.to_string();
+        let store = OperationStore::new(SecretOperation::EditTags.required_capabilities()).failing(
+            move || match &error {
+                DbError::Timeout => DbError::Timeout,
+                DbError::IoError(io) => {
+                    DbError::IoError(std::io::Error::new(io.kind(), io.to_string()))
+                }
+                other => DbError::QueryFailed(other.formatted().cloned().unwrap_or_default()),
+            },
+        );
+
+        let failure = update_secret_tags(
+            &context(&store, &sink, MutationPolicy::Allowed, None),
+            &SecretTagsUpdate::new("prod/api/credentials").set("env", "prod"),
+        )
+        .expect_err("the store fails");
+
+        assert_eq!(
+            failure.kind,
+            SecretWriteFailureKind::Indeterminate,
+            "{rendered}"
+        );
+        assert!(failure.correlation_id.is_some(), "{rendered}");
+        assert!(!failure.audit_unrecorded, "{rendered}");
+        assert_eq!(sink.events().len(), 1);
+    }
+
+    // An answer from the service says what it did: throttling is a plain
+    // failure, even though it is retriable.
+    let store =
+        OperationStore::new(SecretOperation::EditTags.required_capabilities()).failing(|| {
+            DbError::QueryFailed(
+                dbflux_core::FormattedError::new("slow down")
+                    .with_code("ThrottlingException")
+                    .with_retriable(true),
+            )
+        });
+    let failure = update_secret_tags(
+        &context(&store, &Sink::default(), MutationPolicy::Allowed, None),
+        &SecretTagsUpdate::new("prod/api/credentials").set("env", "prod"),
+    )
+    .expect_err("throttled");
+    assert_eq!(failure.kind, SecretWriteFailureKind::StoreFailed);
+    assert!(!failure.audit_unrecorded);
+}
+
+#[test]
+fn a_store_failure_whose_audit_event_is_lost_says_so_and_offers_no_audit_row() {
+    struct RefusingSink;
+    impl EventSink for RefusingSink {
+        fn record(&self, _event: EventRecord) -> Result<EventRecord, EventSinkError> {
+            Err(EventSinkError::Storage("audit store is closed".into()))
+        }
+    }
+
+    let store = OperationStore::new(SecretOperation::EditTags.required_capabilities())
+        .failing(|| DbError::permission_denied("denied by the service"));
+
+    let failure = update_secret_tags(
+        &context(&store, &RefusingSink, MutationPolicy::Allowed, None),
+        &SecretTagsUpdate::new("prod/api/credentials").set("env", "prod"),
+    )
+    .expect_err("the store fails");
+
+    assert_eq!(failure.kind, SecretWriteFailureKind::StoreFailed);
+    assert!(failure.correlation_id.is_none());
+    assert!(matches!(failure.error, DbError::PermissionDenied(_)));
+    assert!(
+        failure.to_string().contains("denied by the service"),
+        "{failure}"
+    );
+    assert!(failure.audit_unrecorded);
 }

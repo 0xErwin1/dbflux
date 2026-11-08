@@ -1046,6 +1046,12 @@ fn rolling_back_to_the_current_version_is_refused_and_changes_nothing() {
         .secret_store(FAKE_SECRETS_STORE_ID)
         .expect("the fake store exists");
 
+    let before = labels_of(
+        &store
+            .list_versions("prod/api/credentials")
+            .expect("history"),
+    );
+
     let error = store
         .roll_back(&SecretRollbackRequest::new(
             "prod/api/credentials",
@@ -1062,6 +1068,7 @@ fn rolling_back_to_the_current_version_is_refused_and_changes_nothing() {
         labels_of(&versions)[0],
         ("v-current".to_string(), vec!["AWSCURRENT".to_string()])
     );
+    assert_eq!(labels_of(&versions), before);
 
     let calls = driver.secret_store_calls();
     assert_eq!(calls.mutation_attempts.len(), 1);
@@ -1573,14 +1580,18 @@ fn a_cron_schedule_is_rescheduled_a_day_out_and_an_hourly_one_by_its_hours() {
                 schedule,
             ))
             .expect("enable");
-        let next = store
+        let rotation = store
             .describe("prod/api/credentials")
             .expect("describe")
             .summary
             .rotation
-            .expect("rotation")
-            .next_rotation
-            .expect("scheduled");
+            .expect("rotation");
+        assert_eq!(
+            rotation.window.as_deref(),
+            Some("4h"),
+            "an update that names no window keeps the one the secret has"
+        );
+        let next = rotation.next_rotation.expect("scheduled");
 
         let started = store.rotate_now("prod/api/credentials").expect("rotate");
         assert!(started.version.is_some());
@@ -1957,6 +1968,7 @@ fn creating_never_overwrites_an_existing_name() {
     ] {
         let store = connection.secret_store(store_id).expect("store");
         let before = store.describe(name).expect("describe");
+        let before_value = exposed_text(&store.get_value(name, None).expect("value"));
 
         let error = store
             .create_secret(&SecretCreateRequest::text(name, "created-value-3"))
@@ -1968,6 +1980,10 @@ fn creating_never_overwrites_an_existing_name() {
         assert_eq!(
             store.describe(name).expect("describe").summary.version,
             before.summary.version
+        );
+        assert_eq!(
+            exposed_text(&store.get_value(name, None).expect("value")),
+            before_value
         );
     }
 
@@ -2221,4 +2237,228 @@ fn the_history_marks_exactly_one_current_version_across_writes() {
         current_ids(&parameters.list_versions(parameter).unwrap()),
         ["4"]
     );
+}
+
+// --- Review follow-ups: pending rotations, descriptions, names ---
+
+#[test]
+fn rotating_is_refused_while_another_version_is_pending_and_changes_nothing() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+    let mut pending = SecretPutRequest::text("prod/api/credentials", "staged value");
+    pending.stage = Some(SecretVersionStage::Pending);
+    store.put_value(&pending).expect("a staged write");
+    let before = labels_of(
+        &store
+            .list_versions("prod/api/credentials")
+            .expect("history"),
+    );
+    let mutations = driver.secret_store_calls().mutations.len();
+
+    let error = store
+        .rotate_now("prod/api/credentials")
+        .expect_err("a rotation is already unfinished");
+
+    assert!(error.to_string().contains("in progress"), "{error}");
+    assert_eq!(
+        labels_of(
+            &store
+                .list_versions("prod/api/credentials")
+                .expect("history")
+        ),
+        before
+    );
+    assert_eq!(driver.secret_store_calls().mutations.len(), mutations);
+}
+
+#[test]
+fn turning_rotation_off_reports_the_version_an_unfinished_rotation_left() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+    let mut pending = SecretPutRequest::text("prod/api/credentials", "staged value");
+    pending.stage = Some(SecretVersionStage::Pending);
+    let staged = store
+        .put_value(&pending)
+        .expect("a staged write")
+        .version
+        .expect("version");
+
+    let change = store
+        .update_rotation(&SecretRotationUpdate::disable("prod/api/credentials"))
+        .expect("disable");
+    assert_eq!(change.unfinished_version.as_deref(), Some(staged.as_str()));
+
+    let change = store
+        .update_rotation(
+            &SecretRotationUpdate::enable("prod/api/credentials", "rate(30 days)")
+                .with_function(FAKE_LAMBDA),
+        )
+        .expect("enable");
+    assert_eq!(change.unfinished_version, None, "turning it on leaves none");
+
+    let (_driver, connection) = connected();
+    let clean = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists")
+        .update_rotation(&SecretRotationUpdate::disable("prod/api/credentials"))
+        .expect("disable");
+    assert_eq!(clean.unfinished_version, None);
+}
+
+#[test]
+fn a_rotation_whose_next_date_overflows_is_refused_and_changes_nothing() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+    let before = store
+        .describe("prod/api/credentials")
+        .expect("describe")
+        .summary
+        .rotation;
+
+    let error = store
+        .update_rotation(&SecretRotationUpdate::enable(
+            "prod/api/credentials",
+            "rate(100000000 days)",
+        ))
+        .expect_err("the next date does not exist");
+
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    assert_eq!(
+        store
+            .describe("prod/api/credentials")
+            .expect("describe")
+            .summary
+            .rotation,
+        before
+    );
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+#[test]
+fn a_flat_description_edit_stamps_the_change_time() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+    let before = store
+        .describe("prod/api/credentials")
+        .expect("describe")
+        .summary
+        .last_changed;
+
+    store
+        .update_description(&SecretDescriptionUpdate::new(
+            "prod/api/credentials",
+            "A new description",
+        ))
+        .expect("edit");
+
+    let after = store
+        .describe("prod/api/credentials")
+        .expect("describe")
+        .summary
+        .last_changed;
+    assert!(after > before, "{after:?} should be later than {before:?}");
+}
+
+#[test]
+fn a_parameter_name_of_only_slashes_or_with_levels_and_no_leading_slash_is_refused() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    for name in ["/", "app/prod/token"] {
+        let error = store
+            .create_secret(&SecretCreateRequest::text(name, "created-value-9"))
+            .expect_err("refused");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    }
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+#[test]
+fn an_unprefixed_parameter_is_listed_at_the_root_directly_and_recursively() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+    store
+        .create_secret(&SecretCreateRequest::text("plain", "created-value-10"))
+        .expect("a flat name is valid");
+
+    for recursive in [false, true] {
+        let listed = store
+            .list(&SecretListRequest {
+                path: Some("/".to_string()),
+                recursive,
+                name_filter: Some("plain".to_string()),
+                ..SecretListRequest::default()
+            })
+            .expect("list");
+
+        assert!(
+            listed.entries.iter().any(|entry| entry.name == "plain"),
+            "recursive={recursive}: {:?}",
+            listed.entries
+        );
+    }
+    assert!(store.describe("plain").is_ok());
+}
+
+#[test]
+fn intelligent_tiering_resolves_to_the_tier_the_value_needs() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    store
+        .create_secret(
+            &SecretCreateRequest::text("/app/small", "small").with_tier("Intelligent-Tiering"),
+        )
+        .expect("created");
+    store
+        .create_secret(
+            &SecretCreateRequest::text("/app/large", "l".repeat(4097))
+                .with_tier("Intelligent-Tiering"),
+        )
+        .expect("created");
+
+    let tier_of = |name: &str| store.describe(name).expect("describe").summary.tier;
+    assert_eq!(tier_of("/app/small").as_deref(), Some("Standard"));
+    assert_eq!(tier_of("/app/large").as_deref(), Some("Advanced"));
+}
+
+#[test]
+fn a_standard_tier_value_over_4096_bytes_is_refused() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    store
+        .create_secret(&SecretCreateRequest::text("/app/fits", "v".repeat(4096)))
+        .expect("4096 bytes fit");
+    let mutations = driver.secret_store_calls().mutations.len();
+    let error = store
+        .create_secret(&SecretCreateRequest::text("/app/over", "v".repeat(4097)))
+        .expect_err("one byte over");
+
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    assert!(store.describe("/app/over").is_err());
+    assert_eq!(driver.secret_store_calls().mutations.len(), mutations);
+
+    store
+        .create_secret(
+            &SecretCreateRequest::text("/app/advanced", "v".repeat(4097)).with_tier("Advanced"),
+        )
+        .expect("the advanced tier holds more");
 }

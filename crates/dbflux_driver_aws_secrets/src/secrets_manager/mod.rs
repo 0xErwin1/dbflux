@@ -10,16 +10,16 @@ use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
     DbError, FormattedError, SecretDeleteRequest, SecretDeletion, SecretDescriptionChange,
     SecretDescriptionUpdate, SecretDetails, SecretListPage, SecretListRequest, SecretPayload,
-    SecretPutRequest, SecretRollback, SecretRollbackRequest, SecretRotation, SecretRotationStart,
-    SecretRotationUpdate, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
-    SecretSummary, SecretTag, SecretTagsUpdate, SecretValue, SecretVersionInfo, SecretVersionStage,
+    SecretPutRequest, SecretRollback, SecretRollbackRequest, SecretRotation, SecretRotationChange,
+    SecretRotationStart, SecretRotationUpdate, SecretStoreCapabilities, SecretStoreDescriptor,
+    SecretStoreSource, SecretSummary, SecretTag, SecretTagsUpdate, SecretValue, SecretVersionInfo,
+    SecretVersionStage, scrub_submitted_payload, validate_rotation_window_fits,
 };
 use dbflux_core::{SecretCreateRequest, SecretCreated};
 
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
 use crate::error_formatter::{
     ErrorTarget, classify_connection_error, classify_operation_error, format_service_error,
-    scrub_submitted_value,
 };
 
 /// Descriptor id of the Secrets Manager store.
@@ -186,6 +186,44 @@ impl SecretsManagerStore {
 }
 
 impl SecretsManagerStore {
+    /// `TagResource` for the tags of the update, when it sets any.
+    fn tag(&self, update: &SecretTagsUpdate) -> Result<(), DbError> {
+        if update.set.is_empty() {
+            return Ok(());
+        }
+
+        runtime()
+            .block_on(
+                self.client
+                    .tag_resource()
+                    .secret_id(&update.name)
+                    .set_tags(Some(sdk_tags(&update.set)))
+                    .send(),
+            )
+            .map_err(|error| self.operation_error(&error, Some(&update.name)))?;
+
+        Ok(())
+    }
+
+    /// `UntagResource` for the keys of the update, when it removes any.
+    fn untag(&self, update: &SecretTagsUpdate) -> Result<(), DbError> {
+        if update.remove.is_empty() {
+            return Ok(());
+        }
+
+        runtime()
+            .block_on(
+                self.client
+                    .untag_resource()
+                    .secret_id(&update.name)
+                    .set_tag_keys(Some(update.remove.clone()))
+                    .send(),
+            )
+            .map_err(|error| self.operation_error(&error, Some(&update.name)))?;
+
+        Ok(())
+    }
+
     /// `DescribeSecret`, refusing a secret another service owns: DBFlux
     /// keeps those read only and AWS does not enforce it, so every write
     /// that is not a value put asks first and names the owner.
@@ -446,7 +484,7 @@ impl SecretStoreSource for SecretsManagerStore {
         let output = runtime().block_on(call.send()).map_err(|error| {
             // The service may echo the submitted value in its own
             // message; a put error never carries it onward.
-            scrub_submitted_value(
+            scrub_submitted_payload(
                 self.operation_error(&error, Some(&request.name)),
                 &request.payload,
             )
@@ -558,8 +596,13 @@ impl SecretStoreSource for SecretsManagerStore {
 
     /// Turns automatic rotation on with `RotateSecret` — rules and function
     /// set, `RotateImmediately` false so editing never rotates — or off with
-    /// `CancelRotateSecret`.
-    fn update_rotation(&self, update: &SecretRotationUpdate) -> Result<(), DbError> {
+    /// `CancelRotateSecret`, which leaves the pending stage of a rotation in
+    /// progress where it was; the version that holds it is reported so the
+    /// caller can say the labels need reconciling before another rotation.
+    fn update_rotation(
+        &self,
+        update: &SecretRotationUpdate,
+    ) -> Result<SecretRotationChange, DbError> {
         self.descriptor.ensure_can(
             SecretStoreCapabilities::WRITE | SecretStoreCapabilities::ROTATION,
             "edit the rotation of",
@@ -568,6 +611,7 @@ impl SecretStoreSource for SecretsManagerStore {
         update.validate()?;
 
         let metadata = self.describe_unmanaged(&update.name)?;
+        let unfinished_version = unfinished_rotation_version(metadata.version_ids_to_stages());
         let plan = plan_rotation_update(
             update,
             metadata.rotation_enabled() == Some(true),
@@ -606,10 +650,12 @@ impl SecretStoreSource for SecretsManagerStore {
                             .send(),
                     )
                     .map_err(|error| self.operation_error(&error, Some(&update.name)))?;
+
+                return Ok(SecretRotationChange { unfinished_version });
             }
         }
 
-        Ok(())
+        Ok(SecretRotationChange::default())
     }
 
     /// One `CreateSecret` call with the name, the text value, the
@@ -646,7 +692,7 @@ impl SecretStoreSource for SecretsManagerStore {
                     .send(),
             )
             .map_err(|error| {
-                scrub_submitted_value(
+                scrub_submitted_payload(
                     self.operation_error(&error, Some(&request.name)),
                     &request.payload,
                 )
@@ -671,43 +717,39 @@ impl SecretStoreSource for SecretsManagerStore {
         )?;
         update.validate()?;
 
-        self.describe_unmanaged(&update.name)?;
+        let metadata = self.describe_unmanaged(&update.name)?;
+        let existing_keys: Vec<String> = metadata
+            .tags()
+            .iter()
+            .filter_map(|existing| existing.key().map(ToString::to_string))
+            .collect();
+        update.check_quota(&existing_keys)?;
 
-        if !update.set.is_empty() {
-            runtime()
-                .block_on(
-                    self.client
-                        .tag_resource()
-                        .secret_id(&update.name)
-                        .set_tags(Some(sdk_tags(&update.set)))
-                        .send(),
-                )
-                .map_err(|error| self.operation_error(&error, Some(&update.name)))?;
+        // A secret at its quota cannot take a new key before the old one is
+        // gone, so the removal goes first and a failure after it says so.
+        if update.removes_first(&existing_keys) {
+            self.untag(update)?;
+
+            return self.tag(update).map_err(|error| {
+                DbError::query_failed(format!(
+                    "The tags of \"{}\" were removed, but setting the others failed: {error}",
+                    update.name
+                ))
+            });
         }
 
-        if !update.remove.is_empty() {
-            runtime()
-                .block_on(
-                    self.client
-                        .untag_resource()
-                        .secret_id(&update.name)
-                        .set_tag_keys(Some(update.remove.clone()))
-                        .send(),
-                )
-                .map_err(|error| {
-                    let error = self.operation_error(&error, Some(&update.name));
-                    if update.set.is_empty() {
-                        error
-                    } else {
-                        DbError::query_failed(format!(
-                            "The tags of \"{}\" were set, but removing the others failed: {error}",
-                            update.name
-                        ))
-                    }
-                })?;
-        }
+        self.tag(update)?;
 
-        Ok(())
+        self.untag(update).map_err(|error| {
+            if update.set.is_empty() {
+                error
+            } else {
+                DbError::query_failed(format!(
+                    "The tags of \"{}\" were set, but removing the others failed: {error}",
+                    update.name
+                ))
+            }
+        })
     }
 
     /// `UpdateSecret` with the description and nothing else: no secret
@@ -899,12 +941,24 @@ pub(crate) fn plan_rotation_update(
         )));
     }
 
+    let schedule = update.schedule.clone().unwrap_or_default();
+    let window = update
+        .window
+        .clone()
+        .or_else(|| existing_window.map(ToString::to_string));
+
+    if let Some(window) = &window {
+        validate_rotation_window_fits(&schedule, window).map_err(|reason| {
+            DbError::constraint_violation(format!(
+                "The rotation of \"{}\" was not changed: {reason}",
+                update.name
+            ))
+        })?;
+    }
+
     Ok(RotationPlan::Enable {
-        schedule: update.schedule.clone().unwrap_or_default(),
-        window: update
-            .window
-            .clone()
-            .or_else(|| existing_window.map(ToString::to_string)),
+        schedule,
+        window,
         function: update.function.clone(),
     })
 }
@@ -1175,9 +1229,10 @@ pub(crate) fn rotation_schedule(rules: &RotationRulesType) -> Option<String> {
         return Some(expression.to_string());
     }
 
-    rules
-        .automatically_after_days()
-        .map(|days| format!("rate({days} days)"))
+    rules.automatically_after_days().map(|days| match days {
+        1 => "rate(1 day)".to_string(),
+        days => format!("rate({days} days)"),
+    })
 }
 
 /// Walks every page of a `ListSecretVersionIds` listing. The fetcher sends
@@ -1236,6 +1291,25 @@ pub(crate) fn versions_from_entries(entries: &[SecretVersionsListEntry]) -> Vec<
 
     versions.sort_by_key(|version| std::cmp::Reverse(version.created));
     versions
+}
+
+/// The version a cancelled rotation leaves holding `AWSPENDING` without
+/// `AWSCURRENT`, if any; the lowest id when several do, so the answer is
+/// stable.
+pub(crate) fn unfinished_rotation_version(
+    versions: Option<&HashMap<String, Vec<String>>>,
+) -> Option<String> {
+    let mut unfinished: Vec<&String> = versions?
+        .iter()
+        .filter(|(_, stages)| {
+            stages.iter().any(|stage| stage == PENDING_STAGE)
+                && !stages.iter().any(|stage| stage == CURRENT_STAGE)
+        })
+        .map(|(version, _)| version)
+        .collect();
+    unfinished.sort();
+
+    unfinished.first().map(|version| version.to_string())
 }
 
 fn current_version(versions: &HashMap<String, Vec<String>>) -> Option<String> {

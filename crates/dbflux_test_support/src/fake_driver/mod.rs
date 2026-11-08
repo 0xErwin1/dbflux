@@ -13,9 +13,9 @@ use dbflux_core::{
     MAX_TAGS, SecretCreateRequest, SecretCreated, SecretDeleteRequest, SecretDeletion,
     SecretDescriptionChange, SecretDescriptionUpdate, SecretDetails, SecretListPage,
     SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
-    SecretRotation, SecretRotationStart, SecretRotationUpdate, SecretStoreCapabilities,
-    SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag, SecretTagsUpdate,
-    SecretValue, SecretVersionInfo, SecretVersionStage,
+    SecretRotation, SecretRotationChange, SecretRotationStart, SecretRotationUpdate,
+    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
+    SecretTagsUpdate, SecretValue, SecretVersionInfo, SecretVersionStage,
 };
 use dbflux_driver_cloudwatch::CLOUDWATCH_FORM;
 use dbflux_driver_dynamodb::DYNAMODB_FORM;

@@ -54,6 +54,70 @@ fn rotation_schedule_prefers_the_expression_and_falls_back_to_days() {
 }
 
 #[test]
+fn a_one_day_interval_is_reported_in_the_singular_a_schedule_edit_accepts() {
+    let one_day = RotationRulesType::builder()
+        .automatically_after_days(1)
+        .build();
+
+    let schedule = rotation_schedule(&one_day).expect("a schedule");
+
+    assert_eq!(schedule, "rate(1 day)");
+    dbflux_core::validate_rotation_schedule(&schedule).expect("the reported schedule is reusable");
+}
+
+#[test]
+fn a_cancelled_rotation_reports_the_version_it_left_pending() {
+    let stages = |entries: &[(&str, &[&str])]| -> HashMap<String, Vec<String>> {
+        entries
+            .iter()
+            .map(|(version, labels)| {
+                (
+                    version.to_string(),
+                    labels.iter().map(ToString::to_string).collect(),
+                )
+            })
+            .collect()
+    };
+
+    assert_eq!(
+        unfinished_rotation_version(Some(&stages(&[
+            ("v-pending", &["AWSPENDING"]),
+            ("v-current", &["AWSCURRENT"]),
+        ])))
+        .as_deref(),
+        Some("v-pending")
+    );
+    assert_eq!(
+        unfinished_rotation_version(Some(&stages(&[
+            ("v-done", &["AWSPENDING", "AWSCURRENT"]),
+            ("v-old", &["AWSPREVIOUS"]),
+        ]))),
+        None,
+        "a pending label on the current version is a finished rotation"
+    );
+    assert_eq!(unfinished_rotation_version(None), None);
+}
+
+#[test]
+fn a_preserved_window_is_checked_against_the_new_interval() {
+    let update = SecretRotationUpdate::enable("prod/api", "rate(4 hours)");
+
+    let error = plan_rotation_update(&update, true, Some(LAMBDA), Some("24h"))
+        .expect_err("the secret's own 24h window no longer fits");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    assert!(error.to_string().contains("4h"), "{error}");
+
+    plan_rotation_update(
+        &update.clone().with_window("4h"),
+        true,
+        Some(LAMBDA),
+        Some("24h"),
+    )
+    .expect("naming a compatible window resolves it");
+    plan_rotation_update(&update, true, Some(LAMBDA), Some("3h")).expect("a shorter window fits");
+}
+
+#[test]
 fn version_labels_are_sorted_and_distinct() {
     let versions = HashMap::from([
         (

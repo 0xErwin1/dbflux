@@ -40,20 +40,19 @@ use dbflux_core::observability::{
 };
 use dbflux_core::{
     DbError, ExecutionClassification, MutationPolicy, SecretPayload, SecretPutRequest,
-    SecretStoreCapabilities, SecretStoreSource, SecretValue, SecretVersionStage,
+    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretValue,
+    SecretVersionStage, require_name, scrub_echoed_values, scrub_submitted_payload,
 };
 use uuid::Uuid;
 
 use crate::labels::mutation_read_only_error;
 
 mod operations;
-mod scrub;
 
 pub use operations::{
     create_secret, delete_secret, restore_secret, roll_back_secret, rotate_secret_now,
     update_secret_description, update_secret_rotation, update_secret_tags,
 };
-use scrub::scrub_submitted_value;
 
 /// Audit action of a governed write that the store accepted.
 pub const SECRET_VALUE_WRITTEN_ACTION: &str = "secret_value_written";
@@ -498,6 +497,13 @@ pub enum SecretWriteFailureKind {
     /// anywhere it did not before.
     StoreFailed,
 
+    /// The store failed in a way that does not say whether the write
+    /// landed — a timeout, a dropped connection, or a response lost after
+    /// the service committed. The change may exist; the caller must tell the
+    /// user to check the secret before retrying, because a retry could write
+    /// a second version.
+    Indeterminate,
+
     /// The store accepted the write, but the audit event could not be
     /// recorded. The write stands — the value cannot be un-written — and a
     /// retry would write a second version while still not repairing the
@@ -526,6 +532,12 @@ pub struct SecretWriteFailure {
     /// Which failing outcome this is, as the seam classified it. The caller
     /// maps its report on this verdict, never on the error variant.
     pub kind: SecretWriteFailureKind,
+
+    /// The event of this refusal or failure could not be recorded, so no
+    /// audit row exists to point at and the trail has a hole the caller must
+    /// say so. Always `false` for [`SecretWriteFailureKind::AuditLost`],
+    /// whose error already says it.
+    pub audit_unrecorded: bool,
 }
 
 impl std::fmt::Display for SecretWriteFailure {
@@ -554,6 +566,14 @@ type StoreCall<'a, T> = Box<dyn FnOnce(&dyn SecretStoreSource) -> Result<T, DbEr
 /// Builds the non-secret audit fields of an accepted outcome.
 type Landed<'a, T> = Box<dyn Fn(&T) -> serde_json::Map<String, serde_json::Value> + 'a>;
 
+/// One thing a call submits that an error must not echo back: the secret's
+/// value, or request text — a tag value, a description — that may be as
+/// sensitive as the value in the hands of whoever configured it.
+enum Submitted<'a> {
+    Payload(&'a SecretPayload),
+    Text(&'a str),
+}
+
 /// One attempt of a governed operation: what it is, what it targets, the
 /// request-level check that runs before any call, and the store call.
 struct Attempt<'a, T> {
@@ -565,8 +585,9 @@ struct Attempt<'a, T> {
     /// well formed.
     invalid: Option<(&'static str, DbError)>,
 
-    /// The value the call submits, so a failure that echoes it is scrubbed.
-    submitted: Option<&'a SecretPayload>,
+    /// What the call submits, so a failure that echoes any of it is
+    /// scrubbed.
+    submitted: Vec<Submitted<'a>>,
 
     /// Non-secret request fields recorded on every event of the attempt.
     details: serde_json::Map<String, serde_json::Value>,
@@ -624,8 +645,10 @@ pub fn put_secret_value(
         Attempt {
             operation: SecretOperation::PutValue,
             name: &request.name,
-            invalid: None,
-            submitted: Some(&request.payload),
+            invalid: require_name(&request.name)
+                .err()
+                .map(|error| ("invalid_request", error)),
+            submitted: vec![Submitted::Payload(&request.payload)],
             details: serde_json::Map::new(),
             call: Box::new(|store| store.put_value(request)),
             landed: Box::new(move |value: &SecretValue| {
@@ -683,31 +706,40 @@ fn govern<T>(context: &WriteContext<'_>, attempt: Attempt<'_, T>) -> Result<T, S
         store_label: &descriptor.label,
         name,
     };
-    let refuse = |reason: &'static str, error: DbError| {
-        record(
-            context.audit,
-            operation_event(
-                operation,
-                &target,
-                OperationOutcome::Refused { reason },
-                &details,
-            ),
-        );
-        SecretWriteFailure {
-            error,
-            correlation_id: None,
-            kind: SecretWriteFailureKind::Refused,
-        }
+    let audited = AuditedAttempt {
+        context,
+        operation,
+        target: &target,
+        details: &details,
     };
 
+    if let Some((reason, error)) = gate_refusal(context, descriptor, operation, name, invalid) {
+        return Err(audited.refused(reason, error));
+    }
+
+    match call(context.store) {
+        Ok(outcome) => audited.landed(outcome, landed),
+        Err(error) => Err(audited.failed(error, &submitted)),
+    }
+}
+
+/// The first gate that refuses the attempt, as `(audit reason, error)`.
+fn gate_refusal(
+    context: &WriteContext<'_>,
+    descriptor: &SecretStoreDescriptor,
+    operation: SecretOperation,
+    name: &str,
+    invalid: Option<(&'static str, DbError)>,
+) -> Option<(&'static str, DbError)> {
     if let Some((reason, message)) =
         policy_refusal(context.policy, context.read_only_reason, operation, name)
     {
-        return Err(refuse(reason, DbError::permission_denied(message)));
+        return Some((reason, DbError::permission_denied(message)));
     }
 
-    let required = operation.required_capabilities();
-    if let Err(error) = descriptor.ensure_can(required, operation.verb(), name) {
+    if let Err(error) =
+        descriptor.ensure_can(operation.required_capabilities(), operation.verb(), name)
+    {
         let reason = if descriptor.supports(SecretStoreCapabilities::WRITE) {
             "operation_not_supported"
         } else {
@@ -720,70 +752,141 @@ fn govern<T>(context: &WriteContext<'_>, attempt: Attempt<'_, T>) -> Result<T, S
         } else {
             error
         };
-        return Err(refuse(reason, error));
+
+        return Some((reason, error));
     }
 
-    if let Some((reason, error)) = invalid {
-        return Err(refuse(reason, error));
+    invalid
+}
+
+/// What one attempt records about itself: every outcome of [`govern`] ends
+/// in exactly one audit event written through here.
+struct AuditedAttempt<'a> {
+    context: &'a WriteContext<'a>,
+    operation: SecretOperation,
+    target: &'a WriteTarget<'a>,
+    details: &'a serde_json::Map<String, serde_json::Value>,
+}
+
+impl AuditedAttempt<'_> {
+    /// A gate refused the attempt before the store was called.
+    fn refused(&self, reason: &'static str, error: DbError) -> SecretWriteFailure {
+        let recorded = record(
+            self.context.audit,
+            operation_event(
+                self.operation,
+                self.target,
+                OperationOutcome::Refused { reason },
+                self.details,
+            ),
+        );
+
+        SecretWriteFailure {
+            error,
+            correlation_id: None,
+            kind: SecretWriteFailureKind::Refused,
+            audit_unrecorded: !recorded,
+        }
     }
 
-    match call(context.store) {
-        Ok(outcome) => {
-            let event = operation_event(
-                operation,
-                &target,
-                OperationOutcome::Done(landed(&outcome)),
-                &details,
-            );
+    /// The store accepted the attempt. When the sink refuses the event the
+    /// write cannot be un-written, so the caller is told it stands.
+    #[allow(clippy::result_large_err)] // `DbError` is the crate's error type
+    fn landed<T>(&self, outcome: T, fields: Landed<'_, T>) -> Result<T, SecretWriteFailure> {
+        let event = operation_event(
+            self.operation,
+            self.target,
+            OperationOutcome::Done(fields(&outcome)),
+            self.details,
+        );
 
-            match context.audit.record(event) {
-                Ok(_) => Ok(outcome),
-                Err(error) => {
-                    log::warn!("[secret store] failed to record secret write audit event: {error}");
-                    Err(SecretWriteFailure {
-                        error: DbError::query_failed(operation.audit_lost_message(
-                            name,
-                            &descriptor.label,
-                            &error,
-                        )),
-                        correlation_id: None,
-                        kind: SecretWriteFailureKind::AuditLost,
-                    })
-                }
+        match self.context.audit.record(event) {
+            Ok(_) => Ok(outcome),
+            Err(error) => {
+                log::warn!("[secret store] failed to record secret write audit event: {error}");
+
+                Err(SecretWriteFailure {
+                    error: DbError::query_failed(self.operation.audit_lost_message(
+                        self.target.name,
+                        self.target.store_label,
+                        &error,
+                    )),
+                    correlation_id: None,
+                    kind: SecretWriteFailureKind::AuditLost,
+                    audit_unrecorded: false,
+                })
             }
         }
-        Err(error) => {
-            // Drivers scrub their own errors; a driver that fails to must
-            // not defeat the seam, so a submitted value is scrubbed again
-            // here — in every form a service may have echoed it — before
-            // the message reaches audit or the caller.
-            let error = match submitted {
-                Some(payload) => scrub_submitted_value(error, payload),
-                None => error,
-            };
-            let message = error.to_string();
-            let event = operation_event(
-                operation,
-                &target,
-                OperationOutcome::Failed { message: &message },
-                &details,
-            );
-            // The failure carries the id its audit event uses, so the
-            // caller can point at the same row when it reports. The event
-            // stores the id as text; parse it back to the type the caller
-            // reports with.
-            let correlation_id = event
-                .correlation_id
-                .as_deref()
-                .and_then(|correlation_id| Uuid::parse_str(correlation_id).ok());
-            record(context.audit, event);
-            Err(SecretWriteFailure {
-                error,
-                correlation_id,
-                kind: SecretWriteFailureKind::StoreFailed,
-            })
+    }
+
+    /// The store failed the attempt. Drivers scrub their own errors; a
+    /// driver that fails to must not defeat the seam, so what the call
+    /// submitted is scrubbed again here — in every form a service may have
+    /// echoed it — before the message reaches audit or the caller.
+    fn failed(&self, error: DbError, submitted: &[Submitted<'_>]) -> SecretWriteFailure {
+        let may_have_landed = may_have_landed(&error);
+        let error = scrub_submitted(error, submitted);
+        let message = error.to_string();
+        let event = operation_event(
+            self.operation,
+            self.target,
+            OperationOutcome::Failed { message: &message },
+            self.details,
+        );
+        // The failure carries the id its audit event uses, so the caller
+        // can point at the same row when it reports. The event stores the
+        // id as text; parse it back to the type the caller reports with.
+        let correlation_id = event
+            .correlation_id
+            .as_deref()
+            .and_then(|correlation_id| Uuid::parse_str(correlation_id).ok());
+
+        let recorded = record(self.context.audit, event);
+
+        // A row that was not recorded cannot be navigated to, so the id is
+        // withheld.
+        SecretWriteFailure {
+            error,
+            correlation_id: recorded.then_some(correlation_id).flatten(),
+            kind: if may_have_landed {
+                SecretWriteFailureKind::Indeterminate
+            } else {
+                SecretWriteFailureKind::StoreFailed
+            },
+            audit_unrecorded: !recorded,
         }
     }
+}
+
+/// Whether a store failure leaves it unknown that the write did not land: a
+/// timeout, a dropped connection, or a service-less transport error the
+/// driver marks retriable, as opposed to an answer from the service, which
+/// says what it did.
+fn may_have_landed(error: &DbError) -> bool {
+    match error {
+        DbError::Timeout | DbError::IoError(_) | DbError::ConnectionFailed(_) => true,
+        other => other
+            .formatted()
+            .is_some_and(|formatted| formatted.retriable && formatted.code.is_none()),
+    }
+}
+
+/// Scrubs everything the call submitted out of the error.
+fn scrub_submitted(error: DbError, submitted: &[Submitted<'_>]) -> DbError {
+    let texts: Vec<&str> = submitted
+        .iter()
+        .filter_map(|item| match item {
+            Submitted::Text(text) => Some(*text),
+            Submitted::Payload(_) => None,
+        })
+        .collect();
+
+    let error = submitted.iter().fold(error, |error, item| match item {
+        Submitted::Payload(payload) => scrub_submitted_payload(error, payload),
+        Submitted::Text(_) => error,
+    });
+
+    scrub_echoed_values(error, &texts)
 }
 
 /// The refusal the resolved mutation policy imposes on a secret write, as
@@ -908,7 +1011,7 @@ fn operation_event(
     .with_action(action)
     .with_summary(summary)
     .with_actor_id("ui:user")
-    .with_object_ref(target.store_id, target.name)
+    .with_object_ref(target.store_id, audit_object_name(target.name))
     .with_connection_context(
         target.profile_id.to_string(),
         String::new(),
@@ -938,13 +1041,28 @@ fn operation_event(
     event.with_details_json(serde_json::Value::Object(details).to_string())
 }
 
+/// The name an audit event records for a target. The audit service refuses
+/// an event without an object id, and a refusal of a blank name is exactly
+/// the event that must still be recorded.
+fn audit_object_name(name: &str) -> &str {
+    if name.trim().is_empty() {
+        "(blank name)"
+    } else {
+        name
+    }
+}
+
 /// Passes the event to the sink, logging — never failing the write — when
 /// the sink refuses it. A lost event on a refused or failed write is logged
 /// here because the returned error already describes the outcome; a lost
 /// event on an accepted write is escalated to the caller by [`govern`]
 /// instead.
-fn record(audit: &dyn EventSink, event: EventRecord) {
-    if let Err(error) = audit.record(event) {
-        log::warn!("[secret store] failed to record secret write audit event: {error}");
+fn record(audit: &dyn EventSink, event: EventRecord) -> bool {
+    match audit.record(event) {
+        Ok(_) => true,
+        Err(error) => {
+            log::warn!("[secret store] failed to record secret write audit event: {error}");
+            false
+        }
     }
 }

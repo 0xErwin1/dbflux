@@ -1207,6 +1207,57 @@ fn parameter_store_update_tags_sets_overwrites_and_removes() -> Result<(), DbErr
     })
 }
 
+#[test]
+#[ignore = "requires Docker daemon"]
+fn a_tag_swap_at_the_fifty_tag_quota_removes_before_it_adds_in_both_stores() -> Result<(), DbError>
+{
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        seeder.secret_string("full-secret", "value");
+        seeder.parameter("/app/full", "value", ParameterType::String);
+        for index in 0..50 {
+            seeder.tag_secret("full-secret", &format!("name-{index}"), "v");
+            seeder.tag_parameter("/app/full", &format!("name-{index}"), "v");
+        }
+
+        let connection = connect(&endpoint)?;
+
+        for (store_id, name) in [
+            (SECRETS_MANAGER_ID, "full-secret"),
+            (PARAMETER_STORE_ID, "/app/full"),
+        ] {
+            let store = store(connection.as_ref(), store_id);
+
+            store.update_tags(
+                &SecretTagsUpdate::new(name)
+                    .set("replacement", "v")
+                    .remove("name-0"),
+            )?;
+
+            let details = store.describe(name)?;
+            assert_eq!(details.tags.len(), 50, "{name}");
+            assert!(
+                details.tags.iter().any(|tag| tag.key == "replacement"),
+                "{name}"
+            );
+            assert!(
+                !details.tags.iter().any(|tag| tag.key == "name-0"),
+                "{name}"
+            );
+
+            let error = store
+                .update_tags(&SecretTagsUpdate::new(name).set("one-too-many", "v"))
+                .expect_err("a fifty-first tag is refused");
+            assert!(
+                matches!(error, DbError::ConstraintViolation(_)),
+                "{name}: {error}"
+            );
+        }
+
+        Ok(())
+    })
+}
+
 /// LocalStack's `DescribeParameters` does not report a parameter's tier, and
 /// a description change rewrites the value, so it refuses to guess the tier
 /// and writes nothing. AWS reports the tier, so on AWS this change goes

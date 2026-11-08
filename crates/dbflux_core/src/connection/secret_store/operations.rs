@@ -264,6 +264,7 @@ impl SecretRotationUpdate {
 
         if let Some(window) = &self.window {
             validate_rotation_window(window).map_err(refuse)?;
+            validate_rotation_window_fits(schedule, window).map_err(refuse)?;
         }
         if let Some(function) = &self.function {
             validate_rotation_function(function).map_err(refuse)?;
@@ -271,6 +272,18 @@ impl SecretRotationUpdate {
 
         Ok(())
     }
+}
+
+/// What a rotation edit did beyond changing the settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecretRotationChange {
+    /// A version that still holds the pending stage after rotation was
+    /// turned off: the cancelled rotation never finished, and the store
+    /// leaves the stage where it was. Until the labels are reconciled — the
+    /// credentials behind that version checked and the stage moved or
+    /// removed — a later rotation can be refused. `None` when nothing was
+    /// left unfinished.
+    pub unfinished_version: Option<String>,
 }
 
 /// What starting a rotation reports.
@@ -346,6 +359,32 @@ pub fn validate_rotation_window(window: &str) -> Result<(), String> {
         _ => Err(format!(
             "\"{window}\" is not a valid rotation window. A window is whole hours from `1h` to `24h`."
         )),
+    }
+}
+
+/// Checks that a rotation window fits the interval of a schedule: a window
+/// must not reach into the next rotation, so on `rate(N hours)` it is at
+/// most N hours. A `rate(N days)` interval is a day or more, which every
+/// window of up to 24 hours fits, and a `cron(...)` schedule has no interval
+/// to compare with.
+pub fn validate_rotation_window_fits(schedule: &str, window: &str) -> Result<(), String> {
+    let interval_hours = schedule
+        .strip_prefix("rate(")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .and_then(|inner| inner.split_once(' '))
+        .and_then(|(count, unit)| {
+            matches!(unit, "hour" | "hours")
+                .then(|| parse_positive(count))
+                .flatten()
+        });
+    let window_hours = window.strip_suffix('h').and_then(parse_positive);
+
+    match (interval_hours, window_hours) {
+        (Some(interval), Some(hours)) if hours > interval => Err(format!(
+            "the {window} window is longer than the {interval}-hour interval of \"{schedule}\"; \
+             a window must not reach into the next rotation. Choose a window of {interval}h or less."
+        )),
+        _ => Ok(()),
     }
 }
 
@@ -431,6 +470,51 @@ impl SecretTagsUpdate {
         self
     }
 
+    /// The keys the secret carries after the update, given the keys it
+    /// carries now.
+    fn keys_with_additions<'a>(&'a self, existing_keys: &'a [String]) -> Vec<&'a str> {
+        let mut keys: Vec<&str> = existing_keys.iter().map(String::as_str).collect();
+        for added in &self.set {
+            if !keys.contains(&added.key.as_str()) {
+                keys.push(&added.key);
+            }
+        }
+
+        keys
+    }
+
+    /// How many tags the secret carries after the update, given the keys it
+    /// carries now.
+    pub fn tags_after(&self, existing_keys: &[String]) -> usize {
+        self.keys_with_additions(existing_keys)
+            .into_iter()
+            .filter(|kept| !self.remove.iter().any(|removed| removed == kept))
+            .count()
+    }
+
+    /// Refuses an update that would leave the secret with more than
+    /// [`MAX_TAGS`] tags, before any call.
+    pub fn check_quota(&self, existing_keys: &[String]) -> Result<(), DbError> {
+        let after = self.tags_after(existing_keys);
+
+        if after > MAX_TAGS {
+            return Err(DbError::constraint_violation(format!(
+                "The tags of \"{}\" were not changed: the update would leave {after} tags, and \
+                 a secret carries at most {MAX_TAGS}.",
+                self.name
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Whether the removals must go first: adding before removing would take
+    /// the secret past [`MAX_TAGS`] for a moment, and the service refuses
+    /// that even when the final count fits.
+    pub fn removes_first(&self, existing_keys: &[String]) -> bool {
+        !self.remove.is_empty() && self.keys_with_additions(existing_keys).len() > MAX_TAGS
+    }
+
     /// Refuses what the service would reject, before any call: an update
     /// that changes nothing, a key or value outside the service's limits, a
     /// reserved `aws:` key, a key that appears twice or is both set and
@@ -479,8 +563,8 @@ impl SecretTagsUpdate {
 
 /// Checks a tag against the limits the services share: a key of 1 to 128
 /// characters that does not start with the reserved `aws:` prefix, a value
-/// of 0 to 256 characters, and only letters, digits, spaces and
-/// `_ . : / = + - @` in both.
+/// of 0 to 256 characters, and only letters, digits, separators (spaces,
+/// including Unicode ones) and `_ . : / = + - @` in both.
 pub fn validate_tag(key: &str, value: &str) -> Result<(), String> {
     validate_tag_key(key)?;
 
@@ -520,11 +604,18 @@ fn validate_tag_key(key: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn is_tag_character(c: char) -> bool {
-    c.is_alphanumeric() || c == ' ' || "_.:/=+-@".contains(c)
+/// The services accept letters, numbers and separators (`\p{L}\p{N}\p{Z}`)
+/// plus `_ . : / = + - @`. A tab or a line feed is whitespace but not a
+/// separator, so control characters stay out.
+fn is_tag_character(character: char) -> bool {
+    character.is_alphanumeric()
+        || (character.is_whitespace() && !character.is_control())
+        || "_.:/=+-@".contains(character)
 }
 
-/// A new description for a secret. An empty description clears it.
+/// A new description for a secret. An empty description clears it on a store
+/// that can clear one; a store that cannot refuses the update. The
+/// `DESCRIPTION` capability does not say which kind a store is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretDescriptionUpdate {
     /// Full name of the secret, including any path.

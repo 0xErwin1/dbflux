@@ -689,9 +689,13 @@ fn a_parameter_description_cannot_be_cleared_through_a_rewrite() {
     assert!(error.to_string().contains("/app/prod/db/host"), "{error}");
 }
 
+fn create_plan(request: &SecretCreateRequest) -> Result<super::CreateParameterPlan, DbError> {
+    plan_create(request, "us-east-1")
+}
+
 #[test]
 fn a_parameter_create_defaults_to_a_string_and_takes_the_services_own_tier() {
-    let plan = plan_create(&SecretCreateRequest::text(
+    let plan = create_plan(&SecretCreateRequest::text(
         "/app/prod/db/host",
         "create-value-probe",
     ))
@@ -712,7 +716,7 @@ fn a_parameter_create_carries_its_type_tier_key_description_and_tags() {
         .with_description("Database password")
         .with_tag("app", "shop");
 
-    let plan = plan_create(&request).expect("a complete create");
+    let plan = create_plan(&request).expect("a complete create");
 
     assert_eq!(plan.parameter_type, ParameterType::SecureString);
     assert_eq!(
@@ -728,7 +732,7 @@ fn a_parameter_create_carries_its_type_tier_key_description_and_tags() {
         ("StringList", ParameterType::StringList),
     ] {
         let plan =
-            plan_create(&SecretCreateRequest::text("/app/list", "a,b").with_value_type(value_type))
+            create_plan(&SecretCreateRequest::text("/app/list", "a,b").with_value_type(value_type))
                 .expect("a type");
         assert_eq!(plan.parameter_type, expected);
     }
@@ -751,7 +755,7 @@ fn a_parameter_create_refuses_what_the_service_would_before_any_call() {
             "create-value-probe",
         ),
     ] {
-        let error = plan_create(&request).expect_err("refused");
+        let error = create_plan(&request).expect_err("refused");
 
         assert!(
             matches!(error, DbError::ConstraintViolation(_)),
@@ -760,7 +764,7 @@ fn a_parameter_create_refuses_what_the_service_would_before_any_call() {
         assert!(!error.to_string().contains("create-value-probe"), "{error}");
     }
 
-    plan_create(&SecretCreateRequest::text(
+    create_plan(&SecretCreateRequest::text(
         format!("/{}", vec!["a"; 15].join("/")),
         "create-value-probe",
     ))
@@ -838,4 +842,269 @@ fn a_paged_history_marks_one_current_version_across_pages() {
         .map(|version| version.id.as_str())
         .collect();
     assert_eq!(current, ["2"]);
+}
+
+// --- Creating: names ---
+
+#[test]
+fn a_hierarchical_parameter_name_needs_its_leading_slash() {
+    for name in ["app/prod/token", "a/b"] {
+        let error = create_plan(&SecretCreateRequest::text(name, "create-value-probe"))
+            .expect_err("refused");
+
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+        assert!(error.to_string().contains("leading slash"), "{error}");
+    }
+
+    create_plan(&SecretCreateRequest::text("plain", "v")).expect("a flat name needs none");
+    create_plan(&SecretCreateRequest::text("/app/prod/token", "v")).expect("a path with its slash");
+}
+
+#[test]
+fn a_parameter_name_leaves_room_for_the_arn_the_service_counts_with_it() {
+    let longest_flat = "n".repeat(1011 - "arn:aws:ssm:us-east-1:123456789012:parameter/".len());
+
+    plan_create(&SecretCreateRequest::text(&longest_flat, "v"), "us-east-1")
+        .expect("a name that fits with its ARN");
+    let error = plan_create(
+        &SecretCreateRequest::text(format!("{longest_flat}n"), "v"),
+        "us-east-1",
+    )
+    .expect_err("one more character does not");
+    assert!(error.to_string().contains("ARN"), "{error}");
+
+    let in_china = "arn:aws-cn:ssm:cn-north-1:123456789012:parameter/".len();
+    plan_create(
+        &SecretCreateRequest::text("n".repeat(1011 - in_china), "v"),
+        "cn-north-1",
+    )
+    .expect("the China prefix is longer than the standard one and still fits");
+    plan_create(
+        &SecretCreateRequest::text("n".repeat(1011 - in_china + 1), "v"),
+        "cn-north-1",
+    )
+    .expect_err("the partition's own prefix counts");
+}
+
+#[test]
+fn a_description_rewrite_of_an_image_parameter_is_refused_before_any_read() {
+    let metadata = described_parameter().data_type("aws:ec2:image").build();
+
+    let error = plan_description_write(&metadata, "/app/ami", "latest image")
+        .expect_err("the service validates the image asynchronously");
+
+    assert!(error.to_string().contains("aws:ec2:image"), "{error}");
+}
+
+// --- A description rewrite against an endpoint that answers from a script ---
+
+mod scripted_endpoint {
+    use std::collections::{HashMap, VecDeque};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+
+    /// A loopback HTTP endpoint answering JSON calls by their
+    /// `X-Amz-Target` operation, one scripted answer per call in order, and
+    /// recording the operation and body of every request it receives.
+    pub(super) struct ScriptedEndpoint {
+        pub(super) url: String,
+        requests: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    impl ScriptedEndpoint {
+        pub(super) fn start(script: Vec<(&'static str, &'static str)>) -> Self {
+            let mut answers: HashMap<String, VecDeque<String>> = HashMap::new();
+            for (operation, body) in script {
+                answers
+                    .entry(operation.to_string())
+                    .or_default()
+                    .push_back(body.to_string());
+            }
+
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+            let url = format!("http://{}", listener.local_addr().expect("address"));
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let recorded = Arc::clone(&requests);
+
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { return };
+                    let (operation, body) = read_request(&mut stream);
+                    if let Ok(mut recorded) = recorded.lock() {
+                        recorded.push((operation.clone(), body));
+                    }
+
+                    let answer = answers
+                        .get_mut(&operation)
+                        .and_then(VecDeque::pop_front)
+                        .unwrap_or_else(|| {
+                            r#"{"__type":"InternalServerError","message":"unscripted"}"#.to_string()
+                        });
+                    let status = if answer.contains("__type") {
+                        "400 Bad Request"
+                    } else {
+                        "200 OK"
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\ncontent-type: application/x-amz-json-1.1\r\n\
+                         content-length: {}\r\nconnection: close\r\n\r\n{answer}",
+                        answer.len()
+                    );
+                    stream.write_all(response.as_bytes()).ok();
+                }
+            });
+
+            Self { url, requests }
+        }
+
+        pub(super) fn operations(&self) -> Vec<String> {
+            self.requests
+                .lock()
+                .map(|requests| requests.iter().map(|(name, _)| name.clone()).collect())
+                .unwrap_or_default()
+        }
+
+        pub(super) fn body_of(&self, operation: &str) -> Option<String> {
+            self.requests.lock().ok().and_then(|requests| {
+                requests
+                    .iter()
+                    .find(|(name, _)| name == operation)
+                    .map(|(_, body)| body.clone())
+            })
+        }
+    }
+
+    fn read_request(stream: &mut std::net::TcpStream) -> (String, String) {
+        let mut received = Vec::new();
+        let mut chunk = [0u8; 4096];
+
+        let header_end = loop {
+            let read = stream.read(&mut chunk).unwrap_or(0);
+            if read == 0 {
+                break received.len();
+            }
+            received.extend_from_slice(&chunk[..read]);
+            if let Some(position) = received.windows(4).position(|window| window == b"\r\n\r\n") {
+                break position + 4;
+            }
+        };
+
+        let headers = String::from_utf8_lossy(&received[..header_end]).to_string();
+        let header = |name: &str| {
+            headers
+                .lines()
+                .find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    key.trim()
+                        .eq_ignore_ascii_case(name)
+                        .then(|| value.trim().to_string())
+                })
+                .unwrap_or_default()
+        };
+        let length: usize = header("content-length").parse().unwrap_or(0);
+
+        while received.len() < header_end + length {
+            let read = stream.read(&mut chunk).unwrap_or(0);
+            if read == 0 {
+                break;
+            }
+            received.extend_from_slice(&chunk[..read]);
+        }
+
+        let operation = header("x-amz-target")
+            .rsplit('.')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+
+        (
+            operation,
+            String::from_utf8_lossy(&received[header_end..]).to_string(),
+        )
+    }
+}
+
+use scripted_endpoint::ScriptedEndpoint;
+
+fn store_at(url: &str) -> ParameterStore {
+    let config = ConfigBuilder::new()
+        .behavior_version(BehaviorVersion::latest())
+        .region(Region::new("us-east-1"))
+        .credentials_provider(Credentials::new("test", "test", None, None, "unit"))
+        .endpoint_url(url)
+        .retry_config(aws_sdk_ssm::config::retry::RetryConfig::disabled())
+        .build();
+
+    ParameterStore::new(
+        aws_sdk_ssm::Client::from_conf(config),
+        AwsSecretsProfileConfig {
+            region: "us-east-1".to_string(),
+            profile: None,
+            access_key_id: None,
+            endpoint: Some(url.to_string()),
+        },
+    )
+}
+
+const DESCRIBED: &str = r#"{"Parameters":[{"Name":"/app/prod/db/host","Type":"SecureString","KeyId":"alias/custom","Version":3,"Tier":"Standard","DataType":"text","AllowedPattern":"^[a-z0-9]+$","Description":"old"}]}"#;
+const READ_AT_3: &str = r#"{"Parameter":{"Name":"/app/prod/db/host","Type":"SecureString","Value":"hunter2","Version":3}}"#;
+const READ_AT_4: &str = r#"{"Parameter":{"Name":"/app/prod/db/host","Type":"SecureString","Value":"changed","Version":4}}"#;
+
+#[test]
+fn a_description_rewrite_sends_everything_the_parameter_has() {
+    let endpoint = ScriptedEndpoint::start(vec![
+        ("DescribeParameters", DESCRIBED),
+        ("GetParameter", READ_AT_3),
+        ("GetParameter", READ_AT_3),
+        ("PutParameter", r#"{"Version":4,"Tier":"Standard"}"#),
+    ]);
+
+    let change = store_at(&endpoint.url)
+        .update_description(&dbflux_core::SecretDescriptionUpdate::new(
+            "/app/prod/db/host",
+            "new description",
+        ))
+        .expect("the rewrite lands");
+
+    assert_eq!(change.version.as_deref(), Some("4"));
+    let body = endpoint.body_of("PutParameter").expect("a put");
+    for expected in [
+        r#""Name":"/app/prod/db/host""#,
+        r#""Value":"hunter2""#,
+        r#""Type":"SecureString""#,
+        r#""KeyId":"alias/custom""#,
+        r#""Tier":"Standard""#,
+        r#""DataType":"text""#,
+        r#""AllowedPattern":"^[a-z0-9]+$""#,
+        r#""Description":"new description""#,
+        r#""Overwrite":true"#,
+    ] {
+        assert!(body.contains(expected), "{expected} missing from {body}");
+    }
+}
+
+#[test]
+fn a_description_rewrite_is_refused_when_the_version_moves_just_before_the_write() {
+    let endpoint = ScriptedEndpoint::start(vec![
+        ("DescribeParameters", DESCRIBED),
+        ("GetParameter", READ_AT_3),
+        ("GetParameter", READ_AT_4),
+        ("PutParameter", r#"{"Version":5,"Tier":"Standard"}"#),
+    ]);
+
+    let error = store_at(&endpoint.url)
+        .update_description(&dbflux_core::SecretDescriptionUpdate::new(
+            "/app/prod/db/host",
+            "new description",
+        ))
+        .expect_err("the parameter moved");
+
+    assert!(error.to_string().contains("changed"), "{error}");
+    assert!(error.to_string().contains("nothing was written"), "{error}");
+    assert!(
+        !endpoint.operations().contains(&"PutParameter".to_string()),
+        "{:?}",
+        endpoint.operations()
+    );
 }

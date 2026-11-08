@@ -3454,6 +3454,8 @@ document:
     error:
       connection_unavailable: "La conexión no está disponible"
       store_unavailable: "La conexión no tiene el almacén %{store}"
+      may_have_landed: "El servicio pudo haber aplicado el cambio antes de fallar. Revisa el secreto antes de volver a intentarlo."
+      audit_unrecorded: "No se pudo registrar el fallo en la auditoría."
     footer:
       loaded:
         one: "%{count} secreto cargado"

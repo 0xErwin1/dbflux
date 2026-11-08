@@ -24,14 +24,17 @@ use secrecy::{ExposeSecret, SecretSlice, SecretString};
 use crate::DbError;
 
 mod operations;
+mod scrub;
 
 pub use operations::{
     DEFAULT_RECOVERY_WINDOW_DAYS, MAX_RECOVERY_WINDOW_DAYS, MAX_TAGS, MIN_RECOVERY_WINDOW_DAYS,
     SecretCreateRequest, SecretCreated, SecretDeleteRequest, SecretDeletion,
     SecretDescriptionChange, SecretDescriptionUpdate, SecretRollback, SecretRollbackRequest,
-    SecretRotationStart, SecretRotationUpdate, SecretTagsUpdate, require_name,
-    validate_rotation_function, validate_rotation_schedule, validate_rotation_window, validate_tag,
+    SecretRotationChange, SecretRotationStart, SecretRotationUpdate, SecretTagsUpdate,
+    require_name, validate_rotation_function, validate_rotation_schedule, validate_rotation_window,
+    validate_rotation_window_fits, validate_tag,
 };
+pub use scrub::{encode_base64, scrub_echoed_values, scrub_submitted_payload};
 
 bitflags! {
     /// Behavior that differs between secret stores. The UI gates actions on
@@ -614,9 +617,14 @@ pub trait SecretStoreSource: Send + Sync {
     }
 
     /// Turns automatic rotation on with `update`'s schedule, window and
-    /// function, or off, without rotating the secret now. Stores
+    /// function, or off, without rotating the secret now. Turning it off
+    /// while a rotation is in progress reports the version it left
+    /// unfinished in `SecretRotationChange::unfinished_version`. Stores
     /// advertising `ROTATION` and `WRITE` implement it; the default refuses.
-    fn update_rotation(&self, update: &SecretRotationUpdate) -> Result<(), DbError> {
+    fn update_rotation(
+        &self,
+        update: &SecretRotationUpdate,
+    ) -> Result<SecretRotationChange, DbError> {
         refuse_unimplemented(self.descriptor(), "editing rotation", &update.name)
     }
 

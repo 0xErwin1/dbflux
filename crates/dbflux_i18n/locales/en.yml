@@ -3454,6 +3454,8 @@ document:
     error:
       connection_unavailable: "The connection is not available"
       store_unavailable: "The connection has no store %{store}"
+      may_have_landed: "The service may have applied the change before it failed. Check the secret before trying again."
+      audit_unrecorded: "The failure could not be written to the audit trail."
     footer:
       loaded:
         one: "%{count} secret loaded"

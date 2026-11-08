@@ -3454,6 +3454,8 @@ document:
     error:
       connection_unavailable: "连接不可用"
       store_unavailable: "该连接没有存储 %{store}"
+      may_have_landed: "服务可能在失败之前已应用该更改。请先检查该密钥，再重试。"
+      audit_unrecorded: "无法将该失败写入审计记录。"
     footer:
       loaded:
         one: "已加载 %{count} 个密钥"

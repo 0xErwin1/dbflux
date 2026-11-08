@@ -3454,6 +3454,8 @@ document:
     error:
       connection_unavailable: "연결을 사용할 수 없습니다"
       store_unavailable: "연결에 %{store} 저장소가 없습니다"
+      may_have_landed: "서비스가 실패하기 전에 변경을 적용했을 수 있습니다. 다시 시도하기 전에 시크릿을 확인하세요."
+      audit_unrecorded: "실패를 감사 기록에 남기지 못했습니다."
     footer:
       loaded:
         one: "시크릿 %{count}개 불러옴"
