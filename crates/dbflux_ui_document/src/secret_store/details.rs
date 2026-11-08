@@ -36,6 +36,10 @@ pub(super) const VIEWER_GUTTER_WIDTH: Rems = ui(28.0);
 /// created columns are narrower here: the details pane is one column wide.
 const VERSION_ID_WIDTH: Rems = ui(80.0);
 const VERSION_CREATED_WIDTH: Rems = ui(118.0);
+/// The Roll back button's column: an icon-only button, named by its tooltip,
+/// so the column does not take the room the staging labels need in the
+/// default 380 px pane.
+const VERSION_ACTION_WIDTH: Rems = ui(28.0);
 const HISTORY_VERSION_WIDTH: Rems = ui(44.0);
 const VERSION_HEADER_HEIGHT: Rems = ui(30.0);
 const VERSION_ROW_HEIGHT: Rems = ui(40.0);
@@ -72,6 +76,41 @@ fn section_title(title: String, cx: &App) -> Div {
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(cx.theme().muted_foreground)
         .child(title.to_uppercase())
+}
+
+/// A disabled Rotate now button that says why: the reason is its tooltip and
+/// part of its accessible name.
+pub(super) fn rotate_with_reason(button: Button, reason: String) -> Button {
+    button
+        .aria_label(format!(
+            "{}: {reason}",
+            dbflux_i18n::t!("document.secret_store.rotate.button")
+        ))
+        .tooltip(reason)
+}
+
+/// A section whose title row ends with an action button, such as the Edit of
+/// Details and Tags.
+fn section_with_action(
+    title: String,
+    action: Option<AnyElement>,
+    rows: Vec<AnyElement>,
+    cx: &App,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(SecretStoreMetrics::ROW_GAP)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(DocumentMetrics::GAP)
+                .child(section_title(title, cx))
+                .child(div().flex_1())
+                .children(action),
+        )
+        .children(rows)
 }
 
 fn section(title: String, rows: Vec<AnyElement>, cx: &App) -> Div {
@@ -210,10 +249,10 @@ impl SecretStoreDocument {
                 sections.extend(versions.take());
 
                 if self.store.supports(SecretStoreCapabilities::ROTATION) {
-                    sections.push(render_rotation_section(details, cx).into_any_element());
+                    sections.push(self.render_rotation_section(details, cx).into_any_element());
                 }
 
-                sections.push(render_tags_section(details, cx).into_any_element());
+                sections.push(self.render_tags_section(details, cx).into_any_element());
             }
             DetailsState::Loading => sections.push(
                 Text::caption(dbflux_i18n::t!("document.secret_store.details.loading"))
@@ -235,6 +274,8 @@ impl SecretStoreDocument {
 
         let header = self.render_details_header(summary, cx);
 
+        let bar = self.render_action_bar(cx);
+
         div()
             .flex_1()
             .min_h_0()
@@ -242,18 +283,29 @@ impl SecretStoreDocument {
             .flex_col()
             .child(header)
             .child(
+                // The viewport ends where the action bar begins, so the bar
+                // stays pinned and never covers content: the sections scroll
+                // inside it on their own handle.
                 div()
-                    .id("secret-details-body")
+                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scrollbar()
-                    .flex()
-                    .flex_col()
-                    .gap(SecretStoreMetrics::SECTION_GAP)
-                    .px(SecretStoreMetrics::DETAILS_PADDING_X)
-                    .py(SecretStoreMetrics::DETAILS_PADDING_Y)
-                    .children(sections),
+                    .child(
+                        div()
+                            .id("secret-details-body")
+                            .size_full()
+                            .track_scroll(&self.details_scroll)
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .gap(SecretStoreMetrics::SECTION_GAP)
+                            .px(SecretStoreMetrics::DETAILS_PADDING_X)
+                            .py(SecretStoreMetrics::DETAILS_PADDING_Y)
+                            .children(sections),
+                    )
+                    .child(Scrollbar::vertical(&self.details_scroll)),
             )
+            .children(bar)
     }
 
     /// The secret's name with the pane's two actions: Copy name and Close.
@@ -267,6 +319,7 @@ impl SecretStoreDocument {
         let theme = cx.theme();
         let border = theme.border;
         let warning = theme.warning;
+        let danger = theme.danger;
         let strong = ChromeColors::strong(theme);
 
         div()
@@ -306,6 +359,21 @@ impl SecretStoreDocument {
                 .tab_stop(false)
                 .on_click(cx.listener(|this, _, _, cx| this.copy_selected_name(cx))),
             )
+            .when(self.supports_delete(), |header| {
+                header.child(
+                    Button::new(
+                        "secret-details-delete",
+                        dbflux_i18n::t!("document.secret_store.delete.button"),
+                    )
+                    .ghost()
+                    .icon(AppIcon::Delete)
+                    .icon_only()
+                    .text_color(danger)
+                    .tab_stop(false)
+                    .disabled(!self.can_delete_selected())
+                    .on_click(cx.listener(|this, _, window, cx| this.open_delete(window, cx))),
+                )
+            })
             .child(
                 Button::new(
                     "secret-details-close",
@@ -322,16 +390,32 @@ impl SecretStoreDocument {
     /// The details the describe reported. A typed store shows its type, tier
     /// and data type; every store shows the identifier, description,
     /// encryption key, versions and the change dates it reports.
-    fn render_metadata_section(&self, details: &SecretDetails, cx: &App) -> Div {
+    fn render_metadata_section(&self, details: &SecretDetails, cx: &mut Context<Self>) -> Div {
         let summary = &details.summary;
         let typed = self.store.supports(SecretStoreCapabilities::TYPED_VALUES);
         let label = |key: &str| dbflux_i18n::t!(key);
 
-        let mut rows = vec![detail_row(
+        let mut rows = Vec::new();
+
+        // A scheduled deletion leads the details, as its state does.
+        if let Some(date) = summary.deletion_scheduled_for {
+            rows.push(detail_row(
+                label("document.secret_store.delete.row_deleted"),
+                format_optional_time(details.deleted_at),
+                cx,
+            ));
+            rows.push(detail_row(
+                label("document.secret_store.delete.row_deletes_on"),
+                format_optional_time(Some(date)),
+                cx,
+            ));
+        }
+
+        rows.push(detail_row(
             label("document.secret_store.details.resource_id"),
             or_unknown(details.resource_id.as_deref()),
             cx,
-        )];
+        ));
 
         if typed {
             rows.push(detail_row(
@@ -391,8 +475,34 @@ impl SecretStoreDocument {
             ));
         }
 
-        section(
+        // A store that changes the description alone has Edit here; one that
+        // rewrites the value for it has Edit description in the bottom bar.
+        let edit = (self.supports_description_edit() && !self.description_edit_rewrites_value())
+            .then(|| {
+                let button = Button::new(
+                    "secret-details-edit",
+                    dbflux_i18n::t!("document.secret_store.description_edit.short"),
+                )
+                .icon(AppIcon::Pencil)
+                .aria_label(dbflux_i18n::t!(
+                    "document.secret_store.description_edit.button"
+                ))
+                .tab_stop(false)
+                .disabled(!self.can_edit_description())
+                .on_click(
+                    cx.listener(|this, _, window, cx| this.open_edit_description(window, cx)),
+                );
+
+                match self.write_refusal_reason() {
+                    Some(reason) => button.tooltip(reason),
+                    None => button,
+                }
+                .into_any_element()
+            });
+
+        section_with_action(
             dbflux_i18n::t!("document.secret_store.details.title"),
+            edit,
             rows,
             cx,
         )
@@ -477,11 +587,28 @@ impl SecretStoreDocument {
             })
             .collect();
 
+        let rollback = staged && self.supports_roll_back();
+
         div()
             .flex()
             .flex_col()
-            .when(staged, |table| table.child(versions_table_header(cx)))
+            .when(staged, |table| {
+                table.child(versions_table_header(rollback, cx))
+            })
             .children(rows)
+            .when(rollback, |table| {
+                table.child(
+                    div()
+                        .id("secret-versions-rollback-note")
+                        .pt(SecretStoreMetrics::ROW_GAP)
+                        .child(
+                            Text::caption(dbflux_i18n::t!(
+                                "document.secret_store.rollback.footnote"
+                            ))
+                            .muted_foreground(),
+                        ),
+                )
+            })
     }
 
     /// One version: clicking it retrieves that version's value. The row
@@ -562,11 +689,8 @@ impl SecretStoreDocument {
                     .muted_foreground(),
             )
         } else {
-            div()
-                .flex()
-                .flex_wrap()
-                .gap(LABEL_CHIP_GAP)
-                .children(version.labels.iter().map(|label| {
+            div().flex().flex_wrap().gap(LABEL_CHIP_GAP).children(
+                version.labels.iter().enumerate().map(|(chip, label)| {
                     Badge::new(
                         label.clone(),
                         if current {
@@ -575,21 +699,236 @@ impl SecretStoreDocument {
                             BadgeTone::Neutral
                         },
                     )
-                }))
+                    .id(SharedString::from(format!(
+                        "secret-version-{index}-label-{chip}"
+                    )))
+                }),
+            )
         };
 
+        // Every row keeps the action column when the store can roll back,
+        // so the created dates stay aligned; the current version has no
+        // button, since there is nothing to roll back to.
+        let action = self.supports_roll_back().then(|| {
+            let cell = div()
+                .id(SharedString::from(format!("secret-version-{index}-action")))
+                .w(VERSION_ACTION_WIDTH)
+                .flex_shrink_0()
+                .flex()
+                .justify_end();
+
+            if current {
+                return cell;
+            }
+
+            cell.child(
+                Button::new(
+                    SharedString::from(format!("secret-version-rollback-{index}")),
+                    dbflux_i18n::t!(
+                        "document.secret_store.rollback.action",
+                        version = short_version_id(&version.id)
+                    ),
+                )
+                .ghost()
+                .icon(AppIcon::RotateCcw)
+                .icon_only()
+                .tab_stop(false)
+                .when(self.version_is_pending(index), |button| {
+                    let reason = dbflux_i18n::t!("document.secret_store.rollback.pending_reason");
+
+                    button
+                        .aria_label(format!(
+                            "{}: {reason}",
+                            dbflux_i18n::t!(
+                                "document.secret_store.rollback.action",
+                                version = short_version_id(&version.id)
+                            )
+                        ))
+                        .tooltip(reason)
+                })
+                .disabled(!self.can_roll_back_version(index))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    // The button sits on the row that retrieves the
+                    // version; rolling back must not also retrieve it.
+                    cx.stop_propagation();
+                    this.open_roll_back(index, window, cx);
+                })),
+            )
+        });
+
         row.h(VERSION_ROW_HEIGHT)
-            .child(cell(
-                short_version_id(&version.id),
-                VERSION_ID_WIDTH,
-                strong,
-            ))
-            .child(div().flex_1().min_w_0().child(labels))
+            .child(
+                cell(short_version_id(&version.id), VERSION_ID_WIDTH, strong)
+                    .id(SharedString::from(format!("secret-version-{index}-id"))),
+            )
+            .child(
+                div()
+                    .id(SharedString::from(format!("secret-version-{index}-labels")))
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(labels),
+            )
             .child(
                 cell(created, VERSION_CREATED_WIDTH, muted)
+                    .id(SharedString::from(format!(
+                        "secret-version-{index}-created"
+                    )))
                     .text_size(DocumentMetrics::TABLE_META_FONT),
             )
+            .children(action)
             .into_any_element()
+    }
+
+    /// The Tags section: the tags as chips, and Edit when the store edits
+    /// them. The button says Edit and is named Edit tags, as the narrow pane
+    /// of the design draws it.
+    fn render_tags_section(&self, details: &SecretDetails, cx: &mut Context<Self>) -> Div {
+        let edit = self.supports_tags().then(|| {
+            let button = Button::new(
+                "secret-tags-edit",
+                dbflux_i18n::t!("document.secret_store.tags_edit.short"),
+            )
+            .icon(AppIcon::Tag)
+            .aria_label(dbflux_i18n::t!("document.secret_store.tags_edit.button"))
+            .tab_stop(false)
+            .disabled(!self.can_edit_tags())
+            .on_click(cx.listener(|this, _, window, cx| this.open_edit_tags(window, cx)));
+
+            match self.write_refusal_reason() {
+                Some(reason) => button.tooltip(reason),
+                None => button,
+            }
+            .into_any_element()
+        });
+
+        section_with_action(
+            dbflux_i18n::t!("document.secret_store.tags.title"),
+            edit,
+            vec![tag_chips(details, cx)],
+            cx,
+        )
+    }
+
+    /// The Rotation section: the settings the store reports, the warning a
+    /// cancelled rotation left, and the buttons that start or edit one.
+    fn render_rotation_section(&self, details: &SecretDetails, cx: &mut Context<Self>) -> Div {
+        let mut rows = rotation_rows(details, cx);
+
+        if let Some(notice) = self.rotation_notice_for_selection() {
+            rows.push(
+                div()
+                    .id("secret-rotation-notice")
+                    .child(
+                        BannerBlock::new(
+                            BannerVariant::Warning,
+                            dbflux_i18n::t!(
+                                "document.secret_store.rotation_edit.unfinished_title",
+                                version = notice.version.as_str()
+                            ),
+                        )
+                        .with_body(dbflux_i18n::t!(
+                            "document.secret_store.rotation_edit.unfinished_body",
+                            version = notice.version.as_str()
+                        )),
+                    )
+                    .into_any_element(),
+            );
+        }
+
+        if self.supports_rotation() {
+            let refusal = self.write_refusal_reason();
+            let edit = Button::new(
+                "secret-rotation-edit",
+                dbflux_i18n::t!("document.secret_store.rotation_edit.button"),
+            )
+            .icon(AppIcon::Pencil)
+            .tab_stop(false)
+            .disabled(!self.can_edit_rotation())
+            .on_click(cx.listener(|this, _, window, cx| this.open_edit_rotation(window, cx)));
+            let rotate = Button::new(
+                "secret-rotation-rotate-now",
+                dbflux_i18n::t!("document.secret_store.rotate.immediately"),
+            )
+            .icon(AppIcon::Zap)
+            .tab_stop(false)
+            .disabled(!self.can_rotate_now())
+            .on_click(cx.listener(|this, _, window, cx| this.rotate_selected_now(window, cx)));
+
+            let edit = match refusal {
+                Some(reason) => edit.tooltip(reason),
+                None => edit,
+            };
+            let rotate = match self.rotate_now_block_reason() {
+                Some(reason) => rotate_with_reason(rotate, reason),
+                None => rotate,
+            };
+
+            rows.push(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(DocumentMetrics::GAP)
+                    .child(edit)
+                    .child(rotate)
+                    .into_any_element(),
+            );
+        }
+
+        section(
+            dbflux_i18n::t!("document.secret_store.rotation.title"),
+            rows,
+            cx,
+        )
+    }
+
+    /// The scheduled deletion of the secret: the date it takes effect, when
+    /// it was requested and with which window, and Restore.
+    fn render_pending_deletion(
+        &self,
+        summary: &SecretSummary,
+        date: dbflux_core::chrono::DateTime<dbflux_core::chrono::Utc>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let deleted_at = match &self.details {
+            DetailsState::Loaded(details) => details.deleted_at,
+            _ => None,
+        };
+
+        let body = match deleted_at {
+            Some(deleted_at) => dbflux_i18n::t!(
+                "document.secret_store.delete.scheduled_detail",
+                name = summary.name.as_str(),
+                deleted = format_optional_time(Some(deleted_at)),
+                days = (date - deleted_at).num_days().max(0)
+            ),
+            None => dbflux_i18n::t!("document.secret_store.value.deletion_scheduled_body"),
+        };
+
+        let mut banner = BannerBlock::new(
+            BannerVariant::Warning,
+            dbflux_i18n::t!(
+                "document.secret_store.value.deletion_scheduled",
+                date = super::render::format_time(date)
+            ),
+        )
+        .with_body(body);
+
+        if self.supports_restore() {
+            banner = banner.with_actions(
+                Button::new(
+                    "secret-restore",
+                    dbflux_i18n::t!("document.secret_store.restore.button"),
+                )
+                .primary()
+                .icon(AppIcon::RotateCcw)
+                .tab_stop(false)
+                .disabled(!self.can_restore_selected())
+                .on_click(cx.listener(|this, _, _, cx| this.restore_selected(cx))),
+            );
+        }
+
+        div().child(banner)
     }
 
     fn render_value_section(
@@ -614,7 +953,8 @@ impl SecretStoreDocument {
             });
 
         let body: AnyElement = if let Some(date) = summary.deletion_scheduled_for {
-            pending_deletion_card(date, cx).into_any_element()
+            self.render_pending_deletion(summary, date, cx)
+                .into_any_element()
         } else {
             match &self.value {
                 ValueState::NotLoaded => self.render_value_not_loaded(cx).into_any_element(),
@@ -1186,7 +1526,7 @@ fn versions_count_label(count: usize) -> String {
 }
 
 /// The column titles of the staged table: Version, Staging labels, Created.
-fn versions_table_header(cx: &App) -> Div {
+fn versions_table_header(with_actions: bool, cx: &App) -> Div {
     let theme = cx.theme();
 
     div()
@@ -1200,39 +1540,38 @@ fn versions_table_header(cx: &App) -> Div {
         .text_color(theme.muted_foreground)
         .child(
             div()
+                .id("secret-versions-col-version")
                 .w(VERSION_ID_WIDTH)
                 .flex_shrink_0()
+                .whitespace_nowrap()
                 .child(dbflux_i18n::t!(
                     "document.secret_store.versions.column.version"
                 )),
         )
-        .child(div().flex_1().min_w_0().child(dbflux_i18n::t!(
-            "document.secret_store.versions.column.labels"
-        )))
         .child(
             div()
+                .id("secret-versions-col-labels")
+                .flex_1()
+                .min_w_0()
+                .whitespace_nowrap()
+                .truncate()
+                .child(dbflux_i18n::t!(
+                    "document.secret_store.versions.column.labels"
+                )),
+        )
+        .child(
+            div()
+                .id("secret-versions-col-created")
                 .w(VERSION_CREATED_WIDTH)
                 .flex_shrink_0()
+                .whitespace_nowrap()
                 .child(dbflux_i18n::t!(
                     "document.secret_store.versions.column.created"
                 )),
         )
-}
-
-fn pending_deletion_card(
-    date: dbflux_core::chrono::DateTime<dbflux_core::chrono::Utc>,
-    _cx: &App,
-) -> BannerBlock {
-    BannerBlock::new(
-        BannerVariant::Warning,
-        dbflux_i18n::t!(
-            "document.secret_store.value.deletion_scheduled",
-            date = super::render::format_time(date)
-        ),
-    )
-    .with_body(dbflux_i18n::t!(
-        "document.secret_store.value.deletion_scheduled_body"
-    ))
+        .when(with_actions, |header| {
+            header.child(div().w(VERSION_ACTION_WIDTH).flex_shrink_0())
+        })
 }
 
 fn managed_card(name: &str, service: &str) -> BannerBlock {
@@ -1247,10 +1586,11 @@ fn managed_card(name: &str, service: &str) -> BannerBlock {
     ))
 }
 
-fn render_rotation_section(details: &SecretDetails, cx: &App) -> Div {
+/// The rows of the Rotation section: the settings the store reports.
+fn rotation_rows(details: &SecretDetails, cx: &App) -> Vec<AnyElement> {
     let label = |key: &str| dbflux_i18n::t!(key);
 
-    let rows = match &details.summary.rotation {
+    match &details.summary.rotation {
         Some(rotation) => vec![
             detail_row(
                 label("document.secret_store.rotation.status"),
@@ -1287,25 +1627,18 @@ fn render_rotation_section(details: &SecretDetails, cx: &App) -> Div {
             label("document.secret_store.rotation.disabled"),
             cx,
         )],
-    };
-
-    section(
-        dbflux_i18n::t!("document.secret_store.rotation.title"),
-        rows,
-        cx,
-    )
+    }
 }
 
-/// Tags as `key=value` chips in a row that wraps. The artboard's Edit
-/// button is left out until a tags-edit action exists.
-fn render_tags_section(details: &SecretDetails, cx: &App) -> Div {
+/// Tags as `key=value` chips in a row that wraps.
+fn tag_chips(details: &SecretDetails, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let fill = theme.secondary;
     let border = theme.border;
     let muted = theme.muted_foreground;
     let family = fonts::editor_family(cx);
 
-    let body: AnyElement = if details.tags.is_empty() {
+    if details.tags.is_empty() {
         Text::caption(dbflux_i18n::t!("document.secret_store.tags.none"))
             .muted_foreground()
             .into_any_element()
@@ -1327,11 +1660,5 @@ fn render_tags_section(details: &SecretDetails, cx: &App) -> Div {
                     .child(format!("{}={}", tag.key, tag.value))
             }))
             .into_any_element()
-    };
-
-    section(
-        dbflux_i18n::t!("document.secret_store.tags.title"),
-        vec![body],
-        cx,
-    )
+    }
 }

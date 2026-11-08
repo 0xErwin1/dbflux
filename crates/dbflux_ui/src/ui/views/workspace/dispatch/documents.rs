@@ -183,7 +183,8 @@ impl Workspace {
             // value editor of the secret store.
             | Command::LoadMore
             | Command::EditExpiry
-            | Command::EditValue => Some(
+            | Command::EditValue
+            | Command::RollBackVersion => Some(
                 self.tab_manager
                     .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
             ),

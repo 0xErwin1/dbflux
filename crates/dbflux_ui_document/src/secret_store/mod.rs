@@ -9,6 +9,7 @@
 //! closes. Behavior that differs between stores follows the store's
 //! `SecretStoreCapabilities`, never a driver id.
 
+mod actions;
 mod context_menu;
 mod data;
 mod details;
@@ -21,6 +22,7 @@ mod render;
 mod value;
 mod write;
 
+use actions::{RotationNotice, WriteDialog};
 use data::HistoryLoad;
 pub use listing::{PathMode, SecretListing};
 pub use region::RegionListState;
@@ -40,6 +42,7 @@ use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::controls::{Dropdown, DropdownSelectionChanged, InputEvent, InputState};
+use dbflux_components::modals::ModalFocus;
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
     Connection, DriverCapabilities, RefreshPolicy, SecretDetails, SecretStoreCapabilities,
@@ -186,6 +189,31 @@ pub struct SecretStoreDocument {
     /// The focus handle of the open menu's overlay, which takes the keyboard
     /// while the menu is up.
     context_menu_focus: FocusHandle,
+    /// The write dialog open over the document, if any.
+    dialog: Option<WriteDialog>,
+    /// Moves the keyboard into the dialog when it opens and hands it back
+    /// when it closes.
+    dialog_focus: ModalFocus,
+    /// The selected secret's last known summary, kept for the moment a reload
+    /// leaves its row off the pages loaded so far.
+    selected_cache: Option<SecretSummary>,
+    /// Clears the search field on the next render, which has the window.
+    clear_search_input: bool,
+    /// The connection the selected secret's details were loaded from.
+    details_session: Option<Arc<dyn Connection>>,
+    /// Scroll position of the details pane's sections.
+    details_scroll: ScrollHandle,
+    /// The session and the row the open dialog was opened on.
+    dialog_pin: Option<actions::DialogPin>,
+    /// A governed write is in flight. Another write waits for it, so a
+    /// double click cannot send the request twice.
+    write_in_flight: bool,
+    /// A rotation cancelled before it finished, shown in the Rotation
+    /// section while its secret stays selected.
+    rotation_notice: Option<RotationNotice>,
+    /// The bottom bar's Edit value was pressed before the value was
+    /// retrieved: the editor opens when the retrieval lands.
+    edit_after_retrieve: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -296,8 +324,10 @@ impl SecretStoreDocument {
         // listing on what the connection actually reaches.
         subscriptions.push(
             cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
+                this.close_dialog_if_session_replaced(cx);
                 this.adopt_connection_region(cx);
                 this.adopt_connection_session(HistoryLoad::Automatic, cx);
+                this.adopt_details_session(cx);
             }),
         );
 
@@ -349,6 +379,16 @@ impl SecretStoreDocument {
             context_menu: None,
             pending_menu_action: None,
             context_menu_focus: cx.focus_handle(),
+            dialog: None,
+            dialog_focus: ModalFocus::new(cx),
+            dialog_pin: None,
+            details_scroll: ScrollHandle::new(),
+            details_session: None,
+            selected_cache: None,
+            clear_search_input: false,
+            write_in_flight: false,
+            rotation_notice: None,
+            edit_after_retrieve: false,
             _subscriptions: subscriptions,
         };
 
@@ -477,6 +517,13 @@ impl SecretStoreDocument {
     }
 
     pub fn active_context(&self) -> ContextId {
+        // A dialog owns the keyboard: its inputs keep every letter the
+        // listing would otherwise read as a command, and its buttons answer
+        // Enter and Escape through the dialog itself.
+        if self.dialog.is_some() {
+            return ContextId::TextInput;
+        }
+
         if self.context_menu.is_some() {
             return ContextId::ContextMenu;
         }
@@ -515,7 +562,11 @@ impl SecretStoreDocument {
     /// The selected secret's listing row, when a secret is selected.
     pub fn selected_summary(&self) -> Option<&SecretSummary> {
         match &self.selected {
-            Some(SecretRowKey::Secret(name)) => self.listing.find(name),
+            Some(SecretRowKey::Secret(name)) => self.listing.find(name).or_else(|| {
+                self.selected_cache
+                    .as_ref()
+                    .filter(|summary| &summary.name == name)
+            }),
             _ => None,
         }
     }
@@ -576,6 +627,8 @@ impl SecretStoreDocument {
             return;
         }
 
+        self.close_dialog_for_navigation(cx);
+        self.details_scroll.set_offset(point(px(0.0), px(0.0)));
         self.clear_value();
         self.details_generation = self.details_generation.wrapping_add(1);
         self.details = DetailsState::Idle;
@@ -583,6 +636,7 @@ impl SecretStoreDocument {
 
         if let SecretRowKey::Secret(name) = &row {
             let name = name.clone();
+            self.selected_cache = self.listing.find(&name).cloned();
             self.selected = Some(row);
             self.describe(name.clone(), cx);
             self.load_versions(name, cx);
@@ -607,6 +661,7 @@ impl SecretStoreDocument {
             self.focus_handle.focus(window, cx);
         }
 
+        self.close_dialog_for_navigation(cx);
         self.clear_value();
         self.details_generation = self.details_generation.wrapping_add(1);
         self.details = DetailsState::Idle;
@@ -724,6 +779,7 @@ impl SecretStoreDocument {
     pub fn clear_value(&mut self) {
         self.value_generation = self.value_generation.wrapping_add(1);
         self.value_write_generation = self.value_write_generation.wrapping_add(1);
+        self.edit_after_retrieve = false;
         self.value = ValueState::NotLoaded;
         self.value_version = None;
         self.value_edit = None;
@@ -1044,7 +1100,7 @@ impl SecretStoreDocument {
         // a button of the value section: both reachable from the menu.
         if let VersionsState::Loaded(versions) = &self.versions {
             for (index, version) in versions.iter().enumerate() {
-                let target = target.clone();
+                let retrieve_target = target.clone();
                 let history_generation = self.versions_generation;
                 actions.push(
                     PaneAction::callback(
@@ -1054,7 +1110,7 @@ impl SecretStoreDocument {
                             version = details::short_version_id(&version.id)
                         ),
                         move |_window, cx| {
-                            if let Some(doc) = target.upgrade() {
+                            if let Some(doc) = retrieve_target.upgrade() {
                                 doc.update(cx, |doc, cx| {
                                     // The menu was built over another history.
                                     if doc.versions_generation == history_generation {
@@ -1067,6 +1123,37 @@ impl SecretStoreDocument {
                     .icon(AppIcon::History)
                     .enabled(self.can_retrieve_value()),
                 );
+
+                // Roll back is a button on every version that is not
+                // current, so each one has its own entry.
+                if self.supports_roll_back() && !self.is_current_version(&version.id) {
+                    let roll_back_target = target.clone();
+                    let history_generation = self.versions_generation;
+                    let mut roll_back = PaneAction::callback(
+                        format!("secret-version-rollback-{index}"),
+                        dbflux_i18n::t!(
+                            "document.secret_store.rollback.action",
+                            version = details::short_version_id(&version.id)
+                        ),
+                        move |window, cx| {
+                            if let Some(doc) = roll_back_target.upgrade() {
+                                doc.update(cx, |doc, cx| {
+                                    if doc.versions_generation == history_generation {
+                                        doc.open_roll_back(index, window, cx);
+                                    }
+                                });
+                            }
+                        },
+                    )
+                    .icon(AppIcon::RotateCcw)
+                    .enabled(self.can_roll_back_version(index));
+                    roll_back.shortcut = dbflux_ui_base::keymap::shortcut_label(
+                        ContextId::Results,
+                        Command::RollBackVersion,
+                    )
+                    .filter(|_| self.previous_version_index() == Some(index));
+                    actions.push(roll_back);
+                }
             }
         }
 
@@ -1120,24 +1207,158 @@ impl SecretStoreDocument {
             );
         }
 
-        // Edit value opens the editor of a plaintext value; the action needs
-        // the window the editor's state is built with.
-        if self.can_edit_value() {
+        // Edit value opens the editor of a plaintext value, retrieving the
+        // value first when it is not loaded; the action needs the window the
+        // editor's state is built with. The bottom bar's button and the row
+        // menu's entry are covered by it.
+        if self.can_request_edit_value() || self.can_edit_value() {
             let target = target.clone();
             let mut edit_value = crate::pane::PaneAction::callback(
                 "secret-edit-value",
                 dbflux_i18n::t!("document.secret_store.edit.open"),
                 move |window, cx| {
                     if let Some(doc) = target.upgrade() {
-                        doc.update(cx, |doc, cx| doc.start_value_edit(window, cx));
+                        doc.update(cx, |doc, cx| doc.request_edit_value(window, cx));
                     }
                 },
             )
             .icon(AppIcon::Pencil)
-            .enabled(self.can_edit_value());
+            .enabled(self.can_request_edit_value());
             edit_value.shortcut =
                 dbflux_ui_base::keymap::shortcut_label(ContextId::Results, Command::EditValue);
             actions.push(edit_value);
+        }
+
+        // Delete asks first; Restore cancels a scheduled deletion. Both are
+        // buttons of the details pane, so both have an entry here.
+        if self.supports_delete() && matches!(self.selected, Some(SecretRowKey::Secret(_))) {
+            let target = target.clone();
+            let mut delete = PaneAction::callback(
+                "secret-delete",
+                dbflux_i18n::t!("document.secret_store.delete.button"),
+                move |window, cx| {
+                    if let Some(doc) = target.upgrade() {
+                        doc.update(cx, |doc, cx| doc.open_delete(window, cx));
+                    }
+                },
+            )
+            .icon(AppIcon::Delete)
+            .enabled(self.can_delete_selected());
+            delete.shortcut =
+                dbflux_ui_base::keymap::shortcut_label(ContextId::Results, Command::Delete);
+            actions.push(delete);
+        }
+
+        // New secret / New parameter is a button of the toolbar.
+        if self.supports_create() {
+            let create_target = target.clone();
+            actions.push(
+                PaneAction::callback(
+                    "secret-new",
+                    dbflux_i18n::t!(if self.hierarchical() {
+                        "document.secret_store.create.button_parameter"
+                    } else {
+                        "document.secret_store.create.button_secret"
+                    }),
+                    move |window, cx| {
+                        if let Some(doc) = create_target.upgrade() {
+                            doc.update(cx, |doc, cx| doc.open_create(window, cx));
+                        }
+                    },
+                )
+                .icon(AppIcon::Plus)
+                .enabled(self.can_open_create()),
+            );
+        }
+
+        // Edit tags and Edit description are buttons of the Tags and Details
+        // sections (the description's of the bottom bar on a store that
+        // rewrites the value for it).
+        if matches!(self.selected, Some(SecretRowKey::Secret(_))) {
+            if self.supports_tags() {
+                let tags_target = target.clone();
+                actions.push(
+                    PaneAction::callback(
+                        "secret-edit-tags",
+                        dbflux_i18n::t!("document.secret_store.tags_edit.button"),
+                        move |window, cx| {
+                            if let Some(doc) = tags_target.upgrade() {
+                                doc.update(cx, |doc, cx| doc.open_edit_tags(window, cx));
+                            }
+                        },
+                    )
+                    .icon(AppIcon::Tag)
+                    .enabled(self.can_edit_tags()),
+                );
+            }
+
+            if self.supports_description_edit() {
+                let description_target = target.clone();
+                actions.push(
+                    PaneAction::callback(
+                        "secret-edit-description",
+                        dbflux_i18n::t!("document.secret_store.description_edit.button"),
+                        move |window, cx| {
+                            if let Some(doc) = description_target.upgrade() {
+                                doc.update(cx, |doc, cx| doc.open_edit_description(window, cx));
+                            }
+                        },
+                    )
+                    .icon(AppIcon::Pencil)
+                    .enabled(self.can_edit_description()),
+                );
+            }
+        }
+
+        // Rotate now and Edit rotation are buttons of the Rotation section,
+        // the bottom bar and the row menu.
+        if self.supports_rotation() && matches!(self.selected, Some(SecretRowKey::Secret(_))) {
+            let rotate_target = target.clone();
+            actions.push(
+                PaneAction::callback(
+                    "secret-rotate-now",
+                    dbflux_i18n::t!("document.secret_store.rotate.button"),
+                    move |window, cx| {
+                        if let Some(doc) = rotate_target.upgrade() {
+                            doc.update(cx, |doc, cx| doc.rotate_selected_now(window, cx));
+                        }
+                    },
+                )
+                .icon(AppIcon::Zap)
+                .enabled(self.can_rotate_now()),
+            );
+
+            let edit_target = target.clone();
+            actions.push(
+                PaneAction::callback(
+                    "secret-edit-rotation",
+                    dbflux_i18n::t!("document.secret_store.rotation_edit.button"),
+                    move |window, cx| {
+                        if let Some(doc) = edit_target.upgrade() {
+                            doc.update(cx, |doc, cx| doc.open_edit_rotation(window, cx));
+                        }
+                    },
+                )
+                .icon(AppIcon::Pencil)
+                .enabled(self.can_edit_rotation()),
+            );
+        }
+
+        if self.supports_restore()
+            && self
+                .selected_summary()
+                .is_some_and(|summary| summary.is_pending_deletion())
+        {
+            actions.push(
+                callback_action(
+                    &target,
+                    "secret-restore",
+                    "document.secret_store.restore.button",
+                    Self::restore_selected,
+                )
+                .icon(AppIcon::RotateCcw)
+                .enabled(self.can_restore_selected()),
+            );
         }
 
         // The region picker is a clickable toolbar control, so the pane
@@ -1171,6 +1392,12 @@ impl SecretStoreDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // The dialog handles its own keys; nothing reaches the listing under
+        // it.
+        if self.dialog.is_some() {
+            return true;
+        }
+
         if self.context_menu.is_some() {
             return self.dispatch_menu_command(cmd, window, cx);
         }
@@ -1193,8 +1420,17 @@ impl SecretStoreDocument {
             Command::CycleDocumentView if self.hierarchical() => self.toggle_path_mode(cx),
             Command::ColumnLeft if self.hierarchical() => self.navigate_up(cx),
             Command::ResultsNextPage => self.load_more(cx),
-            Command::EditValue if self.can_edit_value() => {
-                self.start_value_edit(window, cx);
+            Command::EditValue if self.can_request_edit_value() => {
+                self.request_edit_value(window, cx);
+            }
+            Command::RollBackVersion if self.supports_roll_back() => {
+                self.roll_back_to_previous(window, cx);
+            }
+            Command::Delete
+                if self.supports_delete()
+                    && matches!(self.selected, Some(SecretRowKey::Secret(_))) =>
+            {
+                self.open_delete(window, cx);
             }
             Command::RefreshSchema => self.refresh(cx),
             Command::FocusSearch if self.value_edit.as_ref().is_some_and(|edit| edit.focused) => {

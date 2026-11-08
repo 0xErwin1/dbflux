@@ -272,6 +272,9 @@ pub enum Command {
     /// Opens the editor on the value of the selected entry (the secret
     /// store's Edit value).
     EditValue,
+    /// Rolls the selected secret back to its most recent earlier version
+    /// (the secret store's Roll back, `b`).
+    RollBackVersion,
     CopyPreview,
     /// Imports entries from a file into the list that has the keyboard (the
     /// profile lists of the settings window).
@@ -543,6 +546,7 @@ impl Command {
             Command::LoadMore => "Load more",
             Command::EditExpiry => "Edit expiry…",
             Command::EditValue => "Edit value",
+            Command::RollBackVersion => "Roll back to the previous version",
             Command::CopyPreview => "Copy preview",
             Command::ImportItems => "Import…",
             Command::ImportFromClient => "Import from another client…",
@@ -750,6 +754,7 @@ impl Command {
             Command::LoadMore => "load_more",
             Command::EditExpiry => "edit_expiry",
             Command::EditValue => "edit_value",
+            Command::RollBackVersion => "roll_back_version",
             Command::CopyPreview => "copy_preview",
             Command::ImportItems => "import_items",
             Command::ImportFromClient => "import_from_client",
@@ -961,6 +966,7 @@ impl Command {
             Command::LoadMore,
             Command::EditExpiry,
             Command::EditValue,
+            Command::RollBackVersion,
             Command::CopyPreview,
             Command::ImportItems,
             Command::ImportFromClient,
@@ -1173,6 +1179,7 @@ impl Command {
             Command::LoadMore => "Navigation",
             Command::EditExpiry => "Actions",
             Command::EditValue => "Actions",
+            Command::RollBackVersion => "Actions",
             Command::CopyPreview => "Actions",
             Command::ImportItems
             | Command::ImportFromClient

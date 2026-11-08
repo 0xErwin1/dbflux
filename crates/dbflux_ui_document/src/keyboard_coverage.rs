@@ -655,7 +655,7 @@ pub(crate) const BUCKETS: SurfaceRegistry = SurfaceRegistry {
 /// region listing.
 pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
     name: "secret store",
-    contexts: &[ContextId::Results, ContextId::ContextMenu],
+    contexts: &[ContextId::Results, ContextId::ContextMenu, ContextId::Modal],
     entries: &[
         ("secret-row-*", KeyboardPath::Command(Command::SelectNext)),
         (
@@ -755,6 +755,127 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
             "secret-version-back-to-current",
             KeyboardPath::Menu("secret-version-current"),
         ),
+        // Roll back is a button on every earlier version, and the `b` key
+        // opens the same confirmation for the most recent one; each button
+        // also has a pane action.
+        (
+            "secret-version-rollback-*",
+            KeyboardPath::Menu("secret-version-rollback-*"),
+        ),
+        // The dialogs the write actions open: Enter confirms and Escape
+        // cancels, from wherever the keyboard is inside the dialog.
+        (
+            "secret-rollback-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-rollback-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        (
+            "secret-delete-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-delete-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        // The recovery window of a scheduled deletion: each choice is a
+        // button of the dialog, which keeps Tab inside it.
+        ("secret-delete-window-*", KeyboardPath::TabStop),
+        ("modal-close", KeyboardPath::Command(Command::Cancel)),
+        // Delete is the `x` key on the selected secret, from the pane header
+        // and the bottom bar alike; the row menu's entry runs the same
+        // command. Edit value in the bar and Restore are pane actions.
+        (
+            "secret-details-delete",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-action-delete",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-action-edit-value",
+            KeyboardPath::Menu("secret-edit-value"),
+        ),
+        ("secret-restore", KeyboardPath::Menu("secret-restore")),
+        // Rotate now (the bar, the Rotation section, the row menu) and Edit
+        // rotation are pane actions; the dialog's controls answer Enter and
+        // Escape, and the checkbox is a stop of the dialog.
+        (
+            "secret-action-rotate-now",
+            KeyboardPath::Menu("secret-rotate-now"),
+        ),
+        (
+            "secret-rotation-rotate-now",
+            KeyboardPath::Menu("secret-rotate-now"),
+        ),
+        (
+            "secret-rotation-edit",
+            KeyboardPath::Menu("secret-edit-rotation"),
+        ),
+        (
+            "secret-rotation-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-rotation-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("secret-rotation-enabled", KeyboardPath::TabStop),
+        (
+            "secret-rotate-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-rotate-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        // Edit tags (the Tags section and the row menu) and Edit description
+        // (the Details section, or the bottom bar) are pane actions; each
+        // dialog's buttons answer Enter and Escape, and its row controls are
+        // stops of the dialog.
+        // New secret / New parameter is a pane action; its dialog's buttons
+        // answer Enter and Escape, and the choices and tag rows are stops of
+        // the dialog.
+        ("secret-new", KeyboardPath::Menu("secret-new")),
+        (
+            "secret-create-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-create-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("secret-create-type-*", KeyboardPath::TabStop),
+        ("secret-create-tier-*", KeyboardPath::TabStop),
+        ("secret-create-tag-add", KeyboardPath::TabStop),
+        ("secret-create-tag-remove-*", KeyboardPath::TabStop),
+        ("secret-tags-edit", KeyboardPath::Menu("secret-edit-tags")),
+        (
+            "secret-details-edit",
+            KeyboardPath::Menu("secret-edit-description"),
+        ),
+        (
+            "secret-action-edit-description",
+            KeyboardPath::Menu("secret-edit-description"),
+        ),
+        (
+            "secret-tags-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        ("secret-tags-cancel", KeyboardPath::Command(Command::Cancel)),
+        ("secret-tags-add", KeyboardPath::TabStop),
+        ("secret-tags-remove-*", KeyboardPath::TabStop),
+        (
+            "secret-description-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-description-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
         (
             "secret-value-copy-*",
             KeyboardPath::MouseOnly(
@@ -775,6 +896,22 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
         (
             "secret-menu-edit-value-*",
             KeyboardPath::Menu("secret-edit-value"),
+        ),
+        (
+            "secret-menu-delete-*",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-menu-edit-tags-*",
+            KeyboardPath::Menu("secret-edit-tags"),
+        ),
+        (
+            "secret-menu-rotate-now-*",
+            KeyboardPath::Menu("secret-rotate-now"),
+        ),
+        (
+            "secret-menu-restore-*",
+            KeyboardPath::Menu("secret-restore"),
         ),
         (
             "secret-menu-copy-name-*",

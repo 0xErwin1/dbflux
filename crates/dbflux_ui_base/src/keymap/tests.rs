@@ -3092,3 +3092,13 @@ fn test_results_e_edits_the_value() {
         Some(Command::EditValue)
     );
 }
+
+#[test]
+fn test_results_b_rolls_the_secret_back() {
+    let keymap = default_keymap();
+
+    assert_eq!(
+        keymap.resolve(ContextId::Results, &KeyChord::new("b", Modifiers::none())),
+        Some(Command::RollBackVersion)
+    );
+}

@@ -43,6 +43,10 @@ pub enum FakeSecretMutation {
     Create(SecretCreateRequest),
 }
 
+/// The rotation function the fake flat store's rotating secret reports.
+pub const FAKE_ROTATION_FUNCTION: &str =
+    "arn:aws:lambda:us-east-1:123456789012:function:rotate-api-credentials";
+
 /// Id of the fake flat store, shaped like AWS Secrets Manager.
 pub const FAKE_SECRETS_STORE_ID: &str = "secrets-manager";
 
@@ -315,7 +319,17 @@ impl SecretStoreSource for FakeSecretStore {
             return Err(DbError::permission_denied(message));
         }
 
-        self.find(name).map(|secret| secret.history)
+        // Like the real store, a version holding the pending stage says so.
+        self.find(name).map(|secret| {
+            secret
+                .history
+                .into_iter()
+                .map(|mut version| {
+                    version.is_pending = version.labels.iter().any(|label| label == "AWSPENDING");
+                    version
+                })
+                .collect()
+        })
     }
 
     /// One overwrite, following the rules the real stores keep: secrets
@@ -407,6 +421,7 @@ impl SecretStoreSource for FakeSecretStore {
             }
 
             for entry in secret.history.iter_mut() {
+                entry.is_current = entry.id == request.version_id;
                 entry.labels.retain(|label| label != "AWSPREVIOUS");
                 if entry.id == current {
                     entry.labels.retain(|label| label != "AWSCURRENT");
@@ -1333,6 +1348,7 @@ const FAKE_WRITER: &str = "arn:fake:user/editor";
 /// The history row of a version a write just created.
 fn written_version(id: &str, labels: Vec<String>) -> SecretVersionInfo {
     SecretVersionInfo {
+        is_pending: false,
         id: id.to_string(),
         labels,
         created: fake_time(11, 7, 12),
@@ -1438,6 +1454,7 @@ fn fake_secret(
 
     let details = details(base);
     let history = vec![SecretVersionInfo {
+        is_pending: false,
         id: version.clone(),
         labels: Vec::new(),
         created: details.created,
@@ -1484,6 +1501,7 @@ fn history_row(
     modified_by: Option<&str>,
 ) -> SecretVersionInfo {
     SecretVersionInfo {
+        is_pending: false,
         id: id.to_string(),
         labels: labels.iter().map(ToString::to_string).collect(),
         created,
@@ -1563,7 +1581,8 @@ fn fake_flat_secrets() -> Vec<FakeSecret> {
         enabled: true,
         schedule: Some("rate(30 days)".to_string()),
         window: Some("4h".to_string()),
-        function: Some("rotate-api-credentials".to_string()),
+        // Stores report the rotation function by its ARN.
+        function: Some(FAKE_ROTATION_FUNCTION.to_string()),
         last_rotated: fake_time(9, 20, 3),
         next_rotation: fake_time(10, 20, 3),
     };

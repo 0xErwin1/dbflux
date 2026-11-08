@@ -161,9 +161,12 @@ fn is_base64_padding(value: &str) -> bool {
 }
 
 /// At least one assignment, and every line that is not blank or a comment
-/// is one. A lone base64 token is not an assignment: its padding looks like one.
+/// is one. A value that is one bare token is not an assignment: its padding
+/// looks like one. Among other lines, a `KEY==` line is an assignment whose
+/// value is `=`, because the token reading needs a value that is one token.
 fn is_dotenv(text: &str) -> bool {
     let mut assignments = 0;
+    let bare_token = text.trim().lines().count() == 1;
 
     for line in text.lines().map(str::trim) {
         if line.is_empty() || line.starts_with('#') {
@@ -181,7 +184,7 @@ fn is_dotenv(text: &str) -> bool {
             .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
             && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
 
-        if !valid_key || is_base64_padding(value) {
+        if !valid_key || (bare_token && is_base64_padding(value)) {
             return false;
         }
 

@@ -1282,6 +1282,7 @@ pub(crate) fn versions_from_entries(entries: &[SecretVersionsListEntry]) -> Vec<
             Some(SecretVersionInfo {
                 id: entry.version_id()?.to_string(),
                 is_current: labels.iter().any(|stage| stage == CURRENT_STAGE),
+                is_pending: labels.iter().any(|stage| stage == PENDING_STAGE),
                 labels,
                 created: entry.created_date().and_then(smithy_datetime_to_chrono),
                 modified_by: None,

@@ -5,13 +5,11 @@
 //! pane actions already use — the menu adds no logic of its own.
 //!
 //! The menu entries dispatch through the actions the details pane and the
-//! pane actions already use — the menu adds no logic of its own. Edit value
-//! is the one write-shaped entry: it opens the details pane's editor for a
-//! value that can be edited, the same `start_value_edit` the button calls.
-//! The rest of the write surface (Rotate now, Edit tags, Delete) waits
-//! until the write path grows it (issue #1270), and "Open in tab" waits for
-//! a per-secret document target: the value pane is deliberately scoped to
-//! this tab.
+//! pane actions already use — the menu adds no logic of its own. The write
+//! entries (Edit value, Restore, Delete, and the ones the store offers
+//! beyond them) open the same editor and dialogs the pane's buttons do, and
+//! "Open in tab" waits for a per-secret document target: the value pane is
+//! deliberately scoped to this tab.
 
 use super::{DetailsState, SecretRowKey, SecretStoreDocument, copied_toast};
 use dbflux_app::keymap::{Command, ContextId};
@@ -42,12 +40,18 @@ pub(super) struct SecretMenuItem {
     /// never copies or fetches nothing silently.
     pub detail: Option<SharedString>,
     pub disabled: bool,
+    /// A destructive entry, drawn in the danger tone.
+    pub danger: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SecretMenuAction {
     RetrieveValue,
     EditValue,
+    RotateNow,
+    EditTags,
+    Restore,
+    Delete,
     CopyName,
     CopyArn,
     CopyPath,
@@ -61,6 +65,10 @@ impl SecretMenuAction {
         match self {
             SecretMenuAction::RetrieveValue => "secret-menu-retrieve-value",
             SecretMenuAction::EditValue => "secret-menu-edit-value",
+            SecretMenuAction::RotateNow => "secret-menu-rotate-now",
+            SecretMenuAction::EditTags => "secret-menu-edit-tags",
+            SecretMenuAction::Restore => "secret-menu-restore",
+            SecretMenuAction::Delete => "secret-menu-delete",
             SecretMenuAction::CopyName => "secret-menu-copy-name",
             SecretMenuAction::CopyArn => "secret-menu-copy-arn",
             SecretMenuAction::CopyPath => "secret-menu-copy-path",
@@ -95,7 +103,13 @@ impl SecretMenuItem {
             shortcut: None,
             detail: None,
             disabled: false,
+            danger: false,
         }
+    }
+
+    fn danger(mut self) -> Self {
+        self.danger = true;
+        self
     }
 
     fn with_shortcut(mut self, command: Command) -> Self {
@@ -145,6 +159,68 @@ impl SecretStoreDocument {
                     );
                 }
 
+                // Rotate now starts a rotation of a secret that rotates.
+                if self.supports_rotation() {
+                    let rotate = SecretMenuItem::new(
+                        SecretMenuAction::RotateNow,
+                        dbflux_i18n::t!("document.secret_store.rotate.button").into(),
+                        AppIcon::Zap,
+                    );
+
+                    items.push(match self.rotate_now_block_reason() {
+                        Some(reason) => rotate.disabled_with_reason(reason.into()),
+                        None => self.write_item(rotate, self.can_rotate_now(), true),
+                    });
+                }
+
+                // Edit tags opens the dialog the Tags section's button opens.
+                if self.supports_tags() {
+                    items.push(self.write_item(
+                        SecretMenuItem::new(
+                            SecretMenuAction::EditTags,
+                            dbflux_i18n::t!("document.secret_store.tags_edit.button").into(),
+                            AppIcon::Tag,
+                        ),
+                        self.can_edit_tags(),
+                        true,
+                    ));
+                }
+
+                // Restore cancels a scheduled deletion; Delete schedules or
+                // makes one. Each is drawn disabled, with the reason, when
+                // the secret's own state refuses it.
+                if self.supports_restore()
+                    && self
+                        .selected_summary()
+                        .is_some_and(|summary| summary.is_pending_deletion())
+                {
+                    items.push(self.write_item(
+                        SecretMenuItem::new(
+                            SecretMenuAction::Restore,
+                            dbflux_i18n::t!("document.secret_store.restore.button").into(),
+                            AppIcon::RotateCcw,
+                        ),
+                        self.can_restore_selected(),
+                        false,
+                    ));
+                }
+
+                if self.supports_delete() {
+                    items.push(
+                        self.write_item(
+                            SecretMenuItem::new(
+                                SecretMenuAction::Delete,
+                                dbflux_i18n::t!("document.secret_store.delete.button").into(),
+                                AppIcon::Delete,
+                            )
+                            .danger()
+                            .with_shortcut(Command::Delete),
+                            self.can_delete_selected(),
+                            true,
+                        ),
+                    );
+                }
+
                 items
             }
             SecretRowKey::Path(_) => vec![
@@ -161,6 +237,29 @@ impl SecretStoreDocument {
                 .with_shortcut(Command::RefreshSchema),
             ],
             SecretRowKey::LoadMore => Vec::new(),
+        }
+    }
+
+    /// A write entry: enabled when `allowed`; otherwise disabled with the
+    /// reason the secret's own state gives, when it has one. `refuse_state`
+    /// asks for that reason (a restore is for a secret whose deletion is
+    /// scheduled, so that state is no reason to refuse it).
+    fn write_item(
+        &self,
+        item: SecretMenuItem,
+        allowed: bool,
+        refuse_state: bool,
+    ) -> SecretMenuItem {
+        if allowed {
+            return item;
+        }
+
+        match refuse_state.then(|| self.write_refusal_reason()).flatten() {
+            Some(reason) => item.disabled_with_reason(reason.into()),
+            None => SecretMenuItem {
+                disabled: true,
+                ..item
+            },
         }
     }
 
@@ -194,6 +293,7 @@ impl SecretStoreDocument {
             shortcut: menu_shortcut(Command::ToggleValuePanel),
             detail,
             disabled,
+            danger: false,
         }
     }
 
@@ -335,15 +435,10 @@ impl SecretStoreDocument {
                 // selected_index stays within `items`: it starts at 0 on
                 // open, the MenuUp/MenuDown arms keep it modulo the count,
                 // and rebuilds keep the entry order.
-                #[expect(
-                    clippy::indexing_slicing,
-                    reason = "selected_index starts at 0 on open and the MenuUp/MenuDown arms keep it modulo menu.items.len(), which this dispatch does not re-check"
-                )]
-                let selected = self.context_menu.as_ref().map(|menu| {
-                    (
-                        menu.items[menu.selected_index].action,
-                        menu.items[menu.selected_index].disabled,
-                    )
+                let selected = self.context_menu.as_ref().and_then(|menu| {
+                    menu.items
+                        .get(menu.selected_index)
+                        .map(|item| (item.action, item.disabled))
                 });
 
                 match selected {
@@ -380,12 +475,39 @@ impl SecretStoreDocument {
         self.context_menu = None;
 
         match action {
+            // These open an editor or a dialog that takes the keyboard; the
+            // common refocus below would take it straight back. An opener that
+            // refuses (unsaved edits, a stale selection) opens nothing, and
+            // then the document gets the keyboard back like any other entry.
             SecretMenuAction::EditValue => {
-                // The editor takes the keyboard when it opens; the common
-                // refocus below would take it straight back.
                 self.start_value_edit(window, cx);
-                return;
+
+                if self.is_editing_value() {
+                    return;
+                }
             }
+            SecretMenuAction::Delete => {
+                self.open_delete(window, cx);
+
+                if self.dialog_is_open() {
+                    return;
+                }
+            }
+            SecretMenuAction::RotateNow => {
+                self.rotate_selected_now(window, cx);
+
+                if self.dialog_is_open() {
+                    return;
+                }
+            }
+            SecretMenuAction::EditTags => {
+                self.open_edit_tags(window, cx);
+
+                if self.dialog_is_open() {
+                    return;
+                }
+            }
+            SecretMenuAction::Restore => self.restore_selected(cx),
             SecretMenuAction::RetrieveValue => self.retrieve_selected_value(cx),
             SecretMenuAction::CopyName => self.copy_selected_name(cx),
             SecretMenuAction::CopyArn => self.copy_resource_id(cx),
@@ -411,6 +533,10 @@ fn shared_menu_item(item: &SecretMenuItem) -> MenuItem {
 
     if let Some(detail) = &item.detail {
         entry = entry.detail(detail.clone());
+    }
+
+    if item.danger {
+        entry = entry.danger();
     }
 
     if item.disabled {

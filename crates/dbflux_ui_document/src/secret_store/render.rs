@@ -73,6 +73,13 @@ const HINT_DROP_ORDER: [&str; 3] = ["filter", "copy_arn", "up"];
 /// The narrowest the footer summary gets, for the same reason.
 const SUMMARY_MIN_WIDTH: Rems = dbflux_components::tokens::ui(48.0);
 
+/// The listing width from which the toolbar's New button shows its label, and
+/// the narrower one from which it shows its icon alone. Below that the button
+/// is left out, and New stays in the pane actions menu: the toolbar's other
+/// controls keep their room at the document's minimum width.
+const NEW_LABEL_MIN_WIDTH: Rems = dbflux_components::tokens::ui(900.0);
+const NEW_ICON_MIN_WIDTH: Rems = dbflux_components::tokens::ui(640.0);
+
 /// Placeholder for a field the store did not report.
 pub(super) const UNKNOWN: &str = "—";
 
@@ -448,7 +455,47 @@ impl SecretStoreDocument {
                 self.focus_mode == SecretFocusMode::Search,
                 cx,
             )))
+            .children(
+                self.new_button(cx)
+                    .map(|button| div().flex_shrink_0().child(button)),
+            )
             .child(div().flex_shrink_0().child(refresh))
+    }
+
+    /// New secret or New parameter, by what the store calls its entries. The
+    /// button gives way to its icon, and then to the pane actions menu, as
+    /// the listing narrows; it waits for the first measurement of the
+    /// listing's width.
+    fn new_button(&self, cx: &mut Context<Self>) -> Option<Button> {
+        if !self.supports_create() {
+            return None;
+        }
+
+        let width = self.footer_fit.width.get();
+        let label_min = dbflux_components::fonts::ui_px(cx, NEW_LABEL_MIN_WIDTH);
+        let icon_min = dbflux_components::fonts::ui_px(cx, NEW_ICON_MIN_WIDTH);
+
+        if width < icon_min {
+            return None;
+        }
+
+        let label = if self.hierarchical() {
+            dbflux_i18n::t!("document.secret_store.create.button_parameter")
+        } else {
+            dbflux_i18n::t!("document.secret_store.create.button_secret")
+        };
+
+        let button = Button::new("secret-new", label)
+            .icon(AppIcon::Plus)
+            .tab_stop(false)
+            .disabled(!self.can_open_create())
+            .on_click(cx.listener(|this, _, window, cx| this.open_create(window, cx)));
+
+        Some(if width < label_min {
+            button.icon_only()
+        } else {
+            button
+        })
     }
 
     fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -1090,6 +1137,15 @@ impl Render for SecretStoreDocument {
             self.sync_value_inputs(window, cx);
         }
 
+        // The bottom bar's Edit value retrieved the value first; the editor
+        // opens now that it landed.
+        self.open_pending_edit(window, cx);
+
+        if std::mem::take(&mut self.clear_search_input) {
+            self.search_input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+        }
+
         // A menu entry chosen by click is queued and runs here, which has
         // the window the actions' focus changes need.
         if let Some(action) = self.pending_menu_action.take() {
@@ -1127,6 +1183,17 @@ impl Render for SecretStoreDocument {
 
             if let Some(menu) = self.context_menu.as_mut() {
                 menu.items = items;
+                // The entries can shrink under the highlight (a restore that
+                // landed); keep it on a row that exists.
+                menu.selected_index = menu.selected_index.min(menu.items.len().saturating_sub(1));
+            }
+
+            if self
+                .context_menu
+                .as_ref()
+                .is_some_and(|menu| menu.items.is_empty())
+            {
+                self.context_menu = None;
             }
         }
 
@@ -1134,6 +1201,10 @@ impl Render for SecretStoreDocument {
             let element = context_menu::render_context_menu(menu, &self.context_menu_focus, cx);
 
             root = root.child(element);
+        }
+
+        if let Some(dialog) = self.render_write_dialog(cx) {
+            root = root.child(dialog);
         }
 
         root

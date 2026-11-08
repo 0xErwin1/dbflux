@@ -352,6 +352,24 @@ fn versions_are_listed_newest_first_whatever_order_the_service_answers() {
 }
 
 #[test]
+fn a_version_holding_the_pending_stage_is_marked_pending() {
+    let versions = versions_from_entries(&[
+        version_entry("v-pending", &["AWSPENDING"], Some(3_000)),
+        version_entry("v-current", &["AWSCURRENT"], Some(2_000)),
+        version_entry("v-old", &[], Some(1_000)),
+    ]);
+
+    let pending: Vec<(&str, bool)> = versions
+        .iter()
+        .map(|version| (version.id.as_str(), version.is_pending))
+        .collect();
+    assert_eq!(
+        pending,
+        [("v-pending", true), ("v-current", false), ("v-old", false)]
+    );
+}
+
+#[test]
 fn a_version_with_no_staging_label_is_kept() {
     let versions = versions_from_entries(&[version_entry("v-orphan", &[], Some(1_000))]);
 

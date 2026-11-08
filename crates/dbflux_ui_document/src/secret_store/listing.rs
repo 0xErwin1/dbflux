@@ -42,6 +42,11 @@ pub struct SecretListing {
     pub loading: bool,
     pub error: Option<String>,
     generation: u64,
+
+    /// A reload that keeps what is listed until its first page lands, so the
+    /// rows (and the selection that points at one of them) do not vanish
+    /// while the store answers.
+    replace_on_apply: bool,
 }
 
 impl SecretListing {
@@ -52,11 +57,26 @@ impl SecretListing {
         self.loading = true;
         self.error = None;
 
+        self.replace_on_apply = false;
+
         if first_page {
             self.entries.clear();
             self.child_paths.clear();
             self.next_page_token = None;
         }
+
+        self.generation
+    }
+
+    /// Starts a reload of the first page that leaves the listed rows in
+    /// place until the page lands, and then replaces them. A write that
+    /// changed a row's metadata reloads this way, so the selected row stays
+    /// selected.
+    pub fn begin_reload(&mut self) -> u64 {
+        self.generation = self.generation.wrapping_add(1);
+        self.loading = true;
+        self.error = None;
+        self.replace_on_apply = true;
 
         self.generation
     }
@@ -67,6 +87,11 @@ impl SecretListing {
     pub fn apply_page(&mut self, generation: u64, page: SecretListPage) -> bool {
         if generation != self.generation {
             return false;
+        }
+
+        if std::mem::take(&mut self.replace_on_apply) {
+            self.entries.clear();
+            self.child_paths.clear();
         }
 
         for entry in page.entries {
@@ -96,6 +121,12 @@ impl SecretListing {
         self.loading = false;
         self.error = Some(message);
         true
+    }
+
+    /// Whether the next page to land replaces the listed rows (a reload that
+    /// kept them until then) instead of appending to them.
+    pub fn replaces_on_next_page(&self) -> bool {
+        self.replace_on_apply
     }
 
     pub fn has_more(&self) -> bool {

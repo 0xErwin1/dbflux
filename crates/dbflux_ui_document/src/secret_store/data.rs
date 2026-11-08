@@ -57,6 +57,7 @@ impl SecretStoreDocument {
             return;
         }
 
+        self.close_dialog_for_navigation(cx);
         self.selected = None;
         self.details_generation = self.details_generation.wrapping_add(1);
         self.details = DetailsState::Idle;
@@ -65,6 +66,16 @@ impl SecretStoreDocument {
         self.drop_context_menu();
 
         let generation = self.listing.begin(true);
+        self.spawn_list(generation, None, cx);
+    }
+
+    /// Lists the current level again after a write, leaving the selection,
+    /// its details and its value where they are: the rows are replaced when
+    /// the first page lands, so a changed rotation, description or deletion
+    /// date reads from the store instead of from the listing the write
+    /// outdated.
+    pub(crate) fn reload_listing_in_place(&mut self, cx: &mut Context<Self>) {
+        let generation = self.listing.begin_reload();
         self.spawn_list(generation, None, cx);
     }
 
@@ -147,8 +158,19 @@ impl SecretStoreDocument {
         millis: u128,
         cx: &mut Context<Self>,
     ) {
-        let loaded_before = self.listing.entries.len();
-        let paths_before = self.listing.child_paths.len();
+        // A reload that replaces the rows starts from nothing, so a page that
+        // is shorter than the listing it replaces still made progress.
+        let replacing = self.listing.replaces_on_next_page();
+        let loaded_before = if replacing {
+            0
+        } else {
+            self.listing.entries.len()
+        };
+        let paths_before = if replacing {
+            0
+        } else {
+            self.listing.child_paths.len()
+        };
 
         let applied = match result {
             Ok(page) => {
@@ -175,6 +197,19 @@ impl SecretStoreDocument {
         }
 
         cx.notify();
+
+        // A failed page ends the chain: the retained rows are not progress, and
+        // asking for the old next page would clear the error and mix pages of
+        // two different loads.
+        if self.listing.error.is_some() {
+            return;
+        }
+
+        if let Some(SecretRowKey::Secret(name)) = &self.selected
+            && let Some(summary) = self.listing.find(name)
+        {
+            self.selected_cache = Some(summary.clone());
+        }
 
         // A page that landed under the limit asks for the next one instead of
         // making the user click for it; the manual row remains for the rest.
@@ -203,6 +238,7 @@ impl SecretStoreDocument {
             return;
         };
 
+        self.details_session = Some(connection.clone());
         let store_id = self.store.id.clone();
         let entity = cx.entity().clone();
 
@@ -250,6 +286,10 @@ impl SecretStoreDocument {
             return;
         }
 
+        if let Ok(details) = &result {
+            self.selected_cache = Some(details.summary.clone());
+        }
+
         self.details = match result {
             Ok(details) => DetailsState::Loaded(Box::new(details)),
             Err(error) => DetailsState::Failed(error.to_string()),
@@ -268,6 +308,7 @@ impl SecretStoreDocument {
         self.versions = VersionsState::Idle;
         self.versions_session = None;
         self.missing_connection_reported = false;
+        self.rotation_notice = None;
     }
 
     /// Lists the versions of `name` for the details pane, on the background

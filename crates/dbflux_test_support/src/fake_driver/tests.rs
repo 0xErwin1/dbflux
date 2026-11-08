@@ -1018,6 +1018,9 @@ fn rolling_back_moves_current_to_the_chosen_version_and_previous_to_the_old_curr
             ("v-oldest".to_string(), vec!["AWSCURRENT".to_string()]),
         ]
     );
+    // The flag a listing reads follows the label, so a history read after a
+    // roll back names the version that is current now.
+    assert_eq!(current_ids(&versions), vec!["v-oldest"]);
 
     let details = store.describe("prod/api/credentials").expect("describe");
     assert_eq!(details.summary.version.as_deref(), Some("v-oldest"));
