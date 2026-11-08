@@ -3501,7 +3501,24 @@ document:
       created: "Criado"
       last_changed: "Última alteração"
       last_retrieved: "Última obtenção"
-      versions: "Versões"
+    versions:
+      title: "Versões"
+      history_title: "Histórico"
+      count:
+        one: "%{count} versão"
+        many: "%{count} versões"
+      column:
+        version: "Versão"
+        labels: "Rótulos de preparo"
+        created: "Criada"
+      no_labels: "sem rótulos"
+      history_version: "v%{id}"
+      loading: "Carregando as versões…"
+      failed: "Não foi possível carregar as versões"
+      retrieve: "Recuperar a versão %{version}"
+      back_to_current: "Voltar para a atual"
+      shown: "Exibindo a versão %{version}"
+      not_current: "Não é a versão atual. A recuperação é auditada, o valor não."
     tags:
       title: "Tags"
       none: "Sem tags"

@@ -3501,7 +3501,24 @@ document:
       created: "생성됨"
       last_changed: "마지막 변경"
       last_retrieved: "마지막 조회"
-      versions: "버전"
+    versions:
+      title: "버전"
+      history_title: "기록"
+      count:
+        one: "%{count}개 버전"
+        many: "%{count}개 버전"
+      column:
+        version: "버전"
+        labels: "스테이징 레이블"
+        created: "생성"
+      no_labels: "레이블 없음"
+      history_version: "v%{id}"
+      loading: "버전을 불러오는 중…"
+      failed: "버전을 불러오지 못했습니다"
+      retrieve: "%{version} 버전 가져오기"
+      back_to_current: "현재 버전으로 돌아가기"
+      shown: "%{version} 버전 표시 중"
+      not_current: "현재 버전이 아닙니다. 가져오기는 감사되며 값은 기록되지 않습니다."
     tags:
       title: "태그"
       none: "태그 없음"
