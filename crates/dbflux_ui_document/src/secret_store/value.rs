@@ -152,9 +152,15 @@ impl ValueKind {
     }
 }
 
+/// The `=` left over when a base64 token is split at its padding: `YWJj==`
+/// reads as the key `YWJj` with the value `=`. A real value may start with
+/// `=` (`PASSWORD==secret`); only one made of nothing else is padding.
+fn is_base64_padding(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|c| c == '=')
+}
+
 /// At least one assignment, and every line that is not blank or a comment
-/// is one. A value starting with `=` is not an assignment: it is how base64
-/// padding looks.
+/// is one. A lone base64 token is not an assignment: its padding looks like one.
 fn is_dotenv(text: &str) -> bool {
     let mut assignments = 0;
 
@@ -174,7 +180,7 @@ fn is_dotenv(text: &str) -> bool {
             .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
             && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
 
-        if !valid_key || value.starts_with('=') {
+        if !valid_key || is_base64_padding(value) {
             return false;
         }
 

@@ -315,7 +315,7 @@ impl SecretStoreDocument {
                 .icon(AppIcon::X)
                 .icon_only()
                 .tab_stop(false)
-                .on_click(cx.listener(|this, _, _, cx| this.close_details(cx))),
+                .on_click(cx.listener(|this, _, window, cx| this.close_details(window, cx))),
             )
     }
 

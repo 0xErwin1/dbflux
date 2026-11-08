@@ -7262,6 +7262,85 @@ mod details_design {
         assert_eq!(binary.kind_label(), "binary");
     }
 
+    fn close_details(opened: &mut Opened<'_>) {
+        let doc = opened.doc.clone();
+        opened
+            .window
+            .update(|window, cx| doc.update(cx, |doc, cx| doc.close_details(window, cx)));
+        opened.window.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn closing_with_unsaved_edits_is_refused_by_the_shared_guard(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(PLAINTEXT_SECRET);
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.start_edit();
+        opened.set_editor_text("an unsaved edit");
+
+        close_details(&mut opened);
+
+        assert!(opened.read(|doc| {
+            matches!(doc.selected(), Some(SecretRowKey::Secret(name)) if name == PLAINTEXT_SECRET)
+        }));
+        assert_eq!(opened.editor_text(), "an unsaved edit");
+        assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+    }
+
+    #[gpui::test]
+    fn closing_a_focused_clean_editor_moves_focus_to_the_document(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.window.update(|window, _| window.activate_window());
+        opened.window.run_until_parked();
+        opened.rendered_paths();
+        opened.select(PLAINTEXT_SECRET);
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.start_edit();
+        opened.rendered_paths();
+        assert!(opened.read(|doc| doc.value_edit.as_ref().is_some_and(|edit| edit.focused)));
+
+        close_details(&mut opened);
+
+        let doc = opened.doc.clone();
+        let focused = opened
+            .window
+            .update(|window, cx| doc.read(cx).focus_handle.is_focused(window));
+        assert!(focused, "the document owns focus after the editor is gone");
+    }
+
+    #[gpui::test]
+    fn closing_without_a_focused_editor_leaves_focus_alone(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.window.update(|window, _| window.activate_window());
+        opened.select(KEY_VALUE_SECRET);
+        opened.rendered_paths();
+        let doc = opened.doc.clone();
+        opened
+            .window
+            .update(|window, cx| window.focus(&cx.focus_handle(), cx));
+        let before = opened
+            .window
+            .update(|window, cx| doc.read(cx).focus_handle.is_focused(window));
+        assert!(!before);
+
+        close_details(&mut opened);
+
+        let after = opened
+            .window
+            .update(|window, cx| doc.read(cx).focus_handle.is_focused(window));
+        assert!(!after, "no focus change without a focused editor");
+    }
+
+    #[test]
+    fn dotenv_values_may_start_with_an_equals_sign() {
+        assert_eq!(
+            kind_chip("USER=service\nPASSWORD==secret"),
+            "dotenv · 2 lines"
+        );
+        assert_eq!(kind_chip("YWJj=="), "text · 1 line");
+        assert_eq!(kind_chip("YWJjZA=="), "text · 1 line");
+    }
+
     fn node_bounds(opened: &mut Opened<'_>, id: &str) -> Option<gpui::Bounds<gpui::Pixels>> {
         let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
         let frame = capture.frame(opened.window);
@@ -7336,7 +7415,7 @@ mod details_design {
         opened.update(|doc, cx| doc.retrieve_selected_value(cx));
         assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
 
-        opened.update(|doc, cx| doc.close_details(cx));
+        close_details(&mut opened);
 
         assert!(opened.read(|doc| matches!(doc.value(), ValueState::NotLoaded)));
         assert!(opened.read(|doc| doc.selected().is_none()));
@@ -7441,7 +7520,13 @@ mod details_design {
         opened.update(|doc, cx| doc.retrieve_selected_value(cx));
         opened.rendered_paths();
 
+        let before = opened.read(|doc| doc.value_view_sets);
         click(&mut opened, "segmented-secret-value-view-key-value");
+        assert_eq!(
+            opened.read(|doc| doc.value_view_sets),
+            before,
+            "the muted tab never reaches the view setter"
+        );
 
         assert!(opened.read(|doc| match doc.value() {
             ValueState::Loaded(value) => value.view == ValueView::Plaintext,
