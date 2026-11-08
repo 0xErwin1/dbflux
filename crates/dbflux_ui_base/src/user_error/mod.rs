@@ -126,7 +126,7 @@ pub fn report_error(err: UserFacingError, cx: &mut App) {
     let id_str = err.correlation_id.to_string();
     let summary = &err.summary;
 
-    trace_user_error(&err);
+    record(&err, cx);
 
     let mut toast = match err.severity {
         EventSeverity::Warn => Toast::warning(err.summary.clone()),
@@ -164,13 +164,46 @@ pub fn report_error(err: UserFacingError, cx: &mut App) {
         .action(view_in_audit);
 
     toast.push(cx);
+}
+
+/// Records a user-facing failure exactly as [`report_error`] does — the audit
+/// row through the same tracing event, the correlation id, the
+/// notification-center entry and the error badge — but queues no toast.
+///
+/// Use it for a failure the surface already shows in place, such as a section
+/// that draws its own error banner: a toast on top would cover the controls
+/// next to it, while the failure still belongs in the audit trail and the
+/// notification center. A failure with no inline home keeps [`report_error`].
+///
+/// | Caller context                          | Use                     |
+/// | --------------------------------------- | ----------------------- |
+/// | `&mut Context<T>`, `&mut App`           | `record_error`          |
+/// | Inside `cx.spawn(async ...)`            | `record_error_async`    |
+pub fn record_error(err: UserFacingError, cx: &mut App) {
+    record(&err, cx);
+}
+
+/// Background-safe variant of [`record_error`]. Marshals to the foreground
+/// via `cx.update`.
+pub fn record_error_async(err: UserFacingError, cx: &AsyncApp) {
+    let cx = cx.clone();
+    cx.update(move |cx| record_error(err, cx));
+}
+
+/// The part of reporting every failure shares, toast or not: the tracing
+/// event the audit bridge turns into the audit row, then the
+/// notification-center entry and the error badge.
+fn record(err: &UserFacingError, cx: &mut App) {
+    use crate::app_state_entity::AppStateGlobal;
+
+    trace_user_error(err);
 
     if let Some(app_state_global) = cx.try_global::<AppStateGlobal>() {
         let entity = app_state_global.entity.clone();
         entity.update(cx, |s, cx| {
             s.notifications
                 .record_error(crate::notifications::ErrorNotification::from_user_error(
-                    &err,
+                    err,
                     dbflux_core::chrono::Utc::now(),
                 ));
             s.note_user_error(err.correlation_id, err.severity, cx);
@@ -364,6 +397,116 @@ mod tests {
 
         assert!(!fields.contains_key("cause"));
         assert!(!fields.contains_key("suggested_action"));
+    }
+
+    /// An app with the app-state global and a toast host installed, which is
+    /// all reporting touches.
+    fn reporting_app(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        gpui::Entity<crate::AppStateEntity>,
+        gpui::Entity<bolt::toast::ToastHost>,
+    ) {
+        use gpui::AppContext as _;
+
+        cx.update(|cx| {
+            let app_state = cx.new(|_| {
+                crate::AppStateEntity::new_with_storage_runtime(
+                    dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                        .expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            });
+            let host = cx.new(|_| bolt::toast::ToastHost::new());
+
+            cx.set_global(crate::app_state_entity::AppStateGlobal {
+                entity: app_state.clone(),
+            });
+            cx.set_global(bolt::toast::ToastGlobal { host: host.clone() });
+
+            (app_state, host)
+        })
+    }
+
+    fn recorded_summaries(
+        app_state: &gpui::Entity<crate::AppStateEntity>,
+        cx: &mut gpui::TestAppContext,
+    ) -> Vec<String> {
+        use crate::notifications::{NotificationKey, NotificationSources};
+
+        cx.update(|cx| {
+            let state = app_state.read(cx);
+
+            state
+                .notifications
+                .snapshot(&NotificationSources::default())
+                .entries
+                .iter()
+                .filter_map(|entry| match &entry.key {
+                    NotificationKey::Error(id) => state
+                        .notifications
+                        .error(*id)
+                        .map(|error| error.summary.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+    }
+
+    #[gpui::test]
+    fn record_error_keeps_the_notification_and_the_audit_event_but_queues_no_toast(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _keymap_state = crate::keymap::keymap_state_test_guard();
+        let (app_state, host) = reporting_app(cx);
+        let err = UserFacingError::new(ErrorKind::Driver, "history refused")
+            .with_cause("denied by policy");
+        let capture = std::sync::Arc::new(FieldCapture::default());
+
+        tracing::subscriber::with_default(capture.clone(), || {
+            cx.update(|cx| record_error(err.clone(), cx));
+        });
+
+        let fields = capture
+            .fields
+            .lock()
+            .map(|fields| fields.clone())
+            .unwrap_or_default();
+        assert_eq!(
+            fields.get("correlation_id"),
+            Some(&err.correlation_id.to_string())
+        );
+        assert_eq!(fields.get("action").map(String::as_str), Some("user_error"));
+        assert_eq!(
+            fields.get("cause").map(String::as_str),
+            Some("denied by policy")
+        );
+        assert_eq!(recorded_summaries(&app_state, cx), ["history refused"]);
+        assert_eq!(host.read_with(cx, |host, _| host.toast_count()), 0);
+    }
+
+    #[gpui::test]
+    fn report_error_still_queues_a_toast_next_to_the_same_record(cx: &mut gpui::TestAppContext) {
+        let _keymap_state = crate::keymap::keymap_state_test_guard();
+        let (app_state, host) = reporting_app(cx);
+        let err = UserFacingError::new(ErrorKind::Driver, "save refused");
+        let capture = std::sync::Arc::new(FieldCapture::default());
+
+        tracing::subscriber::with_default(capture.clone(), || {
+            cx.update(|cx| report_error(err.clone(), cx));
+        });
+
+        let fields = capture
+            .fields
+            .lock()
+            .map(|fields| fields.clone())
+            .unwrap_or_default();
+        assert_eq!(
+            fields.get("correlation_id"),
+            Some(&err.correlation_id.to_string())
+        );
+        assert_eq!(recorded_summaries(&app_state, cx), ["save refused"]);
+        assert_eq!(host.read_with(cx, |host, _| host.toast_count()), 1);
     }
 
     #[test]
