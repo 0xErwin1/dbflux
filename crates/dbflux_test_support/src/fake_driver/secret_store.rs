@@ -372,6 +372,17 @@ impl SecretStoreSource for FakeSecretStore {
                 )));
             }
 
+            if secret.history.iter().any(|entry| {
+                entry.id == request.version_id
+                    && entry.labels.iter().any(|label| label == "AWSPENDING")
+            }) {
+                return Err(DbError::query_failed(format!(
+                    "Version {} of {} holds AWSPENDING, an unfinished rotation; \
+                     rolling back onto it would promote an unvalidated value",
+                    request.version_id, request.name
+                )));
+            }
+
             for entry in secret.history.iter_mut() {
                 entry.labels.retain(|label| label != "AWSPREVIOUS");
                 if entry.id == current {

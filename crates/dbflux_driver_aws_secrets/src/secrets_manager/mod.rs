@@ -516,13 +516,7 @@ impl SecretStoreSource for SecretsManagerStore {
         ensure_not_scheduled(metadata.deleted_date(), request.name())?;
 
         let output = runtime()
-            .block_on(
-                self.client
-                    .delete_secret()
-                    .secret_id(request.name())
-                    .recovery_window_in_days(days)
-                    .send(),
-            )
+            .block_on(delete_secret_call(&self.client, request.name(), days).send())
             .map_err(|error| self.operation_error(&error, Some(request.name())))?;
 
         Ok(deletion_from_date(output.deletion_date()))
@@ -578,6 +572,9 @@ impl SecretStoreSource for SecretsManagerStore {
             update,
             metadata.rotation_enabled() == Some(true),
             metadata.rotation_lambda_arn(),
+            metadata
+                .rotation_rules()
+                .and_then(RotationRulesType::duration),
         )?;
 
         match plan {
@@ -586,10 +583,7 @@ impl SecretStoreSource for SecretsManagerStore {
                 window,
                 function,
             } => {
-                let rules = RotationRulesType::builder()
-                    .schedule_expression(schedule)
-                    .set_duration(window)
-                    .build();
+                let rules = rotation_rules(schedule, window);
 
                 runtime()
                     .block_on(
@@ -864,14 +858,26 @@ pub(crate) enum RotationPlan {
     Disable,
 }
 
+/// The rotation rules a `RotateSecret` call sends. The rules replace the
+/// ones on the secret, so a window that is not sent is a window dropped.
+pub(crate) fn rotation_rules(schedule: String, window: Option<String>) -> RotationRulesType {
+    RotationRulesType::builder()
+        .schedule_expression(schedule)
+        .set_duration(window)
+        .build()
+}
+
 /// Decides a rotation edit from the update and the secret's current
 /// rotation, refusing before any call what the service would reject or
 /// what would not change anything: an invalid update, enabling with no
 /// function anywhere, and turning off rotation that is already off.
+/// `RotateSecret` replaces the rules, so an update that names no window
+/// re-sends the window the secret already has instead of dropping it.
 pub(crate) fn plan_rotation_update(
     update: &SecretRotationUpdate,
     enabled: bool,
     existing_function: Option<&str>,
+    existing_window: Option<&str>,
 ) -> Result<RotationPlan, DbError> {
     update.validate()?;
 
@@ -895,7 +901,10 @@ pub(crate) fn plan_rotation_update(
 
     Ok(RotationPlan::Enable {
         schedule: update.schedule.clone().unwrap_or_default(),
-        window: update.window.clone(),
+        window: update
+            .window
+            .clone()
+            .or_else(|| existing_window.map(ToString::to_string)),
         function: update.function.clone(),
     })
 }
@@ -969,6 +978,20 @@ pub(crate) struct RollbackPlan {
     pub to_version: String,
 }
 
+/// The `DeleteSecret` call: the name and the recovery window, and nothing
+/// else. `ForceDeleteWithoutRecovery` is never set, so a deletion made
+/// through DBFlux can always be restored inside its window.
+pub(crate) fn delete_secret_call(
+    client: &Client,
+    name: &str,
+    recovery_window_days: i64,
+) -> aws_sdk_secretsmanager::operation::delete_secret::builders::DeleteSecretFluentBuilder {
+    client
+        .delete_secret()
+        .secret_id(name)
+        .recovery_window_in_days(recovery_window_days)
+}
+
 /// The staging labels of every version `ListSecretVersionIds` reported,
 /// keyed by version id. A version without a label is in the map with an
 /// empty list.
@@ -1010,6 +1033,16 @@ pub(crate) fn plan_rollback(
     if current == target {
         return Err(DbError::query_failed(format!(
             "Version \"{target}\" of \"{name}\" is already the current version"
+        )));
+    }
+
+    if versions
+        .get(target)
+        .is_some_and(|stages| stages.iter().any(|stage| stage == PENDING_STAGE))
+    {
+        return Err(DbError::query_failed(format!(
+            "Version \"{target}\" of \"{name}\" holds {PENDING_STAGE}, an unfinished rotation; \
+             rolling back onto it would promote a value the rotation has not validated."
         )));
     }
 

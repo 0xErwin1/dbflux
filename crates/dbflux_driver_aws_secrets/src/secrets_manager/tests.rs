@@ -493,7 +493,7 @@ const LAMBDA: &str = "arn:aws:lambda:eu-west-1:441012345678:function:rotate";
 fn enabling_rotation_keeps_the_function_the_secret_has_and_needs_one_otherwise() {
     let update = SecretRotationUpdate::enable("prod/api", "rate(30 days)").with_window("4h");
 
-    let plan = plan_rotation_update(&update, false, Some(LAMBDA)).expect("a function exists");
+    let plan = plan_rotation_update(&update, false, Some(LAMBDA), None).expect("a function exists");
     assert_eq!(
         plan,
         RotationPlan::Enable {
@@ -503,10 +503,10 @@ fn enabling_rotation_keeps_the_function_the_secret_has_and_needs_one_otherwise()
         }
     );
 
-    let error = plan_rotation_update(&update, false, None).expect_err("no function anywhere");
+    let error = plan_rotation_update(&update, false, None, None).expect_err("no function anywhere");
     assert!(error.to_string().contains("rotation function"), "{error}");
 
-    let plan = plan_rotation_update(&update.with_function(LAMBDA), false, None)
+    let plan = plan_rotation_update(&update.with_function(LAMBDA), false, None, None)
         .expect("the update names one");
     assert!(matches!(
         plan,
@@ -518,7 +518,8 @@ fn enabling_rotation_keeps_the_function_the_secret_has_and_needs_one_otherwise()
 fn an_invalid_rotation_update_is_refused_before_a_plan_exists() {
     let update = SecretRotationUpdate::enable("prod/api", "every month");
 
-    let error = plan_rotation_update(&update, true, Some(LAMBDA)).expect_err("invalid schedule");
+    let error =
+        plan_rotation_update(&update, true, Some(LAMBDA), None).expect_err("invalid schedule");
 
     assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
 }
@@ -528,11 +529,11 @@ fn rotation_is_turned_off_only_when_it_is_on() {
     let update = SecretRotationUpdate::disable("prod/api");
 
     assert_eq!(
-        plan_rotation_update(&update, true, Some(LAMBDA)).expect("on"),
+        plan_rotation_update(&update, true, Some(LAMBDA), None).expect("on"),
         RotationPlan::Disable
     );
 
-    let error = plan_rotation_update(&update, false, Some(LAMBDA)).expect_err("already off");
+    let error = plan_rotation_update(&update, false, Some(LAMBDA), None).expect_err("already off");
     assert!(error.to_string().contains("not enabled"), "{error}");
 }
 
@@ -624,4 +625,88 @@ fn a_secrets_manager_create_takes_no_type_or_tier_and_a_bounded_description() {
     let nameless = SecretCreateRequest::text("bad name", "create-value-probe");
     let error = validate_create(&nameless).expect_err("a bad name");
     assert!(!error.to_string().contains("create-value-probe"), "{error}");
+}
+
+#[test]
+fn editing_only_the_schedule_keeps_the_existing_window() {
+    let update = SecretRotationUpdate::enable("prod/api", "rate(7 days)");
+
+    let plan = plan_rotation_update(&update, true, Some(LAMBDA), Some("4h")).expect("planned");
+
+    assert_eq!(
+        plan,
+        RotationPlan::Enable {
+            schedule: "rate(7 days)".to_string(),
+            window: Some("4h".to_string()),
+            function: None,
+        }
+    );
+}
+
+#[test]
+fn a_named_window_wins_and_no_window_anywhere_sends_none() {
+    let named = SecretRotationUpdate::enable("prod/api", "rate(7 days)").with_window("2h");
+    let plan = plan_rotation_update(&named, true, Some(LAMBDA), Some("4h")).expect("planned");
+    assert!(matches!(plan, RotationPlan::Enable { window: Some(window), .. } if window == "2h"));
+
+    let bare = SecretRotationUpdate::enable("prod/api", "rate(7 days)");
+    let plan = plan_rotation_update(&bare, true, Some(LAMBDA), None).expect("planned");
+    assert!(matches!(plan, RotationPlan::Enable { window: None, .. }));
+}
+
+#[test]
+fn the_rotation_rules_carry_the_schedule_and_the_window() {
+    let rules = rotation_rules("rate(7 days)".to_string(), Some("4h".to_string()));
+
+    assert_eq!(rules.schedule_expression(), Some("rate(7 days)"));
+    assert_eq!(rules.duration(), Some("4h"));
+}
+
+fn offline_client() -> aws_sdk_secretsmanager::Client {
+    let config = aws_sdk_secretsmanager::config::Builder::new()
+        .behavior_version(aws_sdk_secretsmanager::config::BehaviorVersion::latest())
+        .region(aws_sdk_secretsmanager::config::Region::new("us-east-1"))
+        .credentials_provider(aws_sdk_secretsmanager::config::Credentials::new(
+            "test", "test", None, None, "unit",
+        ))
+        .endpoint_url("http://127.0.0.1:1")
+        .build();
+
+    aws_sdk_secretsmanager::Client::from_conf(config)
+}
+
+#[test]
+fn the_delete_call_carries_the_window_and_never_forces_the_deletion() {
+    let client = offline_client();
+
+    for days in [7, 14, 30] {
+        let request = SecretDeleteRequest::scheduled("prod/api", days);
+        let window = deletion_window(&request).expect("valid window");
+        let call = delete_secret_call(&client, request.name(), window);
+        let input = call.as_input();
+
+        assert_eq!(input.get_secret_id().as_deref(), Some("prod/api"));
+        assert_eq!(*input.get_recovery_window_in_days(), Some(i64::from(days)));
+        assert_eq!(
+            *input.get_force_delete_without_recovery(),
+            None,
+            "force delete is never sent"
+        );
+    }
+}
+
+#[test]
+fn rolling_back_onto_a_pending_rotation_version_is_refused() {
+    let versions = stages(&[
+        ("v-current", &["AWSCURRENT"]),
+        ("v-pending", &["AWSPENDING"]),
+        ("v-old", &[]),
+    ]);
+
+    let error = plan_rollback(&versions, "prod/api", "v-pending")
+        .expect_err("it would promote an unfinished rotation");
+
+    assert!(error.to_string().contains("AWSPENDING"), "{error}");
+    assert!(error.to_string().contains("rotation"), "{error}");
+    plan_rollback(&versions, "prod/api", "v-old").expect("an ordinary version still rolls back");
 }

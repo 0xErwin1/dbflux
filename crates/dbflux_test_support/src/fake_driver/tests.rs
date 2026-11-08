@@ -2075,3 +2075,42 @@ fn the_write_error_knob_fails_a_create_without_creating_anything() {
     assert!(store.describe("prod/denied").is_err());
     assert!(driver.secret_store_calls().mutations.is_empty());
 }
+
+#[test]
+fn rolling_back_onto_a_pending_version_is_refused_and_moves_no_label() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+    store
+        .put_value(
+            &SecretPutRequest::text("prod/api/credentials", "pending-probe")
+                .with_stage(SecretVersionStage::Pending),
+        )
+        .expect("a staged write");
+    let before = labels_of(
+        &store
+            .list_versions("prod/api/credentials")
+            .expect("history"),
+    );
+    let pending = before
+        .iter()
+        .find(|(_, labels)| labels.iter().any(|label| label == "AWSPENDING"))
+        .map(|(id, _)| id.clone())
+        .expect("a pending version exists");
+
+    let error = store
+        .roll_back(&SecretRollbackRequest::new("prod/api/credentials", pending))
+        .expect_err("an unfinished rotation is not a roll back target");
+
+    assert!(error.to_string().contains("AWSPENDING"), "{error}");
+    assert_eq!(
+        labels_of(
+            &store
+                .list_versions("prod/api/credentials")
+                .expect("history")
+        ),
+        before
+    );
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
