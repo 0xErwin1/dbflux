@@ -3613,7 +3613,7 @@ document:
       find: "查找"
       modified: "已修改"
       footer:
-        summary: "UTF-8 · %{size} · 版本 %{version}"
+        version: "版本 %{version}"
         summary_unversioned: "UTF-8 · %{size}"
         changed_one: "已更改 1 行"
         changed_other: "已更改 %{count} 行"

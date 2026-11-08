@@ -5491,7 +5491,10 @@ mod editor_chrome {
         let footer = opened.footer_text();
         assert!(footer.contains("UTF-8"), "{footer}");
         assert!(footer.contains("7 B"), "bytes Save would write: {footer}");
-        assert!(footer.contains(&version), "{footer}");
+        assert!(
+            footer.contains(&crate::secret_store::details::short_version_id(&version)),
+            "{footer}"
+        );
         assert!(footer.contains("2 lines changed"), "{footer}");
         assert!(
             footer.contains("Ln 1, Col 1") || footer.contains("Ln 2, Col"),
@@ -7450,6 +7453,54 @@ mod editor_review {
             assert_eq!(offset, bytes, "caret byte offset");
             assert!(opened.footer_text().contains(column), "{column}");
         }
+    }
+
+    const UUID_VERSION: &str = "2f004766-3e70-4b10-ad74-b8419267a117";
+
+    /// A UUID version reads short in the footer, every item shares one row,
+    /// no line starts with a separator, and the full id is the tooltip.
+    #[gpui::test]
+    fn the_footer_shortens_a_uuid_version_and_stays_on_one_row(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        opened.select(PLAINTEXT_SECRET);
+        opened.show_value("a\nb");
+        opened.update(|doc, _cx| {
+            if let ValueState::Loaded(value) = &mut doc.value {
+                value.version = Some(UUID_VERSION.to_string());
+            }
+        });
+        opened.start_edit();
+        opened.set_editor_text("a\nchanged");
+
+        let footer = opened.footer_text();
+        assert!(footer.contains("2f004766…"), "{footer}");
+        assert!(!footer.contains(UUID_VERSION), "{footer}");
+
+        let tops: Vec<f32> = [
+            "secret-value-editor-footer-summary",
+            "secret-value-editor-footer-version",
+        ]
+        .iter()
+        .map(|id| f32::from(opened.element_bounds(id).origin.y))
+        .collect();
+        assert!(
+            (tops[0] - tops[1]).abs() < 1.5, // guardrail-allow: test tolerance, not spacing
+            "the summary and the version share one row: {tops:?}"
+        );
+
+        // No wrapped line starts with a separator: the first item of each
+        // group is drawn without one.
+        let footer = opened.footer_text();
+        let position = opened
+            .element_text_and_top("secret-value-editor-footer-position")
+            .0;
+        assert!(!position.trim_start().starts_with('·'), "{position}");
+        assert!(!footer.trim_start().starts_with('·'), "{footer}");
+
+        assert_eq!(
+            hover_tooltip(&mut opened, "secret-value-editor-footer-version"),
+            UUID_VERSION
+        );
     }
 
     /// The Formatted hint describes what Save does for both stored layouts.

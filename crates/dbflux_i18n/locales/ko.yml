@@ -3613,7 +3613,7 @@ document:
       find: "찾기"
       modified: "수정됨"
       footer:
-        summary: "UTF-8 · %{size} · 버전 %{version}"
+        version: "버전 %{version}"
         summary_unversioned: "UTF-8 · %{size}"
         changed_one: "1줄 변경됨"
         changed_other: "%{count}줄 변경됨"

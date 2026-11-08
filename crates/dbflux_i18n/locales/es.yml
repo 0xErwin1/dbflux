@@ -3613,7 +3613,7 @@ document:
       find: "Buscar"
       modified: "modificado"
       footer:
-        summary: "UTF-8 · %{size} · versión %{version}"
+        version: "versión %{version}"
         summary_unversioned: "UTF-8 · %{size}"
         changed_one: "1 línea modificada"
         changed_other: "%{count} líneas modificadas"

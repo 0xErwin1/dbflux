@@ -3613,7 +3613,7 @@ document:
       find: "Localizar"
       modified: "modificado"
       footer:
-        summary: "UTF-8 · %{size} · versão %{version}"
+        version: "versão %{version}"
         summary_unversioned: "UTF-8 · %{size}"
         changed_one: "1 linha alterada"
         changed_other: "%{count} linhas alteradas"
