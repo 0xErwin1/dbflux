@@ -131,6 +131,9 @@ struct OperationSpec {
     /// The operation as a noun phrase naming the secret, in policy refusals.
     subject: &'static str,
 
+    /// What the approval refusal says cannot be approved yet.
+    approval_noun: &'static str,
+
     done_summary: &'static str,
     refused_summary: &'static str,
     failed_summary: &'static str,
@@ -141,186 +144,254 @@ struct OperationSpec {
 
 impl SecretOperation {
     const fn spec(self) -> OperationSpec {
+        match self {
+            Self::PutValue => Self::put_value_spec(),
+            Self::RollBack => Self::roll_back_spec(),
+            Self::DeleteScheduled => Self::delete_scheduled_spec(),
+            Self::DeleteIrreversible => Self::delete_irreversible_spec(),
+            Self::Restore => Self::restore_spec(),
+            Self::RotateNow => Self::rotate_now_spec(),
+            Self::EditRotation => Self::edit_rotation_spec(),
+            Self::EditTags => Self::edit_tags_spec(),
+            Self::EditDescription => Self::edit_description_spec(),
+            Self::Create => Self::create_spec(),
+        }
+    }
+
+    const fn put_value_spec() -> OperationSpec {
         let write = SecretStoreCapabilities::WRITE;
 
-        match self {
-            Self::PutValue => OperationSpec {
-                classification: ExecutionClassification::Write,
-                actions: OperationActions {
-                    done: SECRET_VALUE_WRITTEN_ACTION,
-                    refused: SECRET_VALUE_WRITE_REFUSED_ACTION,
-                    failed: SECRET_VALUE_WRITE_FAILED_ACTION,
-                },
-                required: write,
-                verb: "write",
-                subject: "write to \"{name}\"",
-                done_summary: "Wrote a new version of {name} to {store}",
-                refused_summary: "Refused the write to {name} in {store}",
-                failed_summary: "Could not write the value of {name} to {store}",
-                audit_lost: "The write to \"{name}\" landed in {store}, but its audit event could \
-                             not be recorded ({error}). The value cannot be un-written; do not \
-                             retry the write to repair the audit trail.",
+        OperationSpec {
+            classification: ExecutionClassification::Write,
+            actions: OperationActions {
+                done: SECRET_VALUE_WRITTEN_ACTION,
+                refused: SECRET_VALUE_WRITE_REFUSED_ACTION,
+                failed: SECRET_VALUE_WRITE_FAILED_ACTION,
             },
-            Self::RollBack => OperationSpec {
-                classification: ExecutionClassification::Write,
-                actions: OperationActions {
-                    done: "secret_rolled_back",
-                    refused: "secret_rollback_refused",
-                    failed: "secret_rollback_failed",
-                },
-                required: write.union(SecretStoreCapabilities::VERSION_LABELS),
-                verb: "roll back",
-                subject: "roll back of \"{name}\"",
-                done_summary: "Rolled back {name} in {store}",
-                refused_summary: "Refused to roll back {name} in {store}",
-                failed_summary: "Could not roll back {name} in {store}",
-                audit_lost: "The roll back of \"{name}\" landed in {store}, but its audit event \
-                             could not be recorded ({error}). Rolling forward again would move the \
-                             labels a second time and still not repair the audit; do not retry the \
-                             roll back.",
+            required: write,
+            verb: "write",
+            subject: "write to \"{name}\"",
+            approval_noun: "secret value writes",
+            done_summary: "Wrote a new version of {name} to {store}",
+            refused_summary: "Refused the write to {name} in {store}",
+            failed_summary: "Could not write the value of {name} to {store}",
+            audit_lost: "The write to \"{name}\" landed in {store}, but its audit event could \
+                         not be recorded ({error}). The value cannot be un-written; do not \
+                         retry the write to repair the audit trail.",
+        }
+    }
+
+    const fn roll_back_spec() -> OperationSpec {
+        let write = SecretStoreCapabilities::WRITE;
+
+        OperationSpec {
+            classification: ExecutionClassification::Write,
+            actions: OperationActions {
+                done: "secret_rolled_back",
+                refused: "secret_rollback_refused",
+                failed: "secret_rollback_failed",
             },
-            // A recoverable deletion is `Destructive`.
-            Self::DeleteScheduled => OperationSpec {
-                classification: ExecutionClassification::Destructive,
-                actions: OperationActions {
-                    done: "secret_delete_scheduled",
-                    refused: "secret_delete_refused",
-                    failed: "secret_delete_failed",
-                },
-                required: write
-                    .union(SecretStoreCapabilities::DELETE)
-                    .union(SecretStoreCapabilities::SOFT_DELETE),
-                verb: "delete",
-                subject: "deletion of \"{name}\"",
-                done_summary: "Scheduled the deletion of {name} in {store}",
-                refused_summary: "Refused to delete {name} in {store}",
-                failed_summary: "Could not delete {name} in {store}",
-                audit_lost: "The deletion of \"{name}\" landed in {store} and is scheduled, but \
-                             its audit event could not be recorded ({error}). Restore the secret \
-                             to cancel it; do not retry the deletion to repair the audit trail.",
+            required: write.union(SecretStoreCapabilities::VERSION_LABELS),
+            verb: "roll back",
+            subject: "roll back of \"{name}\"",
+            approval_noun: "secret writes",
+            done_summary: "Rolled back {name} in {store}",
+            refused_summary: "Refused to roll back {name} in {store}",
+            failed_summary: "Could not roll back {name} in {store}",
+            audit_lost: "The roll back of \"{name}\" landed in {store}, but its audit event \
+                         could not be recorded ({error}). Rolling forward again would move the \
+                         labels a second time and still not repair the audit; do not retry the \
+                         roll back.",
+        }
+    }
+
+    /// A recoverable deletion is `Destructive`.
+    const fn delete_scheduled_spec() -> OperationSpec {
+        let write = SecretStoreCapabilities::WRITE;
+
+        OperationSpec {
+            classification: ExecutionClassification::Destructive,
+            actions: OperationActions {
+                done: "secret_delete_scheduled",
+                refused: "secret_delete_refused",
+                failed: "secret_delete_failed",
             },
-            // A deletion with no way back is `AdminDestructive`, the class
-            // of dropping a table.
-            Self::DeleteIrreversible => OperationSpec {
-                classification: ExecutionClassification::AdminDestructive,
-                actions: OperationActions {
-                    done: "secret_deleted",
-                    refused: "secret_delete_refused",
-                    failed: "secret_delete_failed",
-                },
-                required: write.union(SecretStoreCapabilities::DELETE),
-                verb: "delete",
-                subject: "deletion of \"{name}\"",
-                done_summary: "Deleted {name} from {store}",
-                refused_summary: "Refused to delete {name} in {store}",
-                failed_summary: "Could not delete {name} in {store}",
-                audit_lost: "The deletion of \"{name}\" landed in {store} and cannot be undone, \
-                             but its audit event could not be recorded ({error}). Do not retry \
-                             the deletion to repair the audit trail.",
+            required: write
+                .union(SecretStoreCapabilities::DELETE)
+                .union(SecretStoreCapabilities::SOFT_DELETE),
+            verb: "delete",
+            subject: "deletion of \"{name}\"",
+            approval_noun: "secret writes",
+            done_summary: "Scheduled the deletion of {name} in {store}",
+            refused_summary: "Refused to delete {name} in {store}",
+            failed_summary: "Could not delete {name} in {store}",
+            audit_lost: "The deletion of \"{name}\" landed in {store} and is scheduled, but \
+                         its audit event could not be recorded ({error}). Restore the secret \
+                         to cancel it; do not retry the deletion to repair the audit trail.",
+        }
+    }
+
+    /// A deletion with no way back is `AdminDestructive`, the class
+    /// of dropping a table.
+    const fn delete_irreversible_spec() -> OperationSpec {
+        let write = SecretStoreCapabilities::WRITE;
+
+        OperationSpec {
+            classification: ExecutionClassification::AdminDestructive,
+            actions: OperationActions {
+                done: "secret_deleted",
+                refused: "secret_delete_refused",
+                failed: "secret_delete_failed",
             },
-            Self::Restore => OperationSpec {
-                classification: ExecutionClassification::Write,
-                actions: OperationActions {
-                    done: "secret_restored",
-                    refused: "secret_restore_refused",
-                    failed: "secret_restore_failed",
-                },
-                required: write.union(SecretStoreCapabilities::SOFT_DELETE),
-                verb: "restore",
-                subject: "restore of \"{name}\"",
-                done_summary: "Restored {name} in {store}",
-                refused_summary: "Refused to restore {name} in {store}",
-                failed_summary: "Could not restore {name} in {store}",
-                audit_lost: "The restore of \"{name}\" landed in {store}, but its audit event \
-                             could not be recorded ({error}). Do not retry the restore to repair \
-                             the audit trail.",
+            required: write.union(SecretStoreCapabilities::DELETE),
+            verb: "delete",
+            subject: "deletion of \"{name}\"",
+            approval_noun: "secret writes",
+            done_summary: "Deleted {name} from {store}",
+            refused_summary: "Refused to delete {name} in {store}",
+            failed_summary: "Could not delete {name} in {store}",
+            audit_lost: "The deletion of \"{name}\" landed in {store} and cannot be undone, \
+                         but its audit event could not be recorded ({error}). Do not retry \
+                         the deletion to repair the audit trail.",
+        }
+    }
+
+    const fn restore_spec() -> OperationSpec {
+        let write = SecretStoreCapabilities::WRITE;
+
+        OperationSpec {
+            classification: ExecutionClassification::Write,
+            actions: OperationActions {
+                done: "secret_restored",
+                refused: "secret_restore_refused",
+                failed: "secret_restore_failed",
             },
-            Self::RotateNow => OperationSpec {
-                classification: ExecutionClassification::Write,
-                actions: OperationActions {
-                    done: "secret_rotation_started",
-                    refused: "secret_rotate_refused",
-                    failed: "secret_rotate_failed",
-                },
-                required: write.union(SecretStoreCapabilities::ROTATION),
-                verb: "rotate",
-                subject: "rotation of \"{name}\"",
-                done_summary: "Started a rotation of {name} in {store}",
-                refused_summary: "Refused to rotate {name} in {store}",
-                failed_summary: "Could not rotate {name} in {store}",
-                audit_lost: "The rotation of \"{name}\" landed in {store} and has started, but its audit event \
-                             could not be recorded ({error}). Do not start it again to repair the \
-                             audit trail: that would create a second version.",
+            required: write.union(SecretStoreCapabilities::SOFT_DELETE),
+            verb: "restore",
+            subject: "restore of \"{name}\"",
+            approval_noun: "secret writes",
+            done_summary: "Restored {name} in {store}",
+            refused_summary: "Refused to restore {name} in {store}",
+            failed_summary: "Could not restore {name} in {store}",
+            audit_lost: "The restore of \"{name}\" landed in {store}, but its audit event \
+                         could not be recorded ({error}). Do not retry the restore to repair \
+                         the audit trail.",
+        }
+    }
+
+    const fn rotate_now_spec() -> OperationSpec {
+        let write = SecretStoreCapabilities::WRITE;
+
+        OperationSpec {
+            classification: ExecutionClassification::Write,
+            actions: OperationActions {
+                done: "secret_rotation_started",
+                refused: "secret_rotate_refused",
+                failed: "secret_rotate_failed",
             },
-            Self::EditRotation => OperationSpec {
-                classification: ExecutionClassification::Write,
-                actions: OperationActions {
-                    done: "secret_rotation_updated",
-                    refused: "secret_rotation_update_refused",
-                    failed: "secret_rotation_update_failed",
-                },
-                required: write.union(SecretStoreCapabilities::ROTATION),
-                verb: "edit the rotation of",
-                subject: "rotation edit of \"{name}\"",
-                done_summary: "Updated the rotation of {name} in {store}",
-                refused_summary: "Refused to update the rotation of {name} in {store}",
-                failed_summary: "Could not update the rotation of {name} in {store}",
-                audit_lost: "The rotation edit of \"{name}\" landed in {store}, but its audit \
-                             event could not be recorded ({error}). Do not repeat the edit to \
-                             repair the audit trail.",
+            required: write.union(SecretStoreCapabilities::ROTATION),
+            verb: "rotate",
+            subject: "rotation of \"{name}\"",
+            approval_noun: "secret writes",
+            done_summary: "Started a rotation of {name} in {store}",
+            refused_summary: "Refused to rotate {name} in {store}",
+            failed_summary: "Could not rotate {name} in {store}",
+            audit_lost: "The rotation of \"{name}\" landed in {store} and has started, but its audit event \
+                         could not be recorded ({error}). Do not start it again to repair the \
+                         audit trail: that would create a second version.",
+        }
+    }
+
+    const fn edit_rotation_spec() -> OperationSpec {
+        let write = SecretStoreCapabilities::WRITE;
+
+        OperationSpec {
+            classification: ExecutionClassification::Write,
+            actions: OperationActions {
+                done: "secret_rotation_updated",
+                refused: "secret_rotation_update_refused",
+                failed: "secret_rotation_update_failed",
             },
-            Self::EditTags => OperationSpec {
-                classification: ExecutionClassification::Write,
-                actions: OperationActions {
-                    done: "secret_tags_updated",
-                    refused: "secret_tags_update_refused",
-                    failed: "secret_tags_update_failed",
-                },
-                required: write.union(SecretStoreCapabilities::TAGS),
-                verb: "edit the tags of",
-                subject: "tag edit of \"{name}\"",
-                done_summary: "Updated the tags of {name} in {store}",
-                refused_summary: "Refused to update the tags of {name} in {store}",
-                failed_summary: "Could not update the tags of {name} in {store}",
-                audit_lost: "The tag edit of \"{name}\" landed in {store}, but its audit event \
-                             could not be recorded ({error}). Do not repeat the edit to repair \
-                             the audit trail.",
+            required: write.union(SecretStoreCapabilities::ROTATION),
+            verb: "edit the rotation of",
+            subject: "rotation edit of \"{name}\"",
+            approval_noun: "secret writes",
+            done_summary: "Updated the rotation of {name} in {store}",
+            refused_summary: "Refused to update the rotation of {name} in {store}",
+            failed_summary: "Could not update the rotation of {name} in {store}",
+            audit_lost: "The rotation edit of \"{name}\" landed in {store}, but its audit \
+                         event could not be recorded ({error}). Do not repeat the edit to \
+                         repair the audit trail.",
+        }
+    }
+
+    const fn edit_tags_spec() -> OperationSpec {
+        let write = SecretStoreCapabilities::WRITE;
+
+        OperationSpec {
+            classification: ExecutionClassification::Write,
+            actions: OperationActions {
+                done: "secret_tags_updated",
+                refused: "secret_tags_update_refused",
+                failed: "secret_tags_update_failed",
             },
-            Self::EditDescription => OperationSpec {
-                classification: ExecutionClassification::Write,
-                actions: OperationActions {
-                    done: "secret_description_updated",
-                    refused: "secret_description_update_refused",
-                    failed: "secret_description_update_failed",
-                },
-                required: write.union(SecretStoreCapabilities::DESCRIPTION),
-                verb: "edit the description of",
-                subject: "description edit of \"{name}\"",
-                done_summary: "Updated the description of {name} in {store}",
-                refused_summary: "Refused to update the description of {name} in {store}",
-                failed_summary: "Could not update the description of {name} in {store}",
-                audit_lost: "The description edit of \"{name}\" landed in {store}, but its audit \
-                             event could not be recorded ({error}). Do not repeat the edit to \
-                             repair the audit trail: a store that rewrites the value to change \
-                             the description would create another version.",
+            required: write.union(SecretStoreCapabilities::TAGS),
+            verb: "edit the tags of",
+            subject: "tag edit of \"{name}\"",
+            approval_noun: "secret writes",
+            done_summary: "Updated the tags of {name} in {store}",
+            refused_summary: "Refused to update the tags of {name} in {store}",
+            failed_summary: "Could not update the tags of {name} in {store}",
+            audit_lost: "The tag edit of \"{name}\" landed in {store}, but its audit event \
+                         could not be recorded ({error}). Do not repeat the edit to repair \
+                         the audit trail.",
+        }
+    }
+
+    const fn edit_description_spec() -> OperationSpec {
+        let write = SecretStoreCapabilities::WRITE;
+
+        OperationSpec {
+            classification: ExecutionClassification::Write,
+            actions: OperationActions {
+                done: "secret_description_updated",
+                refused: "secret_description_update_refused",
+                failed: "secret_description_update_failed",
             },
-            Self::Create => OperationSpec {
-                classification: ExecutionClassification::Write,
-                actions: OperationActions {
-                    done: "secret_created",
-                    refused: "secret_create_refused",
-                    failed: "secret_create_failed",
-                },
-                required: write.union(SecretStoreCapabilities::CREATE),
-                verb: "create",
-                subject: "creation of \"{name}\"",
-                done_summary: "Created {name} in {store}",
-                refused_summary: "Refused to create {name} in {store}",
-                failed_summary: "Could not create {name} in {store}",
-                audit_lost: "The creation of \"{name}\" landed in {store}, but its audit event \
-                             could not be recorded ({error}). The secret exists; do not retry the \
-                             creation to repair the audit trail, because the name is taken now.",
+            required: write.union(SecretStoreCapabilities::DESCRIPTION),
+            verb: "edit the description of",
+            subject: "description edit of \"{name}\"",
+            approval_noun: "secret writes",
+            done_summary: "Updated the description of {name} in {store}",
+            refused_summary: "Refused to update the description of {name} in {store}",
+            failed_summary: "Could not update the description of {name} in {store}",
+            audit_lost: "The description edit of \"{name}\" landed in {store}, but its audit \
+                         event could not be recorded ({error}). Do not repeat the edit to \
+                         repair the audit trail: a store that rewrites the value to change \
+                         the description would create another version.",
+        }
+    }
+
+    const fn create_spec() -> OperationSpec {
+        let write = SecretStoreCapabilities::WRITE;
+
+        OperationSpec {
+            classification: ExecutionClassification::Write,
+            actions: OperationActions {
+                done: "secret_created",
+                refused: "secret_create_refused",
+                failed: "secret_create_failed",
             },
+            required: write.union(SecretStoreCapabilities::CREATE),
+            verb: "create",
+            subject: "creation of \"{name}\"",
+            approval_noun: "secret writes",
+            done_summary: "Created {name} in {store}",
+            refused_summary: "Refused to create {name} in {store}",
+            failed_summary: "Could not create {name} in {store}",
+            audit_lost: "The creation of \"{name}\" landed in {store}, but its audit event \
+                         could not be recorded ({error}). The secret exists; do not retry the \
+                         creation to repair the audit trail, because the name is taken now.",
         }
     }
 
@@ -341,6 +412,10 @@ impl SecretOperation {
 
     fn verb(self) -> &'static str {
         self.spec().verb
+    }
+
+    fn approval_noun(self) -> &'static str {
+        self.spec().approval_noun
     }
 
     fn subject(self, name: &str) -> String {
@@ -740,8 +815,9 @@ fn policy_refusal(
         MutationPolicy::ApprovalRequired => Some((
             "approval_required",
             format!(
-                "Writes on this connection require approval, and approving secret writes \
-                 is not supported yet. The {subject} was refused."
+                "Writes on this connection require approval, and approving {} \
+                 is not supported yet. The {subject} was refused.",
+                operation.approval_noun()
             ),
         )),
     }

@@ -1784,3 +1784,40 @@ fn a_create_records_the_settings_and_tag_keys_and_never_the_value_or_tag_values(
         assert!(!rendered.contains(leaked), "{leaked}");
     }
 }
+
+#[test]
+fn the_approval_refusal_keeps_its_wording_per_operation() {
+    let put = put_secret_value(
+        &OperationStore::new(SecretStoreCapabilities::WRITE),
+        PROFILE,
+        "aws_secrets",
+        MutationPolicy::ApprovalRequired,
+        None,
+        &Sink::default(),
+        &SecretPutRequest::text("prod/token", "probe-value-approval"),
+    )
+    .expect_err("approval-required refuses");
+    assert_eq!(
+        put.to_string(),
+        "Permission denied: Writes on this connection require approval, and approving secret value writes \
+         is not supported yet. The write to \"prod/token\" was refused."
+    );
+
+    let store = OperationStore::new(SecretOperation::RollBack.required_capabilities());
+    let roll_back = roll_back_secret(
+        &context(
+            &store,
+            &Sink::default(),
+            MutationPolicy::ApprovalRequired,
+            None,
+        ),
+        &SecretRollbackRequest::new("prod/token", "v-1"),
+    )
+    .expect_err("approval-required refuses");
+    assert!(
+        roll_back
+            .to_string()
+            .contains("approving secret writes is not supported yet"),
+        "{roll_back}"
+    );
+}
