@@ -4420,7 +4420,7 @@ fn the_landing_refuses_an_answer_asked_of_another_session(cx: &mut TestAppContex
                     generation,
                     name: PLAINTEXT_SECRET,
                     requested_version: None,
-                    session: Some(other),
+                    session: other,
                 },
                 Ok(SecretValue::text(
                     Some("v-1".to_string()),

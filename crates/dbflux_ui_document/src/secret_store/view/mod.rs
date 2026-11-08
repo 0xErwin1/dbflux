@@ -130,7 +130,7 @@ pub struct SecretView {
     /// Cleared when a connection is found again or the selection is reset.
     pub(super) missing_connection_reported: bool,
     /// The deletion state this view's own writes confirmed, by secret name.
-    confirmed_deletions: HashMap<String, deletion::ConfirmedDeletion>,
+    confirmed_deletions: HashMap<String, deletion::Confirmation>,
     /// Whether the profile held a live connection when the view last heard of
     /// a state change. The actions that need one are disabled while it is
     /// false; a path that still reaches the store reports the loss.
@@ -259,6 +259,10 @@ impl SecretView {
     /// Follows the profile's connection coming and going, so the actions that
     /// need it enable and disable with it.
     pub(super) fn sync_connection_presence(&mut self, cx: &mut Context<Self>) {
+        if self.drop_confirmations_of_replaced_session(cx) {
+            cx.notify();
+        }
+
         let present = self.connection(cx).is_some();
 
         if present != self.connection_present {
@@ -351,8 +355,16 @@ impl SecretView {
         refresh_cache: bool,
         cx: &mut Context<Self>,
     ) {
-        if let Some(summary) = &row {
-            self.observe_deletion(summary);
+        self.drop_confirmations_of_replaced_session(cx);
+
+        // A failed page keeps rows it did not just read: they are no
+        // observation.
+        let mut row = row;
+        if let Some(summary) = row.as_mut() {
+            if refresh_cache {
+                self.observe_listed(summary);
+            }
+            self.conform_summary(summary);
         }
 
         if refresh_cache && let Some(summary) = &row {
@@ -421,9 +433,10 @@ impl SecretView {
         cx: &mut Context<Self>,
     ) {
         self.reset_selection(true, cx);
-        self.summary_cache = listing_row.clone();
-        self.listing_row = listing_row;
+        self.summary_cache = None;
+        self.listing_row = None;
         self.name = Some(name.clone());
+        self.set_listing_row(listing_row, true, cx);
         self.describe(name.clone(), cx);
         self.load_versions(name, cx);
     }

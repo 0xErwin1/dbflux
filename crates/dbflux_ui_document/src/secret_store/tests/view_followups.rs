@@ -683,6 +683,202 @@ fn an_explicit_refresh_honors_the_store(cx: &mut TestAppContext) {
     assert!(!opened.pending());
 }
 
+// -- The confirmed deletion, second round --------------------------------------
+
+/// A scheduled delete that lands without a date still scheduled the deletion.
+#[gpui::test]
+fn a_scheduled_delete_without_a_date_is_confirmed(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+
+    opened.update_view(|view, cx| {
+        view.land_delete(
+            KEY_VALUE_SECRET,
+            DeleteKind::Scheduled { window_days: 7 },
+            Landing::Done(dbflux_core::SecretDeletion {
+                deletion_scheduled_for: None,
+            }),
+            cx,
+        )
+    });
+    let stale = opened.stale_row(false);
+    opened.land_stale_listing(stale);
+    opened.land_stale_describe(false);
+
+    assert!(opened.pending());
+    assert!(!opened.read_view(|view| view.can_retrieve_value()));
+    assert!(opened.read_view(|view| view.can_restore_selected()));
+    let text = opened.rendered_text();
+    assert!(!text.contains("1970"), "{text}");
+}
+
+/// An irreversible delete confirms nothing: the secret is gone, not scheduled.
+#[gpui::test]
+fn an_irreversible_delete_confirms_no_scheduled_state(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+
+    opened.update_view(|view, cx| {
+        view.land_delete(
+            KEY_VALUE_SECRET,
+            DeleteKind::Irreversible,
+            Landing::Done(dbflux_core::SecretDeletion::default()),
+            cx,
+        )
+    });
+
+    assert!(!opened.read_view(|view| {
+        view.selected_summary()
+            .is_some_and(|summary| view.is_deletion_pending(summary))
+    }));
+}
+
+/// After a delete, a describe that agrees does not end the override while the
+/// listing still disagrees: a stale listing cannot re-enable the actions.
+#[gpui::test]
+fn an_agreeing_describe_alone_does_not_end_a_confirmed_delete(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.confirm_delete(KEY_VALUE_SECRET);
+
+    opened.land_stale_describe(true);
+    let stale = opened.stale_row(false);
+    opened.land_stale_listing(stale);
+
+    assert!(opened.pending(), "the listing has not agreed yet");
+    assert!(!opened.read_view(|view| view.can_retrieve_value()));
+    assert!(opened.read_view(|view| view.can_restore_selected()));
+    assert!(
+        opened.read_view(|view| matches!(view.versions(), VersionsState::ScheduledForDeletion))
+    );
+
+    let agreeing = opened.stale_row(true);
+    opened.land_stale_listing(agreeing);
+    opened.land_stale_describe(false);
+
+    assert!(
+        !opened.pending(),
+        "both reads agreed, so the store is believed again"
+    );
+}
+
+/// The same after a restore, in the other order: an agreeing listing alone
+/// does not let a stale describe suppress the restored secret.
+#[gpui::test]
+fn an_agreeing_listing_alone_does_not_end_a_confirmed_restore(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    opened.confirm_restore(PENDING_DELETION_SECRET);
+
+    let agreeing = opened.stale_row(false);
+    opened.land_stale_listing(agreeing);
+    opened.land_stale_describe(true);
+
+    assert!(!opened.pending(), "the describe has not agreed yet");
+    assert!(opened.read_view(|view| view.can_retrieve_value()));
+
+    opened.land_stale_describe(false);
+    opened.land_stale_describe(true);
+
+    assert!(
+        opened.pending(),
+        "both reads agreed, so the store is believed"
+    );
+}
+
+/// A confirmed restore conforms the listing row, so no stale scheduled date
+/// is left on it for the row to warn about.
+#[gpui::test]
+fn a_confirmed_restore_conforms_the_listing_row(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    opened.confirm_restore(PENDING_DELETION_SECRET);
+
+    let stale = opened.stale_row(true);
+    opened.land_stale_listing(stale);
+
+    assert_eq!(
+        opened.read_view(|view| view
+            .listed_summary()
+            .and_then(|row| row.deletion_scheduled_for)),
+        None
+    );
+    assert_eq!(
+        opened.read_view(|view| view
+            .selected_summary()
+            .and_then(|row| row.deletion_scheduled_for)),
+        None
+    );
+    let text = opened.rendered_text();
+    assert!(!text.contains("Deletes"), "{text}");
+}
+
+/// A confirmation belongs to the connection session that made it.
+#[gpui::test]
+fn a_session_change_drops_the_confirmed_deletion(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.confirm_delete(KEY_VALUE_SECRET);
+    assert!(opened.pending());
+
+    let _other_account = opened.replace_connection();
+    opened.announce_state_change();
+
+    assert!(
+        !opened.pending(),
+        "the new session's same-named active secret is not scheduled"
+    );
+    assert!(opened.read_view(|view| view.can_retrieve_value()));
+}
+
+/// Selecting a secret conforms its row like a pushed listing row does.
+#[gpui::test]
+fn selecting_a_secret_conforms_its_row_to_a_confirmed_delete(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.confirm_delete(KEY_VALUE_SECRET);
+    let stale = opened.stale_row(false);
+
+    opened.update_view(|view, cx| view.show_secret(KEY_VALUE_SECRET.to_string(), Some(stale), cx));
+
+    assert!(
+        opened
+            .read_view(|view| view
+                .listed_summary()
+                .and_then(|row| row.deletion_scheduled_for))
+            .is_some(),
+        "the row carries the confirmed deletion"
+    );
+    assert!(opened.pending());
+    assert!(!opened.read_view(|view| view.can_retrieve_value()));
+}
+
+/// A retrieval that finds the connection gone before it starts reports that
+/// and records no audit event against an empty driver id.
+#[gpui::test]
+fn a_retrieval_without_a_live_connection_records_no_audit_row(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let before = opened.audit_events().len();
+    // The view has not heard of the disconnect yet.
+    opened.disconnect();
+    assert!(opened.read_view(|view| view.is_connected()));
+
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    opened.window.run_until_parked();
+
+    assert_eq!(opened.audit_events().len(), before, "nothing was retrieved");
+    assert_eq!(opened.reported_errors().len(), 1);
+    assert!(!opened.read_view(|view| matches!(view.value(), ValueState::Loading)));
+}
+
 /// An explicit retrieval command with no connection says why.
 #[gpui::test]
 fn a_retrieval_command_without_a_connection_is_reported_once(cx: &mut TestAppContext) {
