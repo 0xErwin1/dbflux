@@ -750,3 +750,212 @@ fn a_save_from_the_tab_is_pinned_to_its_session(cx: &mut TestAppContext) {
     assert!(replacement.secret_store_calls().put_attempts.is_empty());
     assert_eq!(opened.unread_errors(), 1, "the refusal is reported once");
 }
+
+// -- Layout, as artboards 02 and 06 draw it ----------------------------------
+
+impl Opened<'_> {
+    fn bounds(&mut self, id: &str) -> gpui::Bounds<gpui::Pixels> {
+        self.frame()
+            .nodes()
+            .find(|(_, node)| node.id() == id)
+            .map(|(_, node)| node.bounds())
+            .unwrap_or_else(|| panic!("`{id}` is drawn"))
+    }
+
+    fn text_of(&mut self, id: &str) -> String {
+        self.frame()
+            .nodes()
+            .find(|(_, node)| node.id() == id)
+            .map(|(_, node)| node.content_text().to_string())
+            .unwrap_or_else(|| panic!("`{id}` is drawn"))
+    }
+
+    fn inside(&mut self, id: &str, card: &str) -> bool {
+        let (inner, outer) = (self.bounds(id), self.bounds(card));
+
+        outer.contains(&inner.center())
+    }
+}
+
+/// Two columns of bordered cards: the value and its versions on the left,
+/// the rotation, details and tags in a fixed column on the right.
+#[gpui::test]
+fn the_tab_lays_out_two_columns_of_cards(cx: &mut TestAppContext) {
+    let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+    opened.click("secret-retrieve-value");
+
+    for id in [
+        "secret-document-value-card",
+        "secret-document-versions-card",
+        "secret-document-rotation-card",
+        "secret-document-details-card",
+        "secret-document-tags-card",
+    ] {
+        assert!(opened.is_drawn(id), "`{id}` is drawn");
+    }
+
+    let value = opened.bounds("secret-document-value-card");
+    let versions = opened.bounds("secret-document-versions-card");
+    let rotation = opened.bounds("secret-document-rotation-card");
+    let details = opened.bounds("secret-document-details-card");
+    let tags = opened.bounds("secret-document-tags-card");
+
+    assert_eq!(value.left(), versions.left(), "one left column");
+    assert!(value.bottom() <= versions.top());
+    assert_eq!(rotation.left(), details.left(), "one right column");
+    assert_eq!(details.left(), tags.left());
+    assert!(rotation.bottom() <= details.top() && details.bottom() <= tags.top());
+    assert!(
+        rotation.left() >= value.right(),
+        "the right column sits beside"
+    );
+    assert_eq!(rotation.size.width, gpui::px(470.0)); // guardrail-allow: test geometry, not spacing
+}
+
+/// The value card's title row holds Reveal all, Copy JSON and Edit value; the
+/// switch and the retrieval time sit below; nothing is drawn under the keys
+/// and the tab-only line is the footer's alone.
+#[gpui::test]
+fn the_value_card_keeps_its_actions_in_the_title_row(cx: &mut TestAppContext) {
+    let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+    opened.click("secret-retrieve-value");
+
+    let switch = opened.bounds("segmented-secret-value-view-plaintext");
+    for id in [
+        "secret-value-hide-all",
+        "secret-value-copy-all",
+        "secret-value-edit",
+    ] {
+        assert!(opened.inside(id, "secret-document-value-card"), "{id}");
+        assert!(
+            opened.bounds(id).bottom() <= switch.top(),
+            "`{id}` is above the switch row"
+        );
+    }
+    let last_field = opened.bounds("secret-value-copy-0");
+    assert!(opened.bounds("secret-value-hide-all").bottom() < last_field.top());
+
+    let text = opened.rendered_text();
+    assert!(text.contains("Retrieved"), "{text}");
+    assert_eq!(
+        text.matches("Value visible in this tab only").count(),
+        1,
+        "only the footer says it: {text}"
+    );
+}
+
+/// Roll back is a labelled button in the tab's versions table.
+#[gpui::test]
+fn roll_back_is_a_labelled_button(cx: &mut TestAppContext) {
+    let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+
+    assert_eq!(opened.text_of("secret-version-rollback-1"), "Roll back");
+}
+
+/// The rotation card lists what is known and ends with its two actions; the
+/// details card has the ARN with a copy button and "Edit description" in its
+/// title row; the tags are chips.
+#[gpui::test]
+fn the_side_cards_hold_what_the_artboard_lists(cx: &mut TestAppContext) {
+    let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+
+    for id in ["secret-rotation-edit", "secret-rotation-rotate-now"] {
+        assert!(opened.inside(id, "secret-document-rotation-card"), "{id}");
+    }
+    for id in ["secret-details-edit", "secret-document-details-copy-arn"] {
+        assert!(opened.inside(id, "secret-document-details-card"), "{id}");
+    }
+    assert!(opened.inside("secret-tags-edit", "secret-document-tags-card"));
+
+    let edit_row = opened.bounds("secret-details-edit");
+    let card = opened.bounds("secret-document-details-card");
+    assert!(
+        edit_row.top() < card.top() + gpui::px(48.0), // guardrail-allow: test geometry, not spacing
+        "in the title row"
+    );
+    assert_eq!(opened.text_of("secret-details-edit"), "Edit description");
+
+    let text = opened.rendered_text();
+    for label in [
+        "Status",
+        "Schedule",
+        "Last rotated",
+        "ARN",
+        "Encryption key",
+    ] {
+        assert!(text.contains(label), "{label}: {text}");
+    }
+}
+
+/// The header badge says whether rotation is on, in words.
+#[gpui::test]
+fn the_header_badge_says_rotation_on_or_off(cx: &mut TestAppContext) {
+    let mut on = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+    assert_eq!(on.text_of("secret-document-rotation"), "Rotation on");
+    drop(on);
+
+    let mut off = open_document(cx, PLAINTEXT_SECRET, Some(CURRENT_REGION));
+    assert_eq!(off.text_of("secret-document-rotation"), "Rotation off");
+}
+
+/// The footer hints follow the artboard's order, in lowercase, with the
+/// keymap's own bindings.
+#[gpui::test]
+fn the_footer_hints_follow_the_artboards_order(cx: &mut TestAppContext) {
+    let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+    let text = opened.rendered_text();
+
+    let at = |word: &str| {
+        text.find(word)
+            .unwrap_or_else(|| panic!("`{word}` in the footer: {text}"))
+    };
+    assert!(at("reveal") < at("copy ARN"), "{text}");
+    assert!(at("copy ARN") < at("edit"), "{text}");
+    assert!(at("edit") < at("roll back"), "{text}");
+}
+
+/// While a value is edited the tab is one header row, the editor and a
+/// status bar: no separate toolbar row, no paragraph under the editor.
+#[gpui::test]
+fn the_editing_tab_is_a_header_row_the_editor_and_a_status_bar(cx: &mut TestAppContext) {
+    let mut opened = open_document_with(cx, PLAINTEXT_SECRET, Some(CURRENT_REGION), true);
+    opened.window.simulate_input("!");
+    opened.window.run_until_parked();
+
+    let name = opened.bounds("secret-document-name");
+    for id in [
+        "secret-value-editor-modified",
+        "secret-value-editor-find",
+        "secret-value-editor-discard",
+        "secret-value-editor-save",
+    ] {
+        let bounds = opened.bounds(id);
+        assert!(
+            (bounds.center().y - name.center().y).abs() < gpui::px(24.0), // guardrail-allow: test geometry, not spacing
+            "`{id}` shares the header row"
+        );
+    }
+    assert!(opened.is_drawn("secret-document-subtitle"));
+
+    let editor = opened.bounds("secret-value-editor");
+    let status = opened.bounds("secret-document-editor-status");
+    assert!(editor.bottom() <= status.top() + gpui::px(1.0)); // guardrail-allow: test geometry, not spacing
+    assert!(
+        editor.size.height > gpui::px(300.0), // guardrail-allow: test geometry, not spacing
+        "the editor fills the tab: {editor:?}"
+    );
+    assert!(
+        status.bottom() > opened.bounds("secret-document").bottom() - gpui::px(48.0), // guardrail-allow: test geometry, not spacing
+        "the status bar is at the bottom"
+    );
+
+    let text = opened.rendered_text();
+    assert!(text.contains("Saving creates a new version"), "{text}");
+    assert!(text.contains("1 line changed"), "{text}");
+    assert!(text.contains("Ln "), "{text}");
+    assert!(
+        !text.contains("Saving writes a new version"),
+        "no paragraph: {text}"
+    );
+    assert!(!opened.is_drawn("secret-document-delete"));
+}

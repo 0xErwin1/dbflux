@@ -3430,6 +3430,13 @@ document:
       body: "%{name} pertenece a %{region} y la conexión está en %{live}. Esta pestaña no lee ni escribe nada hasta que la conexión vuelva a %{region}."
     footer:
       value_scope: "Valor visible solo en esta pestaña, se borra al cerrarla"
+      hint:
+        reveal: "mostrar"
+        edit: "editar"
+        roll_back: "revertir"
+    rotation_badge:
+      on: "Rotación activa"
+      off: "Rotación desactivada"
   secret_store:
     title: "%{store} · %{connection}"
     search_placeholder: "La búsqueda se ejecuta en el almacén; los valores nunca se listan"
@@ -3519,6 +3526,7 @@ document:
       every_days: "Cada %{count} días"
       every_hours: "Cada %{count} horas"
       on_schedule: "Según horario"
+      window: "Ventana"
       schedule_with_window: "%{schedule} · ventana %{window} (%{expression})"
       title: "Rotación"
       status: "Estado"
@@ -3652,6 +3660,7 @@ document:
         summary_unversioned: "UTF-8 · %{size}"
         changed_one: "1 línea modificada"
         changed_other: "%{count} líneas modificadas"
+        saving_note: "Guardar crea una versión nueva y la hace actual"
         caret: "Ln %{line}, Col %{column}"
       hint_formatted: "Guardar escribe una versión nueva y la hace la actual. Formateado guarda de nuevo en una sola línea un valor almacenado en una línea, y un valor almacenado en varias líneas tal como está aquí; Sin formato guarda el texto exactamente como está aquí."
       mode:

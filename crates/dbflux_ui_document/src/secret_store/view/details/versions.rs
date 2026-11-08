@@ -22,6 +22,8 @@ const VERSION_CREATED_WIDTH: Rems = ui(118.0);
 /// so the column does not take the room the staging labels need in the
 /// default 380 px pane.
 const VERSION_ACTION_WIDTH: Rems = ui(28.0);
+/// The tab has the room for a labelled Roll back button.
+const VERSION_ACTION_LABELLED_WIDTH: Rems = ui(104.0);
 const HISTORY_VERSION_WIDTH: Rems = ui(44.0);
 const VERSION_HEADER_HEIGHT: Rems = ui(30.0);
 const VERSION_ROW_HEIGHT: Rems = ui(40.0);
@@ -87,6 +89,18 @@ impl SecretView {
             }
         };
 
+        if self.in_tab() {
+            return Some(
+                super::card::card(
+                    "secret-document-versions-card",
+                    header,
+                    vec![div().id("secret-versions").child(body).into_any_element()],
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
+
         Some(
             div()
                 .id("secret-versions")
@@ -122,7 +136,7 @@ impl SecretView {
             .flex()
             .flex_col()
             .when(staged, |table| {
-                table.child(versions_table_header(rollback, cx))
+                table.child(versions_table_header(rollback, self.in_tab(), cx))
             })
             .children(rows)
             .when(rollback, |table| {
@@ -219,7 +233,7 @@ impl SecretView {
     ) -> Stateful<Div> {
         let cell = div()
             .id(SharedString::from(format!("secret-version-{index}-action")))
-            .w(VERSION_ACTION_WIDTH)
+            .w(action_width(self.in_tab()))
             .flex_shrink_0()
             .flex()
             .justify_end();
@@ -231,15 +245,25 @@ impl SecretView {
         cell.child(
             Button::new(
                 SharedString::from(format!("secret-version-rollback-{index}")),
-                dbflux_i18n::t!(
-                    "document.secret_store.rollback.action",
-                    version = short_version_id(&version.id)
-                ),
+                if self.in_tab() {
+                    dbflux_i18n::t!("document.secret_store.rollback.button")
+                } else {
+                    dbflux_i18n::t!(
+                        "document.secret_store.rollback.action",
+                        version = short_version_id(&version.id)
+                    )
+                },
             )
             .ghost()
             .icon(AppIcon::RotateCcw)
-            .icon_only()
+            .when(!self.in_tab(), |button| button.icon_only())
             .tab_stop(false)
+            .when(self.in_tab(), |button| {
+                button.aria_label(dbflux_i18n::t!(
+                    "document.secret_store.rollback.action",
+                    version = short_version_id(&version.id)
+                ))
+            })
             .when(self.version_is_pending(index), |button| {
                 let reason = dbflux_i18n::t!("document.secret_store.rollback.pending_reason");
 
@@ -304,7 +328,7 @@ pub(super) fn versions_count_label(count: usize) -> String {
 }
 
 /// The column titles of the staged table: Version, Staging labels, Created.
-pub(super) fn versions_table_header(with_actions: bool, cx: &App) -> Div {
+pub(super) fn versions_table_header(with_actions: bool, labelled: bool, cx: &App) -> Div {
     let theme = cx.theme();
 
     div()
@@ -348,8 +372,17 @@ pub(super) fn versions_table_header(with_actions: bool, cx: &App) -> Div {
                 )),
         )
         .when(with_actions, |header| {
-            header.child(div().w(VERSION_ACTION_WIDTH).flex_shrink_0())
+            header.child(div().w(action_width(labelled)).flex_shrink_0())
         })
+}
+
+/// The width of the Roll back column: wide enough for the label in the tab.
+fn action_width(labelled: bool) -> Rems {
+    if labelled {
+        VERSION_ACTION_LABELLED_WIDTH
+    } else {
+        VERSION_ACTION_WIDTH
+    }
 }
 
 /// One fixed-width cell of a version row, in the editor face.

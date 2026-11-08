@@ -4,18 +4,20 @@
 //! the one the details pane draws.
 
 use super::SecretView;
-use crate::secret_store::list::rotation_chip;
 use dbflux_app::keymap::ContextId;
 use dbflux_components::controls::Button;
 use dbflux_components::fonts;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Badge, Icon};
+use dbflux_components::primitives::{Badge, BadgeTone, Icon};
 use dbflux_components::tokens::{ChromeColors, DocumentMetrics, SecretStoreMetrics};
 use dbflux_core::SecretStoreCapabilities;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::Scrollbar;
+
+/// Width of the tab's right-hand column of cards.
+const SIDE_COLUMN_WIDTH: Pixels = px(470.0); // guardrail-allow: artboard 02 right column, no token carries 470 px
 
 impl SecretView {
     /// The body of a document of the shown secret. `subtitle` names where it
@@ -32,33 +34,52 @@ impl SecretView {
             return div().flex_1().into_any_element();
         };
 
+        // While a value is edited the editor takes the whole tab.
+        if self.is_editing_value() {
+            return self.render_tab_editor(&summary.name, subtitle, cx);
+        }
+
         let sections = self.detail_sections(&summary, cx);
         let header = self.render_document_header(&summary, subtitle, cx);
-        let editing = self.is_editing_value();
 
-        // The artboard stacks the sections in one column, in this order.
-        let column: Vec<AnyElement> = if editing {
-            vec![sections.value]
-        } else {
-            [
-                Some(sections.value),
-                sections.managed,
-                sections.status,
-                sections.versions,
-                sections.rotation,
-                sections.metadata,
-                sections.tags,
-            ]
+        // The artboard's two columns: the value and its versions on the left,
+        // the rotation, details and tags in a fixed column on the right.
+        let left: Vec<AnyElement> = [
+            Some(sections.value),
+            sections.managed,
+            sections.status,
+            sections.versions,
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let right: Vec<AnyElement> = [sections.rotation, sections.metadata, sections.tags]
             .into_iter()
             .flatten()
-            .collect()
+            .collect();
+
+        let column = |id: &'static str, sections: Vec<AnyElement>| {
+            div()
+                .id(id)
+                .flex()
+                .flex_col()
+                .min_w_0()
+                .gap(SecretStoreMetrics::SECTION_GAP)
+                .children(sections)
         };
         let columns = div()
             .id("secret-document-sections")
             .flex()
-            .flex_col()
+            .items_start()
             .gap(SecretStoreMetrics::SECTION_GAP)
-            .children(column);
+            .child(column("secret-document-main", left).flex_1())
+            .when(!right.is_empty(), |columns| {
+                columns.child(
+                    column("secret-document-side", right)
+                        .w(SIDE_COLUMN_WIDTH)
+                        .flex_shrink_0(),
+                )
+            });
 
         div()
             .flex_1()
@@ -100,10 +121,26 @@ impl SecretView {
         let danger = theme.danger;
         let strong = ChromeColors::strong(theme);
         let muted = theme.muted_foreground;
+        let rotating = summary
+            .rotation
+            .as_ref()
+            .is_some_and(|rotation| rotation.enabled);
         let chip = self
             .store
             .supports(SecretStoreCapabilities::ROTATION)
-            .then(|| rotation_chip(summary.rotation.as_ref()));
+            .then(|| {
+                if rotating {
+                    (
+                        dbflux_i18n::t!("document.secret.rotation_badge.on"),
+                        BadgeTone::Success,
+                    )
+                } else {
+                    (
+                        dbflux_i18n::t!("document.secret.rotation_badge.off"),
+                        BadgeTone::Neutral,
+                    )
+                }
+            });
         let has_resource_id = !self.hierarchical();
 
         div()
@@ -146,7 +183,7 @@ impl SecretView {
                     ),
             )
             .children(
-                chip.map(|chip| Badge::new(chip.label, chip.tone).id("secret-document-rotation")),
+                chip.map(|(label, tone)| Badge::new(label, tone).id("secret-document-rotation")),
             )
             .when(has_resource_id, |header| {
                 header.child(

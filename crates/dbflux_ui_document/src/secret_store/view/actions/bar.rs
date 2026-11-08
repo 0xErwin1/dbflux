@@ -15,6 +15,11 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 
 impl SecretView {
+    /// Whether the store takes writes, so Edit value is something to offer.
+    pub(crate) fn supports_value_edit(&self) -> bool {
+        self.store_allows(SecretStoreCapabilities::WRITE)
+    }
+
     /// Whether Edit value may be pressed: the secret takes writes, no editor
     /// or dialog is open, and the value is either loaded as text or can be
     /// retrieved first.

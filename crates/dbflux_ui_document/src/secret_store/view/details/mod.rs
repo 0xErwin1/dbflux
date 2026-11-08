@@ -1,6 +1,7 @@
 //! The details pane of a `SecretView`: the selected secret's value
 //! section, its details, its rotation and its tags.
 
+mod card;
 mod document;
 pub(super) mod resize;
 mod sections;
@@ -54,39 +55,6 @@ pub(in crate::secret_store) fn rotate_with_reason(button: Button, reason: String
             dbflux_i18n::t!("document.secret_store.rotate.button")
         ))
         .tooltip(reason)
-}
-
-/// A section whose title row ends with an action button, such as the Edit of
-/// Details and Tags.
-pub(super) fn section_with_action(
-    title: String,
-    action: Option<AnyElement>,
-    rows: Vec<AnyElement>,
-    cx: &App,
-) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(SecretStoreMetrics::ROW_GAP)
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(DocumentMetrics::GAP)
-                .child(section_title(title, cx))
-                .child(div().flex_1())
-                .children(action),
-        )
-        .children(rows)
-}
-
-pub(super) fn section(title: String, rows: Vec<AnyElement>, cx: &App) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(SecretStoreMetrics::ROW_GAP)
-        .child(section_title(title, cx))
-        .children(rows)
 }
 
 /// One `label  value` row of a details section, the value in mono.
@@ -424,13 +392,15 @@ impl SecretView {
         &self,
         details: &SecretDetails,
         cx: &mut Context<Self>,
-    ) -> Div {
+    ) -> AnyElement {
         let rows = self.metadata_rows(details, cx);
         let edit = self.edit_description_action(cx);
 
-        section_with_action(
+        self.framed_section(
+            "secret-document-details-card",
             dbflux_i18n::t!("document.secret_store.details.title"),
-            edit,
+            None,
+            edit.into_iter().collect(),
             rows,
             cx,
         )
@@ -439,7 +409,7 @@ impl SecretView {
     /// One row per fact the describe reported: the deletion state first when
     /// one is scheduled, then the identifier, the typed-store fields and the
     /// change dates.
-    fn metadata_rows(&self, details: &SecretDetails, cx: &App) -> Vec<AnyElement> {
+    fn metadata_rows(&self, details: &SecretDetails, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let summary = &details.summary;
         let typed = self.store.supports(SecretStoreCapabilities::TYPED_VALUES);
         let label = |key: &str| dbflux_i18n::t!(key);
@@ -465,11 +435,12 @@ impl SecretView {
             }
         }
 
-        rows.push(detail_row(
+        let resource_id = detail_row(
             label("document.secret_store.details.resource_id"),
             or_unknown(details.resource_id.as_deref()),
             cx,
-        ));
+        );
+        rows.push(self.resource_id_row(resource_id, details.resource_id.is_some(), cx));
 
         if typed {
             rows.push(detail_row(
@@ -489,16 +460,23 @@ impl SecretView {
             ));
         }
 
-        rows.push(detail_row(
+        let encryption_key = detail_row(
             label("document.secret_store.details.encryption_key"),
             or_unknown(details.encryption_key.as_deref()),
             cx,
-        ));
-        rows.push(detail_row(
+        );
+        let description = detail_row(
             label("document.secret_store.details.description"),
             or_unknown(summary.description.as_deref()),
             cx,
-        ));
+        );
+
+        // The tab lists the description before the key, as its artboard does.
+        if self.in_tab() {
+            rows.extend([description, encryption_key]);
+        } else {
+            rows.extend([encryption_key, description]);
+        }
 
         if typed {
             rows.push(detail_row(
@@ -517,11 +495,13 @@ impl SecretView {
                 format_optional_time(details.created),
                 cx,
             ));
-            rows.push(detail_row(
-                label("document.secret_store.details.last_changed"),
-                last_changed_label(details),
-                cx,
-            ));
+            if !self.in_tab() {
+                rows.push(detail_row(
+                    label("document.secret_store.details.last_changed"),
+                    last_changed_label(details),
+                    cx,
+                ));
+            }
             rows.push(detail_row(
                 label("document.secret_store.details.last_retrieved"),
                 last_retrieved_label(details.last_accessed),
@@ -530,6 +510,36 @@ impl SecretView {
         }
 
         rows
+    }
+
+    /// The ARN row, with a copy button beside it in the tab.
+    fn resource_id_row(
+        &self,
+        row: AnyElement,
+        has_resource_id: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if !self.in_tab() || !has_resource_id {
+            return row;
+        }
+
+        div()
+            .flex()
+            .items_center()
+            .gap(DocumentMetrics::GAP)
+            .child(div().flex_1().min_w_0().child(row))
+            .child(
+                Button::new(
+                    "secret-document-details-copy-arn",
+                    dbflux_i18n::t!("document.secret_store.action.copy_resource_id"),
+                )
+                .ghost()
+                .icon(AppIcon::Copy)
+                .icon_only()
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| this.copy_resource_id(cx))),
+            )
+            .into_any_element()
     }
 
     /// The Edit button of the Details section, for a store that changes the

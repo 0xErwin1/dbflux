@@ -99,6 +99,9 @@ impl SecretDocument {
                 .shortcut_for_command(ContextId::Results, command)
                 .map(|shortcut| footer_key_hint(shortcut, dbflux_i18n::t!(key)))
         };
+        let view = self.view.read(cx);
+        let writable = view.supports_value_edit();
+        let rolls_back = view.supports_roll_back();
 
         document_footer(cx)
             .child(
@@ -108,14 +111,23 @@ impl SecretDocument {
                 ),
             )
             .children(hint(
-                Command::ToggleValuePanel,
-                "document.secret_store.footer.hint.retrieve",
+                Command::ExpandCollapse,
+                "document.secret.footer.hint.reveal",
             ))
             .children(hint(
                 Command::ResultsCopyCell,
                 "document.secret_store.footer.hint.copy_arn",
             ))
-            .children(hint(Command::EditValue, "document.secret_store.edit.open"))
+            .children(
+                hint(Command::EditValue, "document.secret.footer.hint.edit").filter(|_| writable),
+            )
+            .children(
+                hint(
+                    Command::RollBackVersion,
+                    "document.secret.footer.hint.roll_back",
+                )
+                .filter(|_| rolls_back),
+            )
     }
 }
 

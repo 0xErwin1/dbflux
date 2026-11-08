@@ -3430,6 +3430,13 @@ document:
       body: "%{name}은(는) %{region}에 속하지만 연결은 %{live}에 있습니다. 연결이 다시 %{region}으로 돌아올 때까지 이 탭에서는 아무것도 읽거나 쓰지 않습니다."
     footer:
       value_scope: "값은 이 탭에서만 표시되며 닫으면 지워집니다"
+      hint:
+        reveal: "표시"
+        edit: "편집"
+        roll_back: "롤백"
+    rotation_badge:
+      on: "교체 켜짐"
+      off: "교체 꺼짐"
   secret_store:
     title: "%{store} · %{connection}"
     search_placeholder: "검색은 저장소에서 실행되며 값은 나열되지 않습니다"
@@ -3519,6 +3526,7 @@ document:
       every_days: "%{count}일마다"
       every_hours: "%{count}시간마다"
       on_schedule: "일정에 따름"
+      window: "기간"
       schedule_with_window: "%{schedule} · 기간 %{window} (%{expression})"
       title: "교체"
       status: "상태"
@@ -3652,6 +3660,7 @@ document:
         summary_unversioned: "UTF-8 · %{size}"
         changed_one: "1줄 변경됨"
         changed_other: "%{count}줄 변경됨"
+        saving_note: "저장하면 새 버전이 만들어지고 현재 버전이 됩니다"
         caret: "%{line}행, %{column}열"
       hint_formatted: "저장하면 새 버전이 기록되고 현재 버전이 됩니다. 서식 보기는 한 줄로 저장된 값은 다시 한 줄로, 여러 줄로 저장된 값은 여기 있는 그대로 저장하며, 원본 보기는 여기 있는 텍스트를 그대로 저장합니다."
       mode:

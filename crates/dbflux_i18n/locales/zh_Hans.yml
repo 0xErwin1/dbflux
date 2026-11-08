@@ -3430,6 +3430,13 @@ document:
       body: "%{name} 属于 %{region}，而连接位于 %{live}。在连接回到 %{region} 之前，此标签页不会读取或写入任何内容。"
     footer:
       value_scope: "值仅在此标签页中可见，关闭时清除"
+      hint:
+        reveal: "显示"
+        edit: "编辑"
+        roll_back: "回滚"
+    rotation_badge:
+      on: "轮换已开启"
+      off: "轮换已关闭"
   secret_store:
     title: "%{store} · %{connection}"
     search_placeholder: "搜索在存储端执行，绝不会列出值"
@@ -3519,6 +3526,7 @@ document:
       every_days: "每 %{count} 天"
       every_hours: "每 %{count} 小时"
       on_schedule: "按计划"
+      window: "时间窗口"
       schedule_with_window: "%{schedule} · 时间窗口 %{window}（%{expression}）"
       title: "轮换"
       status: "状态"
@@ -3652,6 +3660,7 @@ document:
         summary_unversioned: "UTF-8 · %{size}"
         changed_one: "已更改 1 行"
         changed_other: "已更改 %{count} 行"
+        saving_note: "保存会创建新版本并将其设为当前版本"
         caret: "第 %{line} 行，第 %{column} 列"
       hint_formatted: "保存会写入新版本并将其设为当前版本。格式化视图会把原本为单行的值还原为单行，把原本为多行的值按此处文本保存；原始视图按此处文本原样保存。"
       mode:

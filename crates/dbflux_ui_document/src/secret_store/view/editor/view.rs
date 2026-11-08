@@ -75,19 +75,44 @@ impl SecretView {
             .flex_col()
             .gap(SecretStoreMetrics::ROW_GAP)
             .child(self.render_editor_header(cx))
-            .child(self.render_editor_body(&editor, &changes, cx))
+            .child(self.render_editor_body(&editor, &changes, false, cx))
             .child(self.render_editor_footer(&editor, &changes, write_size, cx))
             .child(Text::caption(dbflux_i18n::t!(hint_key)).muted_foreground())
     }
 
     fn render_editor_header(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(DocumentMetrics::GAP)
+            .children(self.editor_modified_badge(cx))
+            .child(div().flex_1())
+            .child(self.render_editor_actions(cx))
+    }
+
+    /// The "modified" badge, while the text differs from the stored one.
+    fn editor_modified_badge(&self, cx: &App) -> Option<AnyElement> {
+        let edit = self.value_edit.as_ref()?;
+
+        edit.is_changed(cx).then(|| {
+            Badge::new(
+                dbflux_i18n::t!("document.secret_store.edit.modified"),
+                BadgeTone::Warning,
+            )
+            .id("secret-value-editor-modified")
+            .into_any_element()
+        })
+    }
+
+    /// The editor's controls: Formatted | Raw, Find, Discard and Save.
+    fn render_editor_actions(&self, cx: &mut Context<Self>) -> Div {
         let Some(edit) = &self.value_edit else {
             return div();
         };
 
         let unchanged = !edit.is_changed(cx);
         let saving = edit.saving;
-        let modified = !unchanged;
         let toggle = self
             .edit_mode()
             .map(|mode| self.render_edit_mode_toggle(mode, saving, cx));
@@ -109,19 +134,8 @@ impl SecretView {
 
         div()
             .flex()
-            .flex_wrap()
             .items_center()
             .gap(DocumentMetrics::GAP)
-            .when(modified, |header| {
-                header.child(
-                    Badge::new(
-                        dbflux_i18n::t!("document.secret_store.edit.modified"),
-                        BadgeTone::Warning,
-                    )
-                    .id("secret-value-editor-modified"),
-                )
-            })
-            .child(div().flex_1())
             .when_some(toggle, |header, toggle| header.child(toggle))
             .child(
                 Button::new(
@@ -197,6 +211,7 @@ impl SecretView {
         &self,
         editor: &Entity<TextareaState>,
         changes: &LineChanges,
+        bleed: bool,
         cx: &App,
     ) -> Div {
         let theme = cx.theme();
@@ -213,19 +228,27 @@ impl SecretView {
         let tint = render_change_tint(changes, &rows, warning);
         let gutter = render_line_gutter(changes, &rows, muted, warning);
 
+        // In the tab the editor fills the room it is given, edge to edge: no
+        // frame and no padding, and the textarea scrolls itself.
         div()
             .relative()
-            .px(DocumentMetrics::DETAIL_BLOCK_PADDING_X)
-            .py(DocumentMetrics::DETAIL_BLOCK_PADDING_Y)
+            .when(bleed, |body| body.size_full())
+            .when(!bleed, |body| {
+                body.px(DocumentMetrics::DETAIL_BLOCK_PADDING_X)
+                    .py(DocumentMetrics::DETAIL_BLOCK_PADDING_Y)
+            })
             .font_family(fonts::editor_family(cx))
             .text_size(DocumentMetrics::DETAIL_BLOCK_FONT)
             .line_height(relative(DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT))
             .text_color(foreground)
-            .child(Chamfer::new(ChamferCut::INPUT).fill(fill).border(border))
+            .when(!bleed, |body| {
+                body.child(Chamfer::new(ChamferCut::INPUT).fill(fill).border(border))
+            })
             .child(
                 div()
                     .relative()
                     .flex()
+                    .when(bleed, |inner| inner.size_full())
                     .when_some(focus, |block, focus| block.track_focus(&focus))
                     .child(
                         canvas(
@@ -249,6 +272,7 @@ impl SecretView {
                             .id("secret-value-editor")
                             .flex_1()
                             .min_w_0()
+                            .when(bleed, |editor| editor.h_full())
                             .aria_hidden(true)
                             .frame_redacted(true)
                             .child(
@@ -279,7 +303,11 @@ impl SecretView {
         // Only the rows the viewport can show are drawn, however long the
         // value is; the margin covers the frame the scroll lags behind.
         let first_row = (-offset / line_height).floor().max(0.0) as usize;
-        let last_row = (first_row + VIEWER_VISIBLE_LINES as usize + 2).min(line_count);
+        let shown_rows = match state.input_bounds().size.height {
+            height if height > px(0.0) => (height / line_height).ceil() as usize,
+            _ => VIEWER_VISIBLE_LINES as usize,
+        };
+        let last_row = (first_row + shown_rows + 2).min(line_count);
         let first_row = first_row.min(last_row);
         let rows_top = offset + line_height * first_row as f32;
         let origin = self
@@ -580,4 +608,204 @@ fn footer_version(version: String) -> Stateful<Div> {
             gpui_component::tooltip::Tooltip::new(version.clone()).build(window, cx)
         })
         .child(format!("· {label}"))
+}
+
+impl SecretView {
+    /// The tab while a value is edited, as artboard 06 draws it: one header
+    /// row (name, type, where it lives, "modified", and the controls), the
+    /// editor taking the rest of the tab, and a status bar. Nothing else.
+    pub(in crate::secret_store) fn render_tab_editor(
+        &self,
+        name: &str,
+        subtitle: String,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(edit) = &self.value_edit else {
+            return div().flex_1().into_any_element();
+        };
+
+        let editor = edit.editor.clone();
+        let text = editor.read(cx).value().to_string();
+        let line_count = text.split('\n').count();
+        let changes = if edit.is_changed(cx) {
+            changed_lines(&edit.baseline_for_mode(), &text)
+        } else {
+            LineChanges::unchanged(line_count)
+        };
+        let write_size = edit.text_to_write(&text).len();
+
+        let theme = cx.theme();
+        let border = theme.border;
+        let warning = theme.warning;
+        let muted = theme.muted_foreground;
+        let strong = dbflux_components::tokens::ChromeColors::strong(theme);
+        let kind = self.value_kind_label();
+
+        let header = div()
+            .id("secret-document-header")
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(DocumentMetrics::GAP)
+            .px(SecretStoreMetrics::DETAILS_PADDING_X)
+            .py(SecretStoreMetrics::DETAILS_PADDING_Y)
+            .border_b_1()
+            .border_color(border)
+            .child(
+                dbflux_components::primitives::Icon::new(AppIcon::KeyRound)
+                    .size(DocumentMetrics::TITLE_ICON)
+                    .color(warning),
+            )
+            .child(
+                div()
+                    .id("secret-document-name")
+                    .truncate()
+                    .font_family(fonts::editor_family(cx))
+                    .font_weight(FontWeight::BOLD)
+                    .text_size(SecretStoreMetrics::NAME_FONT)
+                    .text_color(strong)
+                    .child(name.to_string()),
+            )
+            .children(kind.map(|kind| Badge::new(kind, BadgeTone::Accent).id("secret-value-kind")))
+            .child(
+                div()
+                    .id("secret-document-subtitle")
+                    .min_w_0()
+                    .truncate()
+                    .text_size(DocumentMetrics::TABLE_META_FONT)
+                    .text_color(muted)
+                    .child(subtitle),
+            )
+            .children(self.editor_modified_badge(cx))
+            .child(div().flex_1())
+            .child(self.render_editor_actions(cx));
+
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.render_editor_body(&editor, &changes, true, cx)),
+            )
+            .child(self.render_tab_editor_status(&editor, &changes, write_size, cx))
+            .into_any_element()
+    }
+
+    /// The status bar of the tab's editor: type, encoding, size and version
+    /// (with the labels it holds), the changed lines, what saving does, and
+    /// the caret on the right. Counts and ids only, never the text.
+    fn render_tab_editor_status(
+        &self,
+        editor: &Entity<TextareaState>,
+        changes: &LineChanges,
+        write_size: usize,
+        cx: &App,
+    ) -> Stateful<Div> {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let border = theme.border;
+        let family = fonts::editor_family(cx);
+
+        let kind = self
+            .value_kind_label()
+            .map(|label| label.split(" · ").next().unwrap_or_default().to_string());
+        let summary = dbflux_i18n::t!(
+            "document.secret_store.edit.footer.summary_unversioned",
+            size = format_bytes(write_size as u64)
+        );
+        let version = match &self.value {
+            ValueState::Loaded(value) => value.version.clone(),
+            _ => None,
+        };
+        let labels = version.as_deref().and_then(|id| self.version_labels_of(id));
+
+        let caret = editor.read(cx).cursor_position();
+        let caret_label = dbflux_i18n::t!(
+            "document.secret_store.edit.footer.caret",
+            line = (caret.line + 1).to_string(),
+            column = (caret.character + 1).to_string()
+        );
+
+        let separated = |id: &'static str, text: String| {
+            div().id(id).whitespace_nowrap().child(format!("· {text}"))
+        };
+
+        div()
+            .id("secret-document-editor-status")
+            .flex()
+            .flex_shrink_0()
+            .flex_wrap()
+            .items_center()
+            .gap(DocumentMetrics::GAP)
+            .px(SecretStoreMetrics::DETAILS_PADDING_X)
+            .py(SecretStoreMetrics::DETAILS_PADDING_Y)
+            .border_t_1()
+            .border_color(border)
+            .text_size(DocumentMetrics::TABLE_META_FONT)
+            .text_color(muted)
+            .children(kind.map(|kind| div().id("secret-document-editor-kind").child(kind)))
+            .child(separated("secret-value-editor-footer-summary", summary))
+            .when_some(version, |status, version| {
+                status.child(footer_version_with_labels(version, labels))
+            })
+            .children(
+                changed_lines_label(changes.changed())
+                    .map(|label| separated("secret-value-editor-footer-changes", label)),
+            )
+            .child(separated(
+                "secret-document-editor-saving-note",
+                dbflux_i18n::t!("document.secret_store.edit.footer.saving_note"),
+            ))
+            .child(div().flex_1())
+            .child(
+                div()
+                    .id("secret-value-editor-footer-caret")
+                    .font_family(family)
+                    .child(caret_label),
+            )
+    }
+
+    /// The staging labels the history holds for `version`, joined, when it
+    /// has any.
+    fn version_labels_of(&self, version: &str) -> Option<String> {
+        let crate::secret_store::VersionsState::Loaded(versions) = &self.versions else {
+            return None;
+        };
+
+        versions
+            .iter()
+            .find(|candidate| candidate.id == version)
+            .filter(|candidate| !candidate.labels.is_empty())
+            .map(|candidate| candidate.labels.join(", "))
+    }
+}
+
+/// [`footer_version`] with the version's labels after it: "· version a41c09e2
+/// (AWSCURRENT)".
+fn footer_version_with_labels(version: String, labels: Option<String>) -> Stateful<Div> {
+    let short = if version.parse::<u64>().is_ok() {
+        crate::secret_store::render::version_label(Some(&version))
+    } else {
+        crate::secret_store::view::details::short_version_id(&version)
+    };
+    let label = dbflux_i18n::t!("document.secret_store.edit.footer.version", version = short);
+    let text = match labels {
+        Some(labels) => format!("· {label} ({labels})"),
+        None => format!("· {label}"),
+    };
+
+    div()
+        .id("secret-value-editor-footer-version")
+        .role(gpui::accesskit::Role::Label)
+        .aria_label(version.clone())
+        .tooltip(move |window, cx| {
+            gpui_component::tooltip::Tooltip::new(version.clone()).build(window, cx)
+        })
+        .whitespace_nowrap()
+        .child(text)
 }

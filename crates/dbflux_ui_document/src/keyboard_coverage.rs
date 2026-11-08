@@ -660,6 +660,10 @@ pub(crate) const SECRET_DOCUMENT: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::ResultsCopyCell),
         ),
         (
+            "secret-document-details-copy-arn",
+            KeyboardPath::Command(Command::ResultsCopyCell),
+        ),
+        (
             "secret-document-refresh",
             KeyboardPath::Command(Command::RefreshSchema),
         ),
