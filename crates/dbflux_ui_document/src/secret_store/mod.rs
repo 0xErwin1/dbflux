@@ -1297,12 +1297,16 @@ impl SecretStoreDocument {
         // Rotate now and Edit rotation are buttons of the Rotation section,
         // the bottom bar and the row menu.
         if self.supports_rotation() && matches!(self.selected, Some(SecretRowKey::Secret(_))) {
+            let rotate_target = target.clone();
             actions.push(
-                callback_action(
-                    &target,
+                PaneAction::callback(
                     "secret-rotate-now",
-                    "document.secret_store.rotate.button",
-                    Self::rotate_selected_now,
+                    dbflux_i18n::t!("document.secret_store.rotate.button"),
+                    move |window, cx| {
+                        if let Some(doc) = rotate_target.upgrade() {
+                            doc.update(cx, |doc, cx| doc.rotate_selected_now(window, cx));
+                        }
+                    },
                 )
                 .icon(AppIcon::Zap)
                 .enabled(self.can_rotate_now()),

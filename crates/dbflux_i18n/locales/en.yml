@@ -3689,6 +3689,10 @@ document:
       refused_off: "Rotation is off for %{name}. Turn it on with Edit rotation before rotating."
       done: "Started a rotation of %{name}"
       done_version: "Started a rotation of %{name}; version %{version} is the new current version"
+      title: "Rotate %{name} now"
+      lead: "Rotate %{name} now?"
+      effect: "This runs the secret's rotation function now and creates a new current version. Applications that read the secret receive the rotated value as soon as the rotation finishes."
+      confirm: "Rotate now"
     rotation_edit:
       button: "Edit rotation"
       title: "Edit rotation of %{name}"

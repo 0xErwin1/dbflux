@@ -45,7 +45,7 @@ pub(super) use create::CreateDialog;
 pub(super) use delete::{DeleteDialog, DeleteKind};
 pub(super) use description::DescriptionDialog;
 pub(super) use rollback::RollBackDialog;
-pub(super) use rotation::{RotationDialog, RotationNotice};
+pub(super) use rotation::{RotateNowDialog, RotationDialog, RotationNotice};
 pub(super) use tags::TagsDialog;
 
 /// The dialog open over the document, if any. Only one is ever open: a
@@ -54,6 +54,7 @@ pub(super) enum WriteDialog {
     RollBack(RollBackDialog),
     Delete(DeleteDialog),
     Rotation(RotationDialog),
+    RotateNow(RotateNowDialog),
     Tags(TagsDialog),
     Description(DescriptionDialog),
     Create(CreateDialog),
@@ -447,6 +448,7 @@ impl SecretStoreDocument {
             Some(WriteDialog::RollBack(_)) => self.submit_roll_back(window, cx),
             Some(WriteDialog::Delete(_)) => self.submit_delete(window, cx),
             Some(WriteDialog::Rotation(_)) => self.submit_rotation(window, cx),
+            Some(WriteDialog::RotateNow(_)) => self.submit_rotate_now(window, cx),
             Some(WriteDialog::Tags(_)) => self.submit_tags(window, cx),
             Some(WriteDialog::Description(_)) => self.submit_description(window, cx),
             Some(WriteDialog::Create(_)) => self.submit_create(window, cx),
@@ -461,6 +463,7 @@ impl SecretStoreDocument {
             WriteDialog::RollBack(dialog) => self.render_roll_back_dialog(dialog, cx),
             WriteDialog::Delete(dialog) => self.render_delete_dialog(dialog, cx),
             WriteDialog::Rotation(dialog) => self.render_rotation_dialog(dialog, cx),
+            WriteDialog::RotateNow(dialog) => self.render_rotate_now_dialog(dialog, cx),
             WriteDialog::Tags(dialog) => self.render_tags_dialog(dialog, cx),
             WriteDialog::Description(dialog) => self.render_description_dialog(dialog, cx),
             WriteDialog::Create(dialog) => self.render_create_dialog(dialog, cx),

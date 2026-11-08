@@ -22,7 +22,7 @@ use crate::secret_store::write::{rotate_secret_now, update_secret_rotation};
 use crate::secret_store::{DetailsState, SecretRowKey, SecretStoreDocument};
 use dbflux_components::controls::{Checkbox, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::parts::modal_field;
+use dbflux_components::modals::parts::{modal_field, modal_lead};
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::ModalMetrics;
 use dbflux_core::{
@@ -44,6 +44,11 @@ pub(in crate::secret_store) struct RotationNotice {
 
     /// The version that still holds the pending stage.
     pub version: String,
+}
+
+/// The confirmation of one Rotate now.
+pub(in crate::secret_store) struct RotateNowDialog {
+    pub name: String,
 }
 
 /// The Edit rotation dialog.
@@ -181,7 +186,7 @@ impl SecretStoreDocument {
 
     /// Starts a rotation of the selected secret now. Refused, with the
     /// reason and without calling the store, when its rotation is off.
-    pub fn rotate_selected_now(&mut self, cx: &mut Context<Self>) {
+    pub fn rotate_selected_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_start_rotation_action() {
             return;
         }
@@ -205,6 +210,26 @@ impl SecretStoreDocument {
             return;
         }
 
+        self.open_dialog(
+            WriteDialog::RotateNow(RotateNowDialog { name }),
+            None,
+            window,
+            cx,
+        );
+    }
+
+    /// Starts the rotation the dialog confirmed, through the seam.
+    pub(in crate::secret_store) fn submit_rotate_now(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(WriteDialog::RotateNow(dialog)) = &self.dialog else {
+            return;
+        };
+
+        let name = dialog.name.clone();
+
         let Some(session) = self.write_session(cx) else {
             return;
         };
@@ -227,6 +252,7 @@ impl SecretStoreDocument {
     ) {
         match landing {
             Landing::Done(start) => {
+                self.dismiss_dialog(cx);
                 self.rotation_notice = None;
 
                 let message = match start.version {
@@ -242,11 +268,66 @@ impl SecretStoreDocument {
                 self.refresh_after_write(name, WriteEffect::Versions, cx);
             }
             Landing::Stands(failure) => {
+                self.dismiss_dialog(cx);
                 self.report_write_failure(&failure, cx);
                 self.refresh_after_write(name, WriteEffect::Versions, cx);
             }
             Landing::Rejected(failure) => self.report_write_failure(&failure, cx),
         }
+    }
+
+    pub(in crate::secret_store) fn render_rotate_now_dialog(
+        &self,
+        dialog: &RotateNowDialog,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(ModalMetrics::BODY_GAP)
+            .child(div().id("secret-rotate-lead").child(modal_lead(
+                dbflux_i18n::t!(
+                    "document.secret_store.rotate.lead",
+                    name = dialog.name.as_str()
+                ),
+                cx,
+            )))
+            .child(
+                div().id("secret-rotate-effect").child(
+                    Text::caption(dbflux_i18n::t!("document.secret_store.rotate.effect"))
+                        .muted_foreground(),
+                ),
+            );
+
+        let footer = dialog_footer(
+            FooterSpec {
+                cancel_id: "secret-rotate-cancel",
+                confirm_id: "secret-rotate-confirm",
+                confirm_label: dbflux_i18n::t!("document.secret_store.rotate.confirm"),
+                confirm_icon: AppIcon::Zap,
+                danger: false,
+                enabled: true,
+                submitting: self.write_in_flight,
+            },
+            cx,
+        );
+
+        dialog_modal(
+            DialogShell {
+                id: "secret-rotate-dialog",
+                title: dbflux_i18n::t!(
+                    "document.secret_store.rotate.title",
+                    name = dialog.name.as_str()
+                ),
+                icon: AppIcon::Zap,
+                danger: false,
+                confirm_enabled: !self.write_in_flight,
+            },
+            body,
+            footer,
+            self.dialog_focus.handle(),
+            cx,
+        )
     }
 
     // -- Edit rotation ----------------------------------------------------------

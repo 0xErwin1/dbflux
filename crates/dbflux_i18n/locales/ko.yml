@@ -3689,6 +3689,10 @@ document:
       refused_off: "%{name}의 교체가 꺼져 있습니다. 교체하기 전에 교체 편집에서 켜세요."
       done: "%{name}의 교체를 시작했습니다"
       done_version: "%{name}의 교체를 시작했습니다. 버전 %{version}이(가) 새 현재 버전입니다"
+      title: "%{name} 지금 교체"
+      lead: "%{name}을(를) 지금 교체할까요?"
+      effect: "시크릿의 교체 함수를 지금 실행하고 새 현재 버전을 만듭니다. 시크릿을 읽는 애플리케이션은 교체가 끝나는 즉시 교체된 값을 받습니다."
+      confirm: "지금 교체"
     rotation_edit:
       button: "교체 편집"
       title: "%{name}의 교체 편집"

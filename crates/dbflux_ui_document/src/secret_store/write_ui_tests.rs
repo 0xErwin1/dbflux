@@ -950,6 +950,13 @@ fn rotate_now_starts_a_rotation_through_the_seam(cx: &mut TestAppContext) {
     });
 
     opened.click("secret-rotation-rotate-now");
+    assert!(opened.is_drawn("secret-rotate-dialog"), "it asks first");
+    assert!(opened.mutations().is_empty(), "nothing before the confirm");
+    let text = opened.rendered_text();
+    assert!(text.contains(KEY_VALUE_SECRET), "{text}");
+    assert!(text.contains("rotation function"), "{text}");
+    assert!(text.contains("new current version"), "{text}");
+    opened.click("secret-rotate-confirm");
 
     let mutations = opened.mutations();
     assert_eq!(mutations.len(), 1, "{mutations:?}");
@@ -972,6 +979,7 @@ fn the_bar_and_the_menu_start_the_same_rotation(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(KEY_VALUE_SECRET);
     opened.click("secret-action-rotate-now");
+    opened.click("secret-rotate-confirm");
     assert_eq!(opened.mutations().len(), 1);
 
     opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
@@ -981,6 +989,8 @@ fn the_bar_and_the_menu_start_the_same_rotation(cx: &mut TestAppContext) {
         .position(|action| action == "RotateNow")
         .expect("the menu offers Rotate now");
     opened.click_menu_item(&format!("secret-menu-rotate-now-item-{index}"));
+    assert!(opened.is_drawn("secret-rotate-dialog"));
+    opened.click("secret-rotate-confirm");
 
     // The second rotation is refused by the store while the first is
     // unfinished or accepted again; either way both reached the seam.
@@ -1053,7 +1063,15 @@ fn rotate_now_is_disabled_with_the_reason_when_rotation_is_off(cx: &mut TestAppC
 
     // The backstop: a direct call is still refused with the reason, and the
     // store is not called.
-    opened.update(|doc, cx| doc.rotate_selected_now(cx));
+    let doc = opened.doc.clone();
+    opened
+        .window
+        .update(|window, cx| doc.update(cx, |doc, cx| doc.rotate_selected_now(window, cx)));
+    opened.window.run_until_parked();
+    assert!(
+        !opened.dialog_open(),
+        "no dialog opens for a rotation that is off"
+    );
     assert!(opened.mutations().is_empty());
     assert_eq!(opened.reported_errors().len(), 1);
 }
@@ -1069,12 +1087,14 @@ fn a_read_only_connection_refuses_rotate_now(cx: &mut TestAppContext) {
     );
 
     opened.click("secret-rotation-rotate-now");
+    opened.click("secret-rotate-confirm");
 
     assert!(opened.mutations().is_empty());
     let errors = opened.reported_errors();
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(errors[0].1.contains("read-only"), "{}", errors[0].1);
     assert_eq!(opened.audit_actions(), vec!["secret_rotate_refused"]);
+    assert!(opened.dialog_open(), "a refusal keeps the dialog");
 }
 
 /// A managed secret cannot be rotated from here.
@@ -2554,4 +2574,22 @@ fn a_dialog_closes_when_the_session_is_replaced(cx: &mut TestAppContext) {
     opened.announce_state_change();
 
     assert!(!opened.dialog_open());
+}
+
+/// Cancelling the Rotate now dialog writes nothing, and the dialog is pinned
+/// to its session like the others.
+#[gpui::test]
+fn cancelling_rotate_now_writes_nothing_and_the_dialog_is_pinned(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-action-rotate-now");
+    opened.click("secret-rotate-cancel");
+    assert!(!opened.dialog_open());
+    assert!(opened.mutations().is_empty());
+    assert!(opened.audit_actions().is_empty());
+
+    opened.click("secret-action-rotate-now");
+    let replacement = opened.replace_connection();
+    opened.confirm_open_dialog();
+    opened.assert_pinned_refusal(&replacement);
 }

@@ -3689,6 +3689,10 @@ document:
       refused_off: "A rotação está desativada para %{name}. Ative-a em Editar rotação antes de rotacionar."
       done: "Uma rotação de %{name} foi iniciada"
       done_version: "Uma rotação de %{name} foi iniciada; a versão %{version} é a nova versão atual"
+      title: "Rotacionar %{name} agora"
+      lead: "Rotacionar %{name} agora?"
+      effect: "Isso executa agora a função de rotação do segredo e cria uma nova versão atual. Os aplicativos que leem o segredo recebem o valor rotacionado assim que a rotação termina."
+      confirm: "Rotacionar agora"
     rotation_edit:
       button: "Editar rotação"
       title: "Editar a rotação de %{name}"

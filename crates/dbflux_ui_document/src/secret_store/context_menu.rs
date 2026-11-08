@@ -492,7 +492,12 @@ impl SecretStoreDocument {
                 self.open_delete(window, cx);
                 return;
             }
-            SecretMenuAction::RotateNow => self.rotate_selected_now(cx),
+            SecretMenuAction::RotateNow => {
+                // The dialog takes the keyboard when it opens; the common
+                // refocus below would take it straight back.
+                self.rotate_selected_now(window, cx);
+                return;
+            }
             SecretMenuAction::EditTags => {
                 // The dialog takes the keyboard when it opens; the common
                 // refocus below would take it straight back.

@@ -824,6 +824,14 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::Cancel),
         ),
         ("secret-rotation-enabled", KeyboardPath::TabStop),
+        (
+            "secret-rotate-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-rotate-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
         // Edit tags (the Tags section and the row menu) and Edit description
         // (the Details section, or the bottom bar) are pane actions; each
         // dialog's buttons answer Enter and Escape, and its row controls are

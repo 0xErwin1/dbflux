@@ -132,7 +132,9 @@ impl SecretStoreDocument {
                     .icon(AppIcon::Zap)
                     .tab_stop(false)
                     .disabled(!self.can_rotate_now())
-                    .on_click(cx.listener(|this, _, _, cx| this.rotate_selected_now(cx)));
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.rotate_selected_now(window, cx)),
+                    );
 
                     match self.rotate_now_block_reason() {
                         Some(reason) => {
