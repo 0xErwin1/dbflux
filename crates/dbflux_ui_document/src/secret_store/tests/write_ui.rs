@@ -4282,14 +4282,12 @@ fn the_rotation_dialog_is_locked_while_its_save_is_in_flight(cx: &mut TestAppCon
     assert!(opened.read_view(|view| view.write_in_flight));
 
     let frame = opened.frame_unsettled();
-    for id in ["secret-rotation-confirm"] {
-        let node = frame
-            .nodes()
-            .find(|(_, node)| node.id() == id)
-            .and_then(|(_, node)| frame.accessibility_node(node))
-            .unwrap_or_else(|| panic!("`{id}` is drawn while the save is in flight"));
-        assert!(node.is_disabled(), "{id} is locked");
-    }
+    let confirm = frame
+        .nodes()
+        .find(|(_, node)| node.id() == "secret-rotation-confirm")
+        .and_then(|(_, node)| frame.accessibility_node(node))
+        .expect("the confirm button is drawn while the save is in flight");
+    assert!(confirm.is_disabled(), "Save is locked");
 
     let doc = opened.doc.clone();
     opened.window.update(|_, cx| {
