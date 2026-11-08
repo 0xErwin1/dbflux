@@ -3322,11 +3322,8 @@ fn the_menu_selection_follows_a_shrinking_menu(cx: &mut TestAppContext) {
     opened.load_everything();
     opened.open_secret(PENDING_DELETION_SECRET);
     opened.right_click(&format!("secret-row-{PENDING_DELETION_SECRET}"));
-    let last = opened.read(|doc| {
-        doc.context_menu
-            .as_ref()
-            .map_or(0, |menu| menu.items.len() - 1)
-    });
+    let before = opened.read(|doc| doc.context_menu.as_ref().map_or(0, |menu| menu.items.len()));
+    let last = before - 1;
     opened.update(|doc, cx| {
         if let Some(menu) = doc.context_menu.as_mut() {
             menu.selected_index = last;
@@ -3344,9 +3341,13 @@ fn the_menu_selection_follows_a_shrinking_menu(cx: &mut TestAppContext) {
                 details.summary.deletion_scheduled_for = None;
             }
         });
+        doc.push_listing_row(cx);
     });
     opened.window.run_until_parked();
     let _ = opened.rendered_text();
+
+    let after = opened.read(|doc| doc.context_menu.as_ref().map_or(0, |menu| menu.items.len()));
+    assert!(after < before, "Restore left the menu: {before} -> {after}");
 
     let (index, count) = opened.read(|doc| {
         doc.context_menu
@@ -3388,12 +3389,17 @@ fn the_selected_summary_survives_a_reload_that_drops_its_row(cx: &mut TestAppCon
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.load_everything();
     opened.open_secret(KEY_VALUE_SECRET);
-    opened.update(|doc, _| {
+    opened.update(|doc, cx| {
         doc.listing
             .entries
             .retain(|entry| entry.name != KEY_VALUE_SECRET);
+        doc.push_listing_row(cx);
     });
 
+    assert!(
+        opened.read_view(|view| view.listed_summary().is_none()),
+        "the listing no longer holds the row"
+    );
     assert!(opened.read_view(|view| view.selected_summary().is_some()));
 }
 
@@ -4006,8 +4012,16 @@ fn a_finished_rotation_follow_up_is_forgotten(cx: &mut TestAppContext) {
         1
     );
 
-    // The first schedule ends while the second is still running.
-    cx_advance(&mut opened, 31);
+    // The first schedule ends (at its second tick) while the second one is
+    // still waiting for its own: the newer entry must survive that exit.
+    cx_advance(&mut opened, 6);
+    assert_eq!(
+        opened.read_view(|view| view.rotation_follow_up_generations.len()),
+        1,
+        "the older schedule leaving did not drop the newer entry"
+    );
+
+    cx_advance(&mut opened, 26);
     assert!(
         opened.read_view(|view| view.rotation_follow_up_generations.is_empty()),
         "the finished schedules left no entry"
@@ -4064,8 +4078,15 @@ fn restoring_a_scheduled_secret_loads_its_history(cx: &mut TestAppContext) {
     });
 
     assert!(
-        opened.read_view(|view| !matches!(view.versions(), VersionsState::ScheduledForDeletion))
+        opened
+            .driver
+            .secret_store_calls()
+            .version_listings
+            .iter()
+            .any(|(store, name)| store == FAKE_SECRETS_STORE_ID && name == PENDING_DELETION_SECRET),
+        "the restored secret's history was requested"
     );
+    assert!(!opened.version_ids().is_empty(), "and it loaded");
 }
 
 /// A store that declares tiers but no value types shows no type group and
