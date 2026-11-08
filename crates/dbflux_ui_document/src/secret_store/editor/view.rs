@@ -224,10 +224,13 @@ impl SecretStoreDocument {
             .unwrap_or_default();
         // The text viewport inside the row area: lower than the top when the
         // Find panel is open. Rows are placed and clipped against it.
-        let viewport_top = state
-            .text_bounds()
-            .map_or(px(0.0), |bounds| bounds.origin.y - rows_origin.get())
-            .max(px(0.0));
+        // `text_bounds()` already includes the scroll offset, so the origin
+        // comes from the unscrolled input bounds. Before the first layout
+        // there are none: the text starts at the textarea's top padding.
+        let viewport_top = match state.text_bounds() {
+            Some(_) => (state.input_bounds().origin.y - rows_origin.get()).max(px(0.0)),
+            None => gpui_component::Size::default().input_py(),
+        };
         let viewport_height = match state.input_bounds().size.height {
             height if height > px(0.0) => height,
             _ => line_height * VIEWER_VISIBLE_LINES,

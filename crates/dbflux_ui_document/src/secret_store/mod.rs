@@ -20,6 +20,7 @@ mod render;
 mod value;
 mod write;
 
+use data::HistoryLoad;
 pub use listing::{PathMode, SecretListing};
 pub use region::RegionListState;
 pub use value::{
@@ -284,7 +285,7 @@ impl SecretStoreDocument {
         subscriptions.push(
             cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
                 this.adopt_connection_region(cx);
-                this.adopt_connection_session(cx);
+                this.adopt_connection_session(HistoryLoad::Automatic, cx);
             }),
         );
 

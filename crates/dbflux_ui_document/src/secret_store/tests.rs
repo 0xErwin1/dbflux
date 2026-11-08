@@ -6112,28 +6112,89 @@ fn a_history_retry_without_a_connection_is_reported_once(cx: &mut TestAppContext
     assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
 }
 
-/// A historical retrieval that fails shows its error and neither the
-/// older-value banner nor Back to current.
+/// A historical retrieval that fails replaces the loaded historical value
+/// with its error: neither the older-value banner nor Back to current stays.
 #[gpui::test]
 fn a_failed_historical_retrieval_shows_no_older_value_banner(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| {
-        doc.value_version = Some("v-previous".to_string());
-        doc.value = ValueState::Failed(ValueFailure {
-            message: "retrieval refused".to_string(),
-            correlation_id: Uuid::now_v7(),
-            decrypt_denied: false,
-        });
-        cx.notify();
-    });
+    opened.update(|doc, cx| doc.activate_version(1, cx));
 
+    assert_eq!(opened.shown_password().as_deref(), Some(PREVIOUS_PASSWORD));
     let text = opened.rendered_text();
-    assert!(text.contains("retrieval refused"), "{text}");
+    assert!(text.contains("Showing version"), "{text}");
+    assert!(opened.read(|doc| doc.can_return_to_current()));
+
+    // The fake store has no such version, so the retrieval fails.
+    opened.update(|doc, cx| doc.retrieve_version(Some("v-vanished".to_string()), cx));
+
+    assert_eq!(opened.shown_password(), None);
+    assert!(opened.read(|doc| matches!(doc.value(), ValueState::Failed(_))));
+    let text = opened.rendered_text();
+    assert!(text.contains("no version v-vanished"), "{text}");
     assert!(!text.contains("Showing version"), "{text}");
     assert!(!text.contains("Back to current"), "{text}");
     assert!(!opened.read(|doc| doc.can_return_to_current()));
     assert!(!opened.pane_action("secret-version-current").enabled);
+}
+
+/// A connection replaced while an older version is shown leaves the current
+/// version unknown; the older value still names its version and can go back.
+#[gpui::test]
+fn an_older_value_keeps_its_banner_when_the_current_version_is_unknown(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| doc.activate_version(1, cx));
+    opened.strip_reported_versions();
+
+    let profile_id = opened.read(|doc| doc.profile_id);
+    let app_state = opened.app_state.clone();
+    opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id));
+    });
+    opened.announce_state_change();
+
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+    assert_eq!(
+        opened.read(|doc| doc.current_version_id().map(str::to_string)),
+        None
+    );
+    assert_eq!(opened.shown_password().as_deref(), Some(PREVIOUS_PASSWORD));
+    assert_eq!(
+        opened.read(|doc| doc.shown_older_version().map(str::to_string)),
+        Some("v-previous".to_string())
+    );
+    assert!(opened.read(|doc| doc.can_return_to_current()));
+
+    let text = opened.rendered_text();
+    assert!(text.contains("Showing version"), "{text}");
+    assert!(text.contains("v-previous"), "{text}");
+    assert!(text.contains("Back to current"), "{text}");
+}
+
+/// The automatic reload a connection change triggers stays quiet about a
+/// loss the editor already reported; a listing the user asks for reports it.
+#[gpui::test]
+fn an_explicit_history_retry_reports_a_missing_connection_again(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+
+    let profile_id = opened.read(|doc| doc.profile_id);
+    let app_state = opened.app_state.clone();
+    opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id));
+    });
+    opened.start_edit();
+    assert_eq!(opened.reported_errors().len(), 1);
+
+    opened.announce_state_change();
+    assert_eq!(opened.reported_errors().len(), 1, "automatic reload");
+
+    opened.update(|doc, cx| doc.load_versions(PLAINTEXT_SECRET.to_string(), cx));
+    let reported = opened.reported_errors();
+    assert_eq!(reported.len(), 2, "{reported:?}");
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
 }
 
 // -- Value editor: JSON key/value secrets -----------------------------------
@@ -6592,5 +6653,109 @@ mod editor_review {
         open_find(&mut opened);
         opened.rendered_paths();
         aligned(&mut opened, "find open");
+    }
+
+    /// The first frame, before the textarea reports any bounds, puts gutter
+    /// row 0 where the textarea's padded text will start.
+    #[gpui::test]
+    fn the_first_frame_gutter_starts_at_the_padded_text_origin(cx: &mut TestAppContext) {
+        #[derive(Default)]
+        struct GutterRowTops(std::sync::Mutex<Vec<gpui::Pixels>>);
+
+        impl gpui::FrameObserver for GutterRowTops {
+            fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
+                let top = frame
+                    .nodes()
+                    .find(|(_, node)| node.path().ends_with("secret-value-editor-line-0-number"))
+                    .map(|(_, node)| node.bounds().origin.y);
+
+                if let Some(top) = top {
+                    self.0
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push(top);
+                }
+            }
+        }
+
+        let mut opened = open_hosted(cx);
+        opened.select(PLAINTEXT_SECRET);
+        opened.show_value("a\nb");
+
+        let tops = std::sync::Arc::new(GutterRowTops::default());
+        opened
+            .window
+            .update(|window, _| window.observe_frames(&tops));
+
+        let doc = opened.doc.clone();
+        opened
+            .window
+            .update(|window, cx| doc.update(cx, |doc, cx| doc.start_value_edit(window, cx)));
+        opened.window.run_until_parked();
+        opened.rendered_paths();
+
+        let tops = tops
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let (first, settled) = (tops[0], *tops.last().expect("frames drawn"));
+
+        assert!(
+            (first - settled).abs() < gpui::px(0.5), // guardrail-allow: test tolerance, not spacing
+            "first frame {first:?} vs settled {settled:?}: {tops:?}"
+        );
+    }
+
+    /// Scrolling a long value keeps gutter row N beside text line N, with
+    /// the Find panel closed and open.
+    #[gpui::test]
+    fn the_gutter_follows_the_text_while_scrolled(cx: &mut TestAppContext) {
+        let lines: Vec<String> = (0..80).map(|i| format!("l{i}")).collect();
+        let text = lines.join("\n");
+        let mut opened = open_hosted(cx);
+        start(&mut opened, &text, &text);
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+
+        let scroll_and_check = |opened: &mut Opened<'_>, stage: &str| {
+            let line_height = opened
+                .window
+                .update(|_, cx| editor.read(cx).line_height())
+                .expect("text laid out");
+            opened.window.update(|_, cx| {
+                editor.update(cx, |state, cx| {
+                    state.set_scroll_offset(gpui::point(gpui::px(0.), -line_height * 10.0), cx)
+                });
+            });
+            opened.window.run_until_parked();
+            opened.rendered_paths();
+            opened.rendered_paths();
+
+            for line in [11usize, 13] {
+                let offset = lines[..line]
+                    .iter()
+                    .map(|text| text.len() + 1)
+                    .sum::<usize>();
+                let glyph = opened
+                    .window
+                    .update(|_, cx| editor.read(cx).range_to_bounds(&(offset..offset + 1)))
+                    .expect("text laid out")
+                    .origin
+                    .y;
+                let gutter = opened
+                    .element_bounds(&format!("secret-value-editor-line-{line}-number"))
+                    .origin
+                    .y;
+                assert!(
+                    (gutter - glyph).abs() < gpui::px(1.5), // guardrail-allow: test tolerance, not spacing
+                    "{stage}, line {line}: gutter {gutter:?} vs text {glyph:?}"
+                );
+            }
+        };
+
+        opened.rendered_paths();
+        scroll_and_check(&mut opened, "closed");
+        open_find(&mut opened);
+        scroll_and_check(&mut opened, "find open");
     }
 }

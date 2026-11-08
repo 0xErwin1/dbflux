@@ -260,6 +260,10 @@ impl SecretStoreDocument {
     /// `SecretStoreCapabilities::VERSIONS` is never asked. Never fetches a
     /// value.
     pub(crate) fn load_versions(&mut self, name: String, cx: &mut Context<Self>) {
+        self.request_versions(name, HistoryLoad::Requested, cx);
+    }
+
+    fn request_versions(&mut self, name: String, trigger: HistoryLoad, cx: &mut Context<Self>) {
         self.versions_generation = self.versions_generation.wrapping_add(1);
         let generation = self.versions_generation;
 
@@ -275,8 +279,9 @@ impl SecretStoreDocument {
             let message = dbflux_i18n::t!("document.secret_store.error.connection_unavailable");
 
             // Only the first catch site reports: an editor path that found
-            // the same loss already did.
-            if !self.missing_connection_reported {
+            // the same loss already did. A reload nobody asked for stays
+            // quiet about it; a listing the user asked for does not.
+            if trigger == HistoryLoad::Requested || !self.missing_connection_reported {
                 self.missing_connection_reported = true;
                 report_error(UserFacingError::new(ErrorKind::User, message.clone()), cx);
             }
@@ -331,7 +336,7 @@ impl SecretStoreDocument {
         }
 
         if !self.history_session_is_live(cx) {
-            self.load_versions(name.to_string(), cx);
+            self.request_versions(name.to_string(), HistoryLoad::Automatic, cx);
             cx.notify();
             return;
         }
@@ -363,7 +368,11 @@ impl SecretStoreDocument {
     /// listed from is gone, or when a connection returned after the history
     /// had none to be listed from. Independent of the unsaved-edit guard: the
     /// history carries no edit, and stale ids must never be retrievable.
-    pub(crate) fn adopt_connection_session(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn adopt_connection_session(
+        &mut self,
+        trigger: HistoryLoad,
+        cx: &mut Context<Self>,
+    ) {
         let Some(SecretRowKey::Secret(name)) = self.selected.clone() else {
             return;
         };
@@ -375,7 +384,7 @@ impl SecretStoreDocument {
             return;
         }
 
-        self.load_versions(name, cx);
+        self.request_versions(name, trigger, cx);
         cx.notify();
     }
 
@@ -403,9 +412,13 @@ impl SecretStoreDocument {
         }
 
         let shown = self.value_version.as_deref()?;
-        let current = self.current_version_id()?;
 
-        (shown != current).then_some(shown)
+        // Without a known current version the shown one stays named and
+        // returnable: the retrieval asked for a version, not for the current.
+        match self.current_version_id() {
+            Some(current) => (shown != current).then_some(shown),
+            None => Some(shown),
+        }
     }
 
     fn history_current_version(&self) -> Option<&str> {
@@ -439,7 +452,7 @@ impl SecretStoreDocument {
         // The ids belong to the session that listed them; against another
         // connection they could name a different version or none.
         if !self.history_session_is_live(cx) {
-            self.adopt_connection_session(cx);
+            self.adopt_connection_session(HistoryLoad::Requested, cx);
             return;
         }
 
@@ -606,6 +619,14 @@ impl SecretStoreDocument {
             log::warn!("[secret store] failed to record value retrieval audit event: {error}");
         }
     }
+}
+
+/// Why the history is being listed: something the user did, or a reload the
+/// document runs on its own after the connection changed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HistoryLoad {
+    Requested,
+    Automatic,
 }
 
 fn store_unavailable(store_id: &str) -> DbError {
