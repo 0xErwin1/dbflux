@@ -2593,3 +2593,161 @@ fn cancelling_rotate_now_writes_nothing_and_the_dialog_is_pinned(cx: &mut TestAp
     opened.confirm_open_dialog();
     opened.assert_pinned_refusal(&replacement);
 }
+
+// -- One confirm sends one write ---------------------------------------------------
+
+impl Opened<'_> {
+    /// Presses and releases the left button `clicks` times at `position`
+    /// without letting the window settle in between, as a double click does.
+    fn click_at_unparked(&mut self, position: gpui::Point<gpui::Pixels>, clicks: usize) {
+        for click_count in 1..=clicks {
+            self.window.simulate_event(gpui::MouseDownEvent {
+                position,
+                modifiers: gpui::Modifiers::default(),
+                button: gpui::MouseButton::Left,
+                click_count,
+                first_mouse: false,
+            });
+            self.window.simulate_event(gpui::MouseUpEvent {
+                position,
+                modifiers: gpui::Modifiers::default(),
+                button: gpui::MouseButton::Left,
+                click_count,
+            });
+        }
+    }
+
+    fn press(&mut self, keystrokes: &str) {
+        self.window.simulate_keystrokes(keystrokes);
+        self.window.run_until_parked();
+    }
+}
+
+/// Two confirms in one frame, then Enter, send exactly one write.
+#[gpui::test]
+fn two_confirms_in_one_frame_and_enter_send_one_write(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-action-rotate-now");
+    assert!(opened.dialog_open());
+
+    let doc = opened.doc.clone();
+    opened.window.update(|window, cx| {
+        doc.update(cx, |doc, cx| {
+            doc.confirm_dialog(window, cx);
+            doc.confirm_dialog(window, cx);
+        });
+    });
+    opened.press("enter");
+
+    assert_eq!(opened.mutations().len(), 1, "{:?}", opened.mutations());
+    assert_eq!(opened.audit_actions().len(), 1);
+}
+
+/// A double click on a confirm, then Enter, sends one write.
+#[gpui::test]
+fn a_double_click_and_enter_on_a_confirm_send_one_write(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-action-delete");
+    opened.type_text(KEY_VALUE_SECRET);
+
+    let position = opened.bounds_of("secret-delete-confirm").center();
+    opened.click_at_unparked(position, 2);
+    opened.press("enter");
+
+    assert_eq!(opened.mutations().len(), 1, "{:?}", opened.mutations());
+    assert_eq!(opened.audit_actions().len(), 1);
+}
+
+/// Two presses of Rotate now open one dialog and send one write.
+#[gpui::test]
+fn two_rotate_now_presses_send_one_write(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+
+    // Two presses in the same frame, before the dialog is drawn.
+    let doc = opened.doc.clone();
+    opened.window.update(|window, cx| {
+        doc.update(cx, |doc, cx| {
+            doc.rotate_selected_now(window, cx);
+            doc.rotate_selected_now(window, cx);
+        });
+    });
+    opened.window.run_until_parked();
+    assert!(opened.is_drawn("secret-rotate-dialog"));
+    opened.click("secret-rotate-confirm");
+
+    assert_eq!(opened.mutations().len(), 1, "{:?}", opened.mutations());
+}
+
+/// Escape closes the delete and the create dialogs and writes nothing.
+#[gpui::test]
+fn escape_closes_the_delete_and_create_dialogs_without_writing(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    opened.select(KEY_VALUE_SECRET);
+    opened.window.run_until_parked();
+
+    opened.click("secret-action-delete");
+    opened.type_text(KEY_VALUE_SECRET);
+    opened.press("escape");
+    assert!(!opened.dialog_open(), "delete");
+
+    opened.click("secret-new");
+    opened.type_text("prod/new/credentials");
+    opened.set_create_value(CREATED_VALUE);
+    opened.press("escape");
+    assert!(!opened.dialog_open(), "create");
+
+    assert!(opened.mutations().is_empty(), "{:?}", opened.mutations());
+    assert!(opened.audit_actions().is_empty());
+}
+
+/// A selection change and a refresh under an open delete dialog never retarget
+/// it: whatever is sent names the dialog's secret, and here nothing is sent
+/// because the dialog closed.
+#[gpui::test]
+fn a_selection_change_and_refresh_never_retarget_the_delete_dialog(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-action-delete");
+    opened.type_text(KEY_VALUE_SECRET);
+
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.refresh(cx));
+    opened.confirm_open_dialog();
+
+    for mutation in opened.mutations() {
+        let FakeSecretMutation::Delete(request) = mutation else {
+            panic!("only a delete could be sent");
+        };
+        assert_eq!(request.name(), KEY_VALUE_SECRET);
+    }
+    assert!(opened.mutations().is_empty());
+}
+
+/// The create dialog's value box is hidden from the accessibility tree and
+/// redacted in the rendered frame, whatever the text area does on its own.
+#[gpui::test]
+fn the_create_value_box_is_hidden_and_redacted(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    opened.click("secret-new");
+    opened.set_create_value(CREATED_VALUE);
+
+    let frame = opened.observe_frame();
+    let (_, node) = frame
+        .nodes()
+        .find(|(_, node)| node.id() == "secret-create-value")
+        .expect("the value box is drawn");
+
+    assert!(node.is_redacted(), "redacted in the rendered frame");
+    assert!(
+        frame
+            .accessibility_node(node)
+            .is_none_or(|node| node.is_hidden()),
+        "hidden from the accessibility tree"
+    );
+}
