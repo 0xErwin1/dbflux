@@ -3890,6 +3890,56 @@ fn overlapping_rotation_follow_ups_are_coalesced(cx: &mut TestAppContext) {
     assert_eq!(reads, 3, "one schedule of three reads, not two");
 }
 
+/// A newer rotation of another secret does not cancel this secret's
+/// follow-up: reselected within the window, it is still read again.
+#[gpui::test]
+fn a_rotation_follow_up_survives_the_rotation_of_another_secret(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let stands = || super::super::SecretWriteFailure {
+        error: dbflux_core::DbError::query_failed("audit event lost"),
+        correlation_id: None,
+        kind: super::super::SecretWriteFailureKind::AuditLost,
+        audit_unrecorded: false,
+    };
+
+    opened.update(|doc, cx| {
+        doc.land_rotate_now(
+            KEY_VALUE_SECRET,
+            super::super::actions::Landing::Stands(stands()),
+            cx,
+        )
+    });
+    opened.open_secret(MANAGED_SECRET);
+    opened.update(|doc, cx| {
+        doc.land_rotate_now(
+            MANAGED_SECRET,
+            super::super::actions::Landing::Stands(stands()),
+            cx,
+        )
+    });
+    opened.open_secret(KEY_VALUE_SECRET);
+    let before = opened
+        .driver
+        .secret_store_calls()
+        .described
+        .iter()
+        .filter(|(_, name)| name == KEY_VALUE_SECRET)
+        .count();
+
+    cx_advance(&mut opened, 31);
+
+    let reads = opened
+        .driver
+        .secret_store_calls()
+        .described
+        .iter()
+        .filter(|(_, name)| name == KEY_VALUE_SECRET)
+        .count()
+        - before;
+    assert_eq!(reads, 3, "the first secret's own schedule still runs");
+}
+
 /// A store that declares tiers but no value types shows no type group and
 /// sends no value type.
 #[gpui::test]
