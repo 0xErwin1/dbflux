@@ -47,7 +47,7 @@ The capability flags listed below are exactly the ones each driver's
 | TursoDB | Relational | SQL | Auth token, views, indexes, foreign keys, check/unique constraints, prepared statements, insert/update/delete, pagination, sorting, filtering, CSV/JSON export, transactions, transactional DDL, multi-statement | Remote Turso / libSQL over HTTP (`libsql://`, or `http://` for a local `sqld`); interactive transactions run on per-document server streams; no query cancellation, SSH tunnel, replicas, or database switching. |
 | DuckDB | Relational | SQL | Multiple databases, schemas, views, indexes, foreign keys, check/unique constraints, prepared statements, insert/update/delete with RETURNING, pagination, sorting, filtering, CSV/JSON export, transactions, transactional DDL, query cancellation, row limits, read-only enforcement, multi-statement | Embedded file or in-memory database; attaches a DuckLake catalog on connect; only one process can hold a file for writing; no statement timeouts. |
 | Amazon S3 | Object Storage | Custom("S3") | Auth (profile/SSO or static credentials, custom endpoint), bucket browsing, paginated object navigation, preview, full CRUD, presigned URLs | S3-compatible (Cloudflare R2, MinIO); no multipart upload/transfers panel, no embedded PDF viewer, no lifecycle/ACL management or S3 Select. |
-| AWS Secrets | Secret Store | Custom("AWS Secrets") | Auth (profile/SSO or static credentials, custom endpoint), Secrets Manager and Parameter Store in one connection, paginated listing with name search, parameter path hierarchy, details, explicit value retrieval | Read only (no create, edit, delete, restore, versions or rotation); one region per connection; LocalStack does not honor Parameter Store page sizes. |
+| AWS Secrets | Secret Store | Custom("AWS Secrets") | Auth (profile/SSO or static credentials, custom endpoint), Secrets Manager and Parameter Store in one connection, paginated listing with name search, parameter path hierarchy, details, explicit value retrieval | The value can be edited and saved as a new version (no create, delete, restore, version history or rotation yet); one region per connection; LocalStack does not honor Parameter Store page sizes. |
 
 ## Per-driver summary
 
@@ -190,14 +190,10 @@ optional endpoint override. One connection shows both stores in the sidebar.
 Listing is paginated on the server side with name search, and Parameter Store
 paths are browsed one level at a time. Listing and the details pane never
 fetch a value: a value is read only when the user runs Retrieve value, which
-records an audit event without the value. Key/value JSON secrets render as a
+records an audit event without the value when auditing is enabled and the audit write succeeds; the retrieval itself can succeed without a record. Key/value JSON secrets render as a
 table, other text as plaintext and binary secrets as base64, and secrets owned
 by another service are marked read only. A missing `kms:Decrypt` permission is
-reported as an error, never as an empty value. The region picker lists the
-regions `ec2:DescribeRegions` returns; when the credentials cannot call it (an
-IAM user without that permission, LocalStack without EC2) the document quietly
-shows the connection's configured region without a picker, logs the denial
-once, and Refresh asks again. This release is read only. See
+reported as an error, never as an empty value. The region picker lists the regions `ec2:DescribeRegions` returns; when the credentials cannot call it (an IAM user without that permission, LocalStack without EC2) the document quietly shows the connection's configured region without a picker, logs the denial once, and Refresh asks again. A value, including a JSON key/value secret, can be edited with Edit value (the details pane button, the row's right-click menu, or `e` on the selected row) and saved as a new version. Save goes through the governed write path: it refuses a read-only or approval-required connection and, while DBFlux's audit log is on, records one audit event that never carries the value; with auditing off, a save can succeed without a DBFlux audit record. If recording that event fails after the write landed, the write stands and the editor reports a warning, not a failure. A value stored as JSON opens Formatted, indented for editing, and can be switched to Raw. Save writes the text of the mode being edited: Raw saves the text verbatim, including any line breaks added to a value stored on one line, while Formatted puts a value stored on one line back on one line and writes a value stored on several lines as edited. In both modes Save refuses text that is no longer valid JSON. The editor shows line numbers, marks the lines that changed, and a footer with the size, the version, the number of changed lines and the caret. Binary values keep their read-only view. See
 [`crates/dbflux_driver_aws_secrets/README.md`](../crates/dbflux_driver_aws_secrets/README.md).
 
 ## External RPC drivers

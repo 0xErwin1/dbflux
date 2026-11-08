@@ -3593,6 +3593,19 @@ document:
       refused_managed: "%{name} 的值由 %{service} 管理，因此无法编辑。"
       refused_deletion: "%{name} 已安排删除，在恢复之前无法编辑其值。"
       change_summary: "未保存的值编辑"
+      find: "查找"
+      modified: "已修改"
+      footer:
+        summary: "UTF-8 · %{size} · 版本 %{version}"
+        summary_unversioned: "UTF-8 · %{size}"
+        changed_one: "已更改 1 行"
+        changed_other: "已更改 %{count} 行"
+        caret: "第 %{line} 行，第 %{column} 列"
+      hint_formatted: "保存会写入新版本并将其设为当前版本。格式化视图会把原本为单行的值还原为单行，把原本为多行的值按此处文本保存；原始视图按此处文本原样保存。"
+      mode:
+        formatted: "格式化"
+        raw: "原始"
+        toggle: "在格式化与原始之间切换"
 document_tree:
   search_placeholder: 搜索…
   view:

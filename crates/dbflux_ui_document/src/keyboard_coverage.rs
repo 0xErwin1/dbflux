@@ -719,6 +719,19 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
             "secret-value-editor-save",
             KeyboardPath::Menu("secret-editor-save"),
         ),
+        // The Formatted / Raw switch of a JSON value. The editor holds the
+        // keyboard like a text buffer, so no bare key is bound there; the
+        // pane action of the same name is its keyboard path.
+        (
+            "segmented-secret-editor-mode-*",
+            KeyboardPath::Menu("secret-editor-mode"),
+        ),
+        // Find opens the editor component's find panel; Ctrl+F does the same
+        // while the text has focus.
+        (
+            "secret-value-editor-find",
+            KeyboardPath::Menu("secret-editor-find"),
+        ),
         (
             "secret-value-editor-discard",
             KeyboardPath::Menu("secret-editor-discard"),
