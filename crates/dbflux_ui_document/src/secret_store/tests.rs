@@ -3704,7 +3704,8 @@ impl Opened<'_> {
 }
 
 /// Right-clicking a secret row opens the menu anchored at the pointer, the
-/// row becomes the selection, and the menu holds the read items and Delete.
+/// row becomes the selection, and the menu holds the read items, Rotate now
+/// and Delete.
 /// Edit value waits for a loaded value, so a row whose value was not
 /// retrieved does not offer it.
 #[gpui::test]
@@ -3720,12 +3721,24 @@ fn a_secondary_click_opens_a_secret_row_menu(cx: &mut TestAppContext) {
     );
     assert_eq!(
         opened.menu_actions(),
-        vec!["RetrieveValue", "CopyName", "CopyArn", "Delete"],
-        "the menu lists the read items and Delete"
+        vec![
+            "RetrieveValue",
+            "CopyName",
+            "CopyArn",
+            "RotateNow",
+            "Delete"
+        ],
+        "the menu lists the read items, Rotate now and Delete"
     );
 
     let text = opened.rendered_text();
-    for label in ["Retrieve value", "Copy name", "Copy ARN", "Delete"] {
+    for label in [
+        "Retrieve value",
+        "Copy name",
+        "Copy ARN",
+        "Rotate now",
+        "Delete",
+    ] {
         assert!(text.contains(label), "{label} missing: {text}");
     }
 }
@@ -3739,11 +3752,24 @@ fn restricted_secrets_disable_delete_and_say_why(cx: &mut TestAppContext) {
     for (name, expected) in [
         (
             MANAGED_SECRET,
-            vec!["RetrieveValue", "CopyName", "CopyArn", "Delete"],
+            vec![
+                "RetrieveValue",
+                "CopyName",
+                "CopyArn",
+                "RotateNow",
+                "Delete",
+            ],
         ),
         (
             PENDING_DELETION_SECRET,
-            vec!["RetrieveValue", "CopyName", "CopyArn", "Restore", "Delete"],
+            vec![
+                "RetrieveValue",
+                "CopyName",
+                "CopyArn",
+                "RotateNow",
+                "Restore",
+                "Delete",
+            ],
         ),
     ] {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
