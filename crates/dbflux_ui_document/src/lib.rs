@@ -76,7 +76,7 @@ pub use data_view::{DataViewConfig, DataViewMode};
 pub use data_view_trait::DataView;
 pub use document_builder::inspector_min_width;
 pub use dump_analysis::DumpAnalysisDocument;
-pub use secret_store::SecretStoreDocument;
+pub use secret_store::{SecretStoreDocument, SecretView};
 
 #[cfg(feature = "mcp")]
 pub use governance::McpApprovalsView;

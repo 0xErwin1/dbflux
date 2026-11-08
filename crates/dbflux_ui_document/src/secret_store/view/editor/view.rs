@@ -24,9 +24,10 @@ use super::line_diff::{LineChanges, changed_lines};
 use super::{EditMode, ValueEditState};
 use crate::buckets_table::format_bytes;
 use crate::object_text::{FIND_SHORTCUT_HINT, keycap_text};
-use crate::secret_store::details::VIEWER_GUTTER_WIDTH;
-use crate::secret_store::details::VIEWER_VISIBLE_LINES;
-use crate::secret_store::{SecretStoreDocument, ValueState};
+use crate::secret_store::ValueState;
+use crate::secret_store::view::SecretView;
+use crate::secret_store::view::details::VIEWER_GUTTER_WIDTH;
+use crate::secret_store::view::details::VIEWER_VISIBLE_LINES;
 
 /// Width of the change-marker bar beside a gutter number.
 const MARKER_WIDTH: Pixels = px(3.0);
@@ -45,7 +46,7 @@ impl ValueEditState {
     }
 }
 
-impl SecretStoreDocument {
+impl SecretView {
     /// The editor of a plaintext value: the header row, the gutter beside
     /// the text, the footer, and the hint.
     pub(in crate::secret_store) fn render_value_editor(&self, cx: &mut Context<Self>) -> Div {
@@ -91,7 +92,7 @@ impl SecretStoreDocument {
             .edit_mode()
             .map(|mode| self.render_edit_mode_toggle(mode, saving, cx));
         let save_shortcut = dbflux_ui_base::effective_keymap()
-            .shortcut_for_command(self.active_context(), Command::SaveQuery);
+            .shortcut_for_command(self.host_context, Command::SaveQuery);
 
         let mut save = Button::new(
             "secret-value-editor-save",
@@ -205,141 +206,12 @@ impl SecretStoreDocument {
         let muted = theme.muted_foreground;
         let warning = theme.warning;
 
-        let state = editor.read(cx);
-        let line_count = changes.marked.len().max(1);
-        let offset = state.scroll_offset().y;
-        let line_height = state
-            .line_height()
-            .unwrap_or_else(|| super::fallback_line_height(cx));
-        // Only the rows the viewport can show are drawn, however long the
-        // value is; the margin covers the frame the scroll lags behind.
-        let first_row = (-offset / line_height).floor().max(0.0) as usize;
-        let last_row = (first_row + VIEWER_VISIBLE_LINES as usize + 2).min(line_count);
-        let first_row = first_row.min(last_row);
-        let rows_top = offset + line_height * first_row as f32;
-        let rows_origin = self
-            .value_edit
-            .as_ref()
-            .map(|edit| edit.rows_origin.clone())
-            .unwrap_or_default();
-        // The text viewport inside the row area: lower than the top when the
-        // Find panel is open. Rows are placed and clipped against it.
-        // `text_bounds()` already includes the scroll offset, so the origin
-        // comes from the unscrolled input bounds. Before the first layout
-        // there are none: the text starts at the textarea's top padding.
-        let viewport_top = match state.text_bounds() {
-            Some(_) => (state.input_bounds().origin.y - rows_origin.get()).max(px(0.0)),
-            None => gpui_component::Size::default().input_py(),
-        };
-        let viewport_height = match state.input_bounds().size.height {
-            height if height > px(0.0) => height,
-            _ => line_height * VIEWER_VISIBLE_LINES,
-        };
+        let rows = self.editor_row_layout(editor, changes, cx);
         let focus = self.value_edit.as_ref().map(|edit| edit.focus.clone());
+        let rows_origin = rows.origin.clone();
 
-        let tint = div()
-            .id("secret-value-editor-tint")
-            .absolute()
-            .top(viewport_top)
-            .left_0()
-            .w_full()
-            .h(viewport_height)
-            .overflow_hidden()
-            .child(
-                div()
-                    .absolute()
-                    .top(rows_top)
-                    .left_0()
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .children(
-                        changes
-                            .marked
-                            .iter()
-                            .skip(first_row)
-                            .take(last_row - first_row)
-                            .map(|marked| {
-                                div()
-                                    .h(line_height)
-                                    .w_full()
-                                    .when(*marked, |row| row.bg(warning.opacity(TINT_OPACITY)))
-                            }),
-                    ),
-            );
-
-        let gutter = div()
-            .id("secret-value-editor-gutter")
-            .relative()
-            .flex_shrink_0()
-            .aria_hidden(true)
-            .text_color(muted)
-            .child(
-                div()
-                    .absolute()
-                    .top(viewport_top)
-                    .left_0()
-                    .w_full()
-                    .h(viewport_height)
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .absolute()
-                            .top(rows_top)
-                            .left_0()
-                            .flex()
-                            .flex_col()
-                            .children((first_row..last_row).map(|index| {
-                                let marked = changes.marked.get(index).copied().unwrap_or(false);
-
-                                div()
-                                    .id(SharedString::from(format!(
-                                        "secret-value-editor-line-{index}"
-                                    )))
-                                    .flex()
-                                    .h(line_height)
-                                    .child(
-                                        div()
-                                            .w(VIEWER_GUTTER_WIDTH)
-                                            .pr(DocumentMetrics::GAP)
-                                            .flex()
-                                            .justify_end()
-                                            .child(
-                                                div()
-                                                    .id(SharedString::from(format!(
-                                                        "secret-value-editor-line-{index}-number"
-                                                    )))
-                                                    .child((index + 1).to_string()),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(MARKER_WIDTH)
-                                            .mr(DocumentMetrics::GAP)
-                                            .h_full()
-                                            .when(marked, |bar| {
-                                                bar.child(
-                                            div()
-                                                .id(SharedString::from(format!(
-                                                    "secret-value-editor-line-{index}-marker"
-                                                )))
-                                                .size_full()
-                                                .bg(warning),
-                                        )
-                                            }),
-                                    )
-                            })),
-                    ),
-            )
-            // Reserves the gutter's width; its rows are positioned over it.
-            .child(
-                div()
-                    .invisible()
-                    .flex()
-                    .h(line_height)
-                    .child(div().w(VIEWER_GUTTER_WIDTH).pr(DocumentMetrics::GAP))
-                    .child(div().w(MARKER_WIDTH).mr(DocumentMetrics::GAP)),
-            );
+        let tint = render_change_tint(changes, &rows, warning);
+        let gutter = render_line_gutter(changes, &rows, muted, warning);
 
         div()
             .relative()
@@ -390,6 +262,56 @@ impl SecretStoreDocument {
             )
     }
 
+    /// Which rows of the value the viewport shows and where the row area
+    /// sits, from the textarea's last layout.
+    fn editor_row_layout(
+        &self,
+        editor: &Entity<TextareaState>,
+        changes: &LineChanges,
+        cx: &App,
+    ) -> EditorRowLayout {
+        let state = editor.read(cx);
+        let line_count = changes.marked.len().max(1);
+        let offset = state.scroll_offset().y;
+        let line_height = state
+            .line_height()
+            .unwrap_or_else(|| super::fallback_line_height(cx));
+        // Only the rows the viewport can show are drawn, however long the
+        // value is; the margin covers the frame the scroll lags behind.
+        let first_row = (-offset / line_height).floor().max(0.0) as usize;
+        let last_row = (first_row + VIEWER_VISIBLE_LINES as usize + 2).min(line_count);
+        let first_row = first_row.min(last_row);
+        let rows_top = offset + line_height * first_row as f32;
+        let origin = self
+            .value_edit
+            .as_ref()
+            .map(|edit| edit.rows_origin.clone())
+            .unwrap_or_default();
+        // The text viewport inside the row area: lower than the top when the
+        // Find panel is open. Rows are placed and clipped against it.
+        // `text_bounds()` already includes the scroll offset, so the origin
+        // comes from the unscrolled input bounds. Before the first layout
+        // there are none: the text starts at the textarea's top padding.
+        let viewport_top = match state.text_bounds() {
+            Some(_) => (state.input_bounds().origin.y - origin.get()).max(px(0.0)),
+            None => gpui_component::Size::default().input_py(),
+        };
+        let viewport_height = match state.input_bounds().size.height {
+            height if height > px(0.0) => height,
+            _ => line_height * VIEWER_VISIBLE_LINES,
+        };
+
+        EditorRowLayout {
+            line_height,
+            first_row,
+            last_row,
+            rows_top,
+            viewport_top,
+            viewport_height,
+            origin,
+        }
+    }
+
     /// Encoding, size of what Save would write, the version being edited,
     /// the number of changed lines and the caret. Counts and ids only.
     fn render_editor_footer(
@@ -412,17 +334,7 @@ impl SecretStoreDocument {
             size = size
         );
 
-        let changed = changes.changed();
-        let changed_label = match changed {
-            0 => None,
-            1 => Some(dbflux_i18n::t!(
-                "document.secret_store.edit.footer.changed_one"
-            )),
-            count => Some(dbflux_i18n::t!(
-                "document.secret_store.edit.footer.changed_other",
-                count = count.to_string()
-            )),
-        };
+        let changed_label = changed_lines_label(changes.changed());
 
         let caret = editor.read(cx).cursor_position();
         let caret_label = dbflux_i18n::t!(
@@ -461,27 +373,7 @@ impl SecretStoreDocument {
                             .child(summary),
                     )
                     .when_some(version, |details, version| {
-                        let short = if version.parse::<u64>().is_ok() {
-                            crate::secret_store::render::version_label(Some(&version))
-                        } else {
-                            crate::secret_store::details::short_version_id(&version)
-                        };
-                        let label = dbflux_i18n::t!(
-                            "document.secret_store.edit.footer.version",
-                            version = short
-                        );
-
-                        details.child(
-                            div()
-                                .id("secret-value-editor-footer-version")
-                                .role(gpui::accesskit::Role::Label)
-                                .aria_label(version.clone())
-                                .tooltip(move |window, cx| {
-                                    gpui_component::tooltip::Tooltip::new(version.clone())
-                                        .build(window, cx)
-                                })
-                                .child(format!("· {label}")),
-                        )
+                        details.child(footer_version(version))
                     }),
             )
             .child(div().flex_1())
@@ -502,4 +394,190 @@ impl SecretStoreDocument {
                     ),
             )
     }
+}
+
+/// Where the editor's rows are drawn: the window of rows the viewport shows
+/// and the row area they sit in.
+#[derive(Clone)]
+struct EditorRowLayout {
+    line_height: Pixels,
+    first_row: usize,
+    last_row: usize,
+    rows_top: Pixels,
+    viewport_top: Pixels,
+    viewport_height: Pixels,
+    origin: std::rc::Rc<std::cell::Cell<Pixels>>,
+}
+
+/// The row tint behind every changed line.
+fn render_change_tint(
+    changes: &LineChanges,
+    rows: &EditorRowLayout,
+    warning: Hsla,
+) -> Stateful<Div> {
+    let EditorRowLayout {
+        line_height,
+        first_row,
+        last_row,
+        rows_top,
+        viewport_top,
+        viewport_height,
+        ..
+    } = *rows;
+
+    div()
+        .id("secret-value-editor-tint")
+        .absolute()
+        .top(viewport_top)
+        .left_0()
+        .w_full()
+        .h(viewport_height)
+        .overflow_hidden()
+        .child(
+            div()
+                .absolute()
+                .top(rows_top)
+                .left_0()
+                .w_full()
+                .flex()
+                .flex_col()
+                .children(
+                    changes
+                        .marked
+                        .iter()
+                        .skip(first_row)
+                        .take(last_row - first_row)
+                        .map(|marked| {
+                            div()
+                                .h(line_height)
+                                .w_full()
+                                .when(*marked, |row| row.bg(warning.opacity(TINT_OPACITY)))
+                        }),
+                ),
+        )
+}
+
+/// The gutter: one right-aligned number per drawn row and a bar on the
+/// changed ones.
+fn render_line_gutter(
+    changes: &LineChanges,
+    rows: &EditorRowLayout,
+    muted: Hsla,
+    warning: Hsla,
+) -> Stateful<Div> {
+    let EditorRowLayout {
+        line_height,
+        first_row,
+        last_row,
+        rows_top,
+        viewport_top,
+        viewport_height,
+        ..
+    } = *rows;
+
+    div()
+        .id("secret-value-editor-gutter")
+        .relative()
+        .flex_shrink_0()
+        .aria_hidden(true)
+        .text_color(muted)
+        .child(
+            div()
+                .absolute()
+                .top(viewport_top)
+                .left_0()
+                .w_full()
+                .h(viewport_height)
+                .overflow_hidden()
+                .child(
+                    div()
+                        .absolute()
+                        .top(rows_top)
+                        .left_0()
+                        .flex()
+                        .flex_col()
+                        .children((first_row..last_row).map(|index| {
+                            let marked = changes.marked.get(index).copied().unwrap_or(false);
+
+                            div()
+                                .id(SharedString::from(format!(
+                                    "secret-value-editor-line-{index}"
+                                )))
+                                .flex()
+                                .h(line_height)
+                                .child(
+                                    div()
+                                        .w(VIEWER_GUTTER_WIDTH)
+                                        .pr(DocumentMetrics::GAP)
+                                        .flex()
+                                        .justify_end()
+                                        .child(
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "secret-value-editor-line-{index}-number"
+                                                )))
+                                                .child((index + 1).to_string()),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .w(MARKER_WIDTH)
+                                        .mr(DocumentMetrics::GAP)
+                                        .h_full()
+                                        .when(marked, |bar| {
+                                            bar.child(
+                                                div()
+                                                    .id(SharedString::from(format!(
+                                                        "secret-value-editor-line-{index}-marker"
+                                                    )))
+                                                    .size_full()
+                                                    .bg(warning),
+                                            )
+                                        }),
+                                )
+                        })),
+                ),
+        )
+        // Reserves the gutter's width; its rows are positioned over it.
+        .child(
+            div()
+                .invisible()
+                .flex()
+                .h(line_height)
+                .child(div().w(VIEWER_GUTTER_WIDTH).pr(DocumentMetrics::GAP))
+                .child(div().w(MARKER_WIDTH).mr(DocumentMetrics::GAP)),
+        )
+}
+
+/// "N changed lines", `None` while nothing differs from the stored text.
+fn changed_lines_label(changed: usize) -> Option<String> {
+    match changed {
+        0 => None,
+        1 => Some(dbflux_i18n::t!(
+            "document.secret_store.edit.footer.changed_one"
+        )),
+        count => Some(dbflux_i18n::t!(
+            "document.secret_store.edit.footer.changed_other",
+            count = count.to_string()
+        )),
+    }
+}
+
+/// The version being edited, short in the footer and whole in its tooltip.
+fn footer_version(version: String) -> Stateful<Div> {
+    let short = if version.parse::<u64>().is_ok() {
+        crate::secret_store::render::version_label(Some(&version))
+    } else {
+        crate::secret_store::view::details::short_version_id(&version)
+    };
+    let label = dbflux_i18n::t!("document.secret_store.edit.footer.version", version = short);
+
+    div()
+        .id("secret-value-editor-footer-version")
+        .role(gpui::accesskit::Role::Label)
+        .aria_label(version.clone())
+        .tooltip(move |window, cx| {
+            gpui_component::tooltip::Tooltip::new(version.clone()).build(window, cx)
+        })
+        .child(format!("· {label}"))
 }

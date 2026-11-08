@@ -1,0 +1,493 @@
+//! The details pane of a `SecretView`: the selected secret's value
+//! section, its details, its rotation and its tags.
+
+mod sections;
+mod value;
+mod versions;
+
+#[cfg(test)]
+pub(in crate::secret_store) use value::value_view_items;
+
+use self::sections::managed_card;
+use super::{DetailsState, SecretView, SecretViewEvent, ValueState, VersionsState};
+use crate::secret_store::render::{UNKNOWN, format_optional_time, version_label};
+use dbflux_app::keymap::ContextId;
+use dbflux_components::controls::Button;
+use dbflux_components::fonts;
+use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text};
+use dbflux_components::tokens::{ChromeColors, DocumentMetrics, SecretStoreMetrics, ui};
+use dbflux_core::{SecretDetails, SecretStoreCapabilities, SecretSummary};
+use gpui::prelude::*;
+use gpui::*;
+use gpui_component::ActiveTheme;
+use gpui_component::scroll::Scrollbar;
+
+/// Lines the multi-line viewer keeps visible before it scrolls, so the
+/// sections below the value keep their place.
+pub(in crate::secret_store) const VIEWER_VISIBLE_LINES: f32 = 14.0;
+
+/// Width of the viewer's line-number gutter: three digits at the editor size.
+pub(in crate::secret_store) const VIEWER_GUTTER_WIDTH: Rems = ui(28.0);
+
+/// Characters of a version id the table shows before the ellipsis.
+const VERSION_ID_CHARS: usize = 8;
+
+pub(super) fn section_title(title: String, cx: &App) -> Div {
+    div()
+        .text_size(DocumentMetrics::DETAIL_LABEL_FONT)
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(cx.theme().muted_foreground)
+        .child(title.to_uppercase())
+}
+
+/// A disabled Rotate now button that says why: the reason is its tooltip and
+/// part of its accessible name.
+pub(in crate::secret_store) fn rotate_with_reason(button: Button, reason: String) -> Button {
+    button
+        .aria_label(format!(
+            "{}: {reason}",
+            dbflux_i18n::t!("document.secret_store.rotate.button")
+        ))
+        .tooltip(reason)
+}
+
+/// A section whose title row ends with an action button, such as the Edit of
+/// Details and Tags.
+pub(super) fn section_with_action(
+    title: String,
+    action: Option<AnyElement>,
+    rows: Vec<AnyElement>,
+    cx: &App,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(SecretStoreMetrics::ROW_GAP)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(DocumentMetrics::GAP)
+                .child(section_title(title, cx))
+                .child(div().flex_1())
+                .children(action),
+        )
+        .children(rows)
+}
+
+pub(super) fn section(title: String, rows: Vec<AnyElement>, cx: &App) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(SecretStoreMetrics::ROW_GAP)
+        .child(section_title(title, cx))
+        .children(rows)
+}
+
+/// One `label  value` row of a details section, the value in mono.
+pub(super) fn detail_row(label: String, value: String, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+
+    div()
+        .flex()
+        .items_start()
+        .gap(DocumentMetrics::GAP)
+        .text_size(DocumentMetrics::TABLE_META_FONT)
+        .child(
+            div()
+                .w(SecretStoreMetrics::LABEL_WIDTH)
+                .flex_shrink_0()
+                .text_color(theme.muted_foreground)
+                .child(label),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .font_family(dbflux_components::fonts::editor_family(cx))
+                .text_color(ChromeColors::strong(theme))
+                .child(value),
+        )
+        .into_any_element()
+}
+
+/// The last retrieval as a date. AWS reports it rounded down to the day, as
+/// midnight UTC, so a local time of day would be one that never happened and
+/// could read earlier than the creation date.
+pub(in crate::secret_store) fn last_retrieved_label(
+    time: Option<dbflux_core::chrono::DateTime<dbflux_core::chrono::Utc>>,
+) -> String {
+    time.map_or_else(
+        || UNKNOWN.to_string(),
+        |time| time.date_naive().format("%Y-%m-%d").to_string(),
+    )
+}
+
+pub(super) fn or_unknown(value: Option<&str>) -> String {
+    value.map_or_else(|| UNKNOWN.to_string(), str::to_string)
+}
+
+/// The last change, with the principal that made it when the store reports
+/// one.
+pub(super) fn last_changed_label(details: &SecretDetails) -> String {
+    let when = format_optional_time(details.summary.last_changed);
+
+    match details.last_changed_by.as_deref() {
+        Some(by) => format!("{when} · {by}"),
+        None => when,
+    }
+}
+
+/// `a41c09e2-…` as `a41c09e2…`: the first characters of an id longer than the
+/// column, so ids that differ late stay distinguishable by the row, not the
+/// text.
+pub(in crate::secret_store) fn short_version_id(id: &str) -> String {
+    let mut chars = id.chars();
+    let head: String = chars.by_ref().take(VERSION_ID_CHARS).collect();
+
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
+impl SecretView {
+    pub(in crate::secret_store) fn render_pane(
+        &mut self,
+        host_context: ContextId,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.host_context = host_context;
+
+        let border = cx.theme().border;
+        let background = cx.theme().background;
+
+        let body: AnyElement = match (&self.name, self.selected_summary().cloned()) {
+            (Some(_), Some(summary)) => self.render_secret_details(&summary, cx).into_any_element(),
+            _ => div()
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(SecretStoreMetrics::DETAILS_PADDING_X)
+                .child(
+                    Text::body(dbflux_i18n::t!("document.secret_store.details.none"))
+                        .muted_foreground(),
+                )
+                .into_any_element(),
+        };
+
+        div()
+            .id("secret-details")
+            .w(SecretStoreMetrics::DETAILS_WIDTH)
+            .flex_shrink_1()
+            .min_w(SecretStoreMetrics::DETAILS_MIN_WIDTH)
+            .h_full()
+            .flex()
+            .flex_col()
+            .border_l_1()
+            .border_color(border)
+            .bg(background)
+            .child(body)
+            .into_any_element()
+    }
+
+    pub(super) fn render_secret_details(
+        &self,
+        summary: &SecretSummary,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let mut sections: Vec<AnyElement> =
+            vec![self.render_value_section(summary, cx).into_any_element()];
+
+        if let Some(service) = summary.owning_service.as_deref() {
+            sections.push(managed_card(&summary.name, service).into_any_element());
+        }
+
+        // The history loads apart from the describe, so it shows whatever
+        // state the describe is in; it sits after the metadata when there is
+        // one.
+        let mut versions = self.render_versions_section(cx);
+
+        match &self.details {
+            DetailsState::Loaded(details) => {
+                sections.push(self.render_metadata_section(details, cx).into_any_element());
+                sections.extend(versions.take());
+
+                if self.store.supports(SecretStoreCapabilities::ROTATION) {
+                    sections.push(self.render_rotation_section(details, cx).into_any_element());
+                }
+
+                sections.push(self.render_tags_section(details, cx).into_any_element());
+            }
+            DetailsState::Loading => sections.push(
+                Text::caption(dbflux_i18n::t!("document.secret_store.details.loading"))
+                    .muted_foreground()
+                    .into_any_element(),
+            ),
+            DetailsState::Failed(error) => sections.push(
+                BannerBlock::new(
+                    BannerVariant::Danger,
+                    dbflux_i18n::t!("document.secret_store.details.failed"),
+                )
+                .with_body(error.clone())
+                .into_any_element(),
+            ),
+            DetailsState::Idle => {}
+        }
+
+        sections.extend(versions);
+
+        let header = self.render_details_header(summary, cx);
+
+        let bar = self.render_action_bar(cx);
+
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(
+                // The viewport ends where the action bar begins, so the bar
+                // stays pinned and never covers content: the sections scroll
+                // inside it on their own handle.
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .id("secret-details-body")
+                            .size_full()
+                            .track_scroll(&self.details_scroll)
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .gap(SecretStoreMetrics::SECTION_GAP)
+                            .px(SecretStoreMetrics::DETAILS_PADDING_X)
+                            .py(SecretStoreMetrics::DETAILS_PADDING_Y)
+                            .children(sections),
+                    )
+                    .child(Scrollbar::vertical(&self.details_scroll)),
+            )
+            .children(bar)
+    }
+
+    /// The secret's name with the pane's two actions: Copy name and Close.
+    /// The artboard's third button, open in a tab, waits for the document per
+    /// secret.
+    pub(super) fn render_details_header(
+        &self,
+        summary: &SecretSummary,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = cx.theme();
+        let border = theme.border;
+        let warning = theme.warning;
+        let danger = theme.danger;
+        let strong = ChromeColors::strong(theme);
+
+        div()
+            .id("secret-details-header")
+            .flex()
+            .items_center()
+            .gap(DocumentMetrics::GAP)
+            .px(SecretStoreMetrics::DETAILS_PADDING_X)
+            .py(SecretStoreMetrics::DETAILS_PADDING_Y)
+            .border_b_1()
+            .border_color(border)
+            .child(
+                Icon::new(AppIcon::KeyRound)
+                    .size(DocumentMetrics::TITLE_ICON)
+                    .color(warning),
+            )
+            .child(
+                div()
+                    .id("secret-details-name")
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(fonts::editor_family(cx))
+                    .font_weight(FontWeight::BOLD)
+                    .text_size(SecretStoreMetrics::NAME_FONT)
+                    .text_color(strong)
+                    .child(summary.name.clone()),
+            )
+            .child(
+                Button::new(
+                    "secret-details-copy-name",
+                    dbflux_i18n::t!("document.secret_store.context_menu.copy_name"),
+                )
+                .ghost()
+                .icon(AppIcon::Copy)
+                .icon_only()
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| this.copy_selected_name(cx))),
+            )
+            .when(self.supports_delete(), |header| {
+                header.child(
+                    Button::new(
+                        "secret-details-delete",
+                        dbflux_i18n::t!("document.secret_store.delete.button"),
+                    )
+                    .ghost()
+                    .icon(AppIcon::Delete)
+                    .icon_only()
+                    .text_color(danger)
+                    .tab_stop(false)
+                    .disabled(!self.can_delete_selected())
+                    .on_click(cx.listener(|this, _, window, cx| this.open_delete(window, cx))),
+                )
+            })
+            .child(
+                Button::new(
+                    "secret-details-close",
+                    dbflux_i18n::t!("document.secret_store.details.close"),
+                )
+                .ghost()
+                .icon(AppIcon::X)
+                .icon_only()
+                .tab_stop(false)
+                .on_click(cx.listener(|_, _, _, cx| cx.emit(SecretViewEvent::CloseRequested))),
+            )
+    }
+
+    /// The details the describe reported. A typed store shows its type, tier
+    /// and data type; every store shows the identifier, description,
+    /// encryption key, versions and the change dates it reports.
+    pub(super) fn render_metadata_section(
+        &self,
+        details: &SecretDetails,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let rows = self.metadata_rows(details, cx);
+        let edit = self.edit_description_action(cx);
+
+        section_with_action(
+            dbflux_i18n::t!("document.secret_store.details.title"),
+            edit,
+            rows,
+            cx,
+        )
+    }
+
+    /// One row per fact the describe reported: the deletion state first when
+    /// one is scheduled, then the identifier, the typed-store fields and the
+    /// change dates.
+    fn metadata_rows(&self, details: &SecretDetails, cx: &App) -> Vec<AnyElement> {
+        let summary = &details.summary;
+        let typed = self.store.supports(SecretStoreCapabilities::TYPED_VALUES);
+        let label = |key: &str| dbflux_i18n::t!(key);
+
+        let mut rows = Vec::new();
+
+        // A scheduled deletion leads the details, as its state does.
+        if let Some(date) = summary.deletion_scheduled_for {
+            rows.push(detail_row(
+                label("document.secret_store.delete.row_deleted"),
+                format_optional_time(details.deleted_at),
+                cx,
+            ));
+            rows.push(detail_row(
+                label("document.secret_store.delete.row_deletes_on"),
+                format_optional_time(Some(date)),
+                cx,
+            ));
+        }
+
+        rows.push(detail_row(
+            label("document.secret_store.details.resource_id"),
+            or_unknown(details.resource_id.as_deref()),
+            cx,
+        ));
+
+        if typed {
+            rows.push(detail_row(
+                label("document.secret_store.details.type"),
+                or_unknown(summary.value_type.as_deref()),
+                cx,
+            ));
+            rows.push(detail_row(
+                label("document.secret_store.details.tier"),
+                or_unknown(summary.tier.as_deref()),
+                cx,
+            ));
+            rows.push(detail_row(
+                label("document.secret_store.details.data_type"),
+                or_unknown(details.data_type.as_deref()),
+                cx,
+            ));
+        }
+
+        rows.push(detail_row(
+            label("document.secret_store.details.encryption_key"),
+            or_unknown(details.encryption_key.as_deref()),
+            cx,
+        ));
+        rows.push(detail_row(
+            label("document.secret_store.details.description"),
+            or_unknown(summary.description.as_deref()),
+            cx,
+        ));
+
+        if typed {
+            rows.push(detail_row(
+                label("document.secret_store.details.version"),
+                version_label(summary.version.as_deref()),
+                cx,
+            ));
+            rows.push(detail_row(
+                label("document.secret_store.details.last_modified"),
+                last_changed_label(details),
+                cx,
+            ));
+        } else {
+            rows.push(detail_row(
+                label("document.secret_store.details.created"),
+                format_optional_time(details.created),
+                cx,
+            ));
+            rows.push(detail_row(
+                label("document.secret_store.details.last_changed"),
+                last_changed_label(details),
+                cx,
+            ));
+            rows.push(detail_row(
+                label("document.secret_store.details.last_retrieved"),
+                last_retrieved_label(details.last_accessed),
+                cx,
+            ));
+        }
+
+        rows
+    }
+
+    /// The Edit button of the Details section, for a store that changes the
+    /// description alone.
+    fn edit_description_action(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        // A store that changes the description alone has Edit here; one that
+        // rewrites the value for it has Edit description in the bottom bar.
+        (self.supports_description_edit() && !self.description_edit_rewrites_value()).then(|| {
+            let button = Button::new(
+                "secret-details-edit",
+                dbflux_i18n::t!("document.secret_store.description_edit.short"),
+            )
+            .icon(AppIcon::Pencil)
+            .aria_label(dbflux_i18n::t!(
+                "document.secret_store.description_edit.button"
+            ))
+            .tab_stop(false)
+            .disabled(!self.can_edit_description())
+            .on_click(cx.listener(|this, _, window, cx| this.open_edit_description(window, cx)));
+
+            match self.write_refusal_reason() {
+                Some(reason) => button.tooltip(reason),
+                None => button,
+            }
+            .into_any_element()
+        })
+    }
+}

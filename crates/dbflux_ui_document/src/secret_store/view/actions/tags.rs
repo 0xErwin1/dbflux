@@ -12,9 +12,10 @@
 use super::{
     DialogShell, FooterSpec, Landing, WriteDialog, WriteEffect, dialog_footer, dialog_modal,
 };
+use crate::secret_store::DetailsState;
 use crate::secret_store::SecretOperation;
+use crate::secret_store::view::SecretView;
 use crate::secret_store::write::update_secret_tags;
-use crate::secret_store::{DetailsState, SecretRowKey, SecretStoreDocument};
 use dbflux_components::controls::{Button, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Text;
@@ -29,8 +30,8 @@ const TAGS_CAPABILITIES: SecretStoreCapabilities =
 
 /// One row of the dialog: a tag being edited.
 pub(in crate::secret_store) struct TagRow {
-    pub(super) key: Entity<InputState>,
-    pub(super) value: Entity<InputState>,
+    pub(in crate::secret_store) key: Entity<InputState>,
+    pub(in crate::secret_store) value: Entity<InputState>,
     _subscriptions: [Subscription; 2],
 }
 
@@ -47,9 +48,62 @@ pub(in crate::secret_store) struct TagsDialog {
     touched: bool,
 }
 
+/// Builds one editable tag row. `on_change` runs on the owner of the row
+/// after every edit of either field, so the owner's dialog can mark itself
+/// touched.
+pub(in crate::secret_store) fn new_tag_row<H: 'static>(
+    key: &str,
+    value: &str,
+    window: &mut Window,
+    cx: &mut Context<H>,
+    on_change: fn(&mut H, &mut Context<H>),
+) -> TagRow {
+    let build = |window: &mut Window, cx: &mut Context<H>, placeholder: String, text: &str| {
+        cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder(placeholder);
+
+            if !text.is_empty() {
+                state.set_value(text, window, cx);
+            }
+
+            state
+        })
+    };
+
+    let key_input = build(
+        window,
+        cx,
+        dbflux_i18n::t!("document.secret_store.tags_edit.key_placeholder"),
+        key,
+    );
+    let value_input = build(
+        window,
+        cx,
+        dbflux_i18n::t!("document.secret_store.tags_edit.value_placeholder"),
+        value,
+    );
+
+    // Every keystroke feeds the validation shown under the rows.
+    let watch = |input: &Entity<InputState>, cx: &mut Context<H>| {
+        cx.subscribe(input, move |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                on_change(this, cx);
+                cx.notify();
+            }
+        })
+    };
+    let subscriptions = [watch(&key_input, cx), watch(&value_input, cx)];
+
+    TagRow {
+        key: key_input,
+        value: value_input,
+        _subscriptions: subscriptions,
+    }
+}
+
 impl TagRow {
     /// The row's tag, `None` for a row left entirely empty.
-    pub(super) fn tag(&self, cx: &App) -> Option<SecretTag> {
+    pub(in crate::secret_store) fn tag(&self, cx: &App) -> Option<SecretTag> {
         let key = self.key.read(cx).value().to_string();
         let value = self.value.read(cx).value().to_string();
 
@@ -140,7 +194,7 @@ impl TagsProblem {
     }
 }
 
-impl SecretStoreDocument {
+impl SecretView {
     /// Whether the store can edit tags at all.
     pub fn supports_tags(&self) -> bool {
         self.store_allows(TAGS_CAPABILITIES)
@@ -153,7 +207,7 @@ impl SecretStoreDocument {
             && !self.write_in_flight
             && !self.dialog_is_open()
             && self.write_refusal_reason().is_none()
-            && matches!(self.selected, Some(SecretRowKey::Secret(_)))
+            && self.name.is_some()
             && matches!(self.details, DetailsState::Loaded(_))
     }
 
@@ -177,7 +231,7 @@ impl SecretStoreDocument {
 
         let rows: Vec<TagRow> = original
             .iter()
-            .map(|tag| Self::new_tag_row(&tag.key, &tag.value, window, cx))
+            .map(|tag| new_tag_row(&tag.key, &tag.value, window, cx, Self::touch_tags_dialog))
             .collect();
         let focus = rows.first().map(|row| row.key.read(cx).focus_handle(cx));
 
@@ -194,63 +248,20 @@ impl SecretStoreDocument {
         );
     }
 
-    pub(super) fn new_tag_row(
-        key: &str,
-        value: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> TagRow {
-        let build =
-            |window: &mut Window, cx: &mut Context<Self>, placeholder: String, text: &str| {
-                cx.new(|cx| {
-                    let mut state = InputState::new(window, cx).placeholder(placeholder);
-
-                    if !text.is_empty() {
-                        state.set_value(text, window, cx);
-                    }
-
-                    state
-                })
-            };
-
-        let key_input = build(
-            window,
-            cx,
-            dbflux_i18n::t!("document.secret_store.tags_edit.key_placeholder"),
-            key,
-        );
-        let value_input = build(
-            window,
-            cx,
-            dbflux_i18n::t!("document.secret_store.tags_edit.value_placeholder"),
-            value,
-        );
-
-        // Every keystroke feeds the validation shown under the rows.
-        let watch = |input: &Entity<InputState>, cx: &mut Context<Self>| {
-            cx.subscribe(input, |this, _, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Change) {
-                    match &mut this.dialog {
-                        Some(WriteDialog::Tags(dialog)) => dialog.touched = true,
-                        Some(WriteDialog::Create(dialog)) => dialog.touched = true,
-                        _ => {}
-                    }
-                    cx.notify();
-                }
-            })
-        };
-        let subscriptions = [watch(&key_input, cx), watch(&value_input, cx)];
-
-        TagRow {
-            key: key_input,
-            value: value_input,
-            _subscriptions: subscriptions,
+    /// A row of the open dialog was edited: its problems are worth showing.
+    fn touch_tags_dialog(&mut self, _cx: &mut Context<Self>) {
+        if let Some(WriteDialog::Tags(dialog)) = &mut self.dialog {
+            dialog.touched = true;
         }
     }
 
     /// Adds an empty row to the open dialog and moves the keyboard to its
     /// key.
     pub fn add_tag_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.write_in_flight {
+            return;
+        }
+
         let Some(WriteDialog::Tags(dialog)) = &self.dialog else {
             return;
         };
@@ -259,7 +270,7 @@ impl SecretStoreDocument {
             return;
         }
 
-        let row = Self::new_tag_row("", "", window, cx);
+        let row = new_tag_row("", "", window, cx, Self::touch_tags_dialog);
         let focus = row.key.read(cx).focus_handle(cx);
 
         if let Some(WriteDialog::Tags(dialog)) = &mut self.dialog {
@@ -273,6 +284,10 @@ impl SecretStoreDocument {
 
     /// Removes the row at `index` from the open dialog.
     pub fn remove_tag_row(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.write_in_flight {
+            return;
+        }
+
         if let Some(WriteDialog::Tags(dialog)) = &mut self.dialog
             && index < dialog.rows.len()
         {
@@ -351,84 +366,7 @@ impl SecretStoreDocument {
             .filter(|problem| dialog.touched || !matches!(problem, TagsProblem::NoChange))
             .map(TagsProblem::message);
 
-        let rows: Vec<AnyElement> = dialog
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(index, row)| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .child(
-                        div().flex_1().min_w_0().child(
-                            Input::new(&row.key)
-                                .id(SharedString::from(format!("secret-tags-key-{index}")))
-                                .aria_label(dbflux_i18n::t!(
-                                    "document.secret_store.tags_edit.key_label",
-                                    row = index + 1
-                                ))
-                                .w_full(),
-                        ),
-                    )
-                    .child(
-                        div().flex_1().min_w_0().child(
-                            Input::new(&row.value)
-                                .id(SharedString::from(format!("secret-tags-value-{index}")))
-                                .aria_label(dbflux_i18n::t!(
-                                    "document.secret_store.tags_edit.value_label",
-                                    row = index + 1
-                                ))
-                                .w_full(),
-                        ),
-                    )
-                    .child(
-                        Button::new(
-                            SharedString::from(format!("secret-tags-remove-{index}")),
-                            dbflux_i18n::t!("document.secret_store.tags_edit.remove"),
-                        )
-                        .ghost()
-                        .icon(AppIcon::X)
-                        .icon_only()
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.remove_tag_row(index, cx)),
-                        ),
-                    )
-                    .into_any_element()
-            })
-            .collect();
-
-        let mut body = div().flex().flex_col().gap(ModalMetrics::HEADER_GAP).child(
-            Text::caption(dbflux_i18n::t!("document.secret_store.tags_edit.lead"))
-                .muted_foreground(),
-        );
-
-        if dialog.rows.is_empty() {
-            body = body.child(
-                Text::caption(dbflux_i18n::t!("document.secret_store.tags.none"))
-                    .muted_foreground(),
-            );
-        }
-
-        body = body.children(rows).child(
-            div().flex().child(
-                Button::new(
-                    "secret-tags-add",
-                    dbflux_i18n::t!("document.secret_store.tags_edit.add"),
-                )
-                .icon(AppIcon::Plus)
-                .disabled(at_limit)
-                .on_click(cx.listener(|this, _, window, cx| this.add_tag_row(window, cx))),
-            ),
-        );
-
-        if let Some(message) = shown {
-            body = body.child(
-                div()
-                    .id("secret-tags-problem")
-                    .child(Text::caption(message).danger()),
-            );
-        }
+        let body = self.render_tags_body(dialog, shown, at_limit, cx);
 
         let footer = dialog_footer(
             FooterSpec {
@@ -460,4 +398,106 @@ impl SecretStoreDocument {
             cx,
         )
     }
+
+    /// The lead, the rows, the Add tag button and the problem line.
+    fn render_tags_body(
+        &self,
+        dialog: &TagsDialog,
+        shown: Option<String>,
+        at_limit: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        // The request carries the rows as they were when Save was pressed, so
+        // the form keeps them until the write answers.
+        let locked = self.write_in_flight;
+        let rows: Vec<AnyElement> = dialog
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| render_tag_row(index, row, locked, cx))
+            .collect();
+
+        let mut body = div().flex().flex_col().gap(ModalMetrics::HEADER_GAP).child(
+            Text::caption(dbflux_i18n::t!("document.secret_store.tags_edit.lead"))
+                .muted_foreground(),
+        );
+
+        if dialog.rows.is_empty() {
+            body = body.child(
+                Text::caption(dbflux_i18n::t!("document.secret_store.tags.none"))
+                    .muted_foreground(),
+            );
+        }
+
+        body = body.children(rows).child(
+            div().flex().child(
+                Button::new(
+                    "secret-tags-add",
+                    dbflux_i18n::t!("document.secret_store.tags_edit.add"),
+                )
+                .icon(AppIcon::Plus)
+                .disabled(at_limit || locked)
+                .on_click(cx.listener(|this, _, window, cx| this.add_tag_row(window, cx))),
+            ),
+        );
+
+        if let Some(message) = shown {
+            body = body.child(
+                div()
+                    .id("secret-tags-problem")
+                    .child(Text::caption(message).danger()),
+            );
+        }
+
+        body
+    }
+}
+
+/// One editable tag: its key, its value and the button that removes it.
+fn render_tag_row(
+    index: usize,
+    row: &TagRow,
+    locked: bool,
+    cx: &mut Context<SecretView>,
+) -> AnyElement {
+    div()
+        .flex()
+        .items_center()
+        .gap(Spacing::SM)
+        .child(
+            div().flex_1().min_w_0().child(
+                Input::new(&row.key)
+                    .id(SharedString::from(format!("secret-tags-key-{index}")))
+                    .aria_label(dbflux_i18n::t!(
+                        "document.secret_store.tags_edit.key_label",
+                        row = index + 1
+                    ))
+                    .disabled(locked)
+                    .w_full(),
+            ),
+        )
+        .child(
+            div().flex_1().min_w_0().child(
+                Input::new(&row.value)
+                    .id(SharedString::from(format!("secret-tags-value-{index}")))
+                    .aria_label(dbflux_i18n::t!(
+                        "document.secret_store.tags_edit.value_label",
+                        row = index + 1
+                    ))
+                    .disabled(locked)
+                    .w_full(),
+            ),
+        )
+        .child(
+            Button::new(
+                SharedString::from(format!("secret-tags-remove-{index}")),
+                dbflux_i18n::t!("document.secret_store.tags_edit.remove"),
+            )
+            .ghost()
+            .icon(AppIcon::X)
+            .icon_only()
+            .disabled(locked)
+            .on_click(cx.listener(move |this, _, _, cx| this.remove_tag_row(index, cx))),
+        )
+        .into_any_element()
 }

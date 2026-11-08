@@ -9,20 +9,19 @@
 //! closes. Behavior that differs between stores follows the store's
 //! `SecretStoreCapabilities`, never a driver id.
 
-mod actions;
 mod context_menu;
+mod create;
 mod data;
-mod details;
-mod editor;
 mod list;
 mod listing;
 mod pane;
+mod pane_actions;
 mod region;
 mod render;
 mod value;
+mod view;
 mod write;
 
-use actions::{RotationNotice, WriteDialog};
 use data::HistoryLoad;
 pub use listing::{PathMode, SecretListing};
 pub use region::RegionListState;
@@ -42,18 +41,17 @@ use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::controls::{Dropdown, DropdownSelectionChanged, InputEvent, InputState};
-use dbflux_components::modals::ModalFocus;
-use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
-    Connection, DriverCapabilities, RefreshPolicy, SecretDetails, SecretStoreCapabilities,
-    SecretStoreDescriptor, SecretSummary, SecretVersionInfo,
+    DriverCapabilities, RefreshPolicy, SecretStoreCapabilities, SecretStoreDescriptor,
 };
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::AppStateEntity;
-use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
-use std::sync::Arc;
+use std::cell::Cell;
+use std::rc::Rc;
 use uuid::Uuid;
+use view::SecretViewEvent;
+pub use view::{DetailsState, SecretView, VersionsState};
 
 /// Which part of the document owns keyboard input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,29 +68,6 @@ pub enum SecretRowKey {
     Secret(String),
     /// The row that loads the next page.
     LoadMore,
-}
-
-/// The describe of the selected secret.
-#[derive(Clone, Debug, Default)]
-pub enum DetailsState {
-    #[default]
-    Idle,
-    Loading,
-    Loaded(Box<SecretDetails>),
-    Failed(String),
-}
-
-/// The version history of the selected secret, loaded apart from its
-/// describe so a slow or refused history never hides the details.
-#[derive(Clone, Debug, Default)]
-pub enum VersionsState {
-    #[default]
-    Idle,
-    Loading,
-    Loaded(Vec<SecretVersionInfo>),
-    Failed(String),
-    /// The store does not advertise `SecretStoreCapabilities::VERSIONS`.
-    NotSupported,
 }
 
 /// The last store call and how long it took, for the status bar.
@@ -131,38 +106,10 @@ pub struct SecretStoreDocument {
     search_input: Entity<InputState>,
     focus_mode: SecretFocusMode,
     selected: Option<SecretRowKey>,
-    details: DetailsState,
-    details_generation: u64,
-    versions: VersionsState,
-    versions_generation: u64,
-    #[cfg(test)]
-    value_view_sets: usize,
-    /// The connection the history was listed from, so ids of a replaced
-    /// session are never retrieved against the new one.
-    versions_session: Option<Arc<dyn Connection>>,
-    /// Some path of this document already reported the missing connection
-    /// for the current selection, so the next one to find the same loss
-    /// stays quiet. Cleared when a connection is found again or the
-    /// selection is reset.
-    missing_connection_reported: bool,
-    /// The version whose value the value section shows or is retrieving,
-    /// `None` for the current value.
-    value_version: Option<String>,
-    value: ValueState,
-    value_generation: u64,
-    /// One read-only, secret-marked input per drawn value field, built on
-    /// the render pass after a retrieval (an input needs a `Window`).
-    value_inputs: Vec<Entity<InputState>>,
-    /// The masked flag last applied to each of `value_inputs`.
-    value_input_masks: Vec<bool>,
-    value_inputs_view: Option<ValueView>,
-    /// Scroll position of the multi-line viewer.
-    value_viewer_scroll: ScrollHandle,
-    /// The open editor of a plaintext value, if any.
-    value_edit: Option<editor::ValueEditState>,
-    /// Bumped when the value or the selection is dropped, so a write that
-    /// lands after the user moved on does not touch the pane.
-    value_write_generation: u64,
+    /// Everything that belongs to the selected secret: details, value,
+    /// history, the editor and the writes. The document tells it which row
+    /// is selected and reacts to what it reports.
+    view: Entity<SecretView>,
     last_call: Option<CallTiming>,
     /// Whether the connection's driver advertises `REGION_SWITCH`. Never a
     /// driver id: the capability gates the control.
@@ -177,8 +124,9 @@ pub struct SecretStoreDocument {
     /// Bumped by every region discovery, so a result that a newer discovery or
     /// a replaced connection made stale is dropped instead of shown.
     regions_generation: u64,
-    /// A region switch is reconnecting on the background executor.
-    region_switch_in_flight: bool,
+    /// A region switch is reconnecting on the background executor. Shared
+    /// with the view, whose writes wait for the switch.
+    region_switch_in_flight: Rc<Cell<bool>>,
     /// The toolbar region picker, built only when the driver can switch.
     region_dropdown: Option<Entity<Dropdown>>,
     /// The open right-click menu of the listing, if any.
@@ -189,42 +137,74 @@ pub struct SecretStoreDocument {
     /// The focus handle of the open menu's overlay, which takes the keyboard
     /// while the menu is up.
     context_menu_focus: FocusHandle,
-    /// The write dialog open over the document, if any.
-    dialog: Option<WriteDialog>,
-    /// Moves the keyboard into the dialog when it opens and hands it back
-    /// when it closes.
-    dialog_focus: ModalFocus,
-    /// The selected secret's last known summary, kept for the moment a reload
-    /// leaves its row off the pages loaded so far.
-    selected_cache: Option<SecretSummary>,
     /// Clears the search field on the next render, which has the window.
     clear_search_input: bool,
-    /// The connection the selected secret's details were loaded from.
-    details_session: Option<Arc<dyn Connection>>,
-    /// Scroll position of the details pane's sections.
-    details_scroll: ScrollHandle,
-    /// The session and the row the open dialog was opened on.
-    dialog_pin: Option<actions::DialogPin>,
-    /// A governed write is in flight. Another write waits for it, so a
-    /// double click cannot send the request twice.
-    write_in_flight: bool,
-    /// An editor save is in flight. Kept apart from the editor, which a
-    /// refresh or a reselection clears while the save is still out, so an
-    /// action write waits for the answer whatever became of the editor.
-    editor_save_in_flight: bool,
-    /// Bumped by every started rotation follow-up; an older schedule stops at
-    /// its next tick, so overlapping rotations share the latest one.
-    rotation_follow_up_generation: u64,
-    /// A rotation cancelled before it finished, shown in the Rotation
-    /// section while its secret stays selected.
-    rotation_notice: Option<RotationNotice>,
-    /// The bottom bar's Edit value was pressed before the value was
-    /// retrieved: the editor opens when the retrieval lands.
-    edit_after_retrieve: bool,
+    /// The New secret dialog's fields, while its slot in the view is open.
+    create_dialog: Option<create::CreateDialog>,
+    /// What the listing showed when the create in flight was sent, so its
+    /// landing can tell that the user moved on.
+    create_origin: Option<create::ListingView>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<DocumentEvent> for SecretStoreDocument {}
+
+/// What the document reads from the live connection when it opens.
+struct ConnectionFacts {
+    name: String,
+    descriptor: SecretStoreDescriptor,
+    region: Option<String>,
+    region_switchable: bool,
+}
+
+impl ConnectionFacts {
+    /// A connection without the store yields a descriptor that supports
+    /// nothing, so the document opens empty with an error.
+    fn read(
+        app_state: &Entity<AppStateEntity>,
+        profile_id: Uuid,
+        store_id: &str,
+        cx: &App,
+    ) -> Self {
+        let state = app_state.read(cx);
+        let connected = state.connections().get(&profile_id);
+
+        let name = connected
+            .map(|connected| connected.profile.name.clone())
+            .unwrap_or_default();
+
+        let descriptor = connected
+            .and_then(|connected| {
+                connected
+                    .connection
+                    .secret_store(store_id)
+                    .map(|store| store.descriptor().clone())
+            })
+            .unwrap_or_else(|| {
+                SecretStoreDescriptor::new(
+                    store_id.to_string(),
+                    store_id.to_string(),
+                    SecretStoreCapabilities::empty(),
+                )
+            });
+
+        let region = connected.and_then(|connected| connected.connection.current_region());
+        let region_switchable = connected.is_some_and(|connected| {
+            connected
+                .connection
+                .metadata()
+                .capabilities
+                .contains(DriverCapabilities::REGION_SWITCH)
+        });
+
+        Self {
+            name,
+            descriptor,
+            region,
+            region_switchable,
+        }
+    }
+}
 
 impl SecretStoreDocument {
     /// Opens the store `store_id` of the connection `profile_id`, at `path`
@@ -238,86 +218,20 @@ impl SecretStoreDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (connection_name, descriptor, region, region_switchable) = {
-            let state = app_state.read(cx);
-            let connected = state.connections().get(&profile_id);
+        let ConnectionFacts {
+            name: connection_name,
+            descriptor,
+            region,
+            region_switchable,
+        } = ConnectionFacts::read(&app_state, profile_id, &store_id, cx);
 
-            let name = connected
-                .map(|connected| connected.profile.name.clone())
-                .unwrap_or_default();
-
-            let descriptor = connected
-                .and_then(|connected| {
-                    connected
-                        .connection
-                        .secret_store(&store_id)
-                        .map(|store| store.descriptor().clone())
-                })
-                .unwrap_or_else(|| {
-                    SecretStoreDescriptor::new(
-                        store_id.clone(),
-                        store_id.clone(),
-                        SecretStoreCapabilities::empty(),
-                    )
-                });
-
-            let region = connected.and_then(|connected| connected.connection.current_region());
-            let region_switchable = connected.is_some_and(|connected| {
-                connected
-                    .connection
-                    .metadata()
-                    .capabilities
-                    .contains(DriverCapabilities::REGION_SWITCH)
-            });
-
-            (name, descriptor, region, region_switchable)
-        };
-
-        let search_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(dbflux_i18n::t!("document.secret_store.search_placeholder"))
-        });
-
-        let search_subscription = cx.subscribe_in(
-            &search_input,
-            window,
-            |this, input, event: &InputEvent, _window, cx| match event {
-                InputEvent::PressEnter { .. } => {
-                    let filter = input.read(cx).value().to_string();
-                    this.apply_name_filter(filter, cx);
-                }
-                InputEvent::Focus => {
-                    this.focus_mode = SecretFocusMode::Search;
-                    cx.notify();
-                }
-                InputEvent::Blur => {
-                    this.focus_mode = SecretFocusMode::Table;
-                    cx.notify();
-                }
-                InputEvent::Change => {}
-            },
-        );
-
+        let (search_input, search_subscription) = Self::build_search_input(window, cx);
         let path = path.filter(|_| descriptor.supports(SecretStoreCapabilities::HIERARCHICAL));
 
         // The picker exists only when the driver can switch regions; its
         // items arrive once the background listing lands.
         let (region_dropdown, region_subscription) = if region_switchable {
-            let dropdown = cx.new(|_cx| {
-                Dropdown::new("secret-region")
-                    .placeholder(dbflux_i18n::t!("document.secret_store.region.label"))
-                    .aria_label(dbflux_i18n::t!("document.secret_store.region.label"))
-                    .toolbar_style(true)
-                    .mono_label(true)
-            });
-
-            let subscription = cx.subscribe_in(
-                &dropdown,
-                window,
-                |this, _, event: &DropdownSelectionChanged, _window, cx| {
-                    this.switch_region(event.item.value.to_string(), cx);
-                },
-            );
+            let (dropdown, subscription) = Self::build_region_dropdown(window, cx);
 
             (Some(dropdown), Some(subscription))
         } else {
@@ -326,17 +240,21 @@ impl SecretStoreDocument {
 
         let mut subscriptions = vec![search_subscription];
         subscriptions.extend(region_subscription);
-        // The live connection can be replaced (or moved to another region)
-        // outside this document; the subscription keeps the region and the
-        // listing on what the connection actually reaches.
-        subscriptions.push(
-            cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
-                this.close_dialog_if_session_replaced(cx);
-                this.adopt_connection_region(cx);
-                this.adopt_connection_session(HistoryLoad::Automatic, cx);
-                this.adopt_details_session(cx);
-            }),
-        );
+        subscriptions.push(Self::watch_app_state(&app_state, cx));
+
+        let region_switch_in_flight = Rc::new(Cell::new(false));
+        let view = cx.new(|cx| {
+            SecretView::new(
+                profile_id,
+                descriptor.clone(),
+                app_state.clone(),
+                region_switch_in_flight.clone(),
+                cx,
+            )
+        });
+        // The view redraws itself on its own state; the document draws it.
+        subscriptions.push(cx.observe(&view, |_, _, cx| cx.notify()));
+        subscriptions.push(cx.subscribe_in(&view, window, Self::on_view_event));
 
         let mut doc = Self {
             id: DocumentId::new(),
@@ -358,46 +276,21 @@ impl SecretStoreDocument {
             search_input,
             focus_mode: SecretFocusMode::Table,
             selected: None,
-            details: DetailsState::Idle,
-            details_generation: 0,
-            versions: VersionsState::Idle,
-            versions_generation: 0,
-            #[cfg(test)]
-            value_view_sets: 0,
-            versions_session: None,
-            missing_connection_reported: false,
-            value_version: None,
-            value: ValueState::NotLoaded,
-            value_generation: 0,
-            value_inputs: Vec::new(),
-            value_input_masks: Vec::new(),
-            value_inputs_view: None,
-            value_viewer_scroll: ScrollHandle::new(),
-            value_edit: None,
-            value_write_generation: 0,
+            view,
             last_call: None,
             footer_fit: Default::default(),
             region_switchable,
             region,
             regions: RegionListState::Idle,
             regions_generation: 0,
-            region_switch_in_flight: false,
+            region_switch_in_flight,
             region_dropdown,
             context_menu: None,
             pending_menu_action: None,
             context_menu_focus: cx.focus_handle(),
-            dialog: None,
-            dialog_focus: ModalFocus::new(cx),
-            dialog_pin: None,
-            details_scroll: ScrollHandle::new(),
-            details_session: None,
-            selected_cache: None,
             clear_search_input: false,
-            write_in_flight: false,
-            editor_save_in_flight: false,
-            rotation_follow_up_generation: 0,
-            rotation_notice: None,
-            edit_after_retrieve: false,
+            create_dialog: None,
+            create_origin: None,
             _subscriptions: subscriptions,
         };
 
@@ -407,6 +300,84 @@ impl SecretStoreDocument {
 
         doc.load_first_page(cx);
         doc
+    }
+
+    fn build_search_input(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Entity<InputState>, Subscription) {
+        let search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("document.secret_store.search_placeholder"))
+        });
+
+        let subscription = cx.subscribe_in(
+            &search_input,
+            window,
+            |this, input, event: &InputEvent, _window, cx| match event {
+                InputEvent::PressEnter { .. } => {
+                    let filter = input.read(cx).value().to_string();
+                    this.apply_name_filter(filter, cx);
+                }
+                InputEvent::Focus => {
+                    this.focus_mode = SecretFocusMode::Search;
+                    cx.notify();
+                }
+                InputEvent::Blur => {
+                    this.focus_mode = SecretFocusMode::Table;
+                    cx.notify();
+                }
+                InputEvent::Change => {}
+            },
+        );
+
+        (search_input, subscription)
+    }
+
+    fn build_region_dropdown(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Entity<Dropdown>, Subscription) {
+        let dropdown = cx.new(|_cx| {
+            Dropdown::new("secret-region")
+                .placeholder(dbflux_i18n::t!("document.secret_store.region.label"))
+                .aria_label(dbflux_i18n::t!("document.secret_store.region.label"))
+                .toolbar_style(true)
+                .mono_label(true)
+        });
+
+        let subscription = cx.subscribe_in(
+            &dropdown,
+            window,
+            |this, _, event: &DropdownSelectionChanged, _window, cx| {
+                this.switch_region(event.item.value.to_string(), cx);
+            },
+        );
+
+        (dropdown, subscription)
+    }
+
+    /// The live connection can be replaced (or moved to another region)
+    /// outside this document; the subscription keeps the region and the
+    /// listing on what the connection actually reaches.
+    fn watch_app_state(app_state: &Entity<AppStateEntity>, cx: &mut Context<Self>) -> Subscription {
+        cx.subscribe(app_state, |this, _, _: &AppStateChanged, cx| {
+            this.view
+                .update(cx, |view, cx| view.close_dialog_if_session_replaced(cx));
+            this.adopt_connection_region(cx);
+            this.view.update(cx, |view, cx| {
+                view.adopt_connection_session(HistoryLoad::Automatic, cx)
+            });
+            this.view
+                .update(cx, |view, cx| view.adopt_details_session(cx));
+            this.view
+                .update(cx, |view, cx| view.drop_value_of_replaced_session(cx));
+        })
+    }
+
+    /// The view of the selected secret.
+    pub fn view(&self) -> &Entity<SecretView> {
+        &self.view
     }
 
     pub fn id(&self) -> DocumentId {
@@ -421,7 +392,7 @@ impl SecretStoreDocument {
     /// the open editor holding text no save has written is the one change a
     /// close must ask about.
     pub fn state(&self, cx: &App) -> DocumentState {
-        if self.has_unsaved_value_edits(cx) {
+        if self.view.read(cx).has_unsaved_value_edits(cx) {
             DocumentState::Modified
         } else if self.listing.loading {
             DocumentState::Loading
@@ -464,23 +435,6 @@ impl SecretStoreDocument {
         self.selected.as_ref()
     }
 
-    pub fn details(&self) -> &DetailsState {
-        &self.details
-    }
-
-    pub fn versions(&self) -> &VersionsState {
-        &self.versions
-    }
-
-    /// The version the value section shows, `None` for the current value.
-    pub fn value_version(&self) -> Option<&str> {
-        self.value_version.as_deref()
-    }
-
-    pub fn value(&self) -> &ValueState {
-        &self.value
-    }
-
     pub fn last_call(&self) -> Option<CallTiming> {
         self.last_call
     }
@@ -502,7 +456,7 @@ impl SecretStoreDocument {
 
     /// Whether a region switch is reconnecting.
     pub fn region_switch_in_flight(&self) -> bool {
-        self.region_switch_in_flight
+        self.region_switch_in_flight.get()
     }
 
     pub fn refresh_policy(&self) -> RefreshPolicy {
@@ -525,11 +479,13 @@ impl SecretStoreDocument {
         cx.notify();
     }
 
-    pub fn active_context(&self) -> ContextId {
+    pub fn active_context(&self, cx: &App) -> ContextId {
+        let view = self.view.read(cx);
+
         // A dialog owns the keyboard: its inputs keep every letter the
         // listing would otherwise read as a command, and its buttons answer
         // Enter and Escape through the dialog itself.
-        if self.dialog.is_some() {
+        if view.dialog_is_open() {
             return ContextId::TextInput;
         }
 
@@ -537,9 +493,7 @@ impl SecretStoreDocument {
             return ContextId::ContextMenu;
         }
 
-        if self.focus_mode == SecretFocusMode::Search
-            || self.value_edit.as_ref().is_some_and(|edit| edit.focused)
-        {
+        if self.focus_mode == SecretFocusMode::Search || view.value_editor_focused() {
             return ContextId::TextInput;
         }
 
@@ -567,25 +521,11 @@ impl SecretStoreDocument {
             self.listing.entries.len(),
         )
     }
-
-    /// The selected secret's listing row, when a secret is selected.
-    pub fn selected_summary(&self) -> Option<&SecretSummary> {
-        match &self.selected {
-            Some(SecretRowKey::Secret(name)) => self.listing.find(name).or_else(|| {
-                self.selected_cache
-                    .as_ref()
-                    .filter(|summary| &summary.name == name)
-            }),
-            _ => None,
-        }
-    }
-
-    /// Whether Retrieve value may run for the selection: a secret whose
-    /// deletion is not pending, with no retrieval in flight.
-    pub fn can_retrieve_value(&self) -> bool {
-        self.selected_summary()
-            .is_some_and(|summary| !summary.is_pending_deletion())
-            && !matches!(self.value, ValueState::Loading)
+    /// Whether the open editor holds unsaved text, which a move of the
+    /// selection or of the listing would drop. Refuses and says why.
+    fn block_unsaved_value_edits(&self, cx: &mut Context<Self>) -> bool {
+        self.view
+            .update(cx, |view, cx| view.block_unsaved_value_edits(cx))
     }
 
     // -- Rows and selection ----------------------------------------------
@@ -636,20 +576,14 @@ impl SecretStoreDocument {
             return;
         }
 
-        self.close_dialog_for_navigation(cx);
-        self.details_scroll.set_offset(point(px(0.0), px(0.0)));
-        self.clear_value();
-        self.details_generation = self.details_generation.wrapping_add(1);
-        self.details = DetailsState::Idle;
-        self.reset_versions();
-
         if let SecretRowKey::Secret(name) = &row {
             let name = name.clone();
-            self.selected_cache = self.listing.find(&name).cloned();
+            let listing_row = self.listing.find(&name).cloned();
             self.selected = Some(row);
-            self.describe(name.clone(), cx);
-            self.load_versions(name, cx);
+            self.view
+                .update(cx, |view, cx| view.show_secret(name, listing_row, cx));
         } else {
+            self.view.update(cx, |view, cx| view.show_other_row(cx));
             self.selected = Some(row);
         }
 
@@ -666,15 +600,11 @@ impl SecretStoreDocument {
 
         // The editor goes away with the value; focus it holds would go with
         // it and leave the document's shortcuts without a target.
-        if self.value_edit.as_ref().is_some_and(|edit| edit.focused) {
+        if self.view.read(cx).value_editor_focused() {
             self.focus_handle.focus(window, cx);
         }
 
-        self.close_dialog_for_navigation(cx);
-        self.clear_value();
-        self.details_generation = self.details_generation.wrapping_add(1);
-        self.details = DetailsState::Idle;
-        self.reset_versions();
+        self.view.update(cx, |view, cx| view.clear_selection(cx));
         self.selected = None;
         cx.notify();
     }
@@ -781,114 +711,6 @@ impl SecretStoreDocument {
         cx.notify();
     }
 
-    // -- Value -------------------------------------------------------------
-
-    /// Drops the retrieved value, the inputs that draw it and any open
-    /// editor of it.
-    pub fn clear_value(&mut self) {
-        self.value_generation = self.value_generation.wrapping_add(1);
-        self.value_write_generation = self.value_write_generation.wrapping_add(1);
-        self.edit_after_retrieve = false;
-        self.value = ValueState::NotLoaded;
-        self.value_version = None;
-        self.value_edit = None;
-        self.value_inputs.clear();
-        self.value_input_masks.clear();
-        self.value_inputs_view = None;
-        self.value_viewer_scroll.set_offset(point(px(0.0), px(0.0)));
-    }
-
-    pub fn toggle_reveal(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let ValueState::Loaded(value) = &mut self.value {
-            value.toggle_reveal(index);
-            cx.notify();
-        }
-    }
-
-    pub fn toggle_reveal_all(&mut self, cx: &mut Context<Self>) {
-        if let ValueState::Loaded(value) = &mut self.value {
-            value.toggle_reveal_all();
-            cx.notify();
-        }
-    }
-
-    pub fn hide_all(&mut self, cx: &mut Context<Self>) {
-        if let ValueState::Loaded(value) = &mut self.value {
-            value.hide_all();
-            cx.notify();
-        }
-    }
-
-    pub fn set_value_view(&mut self, view: ValueView, cx: &mut Context<Self>) {
-        #[cfg(test)]
-        {
-            self.value_view_sets += 1;
-        }
-
-        if let ValueState::Loaded(value) = &mut self.value {
-            value.set_view(view);
-            cx.notify();
-        }
-    }
-
-    fn cycle_value_view(&mut self, cx: &mut Context<Self>) {
-        let next = match &self.value {
-            ValueState::Loaded(value) => match value.view {
-                ValueView::KeyValue => ValueView::Plaintext,
-                ValueView::Plaintext => ValueView::KeyValue,
-            },
-            _ => return,
-        };
-
-        self.set_value_view(next, cx);
-    }
-
-    /// Copies one field of the retrieved value, on an explicit action only.
-    pub fn copy_value_field(&mut self, index: usize, cx: &mut Context<Self>) {
-        let ValueState::Loaded(value) = &self.value else {
-            return;
-        };
-
-        let Some((_, field)) = value.fields().get(index).copied() else {
-            return;
-        };
-
-        cx.write_to_clipboard(ClipboardItem::new_string(field.expose_secret().to_string()));
-        copied_toast(
-            dbflux_i18n::t!("document.secret_store.toast.value_copied"),
-            cx,
-        );
-    }
-
-    /// Copies the whole value: the JSON of a key/value secret, the text of a
-    /// plaintext one, the base64 of a binary one.
-    pub fn copy_full_value(&mut self, cx: &mut Context<Self>) {
-        let ValueState::Loaded(value) = &self.value else {
-            return;
-        };
-
-        let text = value.content.full_text().expose_secret().to_string();
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
-        copied_toast(
-            dbflux_i18n::t!("document.secret_store.toast.value_copied"),
-            cx,
-        );
-    }
-
-    /// Copies the selected secret's name. The one implementation behind the
-    /// context menu's Copy name entry and the pane action `m` reaches.
-    pub fn copy_selected_name(&mut self, cx: &mut Context<Self>) {
-        let Some(name) = self.selected_summary().map(|summary| summary.name.clone()) else {
-            return;
-        };
-
-        cx.write_to_clipboard(ClipboardItem::new_string(name));
-        copied_toast(
-            dbflux_i18n::t!("document.secret_store.toast.name_copied"),
-            cx,
-        );
-    }
-
     /// Copies the selected sub-path. The one implementation behind the
     /// context menu's Copy path entry and the pane action `m` reaches.
     pub fn copy_selected_path(&mut self, cx: &mut Context<Self>) {
@@ -898,499 +720,10 @@ impl SecretStoreDocument {
 
         let path = path.clone();
         cx.write_to_clipboard(ClipboardItem::new_string(path));
-        copied_toast(
+        view::copied_toast(
             dbflux_i18n::t!("document.secret_store.toast.path_copied"),
             cx,
         );
-    }
-
-    /// Copies the selected secret's provider-wide identifier (an ARN).
-    pub fn copy_resource_id(&mut self, cx: &mut Context<Self>) {
-        let resource_id = match &self.details {
-            DetailsState::Loaded(details) => details.resource_id.clone(),
-            _ => None,
-        };
-
-        let Some(resource_id) = resource_id else {
-            // The shortcut is advertised in the footer, so a press that
-            // cannot copy says why, in the words the menu entry uses.
-            if matches!(self.selected, Some(SecretRowKey::Secret(_))) {
-                report_error(
-                    UserFacingError::new(ErrorKind::User, self.resource_id_unavailable_reason())
-                        .with_severity(dbflux_core::observability::EventSeverity::Warn),
-                    cx,
-                );
-            }
-            return;
-        };
-
-        cx.write_to_clipboard(ClipboardItem::new_string(resource_id));
-        copied_toast(
-            dbflux_i18n::t!("document.secret_store.toast.resource_id_copied"),
-            cx,
-        );
-    }
-
-    /// Copies the text of the failed retrieval's error.
-    pub fn copy_value_error(&mut self, cx: &mut Context<Self>) {
-        let ValueState::Failed(failure) = &self.value else {
-            return;
-        };
-
-        cx.write_to_clipboard(ClipboardItem::new_string(failure.message.clone()));
-        copied_toast(
-            dbflux_i18n::t!("document.secret_store.toast.error_copied"),
-            cx,
-        );
-    }
-
-    /// Opens the audit viewer on the failed retrieval.
-    pub fn view_value_error_in_audit(&mut self, cx: &mut Context<Self>) {
-        let ValueState::Failed(failure) = &self.value else {
-            return;
-        };
-
-        let correlation_id = failure.correlation_id;
-        self.app_state.update(cx, |state, cx| {
-            state.request_open_audit(Some(correlation_id), cx);
-        });
-    }
-
-    // -- Pane actions --------------------------------------------------------
-
-    /// The controls of the toolbar and the details pane, for the pane
-    /// actions menu `m` opens.
-    pub(crate) fn pane_actions(&self, this: &Entity<Self>) -> Vec<crate::pane::PaneAction> {
-        use crate::pane::PaneAction;
-        use dbflux_components::icons::AppIcon;
-
-        let context = ContextId::Results;
-        let target = this.downgrade();
-        let value_loaded = matches!(self.value, ValueState::Loaded(_));
-        let value_failed = matches!(self.value, ValueState::Failed(_));
-        let has_resource_id = matches!(
-            &self.details,
-            DetailsState::Loaded(details) if details.resource_id.is_some()
-        );
-
-        let command = |id: &'static str, key: &str, command: Command| {
-            PaneAction::command(id, dbflux_i18n::t!(key), command, context)
-        };
-
-        let mut actions = vec![
-            command(
-                "secret-retrieve-value",
-                "document.secret_store.value.retrieve",
-                Command::ToggleValuePanel,
-            )
-            .icon(AppIcon::Eye)
-            .enabled(self.can_retrieve_value()),
-            command(
-                "secret-copy-resource-id",
-                "document.secret_store.action.copy_resource_id",
-                Command::ResultsCopyCell,
-            )
-            .enabled(has_resource_id),
-            command(
-                "secret-copy-value",
-                "document.secret_store.value.copy_all",
-                Command::ResultsCopyRow,
-            )
-            .enabled(value_loaded),
-            command(
-                "secret-reveal",
-                "document.secret_store.value.reveal_all",
-                Command::ExpandCollapse,
-            )
-            .enabled(value_loaded),
-            callback_action(
-                &target,
-                "secret-hide-all",
-                "document.secret_store.value.hide_all",
-                Self::hide_all,
-            )
-            .enabled(value_loaded),
-            callback_action(
-                &target,
-                "secret-copy-error",
-                "document.secret_store.value.copy_error",
-                Self::copy_value_error,
-            )
-            .enabled(value_failed),
-            callback_action(
-                &target,
-                "secret-view-in-audit",
-                "document.secret_store.value.view_in_audit",
-                Self::view_value_error_in_audit,
-            )
-            .enabled(value_failed),
-            callback_action(
-                &target,
-                "secret-editor-save",
-                "document.secret_store.edit.save",
-                Self::save_value_edit,
-            )
-            .enabled(self.is_editing_value() && !self.is_saving_value_edit()),
-            callback_action(
-                &target,
-                "secret-editor-discard",
-                "document.secret_store.edit.discard",
-                Self::discard_value_edit,
-            )
-            .enabled(self.is_editing_value() && !self.is_saving_value_edit()),
-            command(
-                "secret-load-more",
-                "document.secret_store.load_more",
-                Command::ResultsNextPage,
-            )
-            .enabled(self.listing.has_more()),
-            command(
-                "secret-refresh",
-                "document.secret_store.toolbar.refresh",
-                Command::RefreshSchema,
-            )
-            .icon(AppIcon::RefreshCcw),
-        ];
-
-        // Each copy entry names the selection it acts on: Copy name for a
-        // secret, Copy path for a sub-path. The entry is only offered when a
-        // selection of its kind exists.
-        if self.selected_summary().is_some() {
-            actions.push(callback_action(
-                &target,
-                "secret-copy-name",
-                "document.secret_store.context_menu.copy_name",
-                Self::copy_selected_name,
-            ));
-        }
-
-        if self.selected.is_some() {
-            let target = target.clone();
-            actions.push(PaneAction::callback(
-                "secret-details-close",
-                dbflux_i18n::t!("document.secret_store.details.close"),
-                move |window, cx| {
-                    if let Some(doc) = target.upgrade() {
-                        doc.update(cx, |doc, cx| doc.close_details(window, cx));
-                    }
-                },
-            ));
-        }
-
-        if matches!(self.selected, Some(SecretRowKey::Path(_))) {
-            actions.push(callback_action(
-                &target,
-                "secret-copy-path",
-                "document.secret_store.context_menu.copy_path",
-                Self::copy_selected_path,
-            ));
-        }
-
-        if self.hierarchical() {
-            actions.push(
-                command(
-                    "secret-path-mode",
-                    "document.secret_store.path_mode.toggle",
-                    Command::CycleDocumentView,
-                )
-                .icon(AppIcon::Folder),
-            );
-            actions.push(
-                command(
-                    "secret-path-up",
-                    "document.secret_store.path.up",
-                    Command::ColumnLeft,
-                )
-                .enabled(self.path.is_some()),
-            );
-        }
-
-        // Each version of the history is a clickable row, and Back to current
-        // a button of the value section: both reachable from the menu.
-        if let VersionsState::Loaded(versions) = &self.versions {
-            for (index, version) in versions.iter().enumerate() {
-                let retrieve_target = target.clone();
-                let history_generation = self.versions_generation;
-                actions.push(
-                    PaneAction::callback(
-                        format!("secret-version-retrieve-{index}"),
-                        dbflux_i18n::t!(
-                            "document.secret_store.versions.retrieve",
-                            version = details::short_version_id(&version.id)
-                        ),
-                        move |_window, cx| {
-                            if let Some(doc) = retrieve_target.upgrade() {
-                                doc.update(cx, |doc, cx| {
-                                    // The menu was built over another history.
-                                    if doc.versions_generation == history_generation {
-                                        doc.activate_version(index, cx);
-                                    }
-                                });
-                            }
-                        },
-                    )
-                    .icon(AppIcon::History)
-                    .enabled(self.can_retrieve_value()),
-                );
-
-                // Roll back is a button on every version that is not
-                // current, so each one has its own entry.
-                if self.supports_roll_back() && !self.is_current_version(&version.id) {
-                    let roll_back_target = target.clone();
-                    let history_generation = self.versions_generation;
-                    let mut roll_back = PaneAction::callback(
-                        format!("secret-version-rollback-{index}"),
-                        dbflux_i18n::t!(
-                            "document.secret_store.rollback.action",
-                            version = details::short_version_id(&version.id)
-                        ),
-                        move |window, cx| {
-                            if let Some(doc) = roll_back_target.upgrade() {
-                                doc.update(cx, |doc, cx| {
-                                    if doc.versions_generation == history_generation {
-                                        doc.open_roll_back(index, window, cx);
-                                    }
-                                });
-                            }
-                        },
-                    )
-                    .icon(AppIcon::RotateCcw)
-                    .enabled(self.can_roll_back_version(index));
-                    roll_back.shortcut = dbflux_ui_base::keymap::shortcut_label(
-                        ContextId::Results,
-                        Command::RollBackVersion,
-                    )
-                    .filter(|_| self.previous_version_index() == Some(index));
-                    actions.push(roll_back);
-                }
-            }
-        }
-
-        // Registered whatever the history is doing: the banner's button is
-        // drawn from the value, not from the history, so it needs its
-        // keyboard path even while the history loads or fails.
-        if self.store.supports(SecretStoreCapabilities::VERSIONS) {
-            actions.push(
-                callback_action(
-                    &target,
-                    "secret-version-current",
-                    "document.secret_store.versions.back_to_current",
-                    Self::back_to_current_version,
-                )
-                .icon(AppIcon::RotateCcw)
-                .enabled(self.can_return_to_current()),
-            );
-        }
-
-        // The Formatted / Raw switch is a clickable control of the editor, so
-        // the pane actions are its keyboard path too.
-        if self.can_toggle_edit_mode() {
-            let target = target.clone();
-            actions.push(
-                crate::pane::PaneAction::callback(
-                    "secret-editor-mode",
-                    dbflux_i18n::t!("document.secret_store.edit.mode.toggle"),
-                    move |window, cx| {
-                        if let Some(doc) = target.upgrade() {
-                            doc.update(cx, |doc, cx| doc.cycle_edit_mode(window, cx));
-                        }
-                    },
-                )
-                .enabled(self.can_toggle_edit_mode()),
-            );
-        }
-
-        if self.is_editing_value() {
-            let target = target.clone();
-            actions.push(
-                crate::pane::PaneAction::callback(
-                    "secret-editor-find",
-                    dbflux_i18n::t!("document.secret_store.edit.find"),
-                    move |window, cx| {
-                        if let Some(doc) = target.upgrade() {
-                            doc.update(cx, |doc, cx| doc.find_in_value(window, cx));
-                        }
-                    },
-                )
-                .icon(AppIcon::Search),
-            );
-        }
-
-        // Edit value opens the editor of a plaintext value, retrieving the
-        // value first when it is not loaded; the action needs the window the
-        // editor's state is built with. The bottom bar's button and the row
-        // menu's entry are covered by it.
-        if self.can_request_edit_value() || self.can_edit_value() {
-            let target = target.clone();
-            let mut edit_value = crate::pane::PaneAction::callback(
-                "secret-edit-value",
-                dbflux_i18n::t!("document.secret_store.edit.open"),
-                move |window, cx| {
-                    if let Some(doc) = target.upgrade() {
-                        doc.update(cx, |doc, cx| doc.request_edit_value(window, cx));
-                    }
-                },
-            )
-            .icon(AppIcon::Pencil)
-            .enabled(self.can_request_edit_value());
-            edit_value.shortcut =
-                dbflux_ui_base::keymap::shortcut_label(ContextId::Results, Command::EditValue);
-            actions.push(edit_value);
-        }
-
-        // Delete asks first; Restore cancels a scheduled deletion. Both are
-        // buttons of the details pane, so both have an entry here.
-        if self.supports_delete() && matches!(self.selected, Some(SecretRowKey::Secret(_))) {
-            let target = target.clone();
-            let mut delete = PaneAction::callback(
-                "secret-delete",
-                dbflux_i18n::t!("document.secret_store.delete.button"),
-                move |window, cx| {
-                    if let Some(doc) = target.upgrade() {
-                        doc.update(cx, |doc, cx| doc.open_delete(window, cx));
-                    }
-                },
-            )
-            .icon(AppIcon::Delete)
-            .enabled(self.can_delete_selected());
-            delete.shortcut =
-                dbflux_ui_base::keymap::shortcut_label(ContextId::Results, Command::Delete);
-            actions.push(delete);
-        }
-
-        // New secret / New parameter is a button of the toolbar.
-        if self.supports_create() {
-            let create_target = target.clone();
-            actions.push(
-                PaneAction::callback(
-                    "secret-new",
-                    dbflux_i18n::t!(if self.hierarchical() {
-                        "document.secret_store.create.button_parameter"
-                    } else {
-                        "document.secret_store.create.button_secret"
-                    }),
-                    move |window, cx| {
-                        if let Some(doc) = create_target.upgrade() {
-                            doc.update(cx, |doc, cx| doc.open_create(window, cx));
-                        }
-                    },
-                )
-                .icon(AppIcon::Plus)
-                .enabled(self.can_open_create()),
-            );
-        }
-
-        // Edit tags and Edit description are buttons of the Tags and Details
-        // sections (the description's of the bottom bar on a store that
-        // rewrites the value for it).
-        if matches!(self.selected, Some(SecretRowKey::Secret(_))) {
-            if self.supports_tags() {
-                let tags_target = target.clone();
-                actions.push(
-                    PaneAction::callback(
-                        "secret-edit-tags",
-                        dbflux_i18n::t!("document.secret_store.tags_edit.button"),
-                        move |window, cx| {
-                            if let Some(doc) = tags_target.upgrade() {
-                                doc.update(cx, |doc, cx| doc.open_edit_tags(window, cx));
-                            }
-                        },
-                    )
-                    .icon(AppIcon::Tag)
-                    .enabled(self.can_edit_tags()),
-                );
-            }
-
-            if self.supports_description_edit() {
-                let description_target = target.clone();
-                actions.push(
-                    PaneAction::callback(
-                        "secret-edit-description",
-                        dbflux_i18n::t!("document.secret_store.description_edit.button"),
-                        move |window, cx| {
-                            if let Some(doc) = description_target.upgrade() {
-                                doc.update(cx, |doc, cx| doc.open_edit_description(window, cx));
-                            }
-                        },
-                    )
-                    .icon(AppIcon::Pencil)
-                    .enabled(self.can_edit_description()),
-                );
-            }
-        }
-
-        // Rotate now and Edit rotation are buttons of the Rotation section,
-        // the bottom bar and the row menu.
-        if self.supports_rotation() && matches!(self.selected, Some(SecretRowKey::Secret(_))) {
-            let rotate_target = target.clone();
-            actions.push(
-                PaneAction::callback(
-                    "secret-rotate-now",
-                    dbflux_i18n::t!("document.secret_store.rotate.button"),
-                    move |window, cx| {
-                        if let Some(doc) = rotate_target.upgrade() {
-                            doc.update(cx, |doc, cx| doc.rotate_selected_now(window, cx));
-                        }
-                    },
-                )
-                .icon(AppIcon::Zap)
-                .enabled(self.can_rotate_now()),
-            );
-
-            let edit_target = target.clone();
-            actions.push(
-                PaneAction::callback(
-                    "secret-edit-rotation",
-                    dbflux_i18n::t!("document.secret_store.rotation_edit.button"),
-                    move |window, cx| {
-                        if let Some(doc) = edit_target.upgrade() {
-                            doc.update(cx, |doc, cx| doc.open_edit_rotation(window, cx));
-                        }
-                    },
-                )
-                .icon(AppIcon::Pencil)
-                .enabled(self.can_edit_rotation()),
-            );
-        }
-
-        if self.supports_restore()
-            && self
-                .selected_summary()
-                .is_some_and(|summary| summary.is_pending_deletion())
-        {
-            actions.push(
-                callback_action(
-                    &target,
-                    "secret-restore",
-                    "document.secret_store.restore.button",
-                    Self::restore_selected,
-                )
-                .icon(AppIcon::RotateCcw)
-                .enabled(self.can_restore_selected()),
-            );
-        }
-
-        // The region picker is a clickable toolbar control, so the pane
-        // actions are its keyboard path too.
-        if self.region_switchable
-            && let Some(dropdown) = self.region_dropdown.clone()
-        {
-            actions.push(
-                PaneAction::callback(
-                    "secret-region",
-                    dbflux_i18n::t!("document.secret_store.region.label"),
-                    move |window, cx| {
-                        dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
-                    },
-                )
-                .icon(AppIcon::Globe)
-                .enabled(
-                    matches!(&self.regions, RegionListState::Loaded(regions) if !regions.is_empty()),
-                ),
-            );
-        }
-
-        actions
     }
 
     // -- Command dispatch ------------------------------------------------
@@ -1403,7 +736,7 @@ impl SecretStoreDocument {
     ) -> bool {
         // The dialog handles its own keys; nothing reaches the listing under
         // it.
-        if self.dialog.is_some() {
+        if self.view.read(cx).dialog_is_open() {
             return true;
         }
 
@@ -1411,74 +744,62 @@ impl SecretStoreDocument {
             return self.dispatch_menu_command(cmd, window, cx);
         }
 
+        let editor_focused = self.view.read(cx).value_editor_focused();
+
         match cmd {
             Command::SelectNext => self.move_selection(1, cx),
             Command::SelectPrev => self.move_selection(-1, cx),
             Command::SelectFirst => self.select_edge(false, cx),
             Command::SelectLast => self.select_edge(true, cx),
             Command::Execute => self.activate_selected(cx),
-            Command::ToggleValuePanel => self.retrieve_selected_value(cx),
-            Command::SaveQuery if self.value_edit.is_some() => self.save_value_edit(cx),
-            Command::CycleResultView if self.value_edit.is_some() => {
-                self.cycle_edit_mode(window, cx)
-            }
-            Command::ExpandCollapse => self.toggle_reveal_all(cx),
-            Command::ResultsCopyCell => self.copy_resource_id(cx),
-            Command::ResultsCopyRow => self.copy_full_value(cx),
-            Command::CycleResultView => self.cycle_value_view(cx),
             Command::CycleDocumentView if self.hierarchical() => self.toggle_path_mode(cx),
             Command::ColumnLeft if self.hierarchical() => self.navigate_up(cx),
             Command::ResultsNextPage => self.load_more(cx),
-            Command::EditValue if self.can_request_edit_value() => {
-                self.request_edit_value(window, cx);
-            }
-            Command::RollBackVersion if self.supports_roll_back() => {
-                self.roll_back_to_previous(window, cx);
-            }
-            Command::Delete
-                if self.supports_delete()
-                    && matches!(self.selected, Some(SecretRowKey::Secret(_))) =>
-            {
-                self.open_delete(window, cx);
-            }
             Command::RefreshSchema => self.refresh(cx),
-            Command::FocusSearch if self.value_edit.as_ref().is_some_and(|edit| edit.focused) => {
-                self.find_in_value(window, cx)
-            }
-            Command::FocusSearch | Command::FocusToolbar => self.focus_search(window, cx),
+            Command::FocusSearch if !editor_focused => self.focus_search(window, cx),
+            Command::FocusToolbar => self.focus_search(window, cx),
             Command::Cancel => {
                 self.focus_mode = SecretFocusMode::Table;
                 self.focus_handle.focus(window, cx);
                 cx.notify();
             }
-            _ => return false,
+            _ => {
+                return self
+                    .view
+                    .update(cx, |view, cx| view.dispatch_command(cmd, window, cx));
+            }
         }
 
         true
     }
-}
 
-/// A pane action that runs `run` on the document, for an action no command
-/// covers.
-fn callback_action(
-    target: &WeakEntity<SecretStoreDocument>,
-    id: &'static str,
-    key: &str,
-    run: fn(&mut SecretStoreDocument, &mut Context<SecretStoreDocument>),
-) -> crate::pane::PaneAction {
-    let target = target.clone();
-
-    crate::pane::PaneAction::callback(id, dbflux_i18n::t!(key), move |_window, cx| {
-        if let Some(doc) = target.upgrade() {
-            doc.update(cx, run);
+    /// Reacts to what the selected secret's view reports.
+    fn on_view_event(
+        &mut self,
+        _view: &Entity<SecretView>,
+        event: &SecretViewEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            SecretViewEvent::ReloadListing => self.reload_listing_in_place(cx),
+            SecretViewEvent::StoreCalled(timing) => self.last_call = Some(*timing),
+            SecretViewEvent::Removed => self.selected = None,
+            SecretViewEvent::DialogOpened => self.drop_context_menu(),
+            SecretViewEvent::DialogClosed => {
+                // The event is delivered after the update that closed the
+                // dialog; a New secret form opened since then is not the one
+                // it reports.
+                if !self.view.read(cx).create_slot_is_open() {
+                    self.drop_create_dialog();
+                }
+            }
+            SecretViewEvent::CloseRequested => self.close_details(window, cx),
+            SecretViewEvent::Created { name, stands } => {
+                self.land_create(name, *stands, cx);
+            }
         }
-    })
-}
-
-fn copied_toast(message: String, cx: &mut App) {
-    dbflux_ui_base::toast::Toast::success(message)
-        .meta_right(dbflux_ui_base::toast::now_hms())
-        .push(cx);
+    }
 }
 
 #[cfg(test)]

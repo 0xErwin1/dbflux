@@ -4,8 +4,8 @@
 //! Every action goes through the governed seam, so each test also reads the
 //! audit trail the seam wrote.
 
-use super::super::actions::DeleteKind;
-use super::super::actions::WriteDialog;
+use super::super::view::DeleteKind;
+use super::super::view::WriteDialog;
 use super::*;
 use dbflux_core::SecretDeleteRequest;
 use dbflux_core::SecretVersionStage;
@@ -102,7 +102,7 @@ impl Opened<'_> {
     }
 
     fn dialog_open(&mut self) -> bool {
-        self.read(|doc| doc.dialog_is_open())
+        self.read_view(|view| view.dialog_is_open())
     }
 
     /// Selects `name` and lets its details and history load.
@@ -147,7 +147,7 @@ fn a_store_without_version_labels_draws_no_roll_back(cx: &mut TestAppContext) {
         .expect("the store lists a parameter");
     opened.select(&name);
     assert!(
-        opened.read(|doc| doc.selected_summary().is_some()),
+        opened.read_view(|view| view.selected_summary().is_some()),
         "the parameter is selected and its details are drawn"
     );
 
@@ -257,7 +257,7 @@ fn confirming_the_roll_back_writes_through_the_seam_and_refreshes_the_history(
     assert_eq!(opened.audit_actions(), vec!["secret_rolled_back"]);
     assert!(!opened.dialog_open());
 
-    let current = opened.read(|doc| match doc.versions() {
+    let current = opened.read_view(|view| match view.versions() {
         VersionsState::Loaded(versions) => versions
             .iter()
             .find(|version| version.is_current)
@@ -329,17 +329,17 @@ fn a_managed_or_deleting_secret_refuses_the_roll_back(cx: &mut TestAppContext) {
     opened.load_everything();
 
     opened.open_secret(MANAGED_SECRET);
-    let reason = opened.read(|doc| doc.write_refusal_reason());
+    let reason = opened.read_view(|view| view.write_refusal_reason());
     assert!(
         reason
             .as_deref()
             .is_some_and(|reason| reason.contains("rds")),
         "{reason:?}"
     );
-    assert!(!opened.read(|doc| doc.can_roll_back_version(0)));
+    assert!(!opened.read_view(|view| view.can_roll_back_version(0)));
 
     opened.open_secret(PENDING_DELETION_SECRET);
-    let reason = opened.read(|doc| doc.write_refusal_reason());
+    let reason = opened.read_view(|view| view.write_refusal_reason());
     assert!(
         reason
             .as_deref()
@@ -519,7 +519,7 @@ fn a_store_with_a_recovery_window_never_offers_deleting_without_recovery(cx: &mu
         );
     }
 
-    let kind = opened.read(|doc| match &doc.dialog {
+    let kind = opened.read_view(|view| match &view.dialog {
         Some(WriteDialog::Delete(dialog)) => Some(dialog.kind),
         _ => None,
     });
@@ -605,8 +605,8 @@ fn confirming_a_scheduled_deletion_writes_the_window_and_shows_the_state(cx: &mu
 
     // The listing and the details read the store again: the secret is
     // scheduled, shows the deletion and offers Restore.
-    assert!(opened.read(|doc| {
-        doc.selected_summary()
+    assert!(opened.read_view(|view| {
+        view.selected_summary()
             .is_some_and(|summary| summary.is_pending_deletion())
     }));
     assert!(opened.is_drawn("secret-restore"));
@@ -784,8 +784,8 @@ fn a_scheduled_deletion_shows_its_state_and_restore_cancels_it(cx: &mut TestAppC
     );
     assert_eq!(opened.audit_actions(), vec!["secret_restored"]);
     assert!(!opened.is_drawn("secret-restore"));
-    assert!(opened.read(|doc| {
-        doc.selected_summary()
+    assert!(opened.read_view(|view| {
+        view.selected_summary()
             .is_some_and(|summary| !summary.is_pending_deletion())
     }));
 }
@@ -816,11 +816,11 @@ fn a_read_only_connection_refuses_restore(cx: &mut TestAppContext) {
 fn the_bars_edit_value_retrieves_the_value_and_opens_the_editor(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(PLAINTEXT_SECRET);
-    assert!(!opened.read(|doc| doc.is_editing_value()));
+    assert!(!opened.read_view(|view| view.is_editing_value()));
 
     opened.click("secret-action-edit-value");
 
-    assert!(opened.read(|doc| doc.is_editing_value()));
+    assert!(opened.read_view(|view| view.is_editing_value()));
     assert_eq!(opened.editor_text(), FAKE_SECRET_PLAINTEXT);
     assert!(
         opened.mutations().is_empty(),
@@ -944,7 +944,7 @@ fn a_store_without_rotation_draws_no_rotation_action(cx: &mut TestAppContext) {
 fn rotate_now_starts_a_rotation_through_the_seam(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(KEY_VALUE_SECRET);
-    let before = opened.read(|doc| match doc.versions() {
+    let before = opened.read_view(|view| match view.versions() {
         VersionsState::Loaded(versions) => versions.len(),
         _ => 0,
     });
@@ -965,7 +965,7 @@ fn rotate_now_starts_a_rotation_through_the_seam(cx: &mut TestAppContext) {
         "{mutations:?}"
     );
     assert_eq!(opened.audit_actions(), vec!["secret_rotation_started"]);
-    let after = opened.read(|doc| match doc.versions() {
+    let after = opened.read_view(|view| match view.versions() {
         VersionsState::Loaded(versions) => versions.len(),
         _ => 0,
     });
@@ -1054,7 +1054,7 @@ fn rotate_now_is_disabled_with_the_reason_when_rotation_is_off(cx: &mut TestAppC
         opened
             .doc
             .read(cx)
-            .pane_actions(&opened.doc)
+            .pane_actions(&opened.doc, cx)
             .into_iter()
             .find(|action| action.id == "secret-rotate-now")
             .map(|action| action.enabled)
@@ -1064,9 +1064,12 @@ fn rotate_now_is_disabled_with_the_reason_when_rotation_is_off(cx: &mut TestAppC
     // The backstop: a direct call is still refused with the reason, and the
     // store is not called.
     let doc = opened.doc.clone();
-    opened
-        .window
-        .update(|window, cx| doc.update(cx, |doc, cx| doc.rotate_selected_now(window, cx)));
+    opened.window.update(|window, cx| {
+        doc.update(cx, |doc, cx| {
+            doc.view
+                .update(cx, |view, cx| view.rotate_selected_now(window, cx))
+        })
+    });
     opened.window.run_until_parked();
     assert!(
         !opened.dialog_open(),
@@ -1267,8 +1270,8 @@ fn cancelling_rotation_names_the_version_a_rotation_left_pending(cx: &mut TestAp
             &SecretPutRequest::text(KEY_VALUE_SECRET, "{}").with_stage(SecretVersionStage::Pending),
         )
         .expect("the fake accepts a staged write");
-    opened.update(|doc, cx| {
-        doc.request_versions(
+    opened.update_view(|view, cx| {
+        view.request_versions(
             KEY_VALUE_SECRET.to_string(),
             super::super::HistoryLoad::Automatic,
             cx,
@@ -1296,8 +1299,8 @@ fn cancelling_rotation_names_the_version_a_rotation_left_pending(cx: &mut TestAp
     assert_eq!(opened.audit_actions().len(), audit_before + 1);
 
     let version = opened
-        .read(|doc| {
-            doc.rotation_notice
+        .read_view(|view| {
+            view.rotation_notice
                 .as_ref()
                 .map(|notice| notice.version.clone())
         })
@@ -1609,7 +1612,7 @@ fn the_description_of_a_secret_is_edited_without_a_new_version(cx: &mut TestAppC
     opened.open_secret(KEY_VALUE_SECRET);
     assert!(opened.is_drawn("secret-details-edit"));
     assert!(!opened.is_drawn("secret-action-edit-description"));
-    let versions_before = opened.read(|doc| match doc.versions() {
+    let versions_before = opened.read_view(|view| match view.versions() {
         VersionsState::Loaded(versions) => versions.len(),
         _ => 0,
     });
@@ -1637,7 +1640,7 @@ fn the_description_of_a_secret_is_edited_without_a_new_version(cx: &mut TestAppC
     assert_eq!(opened.audit_actions(), vec!["secret_description_updated"]);
     assert!(!opened.dialog_open());
     assert!(opened.rendered_text().contains(NEW_DESCRIPTION));
-    let versions_after = opened.read(|doc| match doc.versions() {
+    let versions_after = opened.read_view(|view| match view.versions() {
         VersionsState::Loaded(versions) => versions.len(),
         _ => 0,
     });
@@ -1658,7 +1661,7 @@ fn a_parameters_description_edit_says_it_writes_a_new_version(cx: &mut TestAppCo
     opened.open_parameter(name);
     assert!(opened.is_drawn("secret-action-edit-description"));
     assert!(!opened.is_drawn("secret-details-edit"));
-    let versions_before = opened.read(|doc| match doc.versions() {
+    let versions_before = opened.read_view(|view| match view.versions() {
         VersionsState::Loaded(versions) => versions.len(),
         _ => 0,
     });
@@ -1683,7 +1686,7 @@ fn a_parameters_description_edit_says_it_writes_a_new_version(cx: &mut TestAppCo
         "{mutations:?}"
     );
     assert_eq!(opened.audit_actions(), vec!["secret_description_updated"]);
-    let versions_after = opened.read(|doc| match doc.versions() {
+    let versions_after = opened.read_view(|view| match view.versions() {
         VersionsState::Loaded(versions) => versions.len(),
         _ => 0,
     });
@@ -1890,8 +1893,8 @@ const CREATED_VALUE: &str = "created-secret-value-9021";
 impl Opened<'_> {
     /// Replaces the text of the open create dialog's value area.
     fn set_create_value(&mut self, text: &str) {
-        let value = self.read(|doc| match &doc.dialog {
-            Some(WriteDialog::Create(dialog)) => dialog.value.clone(),
+        let value = self.read(|doc| match &doc.create_dialog {
+            Some(dialog) => dialog.value.clone(),
             _ => panic!("the create dialog is open"),
         });
         let text = text.to_string();
@@ -1978,8 +1981,8 @@ fn a_parameter_is_created_under_the_current_path(cx: &mut TestAppContext) {
     opened.click("secret-new");
 
     assert!(opened.is_drawn("secret-create-dialog"));
-    let name_input = opened.read(|doc| match &doc.dialog {
-        Some(WriteDialog::Create(dialog)) => dialog.name.clone(),
+    let name_input = opened.read(|doc| match &doc.create_dialog {
+        Some(dialog) => dialog.name.clone(),
         _ => panic!("the create dialog is open"),
     });
     let prefilled = opened
@@ -2147,7 +2150,7 @@ fn a_name_the_store_has_is_refused_and_never_overwrites(cx: &mut TestAppContext)
     // The secret that has the name still reads its own value.
     opened.update(|doc, cx| doc.apply_name_filter(String::new(), cx));
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     let text = opened.rendered_text();
     assert!(!text.contains(CREATED_VALUE), "{text}");
 }
@@ -2550,7 +2553,7 @@ fn every_control_of_the_details_pane_is_reachable_above_the_action_bar(cx: &mut 
 fn no_write_starts_while_a_region_switch_is_in_flight(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(KEY_VALUE_SECRET);
-    opened.update(|doc, _| doc.region_switch_in_flight = true);
+    opened.update(|doc, _| doc.region_switch_in_flight.set(true));
 
     opened.click("secret-action-delete");
     assert!(!opened.dialog_open(), "no dialog opens");
@@ -2670,8 +2673,10 @@ fn two_rotate_now_presses_send_one_write(cx: &mut TestAppContext) {
     let doc = opened.doc.clone();
     opened.window.update(|window, cx| {
         doc.update(cx, |doc, cx| {
-            doc.rotate_selected_now(window, cx);
-            doc.rotate_selected_now(window, cx);
+            doc.view.update(cx, |view, cx| {
+                view.rotate_selected_now(window, cx);
+                view.rotate_selected_now(window, cx);
+            });
         });
     });
     opened.window.run_until_parked();
@@ -2759,13 +2764,16 @@ fn the_create_value_box_is_hidden_and_redacted(cx: &mut TestAppContext) {
 fn roll_back_is_refused_while_a_write_is_in_flight(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(KEY_VALUE_SECRET);
-    opened.update(|doc, _| doc.write_in_flight = true);
+    opened.update_view(|view, _| view.write_in_flight = true);
 
-    assert!(!opened.read(|doc| doc.can_roll_back_version(1)));
+    assert!(!opened.read_view(|view| view.can_roll_back_version(1)));
     let doc = opened.doc.clone();
-    opened
-        .window
-        .update(|window, cx| doc.update(cx, |doc, cx| doc.open_roll_back(1, window, cx)));
+    opened.window.update(|window, cx| {
+        doc.update(cx, |doc, cx| {
+            doc.view
+                .update(cx, |view, cx| view.open_roll_back(1, window, cx))
+        })
+    });
     opened.window.run_until_parked();
 
     assert!(!opened.dialog_open());
@@ -2777,7 +2785,7 @@ fn roll_back_is_refused_while_a_write_is_in_flight(cx: &mut TestAppContext) {
 fn b_while_the_history_loads_says_it_is_loading(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(KEY_VALUE_SECRET);
-    opened.update(|doc, _| doc.versions = VersionsState::Loading);
+    opened.update_view(|view, _| view.versions = VersionsState::Loading);
 
     opened.command(Command::RollBackVersion);
 
@@ -2825,7 +2833,7 @@ fn a_region_switch_started_after_open_refuses_then_closes(cx: &mut TestAppContex
     opened.open_secret(KEY_VALUE_SECRET);
     opened.click("secret-tags-edit");
     opened.click("secret-tags-remove-0");
-    opened.update(|doc, _| doc.region_switch_in_flight = true);
+    opened.update(|doc, _| doc.region_switch_in_flight.set(true));
 
     opened.confirm_open_dialog();
     assert!(opened.mutations().is_empty());
@@ -2838,7 +2846,7 @@ fn a_region_switch_started_after_open_refuses_then_closes(cx: &mut TestAppContex
     );
 
     let replacement = opened.replace_connection();
-    opened.update(|doc, _| doc.region_switch_in_flight = false);
+    opened.update(|doc, _| doc.region_switch_in_flight.set(false));
     opened.announce_state_change();
     assert!(
         !opened.dialog_open(),
@@ -2858,7 +2866,7 @@ fn a_region_switch_started_after_open_refuses_then_closes(cx: &mut TestAppContex
 fn each_attempt_during_a_region_switch_reports_once(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(KEY_VALUE_SECRET);
-    opened.update(|doc, _| doc.region_switch_in_flight = true);
+    opened.update(|doc, _| doc.region_switch_in_flight.set(true));
 
     for (index, id) in [
         "secret-action-delete",
@@ -2886,7 +2894,7 @@ fn each_attempt_during_a_region_switch_reports_once(cx: &mut TestAppContext) {
 fn restore_is_refused_during_a_region_switch(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(PENDING_DELETION_SECRET);
-    opened.update(|doc, _| doc.region_switch_in_flight = true);
+    opened.update(|doc, _| doc.region_switch_in_flight.set(true));
     opened.click("secret-restore");
     assert!(opened.mutations().is_empty());
     assert_eq!(opened.reported_errors().len(), 1);
@@ -2954,8 +2962,10 @@ fn dialog_pin_holds_refuses_a_moved_selection(cx: &mut TestAppContext) {
     opened.click("secret-action-delete");
     opened.type_text(KEY_VALUE_SECRET);
 
-    opened.update(|doc, _| {
+    opened.update(|doc, cx| {
         doc.selected = Some(SecretRowKey::Secret(PLAINTEXT_SECRET.to_string()));
+        doc.view
+            .update(cx, |view, _| view.name = Some(PLAINTEXT_SECRET.to_string()));
     });
     opened.confirm_open_dialog();
 
@@ -2969,12 +2979,12 @@ fn dialog_pin_holds_refuses_a_moved_selection(cx: &mut TestAppContext) {
 fn edit_value_does_not_open_during_a_region_switch(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
-    opened.update(|doc, _| doc.region_switch_in_flight = true);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    opened.update(|doc, _| doc.region_switch_in_flight.set(true));
 
     opened.start_edit();
 
-    assert!(!opened.read(|doc| doc.is_editing_value()));
+    assert!(!opened.read_view(|view| view.is_editing_value()));
     let errors = opened.reported_errors();
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(
@@ -3010,7 +3020,7 @@ fn a_write_landing_on_a_replaced_session_leaves_the_document_alone(cx: &mut Test
         "the write did happen on the old session"
     );
     assert!(
-        !opened.read(|doc| doc.write_in_flight),
+        !opened.read_view(|view| view.write_in_flight),
         "in-flight state is cleared"
     );
     assert_eq!(
@@ -3079,24 +3089,27 @@ fn a_reconnect_refreshes_the_selection_so_restore_works(cx: &mut TestAppContext)
 fn the_editor_waits_for_an_action_write(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
-    opened.update(|doc, _| doc.write_in_flight = true);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    opened.update_view(|view, _| view.write_in_flight = true);
 
     opened.start_edit();
-    assert!(!opened.read(|doc| doc.is_editing_value()));
+    assert!(!opened.read_view(|view| view.is_editing_value()));
     assert_eq!(opened.reported_errors().len(), 1);
 
-    opened.update(|doc, _| doc.write_in_flight = false);
+    opened.update_view(|view, _| view.write_in_flight = false);
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
-    opened.update(|doc, _| doc.write_in_flight = true);
+    opened.update_view(|view, _| view.write_in_flight = true);
     opened.save_edit();
 
     assert!(
         opened.written_values().is_empty(),
         "no save under an action write"
     );
-    assert!(opened.read(|doc| doc.is_editing_value()), "the draft stays");
+    assert!(
+        opened.read_view(|view| view.is_editing_value()),
+        "the draft stays"
+    );
 }
 
 /// An action write cannot start while the editor is saving.
@@ -3104,13 +3117,13 @@ fn the_editor_waits_for_an_action_write(cx: &mut TestAppContext) {
 fn an_action_write_waits_for_an_editor_save(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
-    opened.update(|doc, _| {
-        if let Some(edit) = doc.value_edit.as_mut() {
+    opened.update_view(|view, _| {
+        if let Some(edit) = view.value_edit.as_mut() {
             edit.saving = true;
         }
-        doc.editor_save_in_flight = true;
+        view.editor_save_in_flight = true;
     });
 
     opened.click("secret-tags-edit");
@@ -3126,16 +3139,16 @@ fn a_description_rewrite_leaves_no_draft_to_discard(cx: &mut TestAppContext) {
     let name = "/app/prod/db/host";
     let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
     opened.open_parameter(name);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
-    assert!(opened.read(|doc| doc.is_editing_value()));
+    assert!(opened.read_view(|view| view.is_editing_value()));
 
     opened.click("secret-action-edit-description");
     opened.fill_input("secret-description-input", NEW_DESCRIPTION);
     opened.click("secret-description-confirm");
 
     assert!(
-        !opened.read(|doc| doc.is_editing_value()),
+        !opened.read_view(|view| view.is_editing_value()),
         "dropped at the start"
     );
     assert_eq!(opened.mutations().len(), 1);
@@ -3160,7 +3173,7 @@ fn a_created_secret_is_shown_whatever_the_filter(cx: &mut TestAppContext) {
             .entry_names()
             .contains(&"prod/new/credentials".to_string())
     );
-    assert!(opened.read(|doc| doc.selected_summary().is_some()));
+    assert!(opened.read_view(|view| view.selected_summary().is_some()));
 }
 
 #[gpui::test]
@@ -3181,7 +3194,7 @@ fn a_parameter_created_below_the_level_moves_the_path(cx: &mut TestAppContext) {
             .entry_names()
             .contains(&"/app/prod/db/sub/token".to_string())
     );
-    assert!(opened.read(|doc| doc.selected_summary().is_some()));
+    assert!(opened.read_view(|view| view.selected_summary().is_some()));
 }
 
 /// Nothing of the create form can change once it was confirmed.
@@ -3190,15 +3203,15 @@ fn the_create_form_is_locked_while_it_is_sent(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
     opened.tall();
     opened.click("secret-new");
-    opened.update(|doc, _| doc.write_in_flight = true);
+    opened.update_view(|view, _| view.write_in_flight = true);
     opened.window.run_until_parked();
 
     assert!(opened.is_disabled("secret-create-type-String"));
     assert!(opened.is_disabled("secret-create-tag-add"));
 
     opened.update(|doc, cx| doc.set_create_tier("Advanced", cx));
-    let tier = opened.read(|doc| match &doc.dialog {
-        Some(WriteDialog::Create(dialog)) => dialog.tier.clone(),
+    let tier = opened.read(|doc| match &doc.create_dialog {
+        Some(dialog) => dialog.tier.clone(),
         _ => None,
     });
     assert_eq!(
@@ -3214,13 +3227,13 @@ fn the_create_form_is_locked_while_it_is_sent(cx: &mut TestAppContext) {
 fn edit_rotation_waits_for_the_details(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(KEY_VALUE_SECRET);
-    opened.update(|doc, _| doc.details = DetailsState::Loading);
+    opened.update_view(|view, _| view.details = DetailsState::Loading);
 
     let enabled = opened.window.update(|_, cx| {
         opened
             .doc
             .read(cx)
-            .pane_actions(&opened.doc)
+            .pane_actions(&opened.doc, cx)
             .into_iter()
             .find(|action| action.id == "secret-edit-rotation")
             .map(|action| action.enabled)
@@ -3228,9 +3241,12 @@ fn edit_rotation_waits_for_the_details(cx: &mut TestAppContext) {
     assert_eq!(enabled, Some(false));
 
     let doc = opened.doc.clone();
-    opened
-        .window
-        .update(|window, cx| doc.update(cx, |doc, cx| doc.open_edit_rotation(window, cx)));
+    opened.window.update(|window, cx| {
+        doc.update(cx, |doc, cx| {
+            doc.view
+                .update(cx, |view, cx| view.open_edit_rotation(window, cx))
+        })
+    });
     assert!(!opened.dialog_open());
 }
 
@@ -3240,7 +3256,7 @@ fn edit_rotation_waits_for_the_details(cx: &mut TestAppContext) {
 fn a_refused_menu_write_restores_focus(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
 
@@ -3270,7 +3286,7 @@ fn the_e_key_edits_a_value_that_is_not_loaded(cx: &mut TestAppContext) {
     assert!(opened.command(Command::EditValue));
     opened.window.run_until_parked();
 
-    assert!(opened.read(|doc| doc.is_editing_value()));
+    assert!(opened.read_view(|view| view.is_editing_value()));
 }
 
 /// A rotation that finishes after the immediate refresh is picked up by the
@@ -3306,12 +3322,9 @@ fn the_menu_selection_follows_a_shrinking_menu(cx: &mut TestAppContext) {
     opened.load_everything();
     opened.open_secret(PENDING_DELETION_SECRET);
     opened.right_click(&format!("secret-row-{PENDING_DELETION_SECRET}"));
-    let last = opened.read(|doc| {
-        doc.context_menu
-            .as_ref()
-            .map_or(0, |menu| menu.items.len() - 1)
-    });
-    opened.update(|doc, _| {
+    let before = opened.read(|doc| doc.context_menu.as_ref().map_or(0, |menu| menu.items.len()));
+    let last = before - 1;
+    opened.update(|doc, cx| {
         if let Some(menu) = doc.context_menu.as_mut() {
             menu.selected_index = last;
         }
@@ -3323,12 +3336,18 @@ fn the_menu_selection_follows_a_shrinking_menu(cx: &mut TestAppContext) {
         {
             entry.deletion_scheduled_for = None;
         }
-        if let DetailsState::Loaded(details) = &mut doc.details {
-            details.summary.deletion_scheduled_for = None;
-        }
+        doc.view.update(cx, |view, _| {
+            if let DetailsState::Loaded(details) = &mut view.details {
+                details.summary.deletion_scheduled_for = None;
+            }
+        });
+        doc.push_listing_row(cx);
     });
     opened.window.run_until_parked();
     let _ = opened.rendered_text();
+
+    let after = opened.read(|doc| doc.context_menu.as_ref().map_or(0, |menu| menu.items.len()));
+    assert!(after < before, "Restore left the menu: {before} -> {after}");
 
     let (index, count) = opened.read(|doc| {
         doc.context_menu
@@ -3370,13 +3389,18 @@ fn the_selected_summary_survives_a_reload_that_drops_its_row(cx: &mut TestAppCon
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.load_everything();
     opened.open_secret(KEY_VALUE_SECRET);
-    opened.update(|doc, _| {
+    opened.update(|doc, cx| {
         doc.listing
             .entries
             .retain(|entry| entry.name != KEY_VALUE_SECRET);
+        doc.push_listing_row(cx);
     });
 
-    assert!(opened.read(|doc| doc.selected_summary().is_some()));
+    assert!(
+        opened.read_view(|view| view.listed_summary().is_none()),
+        "the listing no longer holds the row"
+    );
+    assert!(opened.read_view(|view| view.selected_summary().is_some()));
 }
 
 /// A pending deletion disables Rotate now and Edit tags even when its rotation
@@ -3388,8 +3412,8 @@ fn a_pending_deletion_disables_rotate_now_and_edit_tags_with_rotation_on(cx: &mu
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.load_everything();
     opened.open_secret(PENDING_DELETION_SECRET);
-    opened.update(|doc, _| {
-        if let DetailsState::Loaded(details) = &mut doc.details {
+    opened.update_view(|view, _| {
+        if let DetailsState::Loaded(details) = &mut view.details {
             details.summary.rotation = Some(dbflux_core::SecretRotation {
                 enabled: true,
                 schedule: Some("rate(30 days)".to_string()),
@@ -3430,15 +3454,15 @@ fn a_pending_version_is_not_a_roll_back_target(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(KEY_VALUE_SECRET);
     // The history, newest first: current, a pending version, an older one.
-    opened.update(|doc, _| {
-        if let VersionsState::Loaded(versions) = &mut doc.versions {
+    opened.update_view(|view, _| {
+        if let VersionsState::Loaded(versions) = &mut view.versions {
             versions[1].is_pending = true;
         }
     });
     opened.window.run_until_parked();
 
-    assert!(!opened.read(|doc| doc.can_roll_back_version(1)));
-    assert!(opened.read(|doc| doc.can_roll_back_version(2)));
+    assert!(!opened.read_view(|view| view.can_roll_back_version(1)));
+    assert!(opened.read_view(|view| view.can_roll_back_version(2)));
     assert!(opened.is_disabled("secret-version-rollback-1"));
 
     let frame = {
@@ -3467,8 +3491,8 @@ fn a_pending_version_is_not_a_roll_back_target(cx: &mut TestAppContext) {
 fn b_says_why_when_every_earlier_version_is_pending(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(KEY_VALUE_SECRET);
-    opened.update(|doc, _| {
-        if let VersionsState::Loaded(versions) = &mut doc.versions {
+    opened.update_view(|view, _| {
+        if let VersionsState::Loaded(versions) = &mut view.versions {
             for version in versions.iter_mut().skip(1) {
                 version.is_pending = true;
             }
@@ -3492,20 +3516,22 @@ fn b_says_why_when_every_earlier_version_is_pending(cx: &mut TestAppContext) {
 fn an_editor_save_in_flight_blocks_writes_after_the_editor_is_gone(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
 
     let doc = opened.doc.clone();
     let blocked = opened.window.update(|_, cx| {
         doc.update(cx, |doc, cx| {
-            doc.save_value_edit(cx);
-            doc.clear_value();
-            doc.write_session(cx).is_none()
+            doc.view.update(cx, |view, cx| {
+                view.save_value_edit(cx);
+                view.clear_value();
+                view.write_session(cx).is_none()
+            })
         })
     });
 
-    assert!(!opened.read(|doc| doc.is_editing_value()));
+    assert!(!opened.read_view(|view| view.is_editing_value()));
     assert!(
         opened.written_values().is_empty(),
         "the store has not answered"
@@ -3516,7 +3542,7 @@ fn an_editor_save_in_flight_blocks_writes_after_the_editor_is_gone(cx: &mut Test
 
     assert_eq!(opened.written_values().len(), 1);
     assert!(
-        opened.update(|doc, cx| doc.write_session(cx).is_some()),
+        opened.update_view(|view, cx| view.write_session(cx).is_some()),
         "the answered save releases the guard"
     );
 }
@@ -3528,20 +3554,23 @@ fn b_rolls_back_to_the_latest_version_created_before_the_current_one(cx: &mut Te
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(KEY_VALUE_SECRET);
     // Newest first: v-current (V3), v-previous (V2, now current), v-oldest (V1).
-    opened.update(|doc, _| {
-        if let VersionsState::Loaded(versions) = &mut doc.versions {
+    opened.update_view(|view, _| {
+        if let VersionsState::Loaded(versions) = &mut view.versions {
             versions[0].is_current = false;
             versions[1].is_current = true;
         }
-        if let DetailsState::Loaded(details) = &mut doc.details {
+        if let DetailsState::Loaded(details) = &mut view.details {
             details.summary.version = Some("v-previous".to_string());
         }
     });
 
-    assert_eq!(opened.read(|doc| doc.previous_version_index()), Some(2));
+    assert_eq!(
+        opened.read_view(|view| view.previous_version_index()),
+        Some(2)
+    );
     assert!(opened.command(Command::RollBackVersion));
 
-    let target = opened.read(|doc| match &doc.dialog {
+    let target = opened.read_view(|view| match &view.dialog {
         Some(WriteDialog::RollBack(dialog)) => dialog.version_id.clone(),
         _ => panic!("the roll back dialog is open"),
     });
@@ -3554,9 +3583,9 @@ fn b_rolls_back_to_the_latest_version_created_before_the_current_one(cx: &mut Te
 fn a_rejected_tag_write_keeps_an_unchanged_editor_open(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
     opened.open_parameter("/app/prod/db/host");
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
-    assert!(opened.read(|doc| doc.is_editing_value()));
+    assert!(opened.read_view(|view| view.is_editing_value()));
 
     opened.set_policy(
         MutationPolicy::ReadOnly,
@@ -3569,7 +3598,7 @@ fn a_rejected_tag_write_keeps_an_unchanged_editor_open(cx: &mut TestAppContext) 
     assert!(opened.mutations().is_empty());
     assert!(opened.dialog_open(), "the rejected write keeps its dialog");
     assert!(
-        opened.read(|doc| doc.is_editing_value()),
+        opened.read_view(|view| view.is_editing_value()),
         "the editor holds the value the tag write never touched"
     );
 }
@@ -3592,16 +3621,18 @@ fn a_create_finishing_after_navigation_keeps_the_newer_selection(cx: &mut TestAp
             doc.navigate_to(Some("/app/prod/".to_string()), cx);
             doc.select_row(SecretRowKey::Secret("/app/prod/region".to_string()), cx);
             // Loaded before the create lands, so a landing that clears it shows.
-            doc.value = ValueState::Loaded(Box::new(RetrievedValue::new(&SecretValue::text(
-                None,
-                "newer-selection-value".to_string(),
-            ))));
+            doc.view.update(cx, |view, _| {
+                view.value = ValueState::Loaded(Box::new(RetrievedValue::new(&SecretValue::text(
+                    None,
+                    "newer-selection-value".to_string(),
+                ))));
+            });
         })
     });
     opened.window.run_until_parked();
 
     assert!(
-        opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))),
+        opened.read_view(|view| matches!(view.value(), ValueState::Loaded(_))),
         "the newer selection keeps its loaded value"
     );
     assert_eq!(opened.created().len(), 1, "the create reached the store");
@@ -3614,7 +3645,7 @@ fn a_create_finishing_after_navigation_keeps_the_newer_selection(cx: &mut TestAp
         Some("/app/prod/")
     );
     assert!(matches!(
-        opened.read(|doc| doc.details().clone()),
+        opened.read_view(|view| view.details().clone()),
         DetailsState::Loaded(details) if details.summary.name == "/app/prod/region"
     ));
 }
@@ -3625,34 +3656,34 @@ fn a_create_finishing_after_navigation_keeps_the_newer_selection(cx: &mut TestAp
 fn a_live_connection_with_no_details_session_reloads_the_details(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(KEY_VALUE_SECRET);
-    let lost = |doc: &mut SecretStoreDocument| {
-        doc.details_session = None;
-        doc.details = DetailsState::Failed("no connection".to_string());
+    let lost = |view: &mut SecretView| {
+        view.details_session = None;
+        view.details = DetailsState::Failed("no connection".to_string());
     };
 
-    opened.update(|doc, _| {
-        lost(doc);
-        doc.write_in_flight = true;
+    opened.update_view(|view, _| {
+        lost(view);
+        view.write_in_flight = true;
     });
-    opened.update(|doc, cx| doc.adopt_details_session(cx));
+    opened.update_view(|view, cx| view.adopt_details_session(cx));
     assert!(
         matches!(
-            opened.read(|doc| doc.details().clone()),
+            opened.read_view(|view| view.details().clone()),
             DetailsState::Failed(_)
         ),
         "a write in flight keeps the reload back"
     );
 
-    opened.update(|doc, cx| {
-        doc.write_in_flight = false;
-        doc.adopt_details_session(cx);
+    opened.update_view(|view, cx| {
+        view.write_in_flight = false;
+        view.adopt_details_session(cx);
     });
 
     assert!(matches!(
-        opened.read(|doc| doc.details().clone()),
+        opened.read_view(|view| view.details().clone()),
         DetailsState::Loaded(_)
     ));
-    assert!(opened.read(|doc| doc.details_session.is_some()));
+    assert!(opened.read_view(|view| view.details_session.is_some()));
 }
 
 /// A parameter created from the root in Tree mode below the top level moves
@@ -3701,10 +3732,10 @@ fn a_rotation_whose_audit_event_was_lost_is_followed_up(cx: &mut TestAppContext)
         audit_unrecorded: false,
     };
 
-    opened.update(|doc, cx| {
-        doc.land_rotate_now(
+    opened.update_view(|view, cx| {
+        view.land_rotate_now(
             KEY_VALUE_SECRET,
-            super::super::actions::Landing::Stands(failure),
+            super::super::view::Landing::Stands(failure),
             cx,
         )
     });
@@ -3777,7 +3808,11 @@ fn a_missing_store_write_is_recorded_as_that_operations_attempt(cx: &mut TestApp
     opened.open_secret(KEY_VALUE_SECRET);
     opened.click("secret-tags-edit");
     opened.click("secret-tags-remove-0");
-    opened.update(|doc, _| doc.store.id = "gone".to_string());
+    opened.update(|doc, cx| {
+        doc.store.id = "gone".to_string();
+        doc.view
+            .update(cx, |view, _| view.store.id = "gone".to_string());
+    });
 
     opened.click("secret-tags-confirm");
 
@@ -3801,10 +3836,14 @@ fn a_missing_store_write_is_recorded_as_that_operations_attempt(cx: &mut TestApp
 fn a_missing_store_save_is_recorded_as_a_value_write_attempt(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
-    opened.update(|doc, _| doc.store.id = "gone".to_string());
+    opened.update(|doc, cx| {
+        doc.store.id = "gone".to_string();
+        doc.view
+            .update(cx, |view, _| view.store.id = "gone".to_string());
+    });
 
     opened.save_edit();
 
@@ -3829,20 +3868,20 @@ fn a_missing_store_save_is_recorded_as_a_value_write_attempt(cx: &mut TestAppCon
 fn a_second_editor_save_is_refused_while_one_is_pending(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
-    opened.update(|doc, _| doc.editor_save_in_flight = true);
+    opened.update_view(|view, _| view.editor_save_in_flight = true);
 
     opened.save_edit();
 
     assert!(opened.written_values().is_empty(), "no second request");
     assert_eq!(opened.reported_errors().len(), 1, "reported once");
     assert!(
-        opened.read(|doc| !doc.is_saving_value_edit()),
+        opened.read_view(|view| !view.is_saving_value_edit()),
         "the refused save does not mark the editor saving"
     );
-    assert!(opened.read(|doc| doc.editor_save_in_flight));
+    assert!(opened.read_view(|view| view.editor_save_in_flight));
 }
 
 /// Without dates the history's newest-first order decides: the version right
@@ -3851,14 +3890,17 @@ fn a_second_editor_save_is_refused_while_one_is_pending(cx: &mut TestAppContext)
 fn b_follows_the_history_order_when_dates_are_missing(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(KEY_VALUE_SECRET);
-    opened.update(|doc, _| {
-        if let VersionsState::Loaded(versions) = &mut doc.versions {
+    opened.update_view(|view, _| {
+        if let VersionsState::Loaded(versions) = &mut view.versions {
             versions[0].created = None;
             versions[1].created = None;
         }
     });
 
-    assert_eq!(opened.read(|doc| doc.previous_version_index()), Some(1));
+    assert_eq!(
+        opened.read_view(|view| view.previous_version_index()),
+        Some(1)
+    );
 }
 
 /// Two rotations landing close together share one follow-up schedule.
@@ -3874,10 +3916,10 @@ fn overlapping_rotation_follow_ups_are_coalesced(cx: &mut TestAppContext) {
     };
 
     for _ in 0..2 {
-        opened.update(|doc, cx| {
-            doc.land_rotate_now(
+        opened.update_view(|view, cx| {
+            view.land_rotate_now(
                 KEY_VALUE_SECRET,
-                super::super::actions::Landing::Stands(stands()),
+                super::super::view::Landing::Stands(stands()),
                 cx,
             )
         });
@@ -3888,6 +3930,573 @@ fn overlapping_rotation_follow_ups_are_coalesced(cx: &mut TestAppContext) {
 
     let reads = opened.driver.secret_store_calls().described.len() - before;
     assert_eq!(reads, 3, "one schedule of three reads, not two");
+}
+
+/// A newer rotation of another secret does not cancel this secret's
+/// follow-up: reselected within the window, it is still read again.
+#[gpui::test]
+fn a_rotation_follow_up_survives_the_rotation_of_another_secret(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let stands = || super::super::SecretWriteFailure {
+        error: dbflux_core::DbError::query_failed("audit event lost"),
+        correlation_id: None,
+        kind: super::super::SecretWriteFailureKind::AuditLost,
+        audit_unrecorded: false,
+    };
+
+    opened.update_view(|view, cx| {
+        view.land_rotate_now(
+            KEY_VALUE_SECRET,
+            super::super::view::Landing::Stands(stands()),
+            cx,
+        )
+    });
+    opened.open_secret(MANAGED_SECRET);
+    opened.update_view(|view, cx| {
+        view.land_rotate_now(
+            MANAGED_SECRET,
+            super::super::view::Landing::Stands(stands()),
+            cx,
+        )
+    });
+    opened.open_secret(KEY_VALUE_SECRET);
+    let before = opened
+        .driver
+        .secret_store_calls()
+        .described
+        .iter()
+        .filter(|(_, name)| name == KEY_VALUE_SECRET)
+        .count();
+
+    cx_advance(&mut opened, 31);
+
+    let reads = opened
+        .driver
+        .secret_store_calls()
+        .described
+        .iter()
+        .filter(|(_, name)| name == KEY_VALUE_SECRET)
+        .count()
+        - before;
+    assert_eq!(reads, 3, "the first secret's own schedule still runs");
+}
+
+/// A finished follow-up forgets its entry, and an older schedule finishing
+/// does not drop the entry of a newer rotation of the same secret.
+#[gpui::test]
+fn a_finished_rotation_follow_up_is_forgotten(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let stands = || super::super::SecretWriteFailure {
+        error: dbflux_core::DbError::query_failed("audit event lost"),
+        correlation_id: None,
+        kind: super::super::SecretWriteFailureKind::AuditLost,
+        audit_unrecorded: false,
+    };
+    let rotate = |opened: &mut Opened<'_>| {
+        opened.update_view(|view, cx| {
+            view.land_rotate_now(
+                KEY_VALUE_SECRET,
+                super::super::view::Landing::Stands(stands()),
+                cx,
+            )
+        });
+    };
+
+    rotate(&mut opened);
+    cx_advance(&mut opened, 5);
+    rotate(&mut opened);
+    assert_eq!(
+        opened.read_view(|view| view.rotation_follow_up_generations.len()),
+        1
+    );
+
+    // The first schedule ends (at its second tick) while the second one is
+    // still waiting for its own: the newer entry must survive that exit.
+    cx_advance(&mut opened, 6);
+    assert_eq!(
+        opened.read_view(|view| view.rotation_follow_up_generations.len()),
+        1,
+        "the older schedule leaving did not drop the newer entry"
+    );
+
+    cx_advance(&mut opened, 26);
+    assert!(
+        opened.read_view(|view| view.rotation_follow_up_generations.is_empty()),
+        "the finished schedules left no entry"
+    );
+}
+
+/// A secret scheduled for deletion is not asked for its history: the call
+/// fails on the service, and the failure toast would cover Restore. The
+/// section says why instead, and nothing is reported.
+#[gpui::test]
+fn a_secret_scheduled_for_deletion_does_not_load_its_history(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+
+    assert!(
+        opened
+            .driver
+            .secret_store_calls()
+            .version_listings
+            .iter()
+            .all(|(_, name)| name != PENDING_DELETION_SECRET),
+        "no history request for a scheduled secret"
+    );
+    assert!(opened.reported_errors().is_empty());
+    assert!(
+        opened.read_view(|view| matches!(view.versions(), VersionsState::ScheduledForDeletion))
+    );
+    assert!(
+        opened
+            .rendered_text()
+            .contains("Scheduled for deletion; restore it to see its versions")
+    );
+}
+
+/// Restoring the secret through the pane lists its history again.
+#[gpui::test]
+fn restoring_a_scheduled_secret_loads_its_history(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+
+    opened.update_view(|view, cx| view.restore_selected(cx));
+
+    assert!(
+        opened
+            .driver
+            .secret_store_calls()
+            .version_listings
+            .iter()
+            .any(|(store, name)| store == FAKE_SECRETS_STORE_ID && name == PENDING_DELETION_SECRET),
+        "the restored secret's history was requested"
+    );
+    assert!(!opened.version_ids().is_empty(), "and it loaded");
+}
+
+/// Scheduling a deletion refreshes the secret without asking for its history
+/// with the row the write outdated: the section reads scheduled-for-deletion
+/// and nothing is reported.
+#[gpui::test]
+fn scheduling_a_deletion_does_not_request_the_history_again(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    let listings = |opened: &mut Opened<'_>| {
+        opened
+            .driver
+            .secret_store_calls()
+            .version_listings
+            .iter()
+            .filter(|(_, name)| name == KEY_VALUE_SECRET)
+            .count()
+    };
+    let before = listings(&mut opened);
+
+    opened.click("secret-action-delete");
+    opened.type_text(KEY_VALUE_SECRET);
+    opened.confirm_open_dialog();
+
+    assert_eq!(opened.mutations().len(), 1, "{:?}", opened.mutations());
+    assert_eq!(listings(&mut opened), before, "no history request");
+    assert!(
+        opened.read_view(|view| matches!(view.versions(), VersionsState::ScheduledForDeletion))
+    );
+    assert!(opened.reported_errors().is_empty());
+}
+
+/// A scheduled secret selected with no connection still reports the missing
+/// connection, as the other history paths do, and asks for nothing.
+#[gpui::test]
+fn a_scheduled_secret_without_a_connection_is_reported(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    let profile_id = opened.read(|doc| doc.profile_id);
+    let app_state = opened.app_state.clone();
+    opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id))
+    });
+    let listings = opened.driver.secret_store_calls().version_listings.len();
+
+    opened.update_view(|view, cx| view.load_versions(PENDING_DELETION_SECRET.to_string(), cx));
+
+    assert_eq!(opened.reported_errors().len(), 1, "the missing connection");
+    assert_eq!(
+        opened.driver.secret_store_calls().version_listings.len(),
+        listings
+    );
+}
+
+/// A describe that confirms the secret is active again resumes its history,
+/// even when the listing row still says the deletion is scheduled.
+#[gpui::test]
+fn a_describe_confirming_a_restore_loads_the_history(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    assert!(
+        opened.read_view(|view| matches!(view.versions(), VersionsState::ScheduledForDeletion))
+    );
+
+    let connection = opened.live_connection();
+    connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("store")
+        .restore_secret(PENDING_DELETION_SECRET)
+        .expect("restored");
+    opened.update_view(|view, cx| view.describe(PENDING_DELETION_SECRET.to_string(), cx));
+
+    assert!(
+        opened.read_view(|view| view
+            .listed_summary()
+            .is_some_and(|summary| summary.is_pending_deletion())),
+        "the listing row is still the old one"
+    );
+    assert!(!opened.version_ids().is_empty(), "the history loaded");
+    assert!(opened.reported_errors().is_empty());
+}
+
+/// While a tag save is in flight the dialog keeps what the request carries:
+/// the fields, Add and Remove are locked, so a later edit cannot be lost to
+/// the landing that closes the dialog.
+#[gpui::test]
+fn the_tags_dialog_is_locked_while_its_save_is_in_flight(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-tags-edit");
+    assert!(!opened.is_disabled("secret-tags-key-0"));
+    let rows = opened.read_view(|view| match &view.dialog {
+        Some(WriteDialog::Tags(dialog)) => dialog.rows.len(),
+        _ => panic!("the tags dialog is open"),
+    });
+
+    opened.update_view(|view, cx| {
+        view.write_in_flight = true;
+        cx.notify();
+    });
+    opened.update_view(|view, cx| view.remove_tag_row(0, cx));
+
+    for id in ["secret-tags-add", "secret-tags-remove-0"] {
+        assert!(opened.is_disabled(id), "{id} is locked");
+    }
+    let key_input = opened.read_view(|view| match &view.dialog {
+        Some(WriteDialog::Tags(dialog)) => dialog.rows[0].key.clone(),
+        _ => panic!("the tags dialog is open"),
+    });
+    let before = opened
+        .window
+        .update(|_, cx| key_input.read(cx).value().to_string());
+    opened.click("secret-tags-key-0");
+    opened.type_text("zz");
+    let typed = opened
+        .window
+        .update(|_, cx| key_input.read(cx).value().to_string());
+    assert_eq!(typed, before, "typing into a locked field did nothing");
+    let after = opened.read_view(|view| match &view.dialog {
+        Some(WriteDialog::Tags(dialog)) => dialog.rows.len(),
+        _ => panic!("the tags dialog is open"),
+    });
+    assert_eq!(after, rows, "Remove did nothing");
+}
+
+/// The Edit rotation form is locked the same way.
+#[gpui::test]
+fn the_rotation_dialog_is_locked_while_its_save_is_in_flight(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-rotation-edit");
+    assert!(!opened.is_disabled("secret-rotation-schedule-input"));
+    let enabled = opened.read_view(|view| match &view.dialog {
+        Some(WriteDialog::Rotation(dialog)) => dialog.enabled,
+        _ => panic!("the rotation dialog is open"),
+    });
+
+    opened.update_view(|view, cx| {
+        view.write_in_flight = true;
+        cx.notify();
+    });
+    opened.update_view(|view, cx| view.set_rotation_enabled(!enabled, cx));
+
+    let schedule = opened.read_view(|view| match &view.dialog {
+        Some(WriteDialog::Rotation(dialog)) => dialog.schedule.clone(),
+        _ => panic!("the rotation dialog is open"),
+    });
+    let before = opened
+        .window
+        .update(|_, cx| schedule.read(cx).value().to_string());
+    opened.click("secret-rotation-schedule-input");
+    opened.type_text("zz");
+    let typed = opened
+        .window
+        .update(|_, cx| schedule.read(cx).value().to_string());
+    assert_eq!(typed, before, "typing into a locked field did nothing");
+    let after = opened.read_view(|view| match &view.dialog {
+        Some(WriteDialog::Rotation(dialog)) => dialog.enabled,
+        _ => panic!("the rotation dialog is open"),
+    });
+    assert_eq!(after, enabled, "the switch did nothing");
+}
+
+/// Closing the New secret dialog and opening it again in the same update
+/// keeps the new form: the close event queued by the first one belongs to the
+/// form it closed.
+#[gpui::test]
+fn a_queued_close_does_not_erase_a_create_form_opened_after_it(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    opened.click("secret-new");
+    assert!(opened.is_drawn("secret-create-dialog"));
+
+    let doc = opened.doc.clone();
+    opened.window.update(|window, cx| {
+        doc.update(cx, |doc, cx| {
+            doc.close_dialog(cx);
+            doc.open_create(window, cx);
+        })
+    });
+    opened.window.run_until_parked();
+
+    assert!(opened.read(|doc| doc.create_dialog.is_some()));
+    assert!(opened.dialog_open());
+    assert!(
+        opened.is_drawn("secret-create-dialog"),
+        "the modal is drawn"
+    );
+}
+
+// -- Value provenance (PR #1296 review) -----------------------------------------
+
+/// A connection that is not the one the document holds.
+fn other_session() -> Arc<dyn Connection> {
+    let profile = dbflux_core::ConnectionProfile::new(
+        "other-aws",
+        dbflux_core::DbConfig::SQLite {
+            path: std::path::PathBuf::from(":memory:"),
+            connection_id: None,
+        },
+    );
+
+    FakeDriver::new(DbKind::AwsSecrets)
+        .connect_arc(&profile)
+        .expect("connect")
+}
+
+impl Opened<'_> {
+    /// Starts a retrieval and leaves it in flight: the store call is made but
+    /// its answer is not landed until the window settles.
+    fn start_retrieval(&mut self) {
+        let doc = self.doc.clone();
+        self.window.update(|_, cx| {
+            let view = doc.read(cx).view.clone();
+            view.update(cx, |view, cx| view.retrieve_selected_value(cx));
+        });
+    }
+}
+
+/// A retrieval that lands after the connection was replaced belongs to the
+/// old session: the value is dropped, not shown under the new one, and the
+/// section is not left loading.
+#[gpui::test]
+fn a_retrieval_from_a_replaced_session_is_not_shown(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.start_retrieval();
+    let replacement = opened.replace_connection();
+    opened.window.run_until_parked();
+
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
+    assert!(!opened.read_view(|view| view.can_edit_value()));
+    assert!(
+        replacement.secret_store_calls().value_requests.is_empty(),
+        "the new session was not read"
+    );
+}
+
+/// The landing itself checks the session, before any frame could clean up
+/// after it: an answer asked of another session is refused on arrival.
+#[gpui::test]
+fn the_landing_refuses_an_answer_asked_of_another_session(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    let other = other_session();
+    let doc = opened.doc.clone();
+
+    let value = opened.window.update(|_, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, cx| {
+            let generation = view.value_generation;
+            view.apply_value(
+                super::super::view::ValueAsk {
+                    generation,
+                    name: PLAINTEXT_SECRET,
+                    requested_version: None,
+                    session: Some(other),
+                },
+                Ok(SecretValue::text(
+                    Some("v-1".to_string()),
+                    "stale".to_string(),
+                )),
+                0,
+                cx,
+            );
+            matches!(view.value(), ValueState::Loaded(_))
+        })
+    });
+
+    assert!(!value, "the stale answer was not shown");
+}
+
+/// A loaded value does not survive a session change: it is dropped when the
+/// connection is replaced, and cannot be edited afterwards.
+#[gpui::test]
+fn a_loaded_value_is_dropped_when_the_session_changes(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::Loaded(_))));
+
+    opened.replace_connection();
+    opened.announce_state_change();
+
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
+    assert!(!opened.read_view(|view| view.can_edit_value()));
+}
+
+/// An editor holding unsaved text keeps it across a session change, but the
+/// text can never be saved into the new session: the editor stays bound to
+/// the session its value came from.
+#[gpui::test]
+fn unsaved_text_survives_a_session_change_but_is_never_saved_to_the_new_session(
+    cx: &mut TestAppContext,
+) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+
+    let replacement = opened.replace_connection();
+    opened.announce_state_change();
+    assert!(
+        opened.read_view(|view| view.is_editing_value()),
+        "the text is kept"
+    );
+
+    opened.save_edit();
+
+    assert!(opened.written_values().is_empty());
+    assert!(
+        replacement.secret_store_calls().put_attempts.is_empty(),
+        "nothing reached the new session"
+    );
+    assert_eq!(opened.reported_errors().len(), 1);
+}
+
+/// Edit value on a value read from a session that was since replaced does not
+/// bind the editor to the live one.
+#[gpui::test]
+fn an_editor_is_not_opened_on_a_value_from_a_replaced_session(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    let other = other_session();
+    let doc = opened.doc.clone();
+
+    // In one update, so no frame drops the stale value first: the editor's
+    // own check is what refuses.
+    let editing = opened.window.update(|window, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, cx| {
+            view.value_session = Some(other);
+            view.start_value_edit(window, cx);
+            view.is_editing_value()
+        })
+    });
+
+    assert!(!editing);
+    assert_eq!(opened.reported_errors().len(), 1, "the user is told why");
+}
+
+/// The version a retrieval returned stays with the value: when the store
+/// rotates afterwards, the shown value reads as the older one.
+#[gpui::test]
+fn a_current_value_reads_as_older_once_the_store_rotates(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    assert!(opened.read_view(|view| view.shown_older_version().is_none()));
+    let shown = opened
+        .read_view(|view| match view.value() {
+            ValueState::Loaded(value) => value.version.clone(),
+            _ => None,
+        })
+        .expect("the retrieval returned its version");
+
+    opened.rotate_current(KEY_VALUE_SECRET, "rotated");
+    opened.update_view(|view, cx| {
+        view.describe(KEY_VALUE_SECRET.to_string(), cx);
+        view.load_versions(KEY_VALUE_SECRET.to_string(), cx);
+    });
+
+    assert_eq!(
+        opened.read_view(|view| view.shown_older_version().map(str::to_string)),
+        Some(shown)
+    );
+    assert!(opened.read_view(|view| view.can_return_to_current()));
+}
+
+/// The editor's save checks the region-switch guard before it reads the
+/// connection.
+#[gpui::test]
+fn an_editor_save_waits_for_a_region_switch(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+    opened.update(|doc, _| doc.region_switch_in_flight.set(true));
+
+    opened.save_edit();
+
+    assert!(opened.written_values().is_empty());
+    assert_eq!(opened.reported_errors().len(), 1, "the user is told why");
+    assert!(opened.read_view(|view| view.is_editing_value()));
+}
+
+/// A save that completes after the connection was replaced landed on the old
+/// session: it does not replace the new session's value or the editor's
+/// baseline, and the unsaved text stays.
+#[gpui::test]
+fn a_save_completing_on_a_replaced_session_leaves_the_editor_alone(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+    let doc = opened.doc.clone();
+    opened.window.update(|_, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, cx| view.save_value_edit(cx));
+    });
+    opened.replace_connection();
+    opened.window.run_until_parked();
+
+    assert!(
+        opened.read_view(|view| view.is_editing_value()),
+        "the text stays"
+    );
+    assert!(opened.dirty(), "and still differs from the baseline");
+    assert!(!opened.read_view(|view| view.is_saving_value_edit()));
+    assert_eq!(
+        opened.reported_errors().len(),
+        1,
+        "told it landed on the old session"
+    );
 }
 
 /// A store that declares tiers but no value types shows no type group and
@@ -3956,4 +4565,205 @@ fn provider_defined_choices_reach_the_create_request(cx: &mut TestAppContext) {
         .expect("the attempt reached the store");
     assert_eq!(request.value_type.as_deref(), Some("Sealed"));
     assert_eq!(request.tier.as_deref(), Some("Mid"));
+}
+
+/// V3: the host drops its selection when the view reports `Removed`, so the
+/// view and the listing never disagree on what is shown after a delete.
+#[gpui::test]
+fn removed_clears_both_selections(cx: &mut TestAppContext) {
+    let name = "/app/prod/db/host";
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.open_parameter(name);
+    opened.click("secret-action-delete");
+    opened.type_text(name);
+    opened.click("secret-delete-confirm");
+
+    assert_eq!(opened.mutations().len(), 1, "{:?}", opened.mutations());
+    assert!(opened.read(|doc| doc.selected().is_none()));
+    assert!(opened.read_view(|view| view.name().is_none()));
+    let doc = opened.doc.clone();
+    let ids: Vec<String> = opened.window.update(|_, cx| {
+        doc.read(cx)
+            .pane_actions(&doc, cx)
+            .into_iter()
+            .map(|action| action.id.to_string())
+            .collect()
+    });
+    assert!(
+        !ids.iter().any(|id| id == "secret-details-close"),
+        "{ids:?}"
+    );
+}
+
+/// V3/V4: a delete that lands after the user selected another secret in the
+/// same turn leaves the newer selection alone in both the host and the view.
+#[gpui::test]
+fn delete_landing_after_reselection_keeps_the_new_secret(cx: &mut TestAppContext) {
+    let name = "/app/prod/db/host";
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.open_parameter(name);
+    let other = opened
+        .entry_names()
+        .into_iter()
+        .find(|entry| entry != name)
+        .expect("a second parameter");
+    opened.click("secret-action-delete");
+    opened.type_text(name);
+
+    let doc = opened.doc.clone();
+    let target = other.clone();
+    opened.window.update(|window, cx| {
+        doc.update(cx, |doc, cx| {
+            doc.confirm_dialog(window, cx);
+            doc.select_row(SecretRowKey::Secret(target), cx);
+        })
+    });
+    opened.window.run_until_parked();
+
+    assert_eq!(opened.mutations().len(), 1, "{:?}", opened.mutations());
+    assert_eq!(
+        opened.read(|doc| doc.selected().cloned()),
+        Some(SecretRowKey::Secret(other.clone()))
+    );
+    assert_eq!(
+        opened.read_view(|view| view.name().map(str::to_string)),
+        Some(other.clone())
+    );
+    assert!(opened.read_view(|view| matches!(
+        view.details(),
+        DetailsState::Loaded(details) if details.summary.name == other
+    )));
+}
+
+/// V4: a deletion scheduled outside the pane reaches the view through the
+/// listing reload, and every gate that reads the row follows it.
+#[gpui::test]
+fn reloaded_listing_row_updates_the_gates(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    assert!(opened.read_view(|view| view.can_retrieve_value()));
+
+    let connection = opened.live_connection();
+    connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("store")
+        .delete_secret(&SecretDeleteRequest::Scheduled {
+            name: KEY_VALUE_SECRET.to_string(),
+            recovery_window_days: 7,
+        })
+        .expect("scheduled");
+    opened.update(|doc, cx| doc.reload_listing_in_place(cx));
+
+    assert!(opened.read_view(|view| {
+        view.selected_summary()
+            .is_some_and(|summary| summary.is_pending_deletion())
+    }));
+    assert!(!opened.read_view(|view| view.can_retrieve_value()));
+    assert!(opened.read_view(|view| view.write_refusal_reason().is_some()));
+}
+
+/// V4: two selections in one turn: only the last secret's describe and
+/// listing row stay.
+#[gpui::test]
+fn a_superseded_describe_is_dropped(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    opened.update(|doc, cx| {
+        doc.select_row(SecretRowKey::Secret(KEY_VALUE_SECRET.to_string()), cx);
+        doc.select_row(SecretRowKey::Secret(PLAINTEXT_SECRET.to_string()), cx);
+    });
+
+    assert!(opened.read_view(|view| matches!(
+        view.details(),
+        DetailsState::Loaded(details) if details.summary.name == PLAINTEXT_SECRET
+    )));
+    assert_eq!(
+        opened.read_view(|view| view.selected_summary().map(|summary| summary.name.clone())),
+        Some(PLAINTEXT_SECRET.to_string())
+    );
+}
+
+/// V4: a describe still out when the pane closes does not bring it back.
+#[gpui::test]
+fn a_describe_after_close_is_dropped(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    let doc = opened.doc.clone();
+    opened.window.update(|window, cx| {
+        doc.update(cx, |doc, cx| {
+            doc.select_row(SecretRowKey::Secret(KEY_VALUE_SECRET.to_string()), cx);
+            doc.close_details(window, cx);
+        })
+    });
+    opened.window.run_until_parked();
+
+    assert!(opened.read(|doc| doc.selected().is_none()));
+    assert!(opened.read_view(|view| matches!(view.details(), DetailsState::Idle)));
+    assert!(opened.read_view(|view| view.selected_summary().is_none()));
+}
+
+/// V3: a dialog the view opens while the row menu is up drops the menu and
+/// any entry it queued.
+#[gpui::test]
+fn a_dialog_opened_under_the_menu_drops_it(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.open_menu_at(
+        SecretRowKey::Secret(KEY_VALUE_SECRET.to_string()),
+        gpui::point(gpui::px(200.0), gpui::px(200.0)),
+    );
+    assert!(opened.read(|doc| doc.context_menu.is_some()));
+    opened.update(|doc, _| {
+        doc.pending_menu_action = Some(super::super::context_menu::SecretMenuAction::RotateNow)
+    });
+
+    let action = opened.pane_action("secret-delete");
+    opened.run_action(action);
+
+    assert!(opened.dialog_open());
+    assert!(opened.read(|doc| doc.context_menu.is_none()));
+    assert!(opened.read(|doc| doc.pending_menu_action.is_none()));
+}
+
+/// V3: moving the selection under an open New secret dialog drops the
+/// host's fields with the view's slot, and a later confirm writes nothing.
+#[gpui::test]
+fn selection_change_drops_the_create_dialog(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let doc = opened.doc.clone();
+    opened
+        .window
+        .update(|window, cx| doc.update(cx, |doc, cx| doc.open_create(window, cx)));
+    opened.window.run_until_parked();
+    assert!(opened.dialog_open());
+    assert!(opened.read(|doc| doc.create_dialog.is_some()));
+
+    opened.select(PLAINTEXT_SECRET);
+
+    assert!(!opened.dialog_open());
+    assert!(opened.read(|doc| doc.create_dialog.is_none()));
+    opened.confirm_open_dialog();
+    assert!(opened.mutations().is_empty(), "{:?}", opened.mutations());
+}
+
+/// V2: two confirms of the view's dialog in one turn send one write.
+#[gpui::test]
+fn two_confirms_in_one_turn_send_one_write(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-action-delete");
+    opened.type_text(KEY_VALUE_SECRET);
+
+    let doc = opened.doc.clone();
+    opened.window.update(|window, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, cx| {
+            view.confirm_dialog(window, cx);
+            view.confirm_dialog(window, cx);
+        })
+    });
+    opened.window.run_until_parked();
+
+    assert_eq!(opened.mutations().len(), 1, "{:?}", opened.mutations());
 }

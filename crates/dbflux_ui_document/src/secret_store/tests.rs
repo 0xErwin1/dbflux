@@ -19,7 +19,7 @@ use super::write::{
     SECRET_VALUE_WRITTEN_ACTION, SecretWriteFailure, put_secret_value,
 };
 use super::{
-    DetailsState, PathMode, SecretRowKey, SecretStoreDocument, StoreCall,
+    DetailsState, PathMode, SecretRowKey, SecretStoreDocument, SecretView, StoreCall,
     VALUE_RETRIEVE_FAILED_ACTION, VALUE_RETRIEVED_ACTION, ValueState, ValueView, VersionsState,
 };
 use crate::keyboard_test_support::{connected_app_state, init_keyboard_runtime};
@@ -121,12 +121,44 @@ impl Opened<'_> {
         self.window.update(|_, cx| f(doc.read(cx)))
     }
 
+    /// Reads the document with the app it lives in, for what needs both.
+    fn read_cx<R>(&mut self, f: impl FnOnce(&SecretStoreDocument, &gpui::App) -> R) -> R {
+        let doc = self.doc.clone();
+        self.window.update(|_, cx| f(doc.read(cx), cx))
+    }
+
+    /// Reads the view of the selected secret, which owns what the document
+    /// used to hold itself: details, value, history, editor and dialog.
+    fn read_view<R>(&mut self, f: impl FnOnce(&SecretView) -> R) -> R {
+        let doc = self.doc.clone();
+        self.window.update(|_, cx| {
+            let view = doc.read(cx).view.clone();
+            f(view.read(cx))
+        })
+    }
+
+    /// Updates the view of the selected secret, then lets the window settle.
+    fn update_view<R>(
+        &mut self,
+        f: impl FnOnce(&mut SecretView, &mut gpui::Context<SecretView>) -> R,
+    ) -> R {
+        let doc = self.doc.clone();
+        let result = self.window.update(|_, cx| {
+            let view = doc.read(cx).view.clone();
+            view.update(cx, f)
+        });
+        self.window.run_until_parked();
+        result
+    }
+
     /// Shows `text` as the retrieved value, the way a store returning a
     /// multi-line secret would.
     fn show_value(&mut self, text: &str) {
         let value = RetrievedValue::new(&SecretValue::text(None, text.to_string()));
-        self.update(|doc, cx| {
-            doc.value = ValueState::Loaded(Box::new(value));
+        self.update_view(|view, cx| {
+            view.value = ValueState::Loaded(Box::new(value));
+            // As if retrieved from the session that is live now.
+            view.value_session = view.connection(cx);
             cx.notify();
         });
     }
@@ -434,7 +466,7 @@ fn selecting_a_secret_describes_it_without_reading_its_value(cx: &mut TestAppCon
 
     opened.select(KEY_VALUE_SECRET);
 
-    let resource_id = opened.read(|doc| match doc.details() {
+    let resource_id = opened.read_view(|view| match view.details() {
         DetailsState::Loaded(details) => details.resource_id.clone(),
         other => panic!("details not loaded: {other:?}"),
     });
@@ -452,7 +484,7 @@ fn selecting_a_secret_describes_it_without_reading_its_value(cx: &mut TestAppCon
         )]
     );
     assert!(calls.value_requests.is_empty());
-    assert!(opened.read(|doc| matches!(doc.value(), ValueState::NotLoaded)));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
 }
 
 // -- Value -----------------------------------------------------------------
@@ -466,7 +498,7 @@ fn retrieve_value_reads_once_and_audits_without_the_value(cx: &mut TestAppContex
 
     assert!(opened.command(Command::ToggleValuePanel));
 
-    let keys = opened.read(|doc| match doc.value() {
+    let keys = opened.read_view(|view| match view.value() {
         ValueState::Loaded(value) => {
             assert_eq!(value.view, ValueView::KeyValue);
             value
@@ -605,10 +637,10 @@ fn plaintext_and_binary_secrets_open_in_their_views(cx: &mut TestAppContext) {
     opened.load_everything();
 
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
-    opened.update(|doc, cx| doc.set_value_view(ValueView::KeyValue, cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.set_value_view(ValueView::KeyValue, cx));
 
-    opened.read(|doc| match doc.value() {
+    opened.read_view(|view| match view.value() {
         ValueState::Loaded(value) => {
             assert_eq!(value.view, ValueView::Plaintext);
             assert!(!value.content.has_key_value_view());
@@ -618,9 +650,9 @@ fn plaintext_and_binary_secrets_open_in_their_views(cx: &mut TestAppContext) {
     });
 
     opened.select(BINARY_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
 
-    opened.read(|doc| match doc.value() {
+    opened.read_view(|view| match view.value() {
         ValueState::Loaded(value) => {
             assert!(value.content.is_binary());
             assert_eq!(value.fields()[0].1.expose_secret(), "3q2+7wBC");
@@ -644,7 +676,7 @@ fn a_managed_secret_is_read_only_and_says_why(cx: &mut TestAppContext) {
         )),
         "{text}"
     );
-    assert!(opened.read(|doc| doc.can_retrieve_value()));
+    assert!(opened.read_view(|view| view.can_retrieve_value()));
 }
 
 /// The value of a secret whose deletion is pending cannot be retrieved: the
@@ -654,13 +686,13 @@ fn a_pending_deletion_disables_retrieval(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PENDING_DELETION_SECRET);
 
-    assert!(!opened.read(|doc| doc.can_retrieve_value()));
+    assert!(!opened.read_view(|view| view.can_retrieve_value()));
 
     let enabled = opened.window.update(|_, cx| {
         opened
             .doc
             .read(cx)
-            .pane_actions(&opened.doc)
+            .pane_actions(&opened.doc, cx)
             .into_iter()
             .find(|action| action.id.as_ref() == "secret-retrieve-value")
             .map(|action| action.enabled)
@@ -670,7 +702,7 @@ fn a_pending_deletion_disables_retrieval(cx: &mut TestAppContext) {
     opened.command(Command::ToggleValuePanel);
 
     assert!(opened.driver.secret_store_calls().value_requests.is_empty());
-    assert!(opened.read(|doc| matches!(doc.value(), ValueState::NotLoaded)));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
 }
 
 /// A value the store refuses to decrypt opens the error state with the
@@ -682,9 +714,9 @@ fn a_denied_decryption_shows_the_error_and_never_an_empty_value(cx: &mut TestApp
     opened.load_everything();
     opened.select(DENIED_PARAMETER);
 
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
 
-    let correlation_id = opened.read(|doc| match doc.value() {
+    let correlation_id = opened.read_view(|view| match view.value() {
         ValueState::Failed(failure) => {
             assert!(failure.decrypt_denied);
             assert!(
@@ -726,19 +758,19 @@ fn the_value_is_dropped_on_selection_change_and_refresh(cx: &mut TestAppContext)
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
 
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
-    assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::Loaded(_))));
 
     opened.select(MANAGED_SECRET);
-    assert!(opened.read(|doc| matches!(doc.value(), ValueState::NotLoaded)));
-    assert!(opened.read(|doc| doc.value_inputs.is_empty()));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
+    assert!(opened.read_view(|view| view.value_inputs.is_empty()));
 
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
-    assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::Loaded(_))));
 
     assert!(opened.command(Command::RefreshSchema));
-    assert!(opened.read(|doc| matches!(doc.value(), ValueState::NotLoaded)));
-    assert!(opened.read(|doc| doc.value_inputs.is_empty()));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
+    assert!(opened.read_view(|view| view.value_inputs.is_empty()));
 }
 
 /// A masked or revealed value never reaches the accessibility tree that UI
@@ -750,13 +782,13 @@ fn values_never_reach_the_accessibility_tree(cx: &mut TestAppContext) {
 
     for name in [KEY_VALUE_SECRET, PLAINTEXT_SECRET] {
         opened.select(name);
-        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.update_view(|view, cx| view.retrieve_selected_value(cx));
 
         let masked = opened.rendered_text();
         assert!(masked.contains("secret-value-field-0") || !masked.is_empty());
 
         assert!(opened.command(Command::ExpandCollapse));
-        assert!(opened.read(|doc| match doc.value() {
+        assert!(opened.read_view(|view| match view.value() {
             ValueState::Loaded(value) => value.is_revealed(0),
             _ => false,
         }));
@@ -1359,7 +1391,7 @@ fn refresh_under_unsaved_edits_starts_nothing(cx: &mut TestAppContext) {
         Some("AccessDenied".to_string()),
     );
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
 
@@ -1374,7 +1406,7 @@ fn refresh_under_unsaved_edits_starts_nothing(cx: &mut TestAppContext) {
         opened.driver.secret_store_calls().list_requests.len(),
         lists_before
     );
-    assert!(opened.read(|doc| doc.is_editing_value()));
+    assert!(opened.read_view(|view| view.is_editing_value()));
 }
 
 /// A loaded but empty region list leaves nothing to pick, so the region
@@ -1408,8 +1440,8 @@ fn copy_arn_says_why_it_is_unavailable(cx: &mut TestAppContext) {
             .unwrap_or_default()
     };
 
-    opened.update(|doc, cx| {
-        doc.details = DetailsState::Loading;
+    opened.update_view(|view, cx| {
+        view.details = DetailsState::Loading;
         cx.notify();
     });
     assert_eq!(
@@ -1417,8 +1449,8 @@ fn copy_arn_says_why_it_is_unavailable(cx: &mut TestAppContext) {
         dbflux_i18n::t!("document.secret_store.context_menu.arn_loading")
     );
 
-    opened.update(|doc, cx| {
-        doc.details = DetailsState::Failed("describe refused".to_string());
+    opened.update_view(|view, cx| {
+        view.details = DetailsState::Failed("describe refused".to_string());
         cx.notify();
     });
     assert_eq!(
@@ -1589,30 +1621,33 @@ fn the_footer_stays_inside_the_listing_at_the_minimum_width(cx: &mut TestAppCont
 fn a_post_save_history_reload_does_not_report_a_known_loss_again(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
-    let generation = opened.read(|doc| doc.value_write_generation);
+    let generation = opened.read_view(|view| view.value_write_generation);
 
     let profile_id = opened.read(|doc| doc.profile_id);
     let app_state = opened.app_state.clone();
     opened.window.update(|_, cx| {
         app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id));
     });
-    opened.update(|doc, _| doc.missing_connection_reported = true);
+    opened.update_view(|view, _| view.missing_connection_reported = true);
 
     let written = SecretValue {
         version: Some("v-written".to_string()),
         payload: dbflux_core::SecretPayload::Text(EDITED_VALUE.into()),
     };
-    opened.update(|doc, cx| doc.apply_value_write(generation, PLAINTEXT_SECRET, Ok(written), cx));
+    let saved_on = opened.read_view(|view| view.value_session.clone().expect("a retrieved value"));
+    opened.update_view(|view, cx| {
+        view.apply_value_write(generation, PLAINTEXT_SECRET, Ok(written), &saved_on, cx)
+    });
 
     assert!(
         opened.reported_errors().is_empty(),
         "{:?}",
         opened.reported_errors()
     );
-    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
 }
 
 /// With the current version unknown, the shown version is named and can go
@@ -1621,7 +1656,7 @@ fn a_post_save_history_reload_does_not_report_a_known_loss_again(cx: &mut TestAp
 fn an_unknown_current_version_is_not_called_older(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| doc.activate_version(1, cx));
+    opened.update_view(|view, cx| view.activate_version(1, cx));
     opened.strip_reported_versions();
     let profile_id = opened.read(|doc| doc.profile_id);
     let app_state = opened.app_state.clone();
@@ -1720,7 +1755,7 @@ fn the_reveal_all_button_names_what_it_will_do(cx: &mut TestAppContext) {
     opened.load_everything();
 
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
 
     let masked = opened.rendered_text();
     assert!(masked.contains("Reveal all"), "masked: {masked}");
@@ -1849,7 +1884,7 @@ fn the_viewer_draws_the_lines_and_never_leaks_the_value(cx: &mut TestAppContext)
         assert!(!revealed.contains(line), "revealed frame holds {line}");
     }
 
-    opened.update(|doc, cx| doc.copy_full_value(cx));
+    opened.update_view(|view, cx| view.copy_full_value(cx));
     assert_eq!(opened.clipboard().as_deref(), Some(MULTILINE_SECRET));
 }
 
@@ -1888,7 +1923,7 @@ fn the_viewer_scrolls_after_about_fourteen_lines_and_wraps_long_ones(cx: &mut Te
         * DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT;
 
     let viewer = bounds("secret-value-viewer").expect("the viewer is rendered");
-    let visible = line_height * super::details::VIEWER_VISIBLE_LINES;
+    let visible = line_height * super::view::details::VIEWER_VISIBLE_LINES;
     assert!(
         viewer >= visible - gpui::px(1.0),
         "the viewer keeps its lines visible: {viewer:?} at {line_height:?} per line"
@@ -2026,7 +2061,7 @@ fn a_single_line_plaintext_secret_keeps_its_single_line_field(cx: &mut TestAppCo
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.load_everything();
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
 
     let paths = opened.rendered_paths();
 
@@ -2054,29 +2089,45 @@ impl Opened<'_> {
     /// Opens the editor on the selected secret's loaded value.
     fn start_edit(&mut self) {
         let doc = self.doc.clone();
-        self.window
-            .update(|window, cx| doc.update(cx, |doc, cx| doc.start_value_edit(window, cx)));
+        self.window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.view
+                    .update(cx, |view, cx| view.start_value_edit(window, cx))
+            })
+        });
         self.window.run_until_parked();
     }
 
     /// The state of the open editor, if one is open.
     fn editing(&mut self) -> Option<(String, bool)> {
-        self.read(|doc| {
-            let edit = doc.value_edit.as_ref()?;
+        self.read_view(|view| {
+            let edit = view.value_edit.as_ref()?;
             Some((edit.original.expose_secret().to_string(), edit.saving))
         })
     }
 
     /// The text the open editor holds.
     fn editor_text(&mut self) -> String {
-        let editor = self.read(|doc| doc.value_edit.as_ref().expect("editor open").editor.clone());
+        let editor = self.read_view(|view| {
+            view.value_edit
+                .as_ref()
+                .expect("editor open")
+                .editor
+                .clone()
+        });
         self.window
             .update(|_, cx| editor.read(cx).value().to_string())
     }
 
     /// Replaces the text of the open editor.
     fn set_editor_text(&mut self, text: &str) {
-        let editor = self.read(|doc| doc.value_edit.as_ref().expect("editor open").editor.clone());
+        let editor = self.read_view(|view| {
+            view.value_edit
+                .as_ref()
+                .expect("editor open")
+                .editor
+                .clone()
+        });
         let text = text.to_string();
         self.window.update(|window, cx| {
             editor.update(cx, |state, cx| state.set_value(&text, window, cx));
@@ -2086,7 +2137,7 @@ impl Opened<'_> {
 
     /// Saves the open editor the way Save and the pane action do.
     fn save_edit(&mut self) {
-        self.update(|doc, cx| doc.save_value_edit(cx));
+        self.update_view(|view, cx| view.save_value_edit(cx));
     }
 
     /// Every error the user-facing seam reported this session, as
@@ -2110,6 +2161,17 @@ impl Opened<'_> {
                     _ => None,
                 })
                 .collect()
+        })
+    }
+
+    /// How many toasts the stack holds.
+    fn toast_count(&mut self) -> usize {
+        self.window.update(|_, cx| {
+            let host = cx
+                .global::<dbflux_ui_base::toast::ToastGlobal>()
+                .host
+                .clone();
+            host.read(cx).toast_count()
         })
     }
 
@@ -2157,9 +2219,9 @@ impl Opened<'_> {
 fn the_editor_opens_with_the_stored_text(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
 
-    assert!(!opened.read(|doc| doc.is_editing_value()));
+    assert!(!opened.read_view(|view| view.is_editing_value()));
 
     // The action that opens the editor is drawn while the value keeps its
     // presentation.
@@ -2203,7 +2265,7 @@ fn the_editor_opens_with_the_stored_text(cx: &mut TestAppContext) {
 fn an_unchanged_save_writes_nothing(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     let events_before = opened.audit_records().len();
 
@@ -2217,7 +2279,7 @@ fn an_unchanged_save_writes_nothing(cx: &mut TestAppContext) {
     );
     assert!(opened.reported_errors().is_empty());
     assert!(
-        opened.read(|doc| doc.is_editing_value()),
+        opened.read_view(|view| view.is_editing_value()),
         "the editor stays open"
     );
 }
@@ -2256,7 +2318,7 @@ fn the_json_gate_applies_only_to_a_stored_json_value(cx: &mut TestAppContext) {
 fn a_changed_save_writes_a_new_version_through_the_seam(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
 
@@ -2282,9 +2344,9 @@ fn a_changed_save_writes_a_new_version_through_the_seam(cx: &mut TestAppContext)
         "{events:?}"
     );
 
-    opened.read(|doc| {
-        assert!(!doc.is_editing_value(), "the editor closed");
-        match &doc.value {
+    opened.read_view(|view| {
+        assert!(!view.is_editing_value(), "the editor closed");
+        match &view.value {
             ValueState::Loaded(value) => {
                 assert_eq!(value.version.as_deref(), Some("v-written-1"));
                 assert_eq!(value.content.full_text().expose_secret(), EDITED_VALUE);
@@ -2318,7 +2380,7 @@ fn a_read_only_connection_refuses_the_save_without_calling_the_store(cx: &mut Te
         Some(ReadOnlyReason::ProfileSetting),
     );
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
 
@@ -2338,7 +2400,7 @@ fn a_read_only_connection_refuses_the_save_without_calling_the_store(cx: &mut Te
     assert!(errors[0].1.contains("read-only"), "{}", errors[0].1);
 
     assert!(
-        opened.read(|doc| doc.is_editing_value()),
+        opened.read_view(|view| view.is_editing_value()),
         "the editor stays open"
     );
 }
@@ -2397,7 +2459,7 @@ fn an_invalid_json_edit_is_refused_and_names_the_problem(cx: &mut TestAppContext
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(errors[0].1.contains("JSON"), "{}", errors[0].1);
     assert!(
-        opened.read(|doc| doc.is_editing_value()),
+        opened.read_view(|view| view.is_editing_value()),
         "the editor stays open"
     );
 }
@@ -2410,7 +2472,7 @@ fn an_invalid_json_edit_is_refused_and_names_the_problem(cx: &mut TestAppContext
 fn the_edited_text_reaches_no_node_of_the_accessibility_update(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
 
@@ -2445,7 +2507,7 @@ fn the_edited_text_reaches_no_node_of_the_accessibility_update(cx: &mut TestAppC
 fn a_replaced_connection_refuses_the_save(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
 
@@ -2490,7 +2552,7 @@ fn a_replaced_connection_refuses_the_save(cx: &mut TestAppContext) {
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(errors[0].1.contains("was replaced"), "{}", errors[0].1);
     assert!(
-        opened.read(|doc| doc.is_editing_value()),
+        opened.read_view(|view| view.is_editing_value()),
         "the editor stays open"
     );
 }
@@ -2502,7 +2564,7 @@ fn a_replaced_connection_refuses_the_save(cx: &mut TestAppContext) {
 fn unsaved_edits_block_the_transitions_that_would_drop_them(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
 
@@ -2512,7 +2574,7 @@ fn unsaved_edits_block_the_transitions_that_would_drop_them(cx: &mut TestAppCont
         Some(SecretRowKey::Secret(PLAINTEXT_SECRET.to_string())),
         "the selection stayed"
     );
-    assert!(opened.read(|doc| doc.is_editing_value()));
+    assert!(opened.read_view(|view| view.is_editing_value()));
 
     let lists_before = opened.driver.secret_store_calls().list_requests.len();
     assert!(opened.command(Command::RefreshSchema));
@@ -2521,8 +2583,8 @@ fn unsaved_edits_block_the_transitions_that_would_drop_them(cx: &mut TestAppCont
         lists_before,
         "the refresh was refused"
     );
-    assert!(opened.read(|doc| doc.is_editing_value()));
-    assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+    assert!(opened.read_view(|view| view.is_editing_value()));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::Loaded(_))));
 
     let errors: Vec<String> = opened
         .reported_errors()
@@ -2536,10 +2598,10 @@ fn unsaved_edits_block_the_transitions_that_would_drop_them(cx: &mut TestAppCont
         "{errors:?}"
     );
 
-    opened.update(|doc, cx| doc.discard_value_edit(cx));
+    opened.update_view(|view, cx| view.discard_value_edit(cx));
     opened.select(MANAGED_SECRET);
     assert!(
-        !opened.read(|doc| doc.is_editing_value()),
+        !opened.read_view(|view| view.is_editing_value()),
         "the selection works again after Discard"
     );
 }
@@ -2550,25 +2612,25 @@ fn unsaved_edits_block_the_transitions_that_would_drop_them(cx: &mut TestAppCont
 fn the_tab_reports_unsaved_edits_and_asks_before_closing(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
 
     let (summary, status) = opened.window.update(|_, cx| {
         let doc = opened.doc.clone();
         (
-            doc.read(cx).unsaved_change_summary(cx),
+            doc.read(cx).view.read(cx).unsaved_change_summary(cx),
             doc.read(cx).state(cx),
         )
     });
     assert_eq!(summary.as_deref(), Some("Unsaved value edits"));
     assert_eq!(status, crate::types::DocumentState::Modified);
 
-    opened.update(|doc, cx| doc.discard_value_edit(cx));
+    opened.update_view(|view, cx| view.discard_value_edit(cx));
     let (summary, status) = opened.window.update(|_, cx| {
         let doc = opened.doc.clone();
         (
-            doc.read(cx).unsaved_change_summary(cx),
+            doc.read(cx).view.read(cx).unsaved_change_summary(cx),
             doc.read(cx).state(cx),
         )
     });
@@ -2584,23 +2646,25 @@ fn the_tab_reports_unsaved_edits_and_asks_before_closing(cx: &mut TestAppContext
 fn edits_typed_during_the_save_survive_the_landing(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
 
     // Save without waiting for the landing to restock the executor.
     let doc = opened.doc.clone();
-    opened
-        .window
-        .update(|_, cx| doc.update(cx, |doc, cx| doc.save_value_edit(cx)));
+    opened.window.update(|_, cx| {
+        doc.update(cx, |doc, cx| {
+            doc.view.update(cx, |view, cx| view.save_value_edit(cx))
+        })
+    });
     // Typed while the write is in flight; the helper's park lets the
     // landing run after it.
     let continued = format!("{EDITED_VALUE}\nENV=staging");
     opened.set_editor_text(&continued);
 
-    opened.read(|doc| {
-        assert!(doc.is_editing_value(), "the editor stayed open");
-        if let Some(edit) = &doc.value_edit {
+    opened.read_view(|view| {
+        assert!(view.is_editing_value(), "the editor stayed open");
+        if let Some(edit) = &view.value_edit {
             assert!(!edit.saving);
             assert_eq!(edit.original.expose_secret(), EDITED_VALUE);
         } else {
@@ -2612,7 +2676,7 @@ fn edits_typed_during_the_save_survive_the_landing(cx: &mut TestAppContext) {
         opened.written_values(),
         vec![(PLAINTEXT_SECRET.to_string(), EDITED_VALUE.to_string())]
     );
-    opened.read(|doc| match &doc.value {
+    opened.read_view(|view| match &view.value {
         ValueState::Loaded(value) => {
             assert_eq!(value.version.as_deref(), Some("v-written-1"));
             assert_eq!(value.content.full_text().expose_secret(), EDITED_VALUE);
@@ -2631,7 +2695,7 @@ fn edits_typed_during_the_save_survive_the_landing(cx: &mut TestAppContext) {
             (PLAINTEXT_SECRET.to_string(), continued)
         ]
     );
-    assert!(!opened.read(|doc| doc.is_editing_value()));
+    assert!(!opened.read_view(|view| view.is_editing_value()));
 }
 
 /// Discard sits out while a save is in flight — the pane action is
@@ -2641,11 +2705,11 @@ fn edits_typed_during_the_save_survive_the_landing(cx: &mut TestAppContext) {
 fn discard_sits_out_while_a_save_is_in_flight(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
-    opened.update(|doc, _cx| {
-        if let Some(edit) = doc.value_edit.as_mut() {
+    opened.update_view(|view, _cx| {
+        if let Some(edit) = view.value_edit.as_mut() {
             edit.saving = true;
         }
     });
@@ -2655,7 +2719,7 @@ fn discard_sits_out_while_a_save_is_in_flight(cx: &mut TestAppContext) {
             opened
                 .doc
                 .read(cx)
-                .pane_actions(&opened.doc)
+                .pane_actions(&opened.doc, cx)
                 .into_iter()
                 .find(|action| action.id.as_ref() == id)
                 .map(|action| action.enabled)
@@ -2664,19 +2728,19 @@ fn discard_sits_out_while_a_save_is_in_flight(cx: &mut TestAppContext) {
     assert_eq!(enabled("secret-editor-discard"), Some(false));
     assert_eq!(enabled("secret-editor-save"), Some(false));
 
-    opened.update(|doc, cx| doc.discard_value_edit(cx));
+    opened.update_view(|view, cx| view.discard_value_edit(cx));
     assert!(
-        opened.read(|doc| doc.is_editing_value()),
+        opened.read_view(|view| view.is_editing_value()),
         "the in-flight save's editor is not discarded"
     );
 
-    opened.update(|doc, _cx| {
-        if let Some(edit) = doc.value_edit.as_mut() {
+    opened.update_view(|view, _cx| {
+        if let Some(edit) = view.value_edit.as_mut() {
             edit.saving = false;
         }
     });
-    opened.update(|doc, cx| doc.discard_value_edit(cx));
-    assert!(!opened.read(|doc| doc.is_editing_value()));
+    opened.update_view(|view, cx| view.discard_value_edit(cx));
+    assert!(!opened.read_view(|view| view.is_editing_value()));
 }
 
 /// The secret's details are re-checked at save time: a secret that has
@@ -2686,14 +2750,14 @@ fn discard_sits_out_while_a_save_is_in_flight(cx: &mut TestAppContext) {
 fn a_details_change_refuses_the_save(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
 
     // A describe that landed while the editor was open now reports another
     // service as the owner.
-    opened.update(|doc, _cx| {
-        if let DetailsState::Loaded(details) = &mut doc.details {
+    opened.update_view(|view, _cx| {
+        if let DetailsState::Loaded(details) = &mut view.details {
             details.summary.owning_service = Some("rds".to_string());
         }
     });
@@ -2708,11 +2772,11 @@ fn a_details_change_refuses_the_save(cx: &mut TestAppContext) {
             .all(|(_, summary)| summary.contains("managed by")),
         "{errors:?}"
     );
-    assert!(opened.read(|doc| doc.is_editing_value()));
+    assert!(opened.read_view(|view| view.is_editing_value()));
 
     // The ownership clears again, but a deletion is scheduled meanwhile.
-    opened.update(|doc, _cx| {
-        if let DetailsState::Loaded(details) = &mut doc.details {
+    opened.update_view(|view, _cx| {
+        if let DetailsState::Loaded(details) = &mut view.details {
             details.summary.owning_service = None;
             details.summary.deletion_scheduled_for = Some(dbflux_core::chrono::Utc::now());
         }
@@ -2728,7 +2792,7 @@ fn a_details_change_refuses_the_save(cx: &mut TestAppContext) {
             .any(|(_, summary)| summary.contains("Deletion is scheduled")),
         "{errors:?}"
     );
-    assert!(opened.read(|doc| doc.is_editing_value()));
+    assert!(opened.read_view(|view| view.is_editing_value()));
 }
 
 /// A failed write is audited once: the seam records the event, so the
@@ -2749,7 +2813,7 @@ fn a_failed_write_audits_once_and_still_reaches_the_user(cx: &mut TestAppContext
         .clone()
         .with_secret_write_error(PLAINTEXT_SECRET, "put was denied by the fixture");
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
 
@@ -2785,7 +2849,7 @@ fn the_save_button_drives_the_save_from_the_interface(cx: &mut TestAppContext) {
 
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     // The input lands where the editor put the keyboard.
     opened.start_edit();
 
@@ -2828,7 +2892,7 @@ fn the_save_button_drives_the_save_from_the_interface(cx: &mut TestAppContext) {
             format!("typed by hand{FAKE_SECRET_PLAINTEXT}")
         )]
     );
-    assert!(!opened.read(|doc| doc.is_editing_value()));
+    assert!(!opened.read_view(|view| view.is_editing_value()));
     let events = opened.audit_records();
     assert_eq!(
         events.last().and_then(|event| event.action.as_deref()),
@@ -2846,13 +2910,13 @@ fn the_edit_value_control_is_covered(cx: &mut TestAppContext) {
 
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
 
     let entries: Vec<String> = opened.window.update(|_, cx| {
         opened
             .doc
             .read(cx)
-            .pane_actions(&opened.doc)
+            .pane_actions(&opened.doc, cx)
             .into_iter()
             .map(|action| action.id.to_string())
             .collect()
@@ -2876,7 +2940,7 @@ fn the_edit_value_control_is_covered(cx: &mut TestAppContext) {
         opened
             .doc
             .read(cx)
-            .pane_actions(&opened.doc)
+            .pane_actions(&opened.doc, cx)
             .into_iter()
             .map(|action| action.id.to_string())
             .collect()
@@ -2903,7 +2967,7 @@ fn the_row_menu_offers_edit_value_and_opens_the_editor(cx: &mut TestAppContext) 
 
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
 
     // Right-clicking the already-selected row keeps its loaded value, which
     // is the state the entry is offered in.
@@ -2932,7 +2996,7 @@ fn the_row_menu_offers_edit_value_and_opens_the_editor(cx: &mut TestAppContext) 
     assert!(opened.command(Command::MenuSelect));
 
     assert!(
-        opened.read(|doc| doc.is_editing_value()),
+        opened.read_view(|view| view.is_editing_value()),
         "the menu opens the editor"
     );
     assert_eq!(opened.editor_text(), FAKE_SECRET_PLAINTEXT);
@@ -2951,7 +3015,7 @@ fn the_editor_controls_are_covered(cx: &mut TestAppContext) {
 
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     // Save is disabled while the text is unchanged, so the coverage check
     // runs with an edit in it.
@@ -2961,7 +3025,7 @@ fn the_editor_controls_are_covered(cx: &mut TestAppContext) {
         opened
             .doc
             .read(cx)
-            .pane_actions(&opened.doc)
+            .pane_actions(&opened.doc, cx)
             .into_iter()
             .map(|action| action.id.to_string())
             .collect()
@@ -3207,8 +3271,8 @@ fn a_failed_region_list_falls_back_to_the_configured_region_quietly(cx: &mut Tes
 fn switching_the_region_reloads_the_listing(cx: &mut TestAppContext) {
     let mut opened = open_with_regions(cx, &[OTHER_REGION, CURRENT_REGION]);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
-    assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::Loaded(_))));
 
     let lists_before = opened
         .driver
@@ -3248,8 +3312,8 @@ fn switching_the_region_reloads_the_listing(cx: &mut TestAppContext) {
     assert_eq!(first_pages_after, lists_before + 1);
 
     assert!(opened.read(|doc| doc.selected().is_none()));
-    assert!(opened.read(|doc| matches!(doc.details(), DetailsState::Idle)));
-    assert!(opened.read(|doc| matches!(doc.value(), ValueState::NotLoaded)));
+    assert!(opened.read_view(|view| matches!(view.details(), DetailsState::Idle)));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
     assert!(!opened.read(|doc| doc.region_switch_in_flight()));
 }
 
@@ -3261,8 +3325,8 @@ fn switching_the_region_reloads_the_listing(cx: &mut TestAppContext) {
 fn a_region_change_installed_elsewhere_is_adopted(cx: &mut TestAppContext) {
     let mut opened = open_with_regions(cx, &[OTHER_REGION, CURRENT_REGION]);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
-    assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::Loaded(_))));
 
     let profile_id = opened.read(|doc| doc.connection_id().expect("connection"));
     let app_state = opened.app_state.clone();
@@ -3303,8 +3367,8 @@ fn a_region_change_installed_elsewhere_is_adopted(cx: &mut TestAppContext) {
         Some(OTHER_REGION.to_string())
     );
     assert!(opened.read(|doc| doc.selected().is_none()));
-    assert!(opened.read(|doc| matches!(doc.details(), DetailsState::Idle)));
-    assert!(opened.read(|doc| matches!(doc.value(), ValueState::NotLoaded)));
+    assert!(opened.read_view(|view| matches!(view.details(), DetailsState::Idle)));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
 
     // The adopted region reloads from the first page; the listing's own
     // continuations keep their cost out of the assertion.
@@ -3326,8 +3390,8 @@ fn a_region_change_installed_elsewhere_is_adopted(cx: &mut TestAppContext) {
 fn a_refused_region_switch_leaves_the_document_exactly_as_it_was(cx: &mut TestAppContext) {
     let mut opened = open_with_regions(cx, &[OTHER_REGION, CURRENT_REGION]);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
-    assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::Loaded(_))));
 
     let entries_before = opened.entry_names();
     let errors_before = opened
@@ -3372,8 +3436,8 @@ fn a_refused_region_switch_leaves_the_document_exactly_as_it_was(cx: &mut TestAp
     );
     assert_eq!(opened.entry_names(), entries_before);
     assert!(opened.read(|doc| doc.selected().is_some()));
-    assert!(opened.read(|doc| matches!(doc.details(), DetailsState::Loaded(_))));
-    assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+    assert!(opened.read_view(|view| matches!(view.details(), DetailsState::Loaded(_))));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::Loaded(_))));
 
     let errors_after = opened
         .window
@@ -3429,13 +3493,13 @@ fn the_secret_store_document_is_covered(cx: &mut TestAppContext) {
 
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
 
     let entries: Vec<String> = opened.window.update(|_, cx| {
         opened
             .doc
             .read(cx)
-            .pane_actions(&opened.doc)
+            .pane_actions(&opened.doc, cx)
             .into_iter()
             .map(|action| action.id.to_string())
             .collect()
@@ -3471,7 +3535,7 @@ fn the_region_picker_is_covered(cx: &mut TestAppContext) {
             opened
                 .doc
                 .read(cx)
-                .pane_actions(&opened.doc)
+                .pane_actions(&opened.doc, cx)
                 .into_iter()
                 .map(|action| action.id.to_string())
                 .collect()
@@ -3504,7 +3568,7 @@ fn the_region_picker_is_covered(cx: &mut TestAppContext) {
         switchable
             .doc
             .read(cx)
-            .pane_actions(&switchable.doc)
+            .pane_actions(&switchable.doc, cx)
             .into_iter()
             .map(|action| action.id.to_string())
             .collect()
@@ -3688,7 +3752,7 @@ impl Opened<'_> {
         self.window.update(|_, cx| {
             self.doc
                 .read(cx)
-                .pane_actions(&self.doc)
+                .pane_actions(&self.doc, cx)
                 .into_iter()
                 .map(|action| action.id.to_string())
                 .collect()
@@ -3986,8 +4050,8 @@ fn the_keyboard_runs_the_menu(cx: &mut TestAppContext) {
     // Retrieve value is the first entry: selecting it right away retrieves.
     assert!(opened.command(Command::MenuSelect));
     assert!(
-        opened.read(|doc| matches!(doc.value(), ValueState::Loading))
-            || opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))),
+        opened.read_view(|view| matches!(view.value(), ValueState::Loading))
+            || opened.read_view(|view| matches!(view.value(), ValueState::Loaded(_))),
         "MenuSelect on the highlighted Retrieve value retrieves"
     );
     assert!(
@@ -4160,7 +4224,7 @@ fn a_failed_describe_is_not_reported_as_loading(cx: &mut TestAppContext) {
     // Still arriving: the describe runs again with the right-click.
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, _cx| doc.details = DetailsState::Loading);
+    opened.update_view(|view, _cx| view.details = DetailsState::Loading);
     opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
 
     let detail = opened.read(|doc| {
@@ -4187,7 +4251,9 @@ fn a_failed_describe_is_not_reported_as_loading(cx: &mut TestAppContext) {
     // Failed: the reason carries the describe's error, not the loading line.
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, _cx| doc.details = DetailsState::Failed("Permission denied".to_string()));
+    opened.update_view(|view, _cx| {
+        view.details = DetailsState::Failed("Permission denied".to_string())
+    });
     opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
 
     let detail = opened.read(|doc| {
@@ -4224,7 +4290,7 @@ fn enter_on_a_disabled_entry_leaves_the_menu_open(cx: &mut TestAppContext) {
     );
     assert_eq!(opened.read(|doc| doc.selected().cloned()), before);
     assert!(
-        opened.read(|doc| matches!(doc.value(), ValueState::NotLoaded)),
+        opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)),
         "a disabled Retrieve value runs no retrieval"
     );
 }
@@ -5096,8 +5162,8 @@ fn a_failing_write_returns_the_correlation_id_its_audit_event_recorded() {
 
 mod editor_layout {
     use super::*;
-    use crate::secret_store::editor::EditMode;
-    use crate::secret_store::editor::json_layout::{minify, pretty};
+    use crate::secret_store::view::editor::EditMode;
+    use crate::secret_store::view::editor::json_layout::{minify, pretty};
 
     /// Nested, so it opens as plaintext (not key/value), with a string that
     /// holds repeated spaces and escaped quotes, and a number a parse and
@@ -5111,13 +5177,17 @@ mod editor_layout {
 
     impl Opened<'_> {
         fn edit_mode(&mut self) -> Option<EditMode> {
-            self.read(|doc| doc.edit_mode())
+            self.read_view(|view| view.edit_mode())
         }
 
         fn set_mode(&mut self, mode: EditMode) {
             let doc = self.doc.clone();
-            self.window
-                .update(|window, cx| doc.update(cx, |doc, cx| doc.set_edit_mode(mode, window, cx)));
+            self.window.update(|window, cx| {
+                doc.update(cx, |doc, cx| {
+                    doc.view
+                        .update(cx, |view, cx| view.set_edit_mode(mode, window, cx))
+                })
+            });
             self.window.run_until_parked();
         }
 
@@ -5149,7 +5219,7 @@ mod editor_layout {
         pub(super) fn dirty(&mut self) -> bool {
             let doc = self.doc.clone();
             self.window
-                .update(|_, cx| doc.read(cx).has_unsaved_value_edits(cx))
+                .update(|_, cx| doc.read(cx).view.read(cx).has_unsaved_value_edits(cx))
         }
 
         fn has_path(&mut self, suffix: &str) -> bool {
@@ -5210,7 +5280,8 @@ mod editor_layout {
         );
 
         let first = opened.element_bounds("secret-value-editor-line-3").origin.y;
-        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let editor =
+            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
         opened.window.update(|_, cx| {
             editor.update(cx, |state, cx| {
                 state.set_scroll_offset(gpui::point(gpui::px(0.), gpui::px(-60.)), cx)
@@ -5228,12 +5299,12 @@ mod editor_layout {
         opened.edit_json("host = db.internal\nport = 5432");
         assert_eq!(opened.edit_mode(), None, "plaintext has no mode");
         assert!(!opened.has_path("segmented-secret-editor-mode"));
-        assert!(!opened.read(|doc| doc.can_toggle_edit_mode()));
+        assert!(!opened.read_view(|view| view.can_toggle_edit_mode()));
 
         let mut json = open(cx, FAKE_SECRETS_STORE_ID, None);
         json.edit_json(COMPACT);
         assert_eq!(json.edit_mode(), Some(EditMode::Formatted));
-        assert!(json.read(|doc| doc.can_toggle_edit_mode()));
+        assert!(json.read_view(|view| view.can_toggle_edit_mode()));
         assert!(json.has_path("segmented-secret-editor-mode-formatted"));
         assert!(json.has_path("segmented-secret-editor-mode-raw"));
     }
@@ -5407,7 +5478,7 @@ mod editor_layout {
             opened
                 .doc
                 .read(cx)
-                .pane_actions(&opened.doc)
+                .pane_actions(&opened.doc, cx)
                 .into_iter()
                 .map(|action| action.id.to_string())
                 .collect()
@@ -5436,7 +5507,7 @@ mod editor_layout {
 
 mod editor_chrome {
     use super::*;
-    use crate::secret_store::editor::EditMode;
+    use crate::secret_store::view::editor::EditMode;
 
     const THREE: &str = "alpha-77b1\nbeta-77b1\ngamma-77b1";
 
@@ -5562,7 +5633,7 @@ mod editor_chrome {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.edit_text(THREE, "x");
 
-        let context = opened.read(|doc| doc.active_context());
+        let context = opened.read_cx(|doc, cx| doc.active_context(cx));
         let bound =
             dbflux_ui_base::effective_keymap().shortcut_for_command(context, Command::SaveQuery);
         let bound = bound.expect("Save is bound where the editor dispatches it");
@@ -5588,7 +5659,7 @@ mod editor_chrome {
         opened.edit_text(THREE, "changed");
 
         let keymap = dbflux_ui_base::effective_keymap();
-        let context = opened.read(|doc| doc.active_context());
+        let context = opened.read_cx(|doc, cx| doc.active_context(cx));
         assert_eq!(context, ContextId::TextInput);
 
         let save = KeyChord::new("s", Modifiers::primary());
@@ -5617,7 +5688,7 @@ mod editor_chrome {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.edit_text("", "");
         let keymap = dbflux_ui_base::effective_keymap();
-        let context = opened.read(|doc| doc.active_context());
+        let context = opened.read_cx(|doc, cx| doc.active_context(cx));
 
         for key in ["e", "j", "k"] {
             assert_eq!(
@@ -5634,14 +5705,14 @@ mod editor_chrome {
         opened.window.simulate_input("ejk");
         opened.window.run_until_parked();
         assert_eq!(opened.editor_text(), "ejk");
-        assert!(opened.read(|doc| doc.is_editing_value()));
+        assert!(opened.read_view(|view| view.is_editing_value()));
 
         assert!(opened.command(Command::Cancel), "Escape leaves the editor");
         opened.rendered_paths();
-        let context = opened.read(|doc| doc.active_context());
+        let context = opened.read_cx(|doc, cx| doc.active_context(cx));
         assert_eq!(context, dbflux_app::keymap::ContextId::Results);
         assert!(
-            opened.read(|doc| doc.is_editing_value()),
+            opened.read_view(|view| view.is_editing_value()),
             "leaving is not discarding"
         );
     }
@@ -5650,9 +5721,9 @@ mod editor_chrome {
     fn the_footer_reports_the_edit_without_its_text(cx: &mut TestAppContext) {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.select(PLAINTEXT_SECRET);
-        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.update_view(|view, cx| view.retrieve_selected_value(cx));
         let version = opened
-            .read(|doc| match &doc.value {
+            .read_view(|view| match &view.value {
                 ValueState::Loaded(value) => value.version.clone(),
                 _ => None,
             })
@@ -5664,7 +5735,9 @@ mod editor_chrome {
         assert!(footer.contains("UTF-8"), "{footer}");
         assert!(footer.contains("7 B"), "bytes Save would write: {footer}");
         assert!(
-            footer.contains(&crate::secret_store::details::short_version_id(&version)),
+            footer.contains(&crate::secret_store::view::details::short_version_id(
+                &version
+            )),
             "{footer}"
         );
         assert!(footer.contains("2 lines changed"), "{footer}");
@@ -5678,7 +5751,8 @@ mod editor_chrome {
         );
 
         opened.set_editor_text("abc\ndef");
-        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let editor =
+            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
         opened.window.update(|window, cx| {
             editor.update(cx, |state, cx| {
                 state.set_cursor_position(lsp_types::Position::new(1, 2), window, cx)
@@ -5697,9 +5771,12 @@ mod editor_chrome {
         let before = opened.rendered_paths().len();
 
         let doc = opened.doc.clone();
-        opened
-            .window
-            .update(|window, cx| doc.update(cx, |doc, cx| doc.find_in_value(window, cx)));
+        opened.window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.view
+                    .update(cx, |view, cx| view.find_in_value(window, cx))
+            })
+        });
         opened.window.run_until_parked();
 
         let after = opened.rendered_paths();
@@ -5723,14 +5800,15 @@ mod editor_chrome {
         // Focus events are delivered with the frame, as in the running app.
         opened.rendered_paths();
         assert_eq!(
-            opened.read(|doc| doc.active_context()),
+            opened.read_cx(|doc, cx| doc.active_context(cx)),
             ContextId::Results,
             "Escape left the editor"
         );
 
         // A focus change that edits nothing: the textarea has no state
         // change to announce, so only focus can say the editor is back.
-        let state = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let state =
+            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
         opened.window.update(|window, cx| {
             let handle = gpui::Focusable::focus_handle(state.read(cx), cx);
             window.focus(&handle, cx);
@@ -5738,7 +5816,7 @@ mod editor_chrome {
         opened.window.run_until_parked();
         opened.rendered_paths();
         assert_eq!(
-            opened.read(|doc| doc.active_context()),
+            opened.read_cx(|doc, cx| doc.active_context(cx)),
             dbflux_app::keymap::ContextId::TextInput,
             "focus alone restores the editor's context"
         );
@@ -5751,7 +5829,7 @@ mod editor_chrome {
             .simulate_click(editor.center(), gpui::Modifiers::default());
         opened.window.run_until_parked();
 
-        let context = opened.read(|doc| doc.active_context());
+        let context = opened.read_cx(|doc, cx| doc.active_context(cx));
         assert_eq!(context, ContextId::TextInput);
         let save = KeyChord::new("s", Modifiers::primary());
         let command = dbflux_ui_base::effective_keymap().resolve(context, &save);
@@ -5769,7 +5847,8 @@ mod editor_chrome {
     fn the_caret_column_counts_characters(cx: &mut TestAppContext) {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.edit_text("x", "ñ😀x");
-        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let editor =
+            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
         opened.window.update(|window, cx| {
             editor.update(cx, |state, cx| {
                 state.set_cursor_position(lsp_types::Position::new(0, 2), window, cx)
@@ -5798,9 +5877,12 @@ mod editor_chrome {
 
         for mode in [EditMode::Formatted, EditMode::Raw] {
             let doc = opened.doc.clone();
-            opened
-                .window
-                .update(|window, cx| doc.update(cx, |doc, cx| doc.set_edit_mode(mode, window, cx)));
+            opened.window.update(|window, cx| {
+                doc.update(cx, |doc, cx| {
+                    doc.view
+                        .update(cx, |view, cx| view.set_edit_mode(mode, window, cx))
+                })
+            });
             opened.window.run_until_parked();
 
             let text = opened.accessibility_update_text();
@@ -5833,11 +5915,11 @@ mod editor_chrome {
 fn the_edit_value_command_opens_the_editor_on_the_stored_text(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
 
     assert!(opened.command(Command::EditValue));
 
-    assert!(opened.read(|doc| doc.is_editing_value()));
+    assert!(opened.read_view(|view| view.is_editing_value()));
     assert_eq!(opened.editor_text(), FAKE_SECRET_PLAINTEXT);
 }
 
@@ -5853,14 +5935,14 @@ fn the_edit_value_command_falls_through_when_nothing_can_be_edited(cx: &mut Test
         opened.command(Command::EditValue),
         "the value is not loaded: it is retrieved first"
     );
-    assert!(opened.read(|doc| doc.is_editing_value()));
+    assert!(opened.read_view(|view| view.is_editing_value()));
 
-    opened.update(|doc, _| doc.value_edit = None);
+    opened.update_view(|view, _| view.value_edit = None);
 
     opened.select(MANAGED_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     assert!(!opened.command(Command::EditValue), "the secret is managed");
-    assert!(!opened.read(|doc| doc.is_editing_value()));
+    assert!(!opened.read_view(|view| view.is_editing_value()));
 }
 
 /// The row menu's Edit value entry draws the `e` keycap the keymap binds:
@@ -5881,7 +5963,7 @@ fn the_row_menu_draws_the_e_keycap_on_edit_value(cx: &mut TestAppContext) {
 
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     let before = keycaps(&mut opened);
 
     opened.right_click(&format!("secret-row-{PLAINTEXT_SECRET}"));
@@ -5914,7 +5996,7 @@ fn the_row_menu_draws_the_e_keycap_on_edit_value(cx: &mut TestAppContext) {
 fn the_edit_value_command_reports_a_missing_connection(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
 
     let profile_id = opened.read(|doc| doc.profile_id);
     opened.update(|doc, cx| {
@@ -5922,12 +6004,12 @@ fn the_edit_value_command_reports_a_missing_connection(cx: &mut TestAppContext) 
             state.connections_mut().remove(&profile_id);
         });
     });
-    assert!(opened.read(|doc| doc.can_edit_value()));
+    assert!(opened.read_view(|view| view.can_edit_value()));
     assert!(opened.reported_errors().is_empty());
 
     assert!(opened.command(Command::EditValue));
 
-    assert!(!opened.read(|doc| doc.is_editing_value()));
+    assert!(!opened.read_view(|view| view.is_editing_value()));
     // The editor found the loss first; the history retry it triggers stays
     // quiet, so the loss is reported once.
     let reported = opened.reported_errors();
@@ -5947,7 +6029,7 @@ fn the_edit_value_command_reports_a_missing_connection(cx: &mut TestAppContext) 
 fn start_value_edit_reports_a_missing_connection(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
 
     let profile_id = opened.read(|doc| doc.profile_id);
     opened.update(|doc, cx| {
@@ -5955,11 +6037,11 @@ fn start_value_edit_reports_a_missing_connection(cx: &mut TestAppContext) {
             state.connections_mut().remove(&profile_id);
         });
     });
-    assert!(opened.read(|doc| doc.can_edit_value()));
+    assert!(opened.read_view(|view| view.can_edit_value()));
 
     opened.start_edit();
 
-    assert!(!opened.read(|doc| doc.is_editing_value()));
+    assert!(!opened.read_view(|view| view.is_editing_value()));
     // The editor found the loss first; the history retry it triggers stays
     // quiet, so the loss is reported once.
     let reported = opened.reported_errors();
@@ -5984,7 +6066,7 @@ impl Opened<'_> {
         let doc = self.doc.clone();
         let action = self
             .window
-            .update(|_, cx| doc.read(cx).pane_actions(&doc))
+            .update(|_, cx| doc.read(cx).pane_actions(&doc, cx))
             .into_iter()
             .find(|action| action.id.as_ref() == id)
             .unwrap_or_else(|| panic!("`{id}` is a pane action"));
@@ -6001,7 +6083,7 @@ impl Opened<'_> {
     }
 
     fn version_ids(&mut self) -> Vec<String> {
-        self.read(|doc| match doc.versions() {
+        self.read_view(|view| match view.versions() {
             VersionsState::Loaded(versions) => {
                 versions.iter().map(|version| version.id.clone()).collect()
             }
@@ -6010,7 +6092,7 @@ impl Opened<'_> {
     }
 
     fn shown_password(&mut self) -> Option<String> {
-        self.read(|doc| match doc.value() {
+        self.read_view(|view| match view.value() {
             ValueState::Loaded(value) => value
                 .fields()
                 .iter()
@@ -6158,16 +6240,18 @@ fn the_history_section_lists_the_version_the_author_and_the_date(cx: &mut TestAp
 #[gpui::test]
 fn a_store_without_versions_shows_no_section(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
-    opened.update(|doc, _cx| {
-        doc.store = SecretStoreDescriptor::new(
+    opened.update(|doc, cx| {
+        let store = SecretStoreDescriptor::new(
             FAKE_SECRETS_STORE_ID,
             "Secrets Manager",
             SecretStoreCapabilities::empty(),
         );
+        doc.store = store.clone();
+        doc.view.update(cx, |view, _| view.store = store);
     });
     opened.select(KEY_VALUE_SECRET);
 
-    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::NotSupported)));
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::NotSupported)));
     assert!(
         opened
             .driver
@@ -6200,7 +6284,7 @@ fn activating_an_older_version_retrieves_exactly_that_version(cx: &mut TestAppCo
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
 
-    opened.update(|doc, cx| doc.activate_version(1, cx));
+    opened.update_view(|view, cx| view.activate_version(1, cx));
 
     assert_eq!(
         opened.driver.secret_store_calls().value_version_requests,
@@ -6211,7 +6295,7 @@ fn activating_an_older_version_retrieves_exactly_that_version(cx: &mut TestAppCo
         )]
     );
     assert_eq!(
-        opened.read(|doc| doc.value_version().map(str::to_string)),
+        opened.read_view(|view| view.value_version().map(str::to_string)),
         Some("v-previous".to_string())
     );
     assert_eq!(opened.shown_password().as_deref(), Some(PREVIOUS_PASSWORD));
@@ -6244,7 +6328,7 @@ fn activating_the_current_version_retrieves_the_current_value(cx: &mut TestAppCo
     opened.select(KEY_VALUE_SECRET);
     opened.rotate_current(KEY_VALUE_SECRET, "rotated after the history loaded");
 
-    opened.update(|doc, cx| doc.activate_version(0, cx));
+    opened.update_view(|view, cx| view.activate_version(0, cx));
 
     assert_eq!(
         opened.driver.secret_store_calls().value_version_requests,
@@ -6260,7 +6344,7 @@ fn activating_the_current_version_retrieves_the_current_value(cx: &mut TestAppCo
         "the selected row's payload, not the rotated one"
     );
     assert_eq!(
-        opened.read(|doc| doc.value_version().map(str::to_string)),
+        opened.read_view(|view| view.value_version().map(str::to_string)),
         Some("v-current".to_string()),
         "the retrieved version id is kept"
     );
@@ -6269,22 +6353,22 @@ fn activating_the_current_version_retrieves_the_current_value(cx: &mut TestAppCo
         "as far as the pane knows the row is still current"
     );
 
-    opened.update(|doc, cx| {
-        doc.describe(KEY_VALUE_SECRET.to_string(), cx);
-        doc.load_versions(KEY_VALUE_SECRET.to_string(), cx);
+    opened.update_view(|view, cx| {
+        view.describe(KEY_VALUE_SECRET.to_string(), cx);
+        view.load_versions(KEY_VALUE_SECRET.to_string(), cx);
     });
 
     let text = opened.rendered_text();
     assert!(text.contains("Showing version v-current"), "{text}");
     assert!(text.contains("Back to current"), "{text}");
-    assert!(opened.read(|doc| doc.can_return_to_current()));
+    assert!(opened.read_view(|view| view.can_return_to_current()));
     assert_eq!(
         opened.shown_password().as_deref(),
         Some(FAKE_SECRET_PASSWORD)
     );
 
-    opened.update(|doc, cx| doc.back_to_current_version(cx));
-    assert!(opened.read(|doc| doc.value_version().is_none()));
+    opened.update_view(|view, cx| view.back_to_current_version(cx));
+    assert!(opened.read_view(|view| view.value_version().is_none()));
     assert!(!opened.rendered_text().contains("Back to current"));
 }
 
@@ -6294,12 +6378,12 @@ fn the_current_row_shows_no_older_value_banner(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
 
-    opened.update(|doc, cx| doc.activate_version(0, cx));
+    opened.update_view(|view, cx| view.activate_version(0, cx));
 
     let text = opened.rendered_text();
     assert!(!text.contains("Showing version"), "{text}");
     assert!(!text.contains("Back to current"), "{text}");
-    assert!(!opened.read(|doc| doc.can_return_to_current()));
+    assert!(!opened.read_view(|view| view.can_return_to_current()));
 }
 
 /// A describe that lands late with another version id neither moves the
@@ -6308,18 +6392,20 @@ fn the_current_row_shows_no_older_value_banner(cx: &mut TestAppContext) {
 fn a_late_describe_does_not_change_the_version_shown(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| doc.activate_version(1, cx));
+    opened.update_view(|view, cx| view.activate_version(1, cx));
 
-    let mut details = opened.read(|doc| match doc.details() {
+    let mut details = opened.read_view(|view| match view.details() {
         DetailsState::Loaded(details) => (**details).clone(),
         other => panic!("{other:?}"),
     });
     details.summary.version = Some("v-oldest".to_string());
-    let generation = opened.read(|doc| doc.details_generation);
-    opened.update(|doc, cx| doc.apply_details(generation, KEY_VALUE_SECRET, Ok(details), 0, cx));
+    let generation = opened.read_view(|view| view.details_generation);
+    opened.update_view(|view, cx| {
+        view.apply_details(generation, KEY_VALUE_SECRET, Ok(details), 0, cx)
+    });
 
     assert_eq!(
-        opened.read(|doc| doc.value_version().map(str::to_string)),
+        opened.read_view(|view| view.value_version().map(str::to_string)),
         Some("v-previous".to_string())
     );
     let text = opened.rendered_text();
@@ -6335,20 +6421,22 @@ fn the_current_version_is_never_guessed(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
 
-    opened.update(|doc, _cx| {
-        doc.details = DetailsState::Loading;
+    opened.update(|doc, cx| {
         for entry in &mut doc.listing.entries {
             entry.version = Some("listing-version".to_string());
         }
-        if let VersionsState::Loaded(versions) = &mut doc.versions {
-            for version in versions.iter_mut() {
-                version.is_current = false;
+        doc.view.update(cx, |view, _| {
+            view.details = DetailsState::Loading;
+            if let VersionsState::Loaded(versions) = &mut view.versions {
+                for version in versions.iter_mut() {
+                    version.is_current = false;
+                }
             }
-        }
+        });
     });
 
     assert_eq!(
-        opened.read(|doc| doc.current_version_id().map(str::to_string)),
+        opened.read_view(|view| view.current_version_id().map(str::to_string)),
         None
     );
 }
@@ -6359,17 +6447,17 @@ fn the_current_version_is_never_guessed(cx: &mut TestAppContext) {
 fn back_to_current_returns_to_the_current_value_in_one_action(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| doc.activate_version(2, cx));
+    opened.update_view(|view, cx| view.activate_version(2, cx));
     assert_eq!(opened.shown_password().as_deref(), Some(OLDEST_PASSWORD));
 
-    opened.update(|doc, cx| doc.back_to_current_version(cx));
+    opened.update_view(|view, cx| view.back_to_current_version(cx));
 
     assert_eq!(
         opened.shown_password().as_deref(),
         Some(FAKE_SECRET_PASSWORD)
     );
     assert_eq!(
-        opened.read(|doc| doc.value_version().map(str::to_string)),
+        opened.read_view(|view| view.value_version().map(str::to_string)),
         None
     );
     let text = opened.rendered_text();
@@ -6389,7 +6477,7 @@ fn a_stale_versions_response_does_not_render(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.load_everything();
     opened.select(KEY_VALUE_SECRET);
-    let stale_generation = opened.read(|doc| doc.versions_generation);
+    let stale_generation = opened.read_view(|view| view.versions_generation);
     opened.select(PLAINTEXT_SECRET);
 
     let foreign = vec![dbflux_core::SecretVersionInfo {
@@ -6397,20 +6485,20 @@ fn a_stale_versions_response_does_not_render(cx: &mut TestAppContext) {
         ..Default::default()
     }];
 
-    opened.update(|doc, cx| {
-        doc.apply_versions(stale_generation, KEY_VALUE_SECRET, Ok(foreign.clone()), cx);
+    opened.update_view(|view, cx| {
+        view.apply_versions(stale_generation, KEY_VALUE_SECRET, Ok(foreign.clone()), cx);
     });
-    let current_generation = opened.read(|doc| doc.versions_generation);
-    opened.update(|doc, cx| {
-        doc.apply_versions(
+    let current_generation = opened.read_view(|view| view.versions_generation);
+    opened.update_view(|view, cx| {
+        view.apply_versions(
             current_generation,
             KEY_VALUE_SECRET,
             Ok(foreign.clone()),
             cx,
         );
     });
-    opened.update(|doc, cx| {
-        doc.apply_versions(
+    opened.update_view(|view, cx| {
+        view.apply_versions(
             stale_generation,
             PLAINTEXT_SECRET,
             Err(DbError::query_failed("stale failure")),
@@ -6424,15 +6512,15 @@ fn a_stale_versions_response_does_not_render(cx: &mut TestAppContext) {
     let text = opened.rendered_text();
     assert!(!text.contains("stale-ve"), "{text}");
     assert!(!text.contains("stale failure"), "{text}");
-    assert!(opened.read(|doc| !matches!(doc.versions(), VersionsState::Failed(_))));
+    assert!(opened.read_view(|view| !matches!(view.versions(), VersionsState::Failed(_))));
 
     // Selection change and refresh both drop the history and invalidate its
     // load.
     opened.select(KEY_VALUE_SECRET);
-    let before = opened.read(|doc| doc.versions_generation);
+    let before = opened.read_view(|view| view.versions_generation);
     opened.update(|doc, cx| doc.refresh(cx));
-    assert_ne!(opened.read(|doc| doc.versions_generation), before);
-    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Idle)));
+    assert_ne!(opened.read_view(|view| view.versions_generation), before);
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Idle)));
 }
 
 /// A refused history says why and leaves the value section alone: no value,
@@ -6446,7 +6534,7 @@ fn a_failed_history_shows_the_reason_and_no_value(cx: &mut TestAppContext) {
     let mut opened = open_with(cx, driver, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
 
-    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
     let text = opened.rendered_text();
     assert!(text.contains("The versions could not be loaded"), "{text}");
     assert!(
@@ -6454,10 +6542,10 @@ fn a_failed_history_shows_the_reason_and_no_value(cx: &mut TestAppContext) {
         "{text}"
     );
     assert!(!text.contains(FAKE_SECRET_PASSWORD), "{text}");
-    assert!(opened.read(|doc| matches!(doc.value(), ValueState::NotLoaded)));
-    assert!(opened.read(|doc| matches!(doc.details(), DetailsState::Loaded(_))));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
+    assert!(opened.read_view(|view| matches!(view.details(), DetailsState::Loaded(_))));
 
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     assert_eq!(
         opened.shown_password().as_deref(),
         Some(FAKE_SECRET_PASSWORD)
@@ -6506,7 +6594,7 @@ fn the_pane_actions_retrieve_a_version_and_go_back(cx: &mut TestAppContext) {
 
     let actions = opened
         .window
-        .update(|_, cx| opened.doc.read(cx).pane_actions(&opened.doc));
+        .update(|_, cx| opened.doc.read(cx).pane_actions(&opened.doc, cx));
     let back = actions
         .iter()
         .find(|action| action.id.as_ref() == "secret-version-current")
@@ -6531,7 +6619,7 @@ fn the_version_controls_are_covered(cx: &mut TestAppContext) {
 
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| doc.activate_version(1, cx));
+    opened.update_view(|view, cx| view.activate_version(1, cx));
 
     let entries = opened.pane_action_ids();
     let capture = FrameCapture::observe(opened.window);
@@ -6559,7 +6647,7 @@ fn version_values_never_reach_the_accessibility_tree(cx: &mut TestAppContext) {
         (2, OLDEST_PASSWORD),
         (0, FAKE_SECRET_PASSWORD),
     ] {
-        opened.update(|doc, cx| doc.activate_version(index, cx));
+        opened.update_view(|view, cx| view.activate_version(index, cx));
         assert_eq!(
             opened.shown_password().as_deref(),
             Some(shown),
@@ -6651,7 +6739,7 @@ impl Opened<'_> {
     fn pane_action(&mut self, id: &str) -> crate::pane::PaneAction {
         let doc = self.doc.clone();
         self.window
-            .update(|_, cx| doc.read(cx).pane_actions(&doc))
+            .update(|_, cx| doc.read(cx).pane_actions(&doc, cx))
             .into_iter()
             .find(|action| action.id.as_ref() == id)
             .unwrap_or_else(|| panic!("`{id}` is a pane action"))
@@ -6669,9 +6757,11 @@ impl Opened<'_> {
 
     fn strip_reported_versions(&mut self) {
         self.update(|doc, cx| {
-            if let DetailsState::Loaded(details) = &mut doc.details {
-                details.summary.version = None;
-            }
+            doc.view.update(cx, |view, _| {
+                if let DetailsState::Loaded(details) = &mut view.details {
+                    details.summary.version = None;
+                }
+            });
             for entry in &mut doc.listing.entries {
                 entry.version = None;
             }
@@ -6688,7 +6778,7 @@ fn the_current_version_falls_back_to_the_history(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
     assert_eq!(
-        opened.read(|doc| doc.current_version_id().map(str::to_string)),
+        opened.read_view(|view| view.current_version_id().map(str::to_string)),
         Some("v-current".to_string()),
         "the describe's version wins when present"
     );
@@ -6702,15 +6792,15 @@ fn the_current_version_falls_back_to_the_history(cx: &mut TestAppContext) {
                 .with_stage(SecretVersionStage::Pending),
         )
         .expect("pending write");
-    opened.update(|doc, cx| doc.load_versions(KEY_VALUE_SECRET.to_string(), cx));
+    opened.update_view(|view, cx| view.load_versions(KEY_VALUE_SECRET.to_string(), cx));
     assert_eq!(opened.version_ids()[0], "v-written-1");
     opened.strip_reported_versions();
 
     assert_eq!(
-        opened.read(|doc| doc.current_version_id().map(str::to_string)),
+        opened.read_view(|view| view.current_version_id().map(str::to_string)),
         Some("v-current".to_string())
     );
-    assert!(opened.read(|doc| doc.is_current_version("v-current")));
+    assert!(opened.read_view(|view| view.is_current_version("v-current")));
 }
 
 #[gpui::test]
@@ -6720,7 +6810,7 @@ fn the_current_parameter_version_falls_back_to_the_highest_number(cx: &mut TestA
     opened.strip_reported_versions();
 
     assert_eq!(
-        opened.read(|doc| doc.current_version_id().map(str::to_string)),
+        opened.read_view(|view| view.current_version_id().map(str::to_string)),
         Some("3".to_string())
     );
 }
@@ -6732,7 +6822,7 @@ fn the_current_parameter_version_falls_back_to_the_highest_number(cx: &mut TestA
 fn version_transitions_are_refused_under_unsaved_edits(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
     let requests_before = opened
@@ -6741,14 +6831,14 @@ fn version_transitions_are_refused_under_unsaved_edits(cx: &mut TestAppContext) 
         .value_version_requests
         .len();
 
-    opened.update(|doc, cx| doc.activate_version(0, cx));
-    opened.update(|doc, cx| {
-        doc.value_version = Some("older".to_string());
-        doc.back_to_current_version(cx);
+    opened.update_view(|view, cx| view.activate_version(0, cx));
+    opened.update_view(|view, cx| {
+        view.value_version = Some("older".to_string());
+        view.back_to_current_version(cx);
     });
 
     assert_eq!(opened.editor_text(), EDITED_VALUE);
-    assert!(opened.read(|doc| doc.is_editing_value()));
+    assert!(opened.read_view(|view| view.is_editing_value()));
     assert_eq!(
         opened
             .driver
@@ -6763,8 +6853,8 @@ fn version_transitions_are_refused_under_unsaved_edits(cx: &mut TestAppContext) 
         assert!(summary.contains("unsaved edits"), "{summary}");
     }
 
-    opened.update(|doc, cx| doc.discard_value_edit(cx));
-    opened.update(|doc, cx| doc.activate_version(0, cx));
+    opened.update_view(|view, cx| view.discard_value_edit(cx));
+    opened.update_view(|view, cx| view.activate_version(0, cx));
     assert_eq!(
         opened
             .driver
@@ -6786,16 +6876,16 @@ fn the_versions_section_renders_without_the_describe(cx: &mut TestAppContext) {
         DetailsState::Loading,
         DetailsState::Failed("describe refused".to_string()),
     ] {
-        opened.update(|doc, cx| {
-            doc.details = state;
+        opened.update_view(|view, cx| {
+            view.details = state;
             cx.notify();
         });
         let rows = opened.version_rows(3);
         assert_eq!(rows.len(), 3);
     }
 
-    opened.update(|doc, cx| {
-        doc.versions = VersionsState::Loading;
+    opened.update_view(|view, cx| {
+        view.versions = VersionsState::Loading;
         cx.notify();
     });
     assert!(opened.rendered_text().contains("describe refused"));
@@ -6806,8 +6896,8 @@ fn the_versions_section_renders_without_the_describe(cx: &mut TestAppContext) {
             .any(|path| path.ends_with("secret-versions"))
     );
 
-    opened.update(|doc, cx| {
-        doc.versions = VersionsState::Failed("history refused".to_string());
+    opened.update_view(|view, cx| {
+        view.versions = VersionsState::Failed("history refused".to_string());
         cx.notify();
     });
     assert!(opened.rendered_text().contains("history refused"));
@@ -6821,17 +6911,17 @@ fn back_to_current_is_unavailable_while_a_historical_retrieval_is_in_flight(
 ) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| {
-        doc.value_version = Some("v-previous".to_string());
-        doc.value = ValueState::Loading;
+    opened.update_view(|view, cx| {
+        view.value_version = Some("v-previous".to_string());
+        view.value = ValueState::Loading;
         cx.notify();
     });
 
-    assert!(!opened.read(|doc| doc.can_return_to_current()));
+    assert!(!opened.read_view(|view| view.can_return_to_current()));
     assert!(!opened.pane_action("secret-version-current").enabled);
     assert!(opened.shown_password().is_none());
 
-    opened.update(|doc, cx| doc.back_to_current_version(cx));
+    opened.update_view(|view, cx| view.back_to_current_version(cx));
     assert!(
         opened
             .driver
@@ -6840,12 +6930,12 @@ fn back_to_current_is_unavailable_while_a_historical_retrieval_is_in_flight(
             .is_empty()
     );
 
-    opened.update(|doc, cx| {
-        doc.value = ValueState::NotLoaded;
+    opened.update_view(|view, cx| {
+        view.value = ValueState::NotLoaded;
         cx.notify();
     });
-    opened.update(|doc, cx| doc.activate_version(1, cx));
-    assert!(opened.read(|doc| doc.can_return_to_current()));
+    opened.update_view(|view, cx| view.activate_version(1, cx));
+    assert!(opened.read_view(|view| view.can_return_to_current()));
     assert!(opened.pane_action("secret-version-current").enabled);
 }
 
@@ -6857,10 +6947,10 @@ fn back_to_current_is_unavailable_while_a_historical_retrieval_is_in_flight(
 fn a_replaced_connection_reloads_the_history(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
-    let old_generation = opened.read(|doc| doc.versions_generation);
+    let old_generation = opened.read_view(|view| view.versions_generation);
 
     let replacement = opened.replace_connection();
     opened.announce_state_change();
@@ -6873,7 +6963,7 @@ fn a_replaced_connection_reloads_the_history(cx: &mut TestAppContext) {
         )]
     );
     assert!(
-        opened.read(|doc| doc.is_editing_value()),
+        opened.read_view(|view| view.is_editing_value()),
         "the edit is kept"
     );
 
@@ -6881,8 +6971,8 @@ fn a_replaced_connection_reloads_the_history(cx: &mut TestAppContext) {
         id: "old-session-version".to_string(),
         ..Default::default()
     }];
-    opened.update(|doc, cx| {
-        doc.apply_versions(old_generation, PLAINTEXT_SECRET, Ok(foreign), cx);
+    opened.update_view(|view, cx| {
+        view.apply_versions(old_generation, PLAINTEXT_SECRET, Ok(foreign), cx);
     });
     assert!(
         !opened
@@ -6899,7 +6989,7 @@ fn a_version_of_a_replaced_session_is_not_retrieved(cx: &mut TestAppContext) {
     opened.select(KEY_VALUE_SECRET);
     let replacement = opened.replace_connection();
 
-    opened.update(|doc, cx| doc.activate_version(1, cx));
+    opened.update_view(|view, cx| view.activate_version(1, cx));
 
     assert!(
         replacement
@@ -6925,20 +7015,20 @@ fn a_version_of_a_replaced_session_is_not_retrieved(cx: &mut TestAppContext) {
 fn a_save_reloads_the_history_and_clears_the_shown_version(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
-    opened.update(|doc, _cx| doc.value_version = Some("older".to_string()));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    opened.update_view(|view, _cx| view.value_version = Some("older".to_string()));
     opened.start_edit();
     opened.set_editor_text(EDITED_VALUE);
-    let generation_before = opened.read(|doc| doc.versions_generation);
+    let generation_before = opened.read_view(|view| view.versions_generation);
 
     opened.save_edit();
 
     assert_eq!(
-        opened.read(|doc| doc.value_version().map(str::to_string)),
+        opened.read_view(|view| view.value_version().map(str::to_string)),
         None
     );
     assert_ne!(
-        opened.read(|doc| doc.versions_generation),
+        opened.read_view(|view| view.versions_generation),
         generation_before
     );
     assert_eq!(opened.version_ids()[0], "v-written-1");
@@ -6948,8 +7038,8 @@ fn a_save_reloads_the_history_and_clears_the_shown_version(cx: &mut TestAppConte
         id: "in-flight-version".to_string(),
         ..Default::default()
     }];
-    opened.update(|doc, cx| {
-        doc.apply_versions(generation_before, PLAINTEXT_SECRET, Ok(foreign), cx);
+    opened.update_view(|view, cx| {
+        view.apply_versions(generation_before, PLAINTEXT_SECRET, Ok(foreign), cx);
     });
     assert_eq!(opened.version_ids()[0], "v-written-1");
 }
@@ -6987,13 +7077,14 @@ fn a_history_response_of_a_replaced_session_is_dropped(cx: &mut TestAppContext) 
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
     let replacement = opened.replace_connection();
-    let generation = opened.read(|doc| doc.versions_generation);
+    let generation = opened.read_view(|view| view.versions_generation);
     let foreign = vec![dbflux_core::SecretVersionInfo {
         id: "old-session-version".to_string(),
         ..Default::default()
     }];
 
-    opened.update(|doc, cx| doc.apply_versions(generation, KEY_VALUE_SECRET, Ok(foreign), cx));
+    opened
+        .update_view(|view, cx| view.apply_versions(generation, KEY_VALUE_SECRET, Ok(foreign), cx));
 
     assert!(
         !opened
@@ -7003,18 +7094,20 @@ fn a_history_response_of_a_replaced_session_is_dropped(cx: &mut TestAppContext) 
     assert_eq!(replacement.secret_store_calls().version_listings.len(), 1);
 }
 
-/// A history failure is reported where it lands, after the checks that tell
-/// whether it still matters: the current request's failure is reported once,
-/// a superseded request's failure is not reported at all.
+/// A history failure lands inline in the section and is recorded (audit
+/// trail, notification center) without a toast, and only when it still
+/// applies: a superseded request's failure is dropped.
 #[gpui::test]
-fn a_history_failure_is_reported_only_when_it_applies(cx: &mut TestAppContext) {
+fn a_history_failure_shows_inline_only_when_it_applies(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
-    let stale = opened.read(|doc| doc.versions_generation).wrapping_sub(1);
-    let current = opened.read(|doc| doc.versions_generation);
+    let stale = opened
+        .read_view(|view| view.versions_generation)
+        .wrapping_sub(1);
+    let current = opened.read_view(|view| view.versions_generation);
 
-    opened.update(|doc, cx| {
-        doc.apply_versions(
+    opened.update_view(|view, cx| {
+        view.apply_versions(
             stale,
             KEY_VALUE_SECRET,
             Err(DbError::query_failed("stale")),
@@ -7022,28 +7115,32 @@ fn a_history_failure_is_reported_only_when_it_applies(cx: &mut TestAppContext) {
         );
     });
     assert!(opened.reported_errors().is_empty());
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Loaded(_))));
 
-    opened.update(|doc, cx| {
-        doc.apply_versions(
+    opened.update_view(|view, cx| {
+        view.apply_versions(
             current,
             KEY_VALUE_SECRET,
             Err(DbError::query_failed("denied")),
             cx,
         );
     });
-    assert_eq!(opened.reported_errors().len(), 1);
-    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+    assert_eq!(opened.reported_errors().len(), 1, "recorded once");
+    assert_eq!(opened.toast_count(), 0, "and not as a toast");
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
 }
 
-/// The real load of a refused history reports it once, not twice.
+/// A refused history shows inline, is recorded once and raises no toast.
 #[gpui::test]
-fn a_refused_history_is_reported_once(cx: &mut TestAppContext) {
+fn a_refused_history_is_recorded_without_a_toast(cx: &mut TestAppContext) {
     let driver = FakeDriver::new(DbKind::AwsSecrets)
         .with_secret_versions_error(KEY_VALUE_SECRET, "not authorized");
     let mut opened = open_with(cx, driver, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
 
     assert_eq!(opened.reported_errors().len(), 1);
+    assert_eq!(opened.toast_count(), 0);
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
 }
 
 /// A connection that went away and came back (here with a new session)
@@ -7058,7 +7155,7 @@ fn the_history_is_retried_when_the_connection_returns(cx: &mut TestAppContext) {
         app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id))
     });
     opened.announce_state_change();
-    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
 
     let replacement_driver = FakeDriver::new(DbKind::AwsSecrets);
     let mut connected = removed.expect("was connected");
@@ -7079,7 +7176,7 @@ fn the_history_is_retried_when_the_connection_returns(cx: &mut TestAppContext) {
             .len(),
         1
     );
-    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Loaded(_))));
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Loaded(_))));
 
     opened.announce_state_change();
     assert_eq!(
@@ -7098,13 +7195,13 @@ fn the_history_is_retried_when_the_connection_returns(cx: &mut TestAppContext) {
 fn back_to_current_stays_a_pane_action_while_the_history_loads_or_fails(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| doc.activate_version(1, cx));
+    opened.update_view(|view, cx| view.activate_version(1, cx));
 
     for state in [
         VersionsState::Loading,
         VersionsState::Failed("history refused".to_string()),
     ] {
-        opened.update(|doc, _cx| doc.versions = state);
+        opened.update_view(|view, _cx| view.versions = state);
         let action = opened.pane_action("secret-version-current");
         assert!(action.enabled, "a historical value is shown");
     }
@@ -7134,7 +7231,7 @@ fn a_history_retry_without_a_connection_is_reported_once(cx: &mut TestAppContext
         )),
         "{errors:?}"
     );
-    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
 }
 
 /// A historical retrieval that fails replaces the loaded historical value
@@ -7143,23 +7240,23 @@ fn a_history_retry_without_a_connection_is_reported_once(cx: &mut TestAppContext
 fn a_failed_historical_retrieval_shows_no_older_value_banner(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| doc.activate_version(1, cx));
+    opened.update_view(|view, cx| view.activate_version(1, cx));
 
     assert_eq!(opened.shown_password().as_deref(), Some(PREVIOUS_PASSWORD));
     let text = opened.rendered_text();
     assert!(text.contains("Showing version"), "{text}");
-    assert!(opened.read(|doc| doc.can_return_to_current()));
+    assert!(opened.read_view(|view| view.can_return_to_current()));
 
     // The fake store has no such version, so the retrieval fails.
-    opened.update(|doc, cx| doc.retrieve_version(Some("v-vanished".to_string()), cx));
+    opened.update_view(|view, cx| view.retrieve_version(Some("v-vanished".to_string()), cx));
 
     assert_eq!(opened.shown_password(), None);
-    assert!(opened.read(|doc| matches!(doc.value(), ValueState::Failed(_))));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::Failed(_))));
     let text = opened.rendered_text();
     assert!(text.contains("no version v-vanished"), "{text}");
     assert!(!text.contains("Showing version"), "{text}");
     assert!(!text.contains("Back to current"), "{text}");
-    assert!(!opened.read(|doc| doc.can_return_to_current()));
+    assert!(!opened.read_view(|view| view.can_return_to_current()));
     assert!(!opened.pane_action("secret-version-current").enabled);
 }
 
@@ -7169,7 +7266,7 @@ fn a_failed_historical_retrieval_shows_no_older_value_banner(cx: &mut TestAppCon
 fn an_older_value_keeps_its_banner_when_the_current_version_is_unknown(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| doc.activate_version(1, cx));
+    opened.update_view(|view, cx| view.activate_version(1, cx));
     opened.strip_reported_versions();
 
     let profile_id = opened.read(|doc| doc.profile_id);
@@ -7179,17 +7276,17 @@ fn an_older_value_keeps_its_banner_when_the_current_version_is_unknown(cx: &mut 
     });
     opened.announce_state_change();
 
-    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
     assert_eq!(
-        opened.read(|doc| doc.current_version_id().map(str::to_string)),
+        opened.read_view(|view| view.current_version_id().map(str::to_string)),
         None
     );
     assert_eq!(opened.shown_password().as_deref(), Some(PREVIOUS_PASSWORD));
     assert_eq!(
-        opened.read(|doc| doc.shown_older_version().map(str::to_string)),
+        opened.read_view(|view| view.shown_older_version().map(str::to_string)),
         Some("v-previous".to_string())
     );
-    assert!(opened.read(|doc| doc.can_return_to_current()));
+    assert!(opened.read_view(|view| view.can_return_to_current()));
 
     let text = opened.rendered_text();
     assert!(text.contains("Showing version"), "{text}");
@@ -7203,7 +7300,7 @@ fn an_older_value_keeps_its_banner_when_the_current_version_is_unknown(cx: &mut 
 fn an_explicit_history_retry_reports_a_missing_connection_again(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(PLAINTEXT_SECRET);
-    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
 
     let profile_id = opened.read(|doc| doc.profile_id);
     let app_state = opened.app_state.clone();
@@ -7216,17 +7313,17 @@ fn an_explicit_history_retry_reports_a_missing_connection_again(cx: &mut TestApp
     opened.announce_state_change();
     assert_eq!(opened.reported_errors().len(), 1, "automatic reload");
 
-    opened.update(|doc, cx| doc.load_versions(PLAINTEXT_SECRET.to_string(), cx));
+    opened.update_view(|view, cx| view.load_versions(PLAINTEXT_SECRET.to_string(), cx));
     let reported = opened.reported_errors();
     assert_eq!(reported.len(), 2, "{reported:?}");
-    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
 }
 
 // -- Value editor: JSON key/value secrets -----------------------------------
 
 mod editor_key_value {
     use super::*;
-    use crate::secret_store::editor::EditMode;
+    use crate::secret_store::view::editor::EditMode;
 
     const EDITED: &str = r#"{"username":"api-user2","password":"fake-password-7f3a","port":5432}"#;
 
@@ -7235,7 +7332,7 @@ mod editor_key_value {
         opened.window.update(|window, _| window.activate_window());
         opened.window.run_until_parked();
         opened.select(KEY_VALUE_SECRET);
-        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.update_view(|view, cx| view.retrieve_selected_value(cx));
         opened
     }
 
@@ -7249,10 +7346,10 @@ mod editor_key_value {
     #[gpui::test]
     fn edit_value_is_offered_for_a_key_value_secret(cx: &mut TestAppContext) {
         let mut opened = opened_key_value(cx);
-        assert!(opened.read(|doc| doc.can_edit_value()));
+        assert!(opened.read_view(|view| view.can_edit_value()));
         assert!(has_path(&mut opened, "secret-value-edit"));
 
-        opened.update(|doc, cx| doc.set_value_view(ValueView::Plaintext, cx));
+        opened.update_view(|view, cx| view.set_value_view(ValueView::Plaintext, cx));
         assert!(has_path(&mut opened, "secret-value-edit"));
 
         opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
@@ -7270,7 +7367,7 @@ mod editor_key_value {
             opened
                 .doc
                 .read(cx)
-                .pane_actions(&opened.doc)
+                .pane_actions(&opened.doc, cx)
                 .into_iter()
                 .map(|action| action.id.to_string())
                 .collect()
@@ -7278,7 +7375,7 @@ mod editor_key_value {
         assert!(actions.iter().any(|id| id == "secret-edit-value"));
 
         assert!(opened.command(Command::EditValue));
-        assert!(opened.read(|doc| doc.is_editing_value()));
+        assert!(opened.read_view(|view| view.is_editing_value()));
     }
 
     #[gpui::test]
@@ -7287,7 +7384,7 @@ mod editor_key_value {
         opened.start_edit();
 
         assert_eq!(
-            opened.read(|doc| doc.edit_mode()),
+            opened.read_view(|view| view.edit_mode()),
             Some(EditMode::Formatted)
         );
         let text = opened.editor_text();
@@ -7308,9 +7405,9 @@ mod editor_key_value {
             opened.written_values(),
             vec![(KEY_VALUE_SECRET.to_string(), EDITED.to_string())]
         );
-        opened.read(|doc| {
-            assert!(!doc.is_editing_value());
-            let ValueState::Loaded(value) = &doc.value else {
+        opened.read_view(|view| {
+            assert!(!view.is_editing_value());
+            let ValueState::Loaded(value) = &view.value else {
                 panic!("value not loaded");
             };
             assert_eq!(value.view, ValueView::KeyValue);
@@ -7344,12 +7441,12 @@ mod editor_key_value {
         for name in [BINARY_SECRET, MANAGED_SECRET] {
             let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
             opened.select(name);
-            opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+            opened.update_view(|view, cx| view.retrieve_selected_value(cx));
             assert!(
-                opened.read(|doc| matches!(doc.value, ValueState::Loaded(_))),
+                opened.read_view(|view| matches!(view.value, ValueState::Loaded(_))),
                 "{name} loaded"
             );
-            assert!(!opened.read(|doc| doc.can_edit_value()), "{name}");
+            assert!(!opened.read_view(|view| view.can_edit_value()), "{name}");
             assert!(!has_path(&mut opened, "secret-value-edit"), "{name}");
         }
     }
@@ -7360,9 +7457,12 @@ mod editor_key_value {
         opened.start_edit();
         for mode in [EditMode::Formatted, EditMode::Raw] {
             let doc = opened.doc.clone();
-            opened
-                .window
-                .update(|window, cx| doc.update(cx, |doc, cx| doc.set_edit_mode(mode, window, cx)));
+            opened.window.update(|window, cx| {
+                doc.update(cx, |doc, cx| {
+                    doc.view
+                        .update(cx, |view, cx| view.set_edit_mode(mode, window, cx))
+                })
+            });
             opened.window.run_until_parked();
             let text = opened.accessibility_update_text();
             assert!(!text.contains("fake-password-7f3a"), "{mode:?}: {text}");
@@ -7376,7 +7476,7 @@ mod editor_key_value {
 mod editor_review {
     use super::*;
     use crate::keyboard_test_support::host_document;
-    use crate::secret_store::editor::EditMode;
+    use crate::secret_store::view::editor::EditMode;
     use dbflux_app::keymap::ContextId;
 
     /// The document hosted the way the workspace hosts it: the key context
@@ -7408,7 +7508,7 @@ mod editor_review {
                     )
                 })
             },
-            |doc, _| doc.active_context(),
+            |doc, cx| doc.active_context(cx),
             |doc, command, window, cx| doc.dispatch_command(command, window, cx),
         );
         let doc = window.update(|_, cx| host.read(cx).document.clone());
@@ -7456,9 +7556,12 @@ mod editor_review {
 
     fn open_find(opened: &mut Opened<'_>) {
         let doc = opened.doc.clone();
-        opened
-            .window
-            .update(|window, cx| doc.update(cx, |doc, cx| doc.find_in_value(window, cx)));
+        opened.window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.view
+                    .update(cx, |view, cx| view.find_in_value(window, cx))
+            })
+        });
         opened.window.run_until_parked();
         opened.rendered_paths();
     }
@@ -7487,7 +7590,8 @@ mod editor_review {
         start(&mut opened, "stored text", "typed text");
 
         open_find(&mut opened);
-        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let editor =
+            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
         let (textarea_focused, editor_contains_focus) = opened.window.update(|window, cx| {
             let textarea = gpui::Focusable::focus_handle(editor.read(cx), cx);
             (
@@ -7496,14 +7600,14 @@ mod editor_review {
             )
         });
         let wrapper_has_focus =
-            opened.read(|doc| doc.value_edit.as_ref().is_some_and(|edit| edit.focused));
+            opened.read_view(|view| view.value_edit.as_ref().is_some_and(|edit| edit.focused));
         assert!(
             !textarea_focused && !editor_contains_focus,
             "focus left the textarea for the Find input"
         );
         assert!(wrapper_has_focus, "the editor still counts as focused");
         assert_eq!(
-            opened.read(|doc| doc.active_context()),
+            opened.read_cx(|doc, cx| doc.active_context(cx)),
             ContextId::TextInput
         );
 
@@ -7533,7 +7637,7 @@ mod editor_review {
         );
         assert!(opened.rendered_paths().len() > before, "Find panel drawn");
         assert_eq!(
-            opened.read(|doc| doc.active_context()),
+            opened.read_cx(|doc, cx| doc.active_context(cx)),
             ContextId::TextInput
         );
     }
@@ -7556,7 +7660,10 @@ mod editor_review {
         // In Raw mode the same text is a change.
         let doc = opened.doc.clone();
         opened.window.update(|window, cx| {
-            doc.update(cx, |doc, cx| doc.set_edit_mode(EditMode::Raw, window, cx))
+            doc.update(cx, |doc, cx| {
+                doc.view
+                    .update(cx, |view, cx| view.set_edit_mode(EditMode::Raw, window, cx))
+            })
         });
         opened.set_editor_text("[ 1 , 2 ]");
         opened.rendered_paths();
@@ -7593,14 +7700,15 @@ mod editor_review {
         let mut opened = open_hosted(cx);
         start(&mut opened, "a\nb", "a\nb");
 
-        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let editor =
+            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
         let laid_out = opened
             .window
             .update(|_, cx| editor.read(cx).line_height())
             .expect("the textarea has laid out");
         let fallback = opened
             .window
-            .update(|_, cx| crate::secret_store::editor::fallback_line_height(cx));
+            .update(|_, cx| crate::secret_store::view::editor::fallback_line_height(cx));
 
         assert_eq!(fallback, laid_out);
     }
@@ -7611,7 +7719,8 @@ mod editor_review {
     fn the_caret_is_verified_by_byte_offset(cx: &mut TestAppContext) {
         let mut opened = open_hosted(cx);
         start(&mut opened, "x", "ñ😀x");
-        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let editor =
+            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
 
         for (character, bytes, column) in
             [(1u32, 2usize, "Col 2"), (2, 6, "Col 3"), (3, 7, "Col 4")]
@@ -7639,8 +7748,8 @@ mod editor_review {
         let mut opened = open_hosted(cx);
         opened.select(PLAINTEXT_SECRET);
         opened.show_value("a\nb");
-        opened.update(|doc, _cx| {
-            if let ValueState::Loaded(value) = &mut doc.value {
+        opened.update_view(|view, _cx| {
+            if let ValueState::Loaded(value) = &mut view.value {
                 value.version = Some(UUID_VERSION.to_string());
             }
         });
@@ -7701,7 +7810,8 @@ mod editor_review {
             .join("\n");
         let mut opened = open_hosted(cx);
         start(&mut opened, &text, &text);
-        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let editor =
+            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
 
         let aligned = |opened: &mut Opened<'_>, stage: &str| {
             for line in [0usize, 5] {
@@ -7763,9 +7873,12 @@ mod editor_review {
             .update(|window, _| window.observe_frames(&tops));
 
         let doc = opened.doc.clone();
-        opened
-            .window
-            .update(|window, cx| doc.update(cx, |doc, cx| doc.start_value_edit(window, cx)));
+        opened.window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.view
+                    .update(cx, |view, cx| view.start_value_edit(window, cx))
+            })
+        });
         opened.window.run_until_parked();
         opened.rendered_paths();
 
@@ -7781,7 +7894,8 @@ mod editor_review {
             "first frame {first:?} vs settled {settled:?}: {tops:?}"
         );
 
-        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let editor =
+            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
         let glyph = opened
             .window
             .update(|_, cx| editor.read(cx).range_to_bounds(&(0..1)))
@@ -7802,7 +7916,8 @@ mod editor_review {
         let text = lines.join("\n");
         let mut opened = open_hosted(cx);
         start(&mut opened, &text, &text);
-        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let editor =
+            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
 
         let scroll_and_check = |opened: &mut Opened<'_>, stage: &str| {
             let line_height = opened
@@ -7903,7 +8018,7 @@ mod details_design {
     fn closing_with_unsaved_edits_is_refused_by_the_shared_guard(cx: &mut TestAppContext) {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.select(PLAINTEXT_SECRET);
-        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.update_view(|view, cx| view.retrieve_selected_value(cx));
         opened.start_edit();
         opened.set_editor_text("an unsaved edit");
 
@@ -7913,7 +8028,7 @@ mod details_design {
             matches!(doc.selected(), Some(SecretRowKey::Secret(name)) if name == PLAINTEXT_SECRET)
         }));
         assert_eq!(opened.editor_text(), "an unsaved edit");
-        assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+        assert!(opened.read_view(|view| matches!(view.value(), ValueState::Loaded(_))));
     }
 
     #[gpui::test]
@@ -7923,10 +8038,10 @@ mod details_design {
         opened.window.run_until_parked();
         opened.rendered_paths();
         opened.select(PLAINTEXT_SECRET);
-        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.update_view(|view, cx| view.retrieve_selected_value(cx));
         opened.start_edit();
         opened.rendered_paths();
-        assert!(opened.read(|doc| doc.value_edit.as_ref().is_some_and(|edit| edit.focused)));
+        assert!(opened.read_view(|view| view.value_edit.as_ref().is_some_and(|edit| edit.focused)));
 
         close_details(&mut opened);
 
@@ -8057,12 +8172,12 @@ mod details_design {
     fn closing_the_pane_drops_the_retrieved_value(cx: &mut TestAppContext) {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.select(KEY_VALUE_SECRET);
-        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
-        assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+        opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+        assert!(opened.read_view(|view| matches!(view.value(), ValueState::Loaded(_))));
 
         close_details(&mut opened);
 
-        assert!(opened.read(|doc| matches!(doc.value(), ValueState::NotLoaded)));
+        assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
         assert!(opened.read(|doc| doc.selected().is_none()));
     }
 
@@ -8078,7 +8193,7 @@ mod details_design {
             opened
                 .doc
                 .read(cx)
-                .pane_actions(&opened.doc)
+                .pane_actions(&opened.doc, cx)
                 .into_iter()
                 .map(|action| action.id.to_string())
                 .collect()
@@ -8117,7 +8232,7 @@ mod details_design {
     fn a_plaintext_value_offers_the_two_tab_control_with_key_value_muted(cx: &mut TestAppContext) {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.select(PLAINTEXT_SECRET);
-        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.update_view(|view, cx| view.retrieve_selected_value(cx));
 
         let paths = opened.rendered_paths();
         let has = |id: &str| paths.iter().any(|path| path.ends_with(id));
@@ -8135,7 +8250,7 @@ mod details_design {
 
     #[test]
     fn key_value_is_muted_with_its_reason_when_the_value_is_not_an_object() {
-        use crate::secret_store::details::value_view_items;
+        use crate::secret_store::view::details::value_view_items;
 
         let items = value_view_items(false);
         let key_value = items.first().expect("the first tab");
@@ -8162,18 +8277,18 @@ mod details_design {
     fn clicking_the_muted_key_value_tab_changes_nothing(cx: &mut TestAppContext) {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.select(PLAINTEXT_SECRET);
-        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.update_view(|view, cx| view.retrieve_selected_value(cx));
         opened.rendered_paths();
 
-        let before = opened.read(|doc| doc.value_view_sets);
+        let before = opened.read_view(|view| view.value_view_sets);
         click(&mut opened, "segmented-secret-value-view-key-value");
         assert_eq!(
-            opened.read(|doc| doc.value_view_sets),
+            opened.read_view(|view| view.value_view_sets),
             before,
             "the muted tab never reaches the view setter"
         );
 
-        assert!(opened.read(|doc| match doc.value() {
+        assert!(opened.read_view(|view| match view.value() {
             ValueState::Loaded(value) => value.view == ValueView::Plaintext,
             _ => false,
         }));
@@ -8183,7 +8298,7 @@ mod details_design {
     fn a_key_value_secret_keeps_both_tabs_enabled_and_every_key_masked(cx: &mut TestAppContext) {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.select(KEY_VALUE_SECRET);
-        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.update_view(|view, cx| view.retrieve_selected_value(cx));
 
         let text = opened.rendered_text();
         assert!(!text.contains("Key/value is not available"), "{text}");
@@ -8202,7 +8317,7 @@ mod details_design {
             "no chip before the value is retrieved"
         );
 
-        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.update_view(|view, cx| view.retrieve_selected_value(cx));
         assert_eq!(
             node_text(&mut opened, "secret-value-kind").as_deref(),
             Some("JSON · 3 keys")
@@ -8229,7 +8344,7 @@ mod details_design {
     fn the_header_and_chip_reach_the_accessibility_tree_without_a_value(cx: &mut TestAppContext) {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.select(KEY_VALUE_SECRET);
-        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.update_view(|view, cx| view.retrieve_selected_value(cx));
         assert!(opened.command(Command::ExpandCollapse));
 
         let announced = opened.accessibility_update_text();
@@ -8274,7 +8389,7 @@ mod details_design {
 
     #[test]
     fn last_retrieved_is_a_date_even_across_a_local_offset() {
-        use crate::secret_store::details::last_retrieved_label;
+        use crate::secret_store::view::details::last_retrieved_label;
         use dbflux_core::chrono::{FixedOffset, TimeZone, Utc};
 
         let midnight = Utc.with_ymd_and_hms(2026, 10, 19, 0, 0, 0).unwrap();
@@ -8296,7 +8411,7 @@ mod details_design {
     fn the_value_actions_share_a_row_at_the_default_width(cx: &mut TestAppContext) {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.select(PLAINTEXT_SECRET);
-        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.update_view(|view, cx| view.retrieve_selected_value(cx));
         opened.rendered_paths();
 
         let top = |opened: &mut Opened<'_>, id: &str| {

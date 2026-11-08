@@ -18,9 +18,10 @@
 use super::{
     DialogShell, FooterSpec, Landing, WriteDialog, WriteEffect, dialog_footer, dialog_modal,
 };
+use crate::secret_store::DetailsState;
 use crate::secret_store::SecretOperation;
+use crate::secret_store::view::{SecretView, SecretViewEvent};
 use crate::secret_store::write::{rotate_secret_now, update_secret_rotation};
-use crate::secret_store::{DetailsState, SecretRowKey, SecretStoreDocument};
 use dbflux_components::controls::{Checkbox, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::parts::{modal_field, modal_lead};
@@ -120,7 +121,7 @@ impl RotationDialog {
     }
 }
 
-impl SecretStoreDocument {
+impl SecretView {
     /// Whether the store offers rotation actions at all.
     pub fn supports_rotation(&self) -> bool {
         self.store_allows(ROTATION_CAPABILITIES)
@@ -149,7 +150,7 @@ impl SecretStoreDocument {
             && !self.write_in_flight
             && !self.dialog_is_open()
             && self.write_refusal_reason().is_none()
-            && matches!(self.selected, Some(SecretRowKey::Secret(_)))
+            && self.name.is_some()
     }
 
     /// Whether Edit rotation may open: the details are loaded, so the dialog
@@ -190,7 +191,7 @@ impl SecretStoreDocument {
     pub(in crate::secret_store) fn rotation_notice_for_selection(&self) -> Option<&RotationNotice> {
         let notice = self.rotation_notice.as_ref()?;
 
-        (self.selected == Some(SecretRowKey::Secret(notice.name.clone()))).then_some(notice)
+        self.is_for(&notice.name).then_some(notice)
     }
 
     // -- Rotate now -----------------------------------------------------------
@@ -301,10 +302,14 @@ impl SecretStoreDocument {
         let name = name.to_string();
         let session = self.connection(cx);
 
-        // A newer rotation takes over: the older schedule stops at its next
-        // tick, and the latest one still ends with its own final read.
-        self.rotation_follow_up_generation = self.rotation_follow_up_generation.wrapping_add(1);
-        let generation = self.rotation_follow_up_generation;
+        // A newer rotation of the same secret takes over: the older schedule
+        // stops at its next tick, and the latest one still ends with its own
+        // final read. Another secret's rotation leaves it alone.
+        self.rotation_follow_up_counter = self.rotation_follow_up_counter.wrapping_add(1);
+        let generation = self.rotation_follow_up_counter;
+        let key = name.clone();
+        self.rotation_follow_up_generations
+            .insert(key.clone(), generation);
 
         cx.spawn(async move |_this, cx| {
             for seconds in ROTATION_FOLLOW_UP_SECONDS {
@@ -314,7 +319,7 @@ impl SecretStoreDocument {
 
                 let keep_going = cx.update(|cx| {
                     entity.update(cx, |doc, cx| {
-                        doc.rotation_follow_up_generation == generation
+                        doc.rotation_follow_up_generations.get(&key) == Some(&generation)
                             && doc.refresh_rotation_follow_up(&name, &session, cx)
                     })
                 });
@@ -323,6 +328,16 @@ impl SecretStoreDocument {
                     break;
                 }
             }
+
+            // Only the schedule that still owns the entry forgets it; a
+            // newer rotation of the same secret keeps its own.
+            cx.update(|cx| {
+                entity.update(cx, |view, _| {
+                    if view.rotation_follow_up_generations.get(&key) == Some(&generation) {
+                        view.rotation_follow_up_generations.remove(&key);
+                    }
+                })
+            });
         })
         .detach();
     }
@@ -340,7 +355,7 @@ impl SecretStoreDocument {
             _ => false,
         };
 
-        if !same_session || self.selected != Some(SecretRowKey::Secret(name.to_string())) {
+        if !same_session || !self.is_for(name) {
             return false;
         }
 
@@ -351,7 +366,7 @@ impl SecretStoreDocument {
                 crate::secret_store::HistoryLoad::Automatic,
                 cx,
             );
-            self.reload_listing_in_place(cx);
+            cx.emit(SecretViewEvent::ReloadListing);
         }
 
         true
@@ -506,6 +521,11 @@ impl SecretStoreDocument {
 
     /// Turns the dialog's rotation on or off.
     pub fn set_rotation_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        // The request carries the form as it was when Save was pressed.
+        if self.write_in_flight {
+            return;
+        }
+
         if let Some(WriteDialog::Rotation(dialog)) = &mut self.dialog {
             dialog.enabled = enabled;
             dialog.touched = true;
@@ -614,72 +634,7 @@ impl SecretStoreDocument {
             .clone()
             .filter(|_| dialog.touched || !dialog.enabled || !schedule_empty);
 
-        let field = |label_key: &str,
-                     hint_key: &str,
-                     id: &'static str,
-                     input: &Entity<InputState>,
-                     cx: &App| {
-            modal_field(
-                dbflux_i18n::t!(label_key),
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(ModalMetrics::HEADER_GAP)
-                    .child(
-                        Input::new(input)
-                            .id(id)
-                            .aria_label(dbflux_i18n::t!(label_key))
-                            .disabled(!dialog.enabled)
-                            .w_full(),
-                    )
-                    .child(Text::caption(dbflux_i18n::t!(hint_key)).muted_foreground()),
-                cx,
-            )
-        };
-
-        let mut body = div()
-            .flex()
-            .flex_col()
-            .gap(ModalMetrics::BODY_GAP)
-            .child(
-                Checkbox::new("secret-rotation-enabled")
-                    .label(dbflux_i18n::t!(
-                        "document.secret_store.rotation_edit.enabled"
-                    ))
-                    .checked(dialog.enabled)
-                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                        this.set_rotation_enabled(*checked, cx);
-                    })),
-            )
-            .child(field(
-                "document.secret_store.rotation_edit.schedule",
-                "document.secret_store.rotation_edit.schedule_hint",
-                "secret-rotation-schedule-input",
-                &dialog.schedule,
-                cx,
-            ))
-            .child(field(
-                "document.secret_store.rotation_edit.window",
-                "document.secret_store.rotation_edit.window_hint",
-                "secret-rotation-window-input",
-                &dialog.window,
-                cx,
-            ))
-            .child(field(
-                "document.secret_store.rotation_edit.function",
-                "document.secret_store.rotation_edit.function_hint",
-                "secret-rotation-function-input",
-                &dialog.function,
-                cx,
-            ));
-
-        if let Some(message) = shown_problem {
-            body = body.child(
-                div()
-                    .id("secret-rotation-problem")
-                    .child(Text::caption(message).danger()),
-            );
-        }
+        let body = self.render_rotation_body(dialog, shown_problem, cx);
 
         let footer = dialog_footer(
             FooterSpec {
@@ -711,4 +666,89 @@ impl SecretStoreDocument {
             cx,
         )
     }
+
+    /// The enabled switch, the three fields and the problem line.
+    fn render_rotation_body(
+        &self,
+        dialog: &RotationDialog,
+        shown_problem: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(ModalMetrics::BODY_GAP)
+            .child(
+                Checkbox::new("secret-rotation-enabled")
+                    .label(dbflux_i18n::t!(
+                        "document.secret_store.rotation_edit.enabled"
+                    ))
+                    .checked(dialog.enabled)
+                    .disabled(self.write_in_flight)
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.set_rotation_enabled(*checked, cx);
+                    })),
+            )
+            .child(rotation_field(
+                dialog.enabled && !self.write_in_flight,
+                "document.secret_store.rotation_edit.schedule",
+                "document.secret_store.rotation_edit.schedule_hint",
+                "secret-rotation-schedule-input",
+                &dialog.schedule,
+                cx,
+            ))
+            .child(rotation_field(
+                dialog.enabled && !self.write_in_flight,
+                "document.secret_store.rotation_edit.window",
+                "document.secret_store.rotation_edit.window_hint",
+                "secret-rotation-window-input",
+                &dialog.window,
+                cx,
+            ))
+            .child(rotation_field(
+                dialog.enabled && !self.write_in_flight,
+                "document.secret_store.rotation_edit.function",
+                "document.secret_store.rotation_edit.function_hint",
+                "secret-rotation-function-input",
+                &dialog.function,
+                cx,
+            ));
+
+        if let Some(message) = shown_problem {
+            body = body.child(
+                div()
+                    .id("secret-rotation-problem")
+                    .child(Text::caption(message).danger()),
+            );
+        }
+
+        body
+    }
+}
+
+/// One labelled field of the Edit rotation dialog with its hint under it.
+fn rotation_field(
+    enabled: bool,
+    label_key: &str,
+    hint_key: &str,
+    id: &'static str,
+    input: &Entity<InputState>,
+    cx: &App,
+) -> impl IntoElement {
+    modal_field(
+        dbflux_i18n::t!(label_key),
+        div()
+            .flex()
+            .flex_col()
+            .gap(ModalMetrics::HEADER_GAP)
+            .child(
+                Input::new(input)
+                    .id(id)
+                    .aria_label(dbflux_i18n::t!(label_key))
+                    .disabled(!enabled)
+                    .w_full(),
+            )
+            .child(Text::caption(dbflux_i18n::t!(hint_key)).muted_foreground()),
+        cx,
+    )
 }
