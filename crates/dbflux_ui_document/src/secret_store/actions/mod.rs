@@ -59,6 +59,14 @@ pub(super) enum WriteDialog {
     Create(CreateDialog),
 }
 
+/// What an open dialog was opened on: the connection session and the row. A
+/// confirm that finds either changed writes nothing, so a dialog can never
+/// land on a session or a secret other than the ones it was opened on.
+pub(super) struct DialogPin {
+    connection: Option<Arc<dyn Connection>>,
+    selected: Option<SecretRowKey>,
+}
+
 /// Everything a governed write takes from the document, captured on the
 /// foreground so the write itself can run on the background executor: the
 /// connection session, the connection's resolved mutation policy and the
@@ -311,6 +319,10 @@ impl SecretStoreDocument {
         cx: &mut Context<Self>,
     ) {
         self.drop_context_menu();
+        self.dialog_pin = Some(DialogPin {
+            connection: self.connection(cx),
+            selected: self.selected.clone(),
+        });
         self.dialog = Some(dialog);
         self.dialog_focus.focus(focus.as_ref(), window, cx);
         cx.notify();
@@ -328,6 +340,8 @@ impl SecretStoreDocument {
     /// Drops the dialog whether or not a write is in flight: the landing of
     /// a write that already left must still close what it belongs to.
     pub(super) fn dismiss_dialog(&mut self, cx: &mut Context<Self>) {
+        self.dialog_pin = None;
+
         if self.dialog.take().is_some() {
             self.dialog_focus.restore(cx);
             cx.notify();
@@ -339,10 +353,45 @@ impl SecretStoreDocument {
         self.dialog.is_some() && self.write_in_flight
     }
 
+    /// Closes the open dialog because the selection or the listing is moving
+    /// on, even while a write is in flight: its landing still reports.
+    pub(super) fn close_dialog_for_navigation(&mut self, cx: &mut Context<Self>) {
+        self.dismiss_dialog(cx);
+    }
+
+    /// Whether the open dialog still stands on what it was opened on. A
+    /// dialog whose connection was replaced, or whose secret is no longer the
+    /// selection, is closed and the user told; nothing is written.
+    fn dialog_pin_holds(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(pin) = &self.dialog_pin else {
+            return true;
+        };
+
+        let same_session = match (&pin.connection, self.connection(cx)) {
+            (Some(pinned), Some(live)) => Arc::ptr_eq(pinned, &live),
+            (None, None) => true,
+            _ => false,
+        };
+        // Creating names no existing secret, so the selection does not matter.
+        let same_row =
+            matches!(self.dialog, Some(WriteDialog::Create(_))) || pin.selected == self.selected;
+
+        if same_session && same_row {
+            return true;
+        }
+
+        self.dismiss_dialog(cx);
+        self.report_write_warning(
+            dbflux_i18n::t!("document.secret_store.write.connection_replaced"),
+            cx,
+        );
+        false
+    }
+
     /// Confirms the open dialog: the one primary action of whichever dialog
     /// is up, as its button and Enter both run it.
     pub fn confirm_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.dialog_is_submitting() {
+        if self.dialog_is_submitting() || !self.dialog_pin_holds(cx) {
             return;
         }
 

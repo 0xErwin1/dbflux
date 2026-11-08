@@ -194,6 +194,8 @@ pub struct SecretStoreDocument {
     /// Moves the keyboard into the dialog when it opens and hands it back
     /// when it closes.
     dialog_focus: ModalFocus,
+    /// The session and the row the open dialog was opened on.
+    dialog_pin: Option<actions::DialogPin>,
     /// A governed write is in flight. Another write waits for it, so a
     /// double click cannot send the request twice.
     write_in_flight: bool,
@@ -368,6 +370,7 @@ impl SecretStoreDocument {
             context_menu_focus: cx.focus_handle(),
             dialog: None,
             dialog_focus: ModalFocus::new(cx),
+            dialog_pin: None,
             write_in_flight: false,
             rotation_notice: None,
             edit_after_retrieve: false,
@@ -605,6 +608,7 @@ impl SecretStoreDocument {
             return;
         }
 
+        self.close_dialog_for_navigation(cx);
         self.clear_value();
         self.details_generation = self.details_generation.wrapping_add(1);
         self.details = DetailsState::Idle;
@@ -636,6 +640,7 @@ impl SecretStoreDocument {
             self.focus_handle.focus(window, cx);
         }
 
+        self.close_dialog_for_navigation(cx);
         self.clear_value();
         self.details_generation = self.details_generation.wrapping_add(1);
         self.details = DetailsState::Idle;

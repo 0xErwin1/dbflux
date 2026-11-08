@@ -57,6 +57,7 @@ impl SecretStoreDocument {
             return;
         }
 
+        self.close_dialog_for_navigation(cx);
         self.selected = None;
         self.details_generation = self.details_generation.wrapping_add(1);
         self.details = DetailsState::Idle;

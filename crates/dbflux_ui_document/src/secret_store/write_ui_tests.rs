@@ -2291,3 +2291,167 @@ fn the_create_controls_are_covered(cx: &mut TestAppContext) {
         );
     }
 }
+
+// -- Dialogs are pinned to the session and the secret they opened on -----------
+
+impl Opened<'_> {
+    /// Confirms the open dialog the way Enter does.
+    fn confirm_open_dialog(&mut self) {
+        let doc = self.doc.clone();
+        self.window
+            .update(|window, cx| doc.update(cx, |doc, cx| doc.confirm_dialog(window, cx)));
+        self.window.run_until_parked();
+    }
+
+    /// Asserts that a confirm after a connection replacement wrote nothing to
+    /// either session and reported the refusal once.
+    fn assert_pinned_refusal(&mut self, replacement: &FakeDriver) {
+        assert!(self.mutations().is_empty(), "old: {:?}", self.mutations());
+        assert!(
+            replacement
+                .secret_store_calls()
+                .mutation_attempts
+                .is_empty(),
+            "new: {:?}",
+            replacement.secret_store_calls().mutation_attempts
+        );
+        assert!(replacement.secret_store_calls().put_attempts.is_empty());
+
+        let errors = self.reported_errors();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].1.contains("was replaced"), "{}", errors[0].1);
+        assert!(
+            !self.dialog_open(),
+            "a dialog that can no longer write closes"
+        );
+    }
+}
+
+#[gpui::test]
+fn a_delete_dialog_is_pinned_to_its_session(cx: &mut TestAppContext) {
+    let name = "/app/prod/db/host";
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.open_parameter(name);
+    opened.click("secret-action-delete");
+    opened.type_text(name);
+    let replacement = opened.replace_connection();
+
+    opened.confirm_open_dialog();
+
+    opened.assert_pinned_refusal(&replacement);
+}
+
+#[gpui::test]
+fn a_scheduled_delete_dialog_is_pinned_to_its_session(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-action-delete");
+    opened.type_text(KEY_VALUE_SECRET);
+    let replacement = opened.replace_connection();
+
+    opened.confirm_open_dialog();
+
+    opened.assert_pinned_refusal(&replacement);
+}
+
+#[gpui::test]
+fn a_tags_dialog_is_pinned_to_its_session(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-tags-edit");
+    opened.click("secret-tags-remove-0");
+    let replacement = opened.replace_connection();
+
+    opened.confirm_open_dialog();
+
+    opened.assert_pinned_refusal(&replacement);
+}
+
+#[gpui::test]
+fn a_description_dialog_is_pinned_to_its_session(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-details-edit");
+    opened.fill_input("secret-description-input", NEW_DESCRIPTION);
+    let replacement = opened.replace_connection();
+
+    opened.confirm_open_dialog();
+
+    opened.assert_pinned_refusal(&replacement);
+}
+
+#[gpui::test]
+fn a_rotation_dialog_is_pinned_to_its_session(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-rotation-edit");
+    opened.fill_input("secret-rotation-schedule-input", "rate(7 days)");
+    let replacement = opened.replace_connection();
+
+    opened.confirm_open_dialog();
+
+    opened.assert_pinned_refusal(&replacement);
+}
+
+#[gpui::test]
+fn a_create_dialog_is_pinned_to_its_session(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    opened.click("secret-new");
+    opened.type_text("prod/new/credentials");
+    opened.set_create_value(CREATED_VALUE);
+    let replacement = opened.replace_connection();
+
+    opened.confirm_open_dialog();
+
+    opened.assert_pinned_refusal(&replacement);
+}
+
+#[gpui::test]
+fn a_roll_back_dialog_is_pinned_to_its_session(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-version-rollback-1");
+    let replacement = opened.replace_connection();
+
+    opened.confirm_open_dialog();
+
+    assert!(opened.mutations().is_empty());
+    assert!(
+        replacement
+            .secret_store_calls()
+            .mutation_attempts
+            .is_empty()
+    );
+    assert!(!opened.dialog_open());
+}
+
+/// Moving to another secret closes a dialog that names the first one, so a
+/// confirm can never target a secret other than the one the dialog names.
+#[gpui::test]
+fn a_selection_change_closes_the_delete_dialog(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-action-delete");
+    assert!(opened.dialog_open());
+
+    opened.select(PLAINTEXT_SECRET);
+    assert!(!opened.dialog_open(), "the dialog named another secret");
+
+    opened.confirm_open_dialog();
+    assert!(opened.mutations().is_empty(), "{:?}", opened.mutations());
+}
+
+/// A reload of the listing closes an open dialog too.
+#[gpui::test]
+fn a_reload_closes_the_open_dialog(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-action-delete");
+    assert!(opened.dialog_open());
+
+    opened.update(|doc, cx| doc.refresh(cx));
+
+    assert!(!opened.dialog_open());
+}
