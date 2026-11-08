@@ -14,9 +14,9 @@ use aws_sdk_ssm::types::{ParameterType, Tag as ParameterTag};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     Connection, ConnectionProfile, DEFAULT_RECOVERY_WINDOW_DAYS, DbConfig, DbDriver, DbError,
-    DbKind, SecretDeleteRequest, SecretListRequest, SecretPayload, SecretPutRequest,
-    SecretRollbackRequest, SecretRotationUpdate, SecretStoreCapabilities, SecretStoreSource,
-    SecretValue, SecretVersionStage,
+    DbKind, SecretDeleteRequest, SecretDescriptionUpdate, SecretListRequest, SecretPayload,
+    SecretPutRequest, SecretRollbackRequest, SecretRotationUpdate, SecretStoreCapabilities,
+    SecretStoreSource, SecretTagsUpdate, SecretValue, SecretVersionStage,
 };
 use dbflux_driver_aws_secrets::{AwsSecretsDriver, PARAMETER_STORE_ID, SECRETS_MANAGER_ID};
 use dbflux_test_support::containers;
@@ -1067,6 +1067,176 @@ fn secrets_manager_rotation_edits_that_would_fail_are_refused_before_the_call()
                 .rotation
                 .is_none()
         );
+
+        Ok(())
+    })
+}
+
+fn tag_pairs(details: &dbflux_core::SecretDetails) -> Vec<(String, String)> {
+    let mut pairs: Vec<(String, String)> = details
+        .tags
+        .iter()
+        .map(|tag| (tag.key.clone(), tag.value.clone()))
+        .collect();
+    pairs.sort();
+    pairs
+}
+
+fn pair(key: &str, value: &str) -> (String, String) {
+    (key.to_string(), value.to_string())
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn secrets_manager_update_tags_sets_overwrites_and_removes_without_a_new_version()
+-> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        seeder.secret_string("tagged", "value");
+        seeder.tag_secret("tagged", "team", "payments");
+        seeder.tag_secret("tagged", "env", "prod");
+
+        let connection = connect(&endpoint)?;
+        let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
+
+        secrets.update_tags(
+            &SecretTagsUpdate::new("tagged")
+                .set("env", "staging")
+                .set("owner", "")
+                .remove("team"),
+        )?;
+
+        let details = secrets.describe("tagged")?;
+        assert_eq!(
+            tag_pairs(&details),
+            vec![pair("env", "staging"), pair("owner", "")]
+        );
+        assert_eq!(details.version_count, Some(1));
+        assert_eq!(text(&secrets.get_value("tagged", None)?), "value");
+
+        let error = secrets
+            .update_tags(&SecretTagsUpdate::new("tagged").set("aws:env", "x"))
+            .expect_err("a reserved key is refused before the call");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+        assert!(matches!(
+            secrets.update_tags(&SecretTagsUpdate::new("missing").set("a", "b")),
+            Err(DbError::ObjectNotFound(_))
+        ));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn secrets_manager_update_description_changes_only_the_description() -> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        seeder.secret_string("described-alone", "value");
+
+        let connection = connect(&endpoint)?;
+        let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
+        let before = secrets.describe("described-alone")?;
+
+        let change = secrets.update_description(&SecretDescriptionUpdate::new(
+            "described-alone",
+            "Payments API credentials",
+        ))?;
+
+        assert!(change.version.is_none(), "no version is written");
+        let after = secrets.describe("described-alone")?;
+        assert_eq!(
+            after.summary.description.as_deref(),
+            Some("Payments API credentials")
+        );
+        assert_eq!(after.version_count, before.version_count);
+        assert_eq!(after.summary.version, before.summary.version);
+        assert_eq!(after.encryption_key, before.encryption_key);
+        assert_eq!(text(&secrets.get_value("described-alone", None)?), "value");
+        assert_eq!(secrets.list_versions("described-alone")?.len(), 1);
+
+        let error = secrets
+            .update_description(&SecretDescriptionUpdate::new(
+                "described-alone",
+                "d".repeat(2049),
+            ))
+            .expect_err("longer than the service takes");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn parameter_store_update_tags_sets_overwrites_and_removes() -> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        seeder.parameter("/app/tagged", "value", ParameterType::String);
+        seeder.tag_parameter("/app/tagged", "app", "shop");
+        seeder.tag_parameter("/app/tagged", "env", "prod");
+
+        let connection = connect(&endpoint)?;
+        let parameters = store(connection.as_ref(), PARAMETER_STORE_ID);
+
+        parameters.update_tags(
+            &SecretTagsUpdate::new("/app/tagged")
+                .set("env", "staging")
+                .set("owner", "platform")
+                .remove("app"),
+        )?;
+
+        let details = parameters.describe("/app/tagged")?;
+        assert_eq!(
+            tag_pairs(&details),
+            vec![pair("env", "staging"), pair("owner", "platform")]
+        );
+        assert_eq!(details.summary.version.as_deref(), Some("1"));
+        assert!(matches!(
+            parameters.update_tags(&SecretTagsUpdate::new("/app/missing").set("a", "b")),
+            Err(DbError::ObjectNotFound(_))
+        ));
+
+        Ok(())
+    })
+}
+
+/// LocalStack's `DescribeParameters` does not report a parameter's tier, and
+/// a description change rewrites the value, so it refuses to guess the tier
+/// and writes nothing. AWS reports the tier, so on AWS this change goes
+/// through (it is covered by the fake store and by unit tests here; the
+/// live write is for real AWS). This test pins the fail-closed behavior.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn parameter_store_update_description_refuses_without_a_reported_tier_and_writes_nothing()
+-> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        seeder.parameter("/app/described", "the-value", ParameterType::String);
+        seeder.parameter("/app/vault", "the-secret", ParameterType::SecureString);
+
+        let connection = connect(&endpoint)?;
+        let parameters = store(connection.as_ref(), PARAMETER_STORE_ID);
+
+        for name in ["/app/described", "/app/vault"] {
+            let error = parameters
+                .update_description(&SecretDescriptionUpdate::new(name, "A description"))
+                .expect_err("the tier is not reported, so the rewrite is refused");
+            assert!(error.to_string().contains("tier"), "{name}: {error}");
+
+            let after = parameters.describe(name)?;
+            assert_eq!(after.summary.version.as_deref(), Some("1"), "{name}");
+            assert!(after.summary.description.is_none(), "{name}");
+        }
+        assert_eq!(
+            text(&parameters.get_value("/app/vault", None)?),
+            "the-secret"
+        );
+
+        let error = parameters
+            .update_description(&SecretDescriptionUpdate::new("/app/described", ""))
+            .expect_err("a description is not cleared by a rewrite");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
 
         Ok(())
     })

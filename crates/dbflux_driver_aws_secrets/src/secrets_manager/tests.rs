@@ -550,3 +550,25 @@ fn rotating_now_needs_rotation_enabled_with_a_function() {
     let error = ensure_rotatable(Some(true), None, "prod/api").expect_err("no function");
     assert!(error.to_string().contains("rotation function"), "{error}");
 }
+
+#[test]
+fn tags_become_secrets_manager_tags_keeping_empty_values() {
+    let built = sdk_tags(&[SecretTag::new("env", "prod"), SecretTag::new("owner", "")]);
+
+    assert_eq!(built.len(), 2);
+    assert_eq!(built[0].key(), Some("env"));
+    assert_eq!(built[0].value(), Some("prod"));
+    assert_eq!(built[1].key(), Some("owner"));
+    assert_eq!(built[1].value(), Some(""));
+}
+
+#[test]
+fn a_description_longer_than_two_thousand_forty_eight_characters_is_refused() {
+    ensure_description_fits(&"d".repeat(2048), "prod/api").expect("2048 fit");
+    ensure_description_fits("", "prod/api").expect("clearing is a description");
+
+    let error = ensure_description_fits(&"d".repeat(2049), "prod/api").expect_err("2049 do not");
+
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    assert!(error.to_string().contains("prod/api"), "{error}");
+}

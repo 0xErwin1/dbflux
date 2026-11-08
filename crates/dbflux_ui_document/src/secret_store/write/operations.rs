@@ -4,8 +4,9 @@
 //! once and scrubbed the same way a put is.
 
 use dbflux_core::{
-    SecretDeleteRequest, SecretDeletion, SecretRollback, SecretRollbackRequest,
-    SecretRotationStart, SecretRotationUpdate, SecretStoreCapabilities,
+    SecretDeleteRequest, SecretDeletion, SecretDescriptionChange, SecretDescriptionUpdate,
+    SecretRollback, SecretRollbackRequest, SecretRotationStart, SecretRotationUpdate,
+    SecretStoreCapabilities, SecretTagsUpdate,
 };
 
 use dbflux_core::DbError;
@@ -251,6 +252,100 @@ pub fn update_secret_rotation(
             details,
             call: Box::new(|store| store.update_rotation(update)),
             landed: Box::new(|_: &()| serde_json::Map::new()),
+        },
+    )
+}
+
+/// Applies a tag edit through the governed path: classification `Write`,
+/// capabilities `WRITE` and `TAGS`. Keys and values are validated against
+/// the services' limits before any call. The audit event records the keys
+/// set and removed, never the values.
+///
+/// # Errors
+///
+/// A [`SecretWriteFailure`]: a refusal before any store call (policy,
+/// capability, or a tag the service would reject), the store's failure, or
+/// the audit failure after an edit that landed.
+#[allow(clippy::result_large_err)] // `DbError` is the crate's error type
+pub fn update_secret_tags(
+    context: &WriteContext<'_>,
+    update: &SecretTagsUpdate,
+) -> Result<(), SecretWriteFailure> {
+    let mut details = serde_json::Map::new();
+    details.insert(
+        "set_keys".to_string(),
+        serde_json::Value::from(
+            update
+                .set
+                .iter()
+                .map(|tag| tag.key.clone())
+                .collect::<Vec<_>>(),
+        ),
+    );
+    details.insert(
+        "removed_keys".to_string(),
+        serde_json::Value::from(update.remove.clone()),
+    );
+
+    govern(
+        context,
+        Attempt {
+            operation: SecretOperation::EditTags,
+            name: &update.name,
+            invalid: update
+                .validate()
+                .err()
+                .map(|error| ("invalid_request", error)),
+            submitted: None,
+            details,
+            call: Box::new(|store| store.update_tags(update)),
+            landed: Box::new(|_: &()| serde_json::Map::new()),
+        },
+    )
+}
+
+/// Changes a description through the governed path: classification
+/// `Write`, capabilities `WRITE` and `DESCRIPTION`. A store that changes it
+/// only by writing the value again creates a version, and the audit event
+/// names it, so the extra version is never a surprise in the trail. The
+/// description text is not recorded.
+///
+/// # Errors
+///
+/// A [`SecretWriteFailure`]: a refusal before any store call (policy or
+/// capability), the store's failure (including a store that cannot keep the
+/// value, type and key intact), or the audit failure after a change that
+/// landed.
+#[allow(clippy::result_large_err)] // `DbError` is the crate's error type
+pub fn update_secret_description(
+    context: &WriteContext<'_>,
+    update: &SecretDescriptionUpdate,
+) -> Result<SecretDescriptionChange, SecretWriteFailure> {
+    let mut details = serde_json::Map::new();
+    details.insert(
+        "cleared".to_string(),
+        serde_json::Value::Bool(update.description.is_empty()),
+    );
+
+    govern(
+        context,
+        Attempt {
+            operation: SecretOperation::EditDescription,
+            name: &update.name,
+            invalid: None,
+            submitted: None,
+            details,
+            call: Box::new(|store| store.update_description(update)),
+            landed: Box::new(|change: &SecretDescriptionChange| {
+                let mut fields = serde_json::Map::new();
+                if let Some(version) = &change.version {
+                    fields.insert(
+                        "version".to_string(),
+                        serde_json::Value::String(version.clone()),
+                    );
+                }
+                fields
+            }),
         },
     )
 }

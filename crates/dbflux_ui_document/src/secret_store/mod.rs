@@ -31,7 +31,7 @@ pub use write::{
     SECRET_VALUE_WRITTEN_ACTION, SECRET_WRITE_CLASSIFICATION, SecretOperation, SecretWriteFailure,
     SecretWriteFailureKind, SecretWriteOutcome, WriteContext, WriteTarget, delete_secret,
     put_secret_value, restore_secret, roll_back_secret, rotate_secret_now, secret_write_event,
-    update_secret_rotation,
+    update_secret_description, update_secret_rotation, update_secret_tags,
 };
 
 use super::handle::DocumentEvent;

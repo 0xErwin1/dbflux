@@ -8,11 +8,11 @@ use aws_sdk_secretsmanager::types::{
 use aws_smithy_types::DateTime as SmithyDateTime;
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
-    DbError, FormattedError, SecretDeleteRequest, SecretDeletion, SecretDetails, SecretListPage,
-    SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
-    SecretRotation, SecretRotationStart, SecretRotationUpdate, SecretStoreCapabilities,
-    SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag, SecretValue,
-    SecretVersionInfo, SecretVersionStage,
+    DbError, FormattedError, SecretDeleteRequest, SecretDeletion, SecretDescriptionChange,
+    SecretDescriptionUpdate, SecretDetails, SecretListPage, SecretListRequest, SecretPayload,
+    SecretPutRequest, SecretRollback, SecretRollbackRequest, SecretRotation, SecretRotationStart,
+    SecretRotationUpdate, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
+    SecretSummary, SecretTag, SecretTagsUpdate, SecretValue, SecretVersionInfo, SecretVersionStage,
 };
 
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
@@ -141,7 +141,9 @@ impl SecretsManagerStore {
                     | SecretStoreCapabilities::ROTATION
                     | SecretStoreCapabilities::SOFT_DELETE
                     | SecretStoreCapabilities::WRITE
-                    | SecretStoreCapabilities::DELETE,
+                    | SecretStoreCapabilities::DELETE
+                    | SecretStoreCapabilities::TAGS
+                    | SecretStoreCapabilities::DESCRIPTION,
             ),
         }
     }
@@ -614,6 +616,87 @@ impl SecretStoreSource for SecretsManagerStore {
         Ok(())
     }
 
+    /// `TagResource` for the tags to set (it overwrites a key that exists)
+    /// and `UntagResource` for the keys to remove. Neither touches the value
+    /// or any version. A secret another service owns is refused. The two
+    /// calls are separate, so a removal that fails after the tags were set
+    /// says so.
+    fn update_tags(&self, update: &SecretTagsUpdate) -> Result<(), DbError> {
+        self.descriptor.ensure_can(
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::TAGS,
+            "edit the tags of",
+            &update.name,
+        )?;
+        update.validate()?;
+
+        self.describe_unmanaged(&update.name)?;
+
+        if !update.set.is_empty() {
+            runtime()
+                .block_on(
+                    self.client
+                        .tag_resource()
+                        .secret_id(&update.name)
+                        .set_tags(Some(sdk_tags(&update.set)))
+                        .send(),
+                )
+                .map_err(|error| self.operation_error(&error, Some(&update.name)))?;
+        }
+
+        if !update.remove.is_empty() {
+            runtime()
+                .block_on(
+                    self.client
+                        .untag_resource()
+                        .secret_id(&update.name)
+                        .set_tag_keys(Some(update.remove.clone()))
+                        .send(),
+                )
+                .map_err(|error| {
+                    let error = self.operation_error(&error, Some(&update.name));
+                    if update.set.is_empty() {
+                        error
+                    } else {
+                        DbError::query_failed(format!(
+                            "The tags of \"{}\" were set, but removing the others failed: {error}",
+                            update.name
+                        ))
+                    }
+                })?;
+        }
+
+        Ok(())
+    }
+
+    /// `UpdateSecret` with the description and nothing else: no secret
+    /// value and no KMS key are sent, so the call creates no version and
+    /// changes nothing about how the value is protected.
+    fn update_description(
+        &self,
+        update: &SecretDescriptionUpdate,
+    ) -> Result<SecretDescriptionChange, DbError> {
+        self.descriptor.ensure_can(
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::DESCRIPTION,
+            "edit the description of",
+            &update.name,
+        )?;
+        ensure_description_fits(&update.description, &update.name)?;
+
+        self.describe_unmanaged(&update.name)?;
+
+        runtime()
+            .block_on(
+                self.client
+                    .update_secret()
+                    .secret_id(&update.name)
+                    .description(&update.description)
+                    .send(),
+            )
+            .map_err(|error| self.operation_error(&error, Some(&update.name)))?;
+
+        Ok(SecretDescriptionChange::default())
+    }
+
     /// One `RestoreSecret` call, which cancels a scheduled deletion. A
     /// secret another service owns is refused; one that is not scheduled
     /// for deletion is rejected by the service itself.
@@ -653,6 +736,29 @@ pub(crate) fn deletion_window(request: &SecretDeleteRequest) -> Result<i64, DbEr
              without recovery."
         ))),
     }
+}
+
+/// The tags of a request as the Secrets Manager SDK takes them. An empty
+/// value is kept: a tag with no value is a valid tag.
+pub(crate) fn sdk_tags(tags: &[SecretTag]) -> Vec<Tag> {
+    tags.iter()
+        .map(|tag| Tag::builder().key(&tag.key).value(&tag.value).build())
+        .collect()
+}
+
+/// Most characters a secret description holds.
+const MAX_DESCRIPTION_CHARACTERS: usize = 2048;
+
+/// Refuses a description the service would reject. An empty one is valid
+/// and clears the description.
+pub(crate) fn ensure_description_fits(description: &str, name: &str) -> Result<(), DbError> {
+    if description.chars().count() > MAX_DESCRIPTION_CHARACTERS {
+        return Err(DbError::constraint_violation(format!(
+            "The description of \"{name}\" is longer than {MAX_DESCRIPTION_CHARACTERS} characters."
+        )));
+    }
+
+    Ok(())
 }
 
 /// What a rotation edit sends.

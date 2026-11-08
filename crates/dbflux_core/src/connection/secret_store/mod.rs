@@ -26,10 +26,11 @@ use crate::DbError;
 mod operations;
 
 pub use operations::{
-    DEFAULT_RECOVERY_WINDOW_DAYS, MAX_RECOVERY_WINDOW_DAYS, MIN_RECOVERY_WINDOW_DAYS,
-    SecretDeleteRequest, SecretDeletion, SecretRollback, SecretRollbackRequest,
-    SecretRotationStart, SecretRotationUpdate, validate_rotation_function,
-    validate_rotation_schedule, validate_rotation_window,
+    DEFAULT_RECOVERY_WINDOW_DAYS, MAX_RECOVERY_WINDOW_DAYS, MAX_TAGS, MIN_RECOVERY_WINDOW_DAYS,
+    SecretDeleteRequest, SecretDeletion, SecretDescriptionChange, SecretDescriptionUpdate,
+    SecretRollback, SecretRollbackRequest, SecretRotationStart, SecretRotationUpdate,
+    SecretTagsUpdate, validate_rotation_function, validate_rotation_schedule,
+    validate_rotation_window, validate_tag,
 };
 
 bitflags! {
@@ -68,6 +69,14 @@ bitflags! {
         /// window and can be restored; without it the deletion is
         /// irreversible and needs the secret's exact name as confirmation.
         const DELETE = 1 << 7;
+
+        /// Tags can be added, changed and removed through
+        /// `SecretStoreSource::update_tags`.
+        const TAGS = 1 << 8;
+
+        /// The description can be changed through
+        /// `SecretStoreSource::update_description`.
+        const DESCRIPTION = 1 << 9;
     }
 }
 
@@ -601,6 +610,25 @@ pub trait SecretStoreSource: Send + Sync {
     /// advertising `ROTATION` and `WRITE` implement it; the default refuses.
     fn update_rotation(&self, update: &SecretRotationUpdate) -> Result<(), DbError> {
         refuse_unimplemented(self.descriptor(), "editing rotation", &update.name)
+    }
+
+    /// Adds, changes and removes tags without touching the value or any
+    /// version. Stores advertising `TAGS` and `WRITE` implement it; the
+    /// default refuses.
+    fn update_tags(&self, update: &SecretTagsUpdate) -> Result<(), DbError> {
+        refuse_unimplemented(self.descriptor(), "editing tags", &update.name)
+    }
+
+    /// Changes the description. A store that changes it alone leaves the
+    /// versions as they are; a store that can only change it by writing the
+    /// value again must keep the value, type and key exactly as they are and
+    /// report the version it created, or refuse. Stores advertising
+    /// `DESCRIPTION` and `WRITE` implement it; the default refuses.
+    fn update_description(
+        &self,
+        update: &SecretDescriptionUpdate,
+    ) -> Result<SecretDescriptionChange, DbError> {
+        refuse_unimplemented(self.descriptor(), "editing descriptions", &update.name)
     }
 }
 

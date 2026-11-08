@@ -35,6 +35,8 @@ pub enum FakeSecretMutation {
     Restore { name: String },
     RotateNow { name: String },
     UpdateRotation(SecretRotationUpdate),
+    UpdateTags(SecretTagsUpdate),
+    UpdateDescription(SecretDescriptionUpdate),
 }
 
 /// Id of the fake flat store, shaped like AWS Secrets Manager.
@@ -604,6 +606,145 @@ impl SecretStoreSource for FakeSecretStore {
         self.accept_mutation(mutation);
         Ok(())
     }
+    /// Applies a tag edit: removals first, then each tag set overwrites the
+    /// value of an existing key in place or is appended, and the secret may
+    /// not end up with more than [`MAX_TAGS`] tags. No version is touched.
+    fn update_tags(&self, update: &SecretTagsUpdate) -> Result<(), DbError> {
+        let mutation = FakeSecretMutation::UpdateTags(update.clone());
+        self.begin_mutation(
+            mutation.clone(),
+            &update.name,
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::TAGS,
+            "edit the tags of",
+        )?;
+        update.validate()?;
+
+        {
+            let mut stored = rwlock_write(&self.secrets);
+            let secret = find_mut(&mut stored, &update.name, self.noun())?;
+            if !self.hierarchical() {
+                refuse_unwritable(secret, &update.name)?;
+            }
+
+            let mut tags = secret.details.tags.clone();
+            tags.retain(|tag| !update.remove.contains(&tag.key));
+            for tag in &update.set {
+                match tags.iter_mut().find(|existing| existing.key == tag.key) {
+                    Some(existing) => existing.value = tag.value.clone(),
+                    None => tags.push(tag.clone()),
+                }
+            }
+            if tags.len() > MAX_TAGS {
+                return Err(DbError::constraint_violation(format!(
+                    "{} {} would carry {} tags; at most {MAX_TAGS} are allowed",
+                    self.noun(),
+                    update.name,
+                    tags.len()
+                )));
+            }
+
+            secret.details.tags = tags;
+        }
+
+        self.accept_mutation(mutation);
+        Ok(())
+    }
+
+    /// A flat store changes the description alone. A hierarchical store can
+    /// only change it by writing the value again, so the fake does the same
+    /// the real driver does: it reads the current value (failing closed when
+    /// the read is denied or unavailable) and writes it back as the next
+    /// version with the new description, leaving the type, key and data type
+    /// as they are.
+    fn update_description(
+        &self,
+        update: &SecretDescriptionUpdate,
+    ) -> Result<SecretDescriptionChange, DbError> {
+        let mutation = FakeSecretMutation::UpdateDescription(update.clone());
+        self.begin_mutation(
+            mutation.clone(),
+            &update.name,
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::DESCRIPTION,
+            "edit the description of",
+        )?;
+
+        let limit = if self.hierarchical() { 1024 } else { 2048 };
+        if update.description.chars().count() > limit {
+            return Err(DbError::constraint_violation(format!(
+                "The description of {} is longer than {limit} characters",
+                update.name
+            )));
+        }
+        if self.hierarchical() && update.description.is_empty() {
+            return Err(DbError::constraint_violation(format!(
+                "The description of {} cannot be cleared; write a replacement text instead",
+                update.name
+            )));
+        }
+        let description = Some(update.description.clone()).filter(|text| !text.is_empty());
+
+        let version = {
+            let mut stored = rwlock_write(&self.secrets);
+            let secret = find_mut(&mut stored, &update.name, self.noun())?;
+
+            if self.hierarchical() {
+                Some(rewrite_with_description(secret, &update.name, description)?)
+            } else {
+                refuse_unwritable(secret, &update.name)?;
+                secret.details.summary.description = description;
+                None
+            }
+        };
+
+        self.accept_mutation(mutation);
+        Ok(SecretDescriptionChange { version })
+    }
+}
+
+/// The hierarchical store's description change: the next numbered version
+/// carries the current value again.
+fn rewrite_with_description(
+    secret: &mut FakeSecret,
+    name: &str,
+    description: Option<String>,
+) -> Result<String, DbError> {
+    if let Some(failure) = &secret.read_failure {
+        return Err(match failure {
+            FakeSecretReadFailure::Denied(message) => DbError::permission_denied(*message),
+            FakeSecretReadFailure::Unavailable(message) => DbError::query_failed(*message),
+        });
+    }
+
+    let current =
+        secret.details.summary.version.clone().ok_or_else(|| {
+            DbError::query_failed(format!("Parameter {name} has no current version"))
+        })?;
+    let payload = secret
+        .versions
+        .iter()
+        .find(|(id, _)| *id == current)
+        .map(|(_, payload)| payload.clone())
+        .ok_or_else(|| DbError::query_failed(format!("Parameter {name} has no current value")))?;
+    let next = current
+        .parse::<u64>()
+        .map_err(|_| DbError::query_failed(format!("Parameter {name} has no numbered version")))?
+        .wrapping_add(1)
+        .to_string();
+
+    secret.versions.push((next.clone(), payload));
+    secret.history.insert(
+        0,
+        SecretVersionInfo {
+            modified_by: Some(FAKE_WRITER.to_string()),
+            ..written_version(&next, Vec::new())
+        },
+    );
+    secret.details.summary.version = Some(next.clone());
+    secret.details.summary.description = description;
+    secret.details.summary.last_changed = fake_now();
+    secret.details.last_changed_by = Some(FAKE_WRITER.to_string());
+
+    Ok(next)
 }
 
 /// When the next rotation falls after `from`, for the schedules the fake
@@ -668,6 +809,15 @@ fn refuse_unwritable(secret: &FakeSecret, name: &str) -> Result<(), DbError> {
 }
 
 impl FakeSecretStore {
+    /// What the store's entries are called in its not-found answers.
+    fn noun(&self) -> &'static str {
+        if self.hierarchical() {
+            "Parameter"
+        } else {
+            "Secret"
+        }
+    }
+
     /// Marks a secret pending deletion `days` after the fake clock.
     fn schedule_deletion(&self, name: &str, days: u32) -> Result<SecretDeletion, DbError> {
         let mut stored = rwlock_write(&self.secrets);
@@ -1023,7 +1173,9 @@ pub(super) fn fake_secret_stores(state: &Arc<FakeDriverState>) -> Vec<FakeSecret
                     | SecretStoreCapabilities::ROTATION
                     | SecretStoreCapabilities::SOFT_DELETE
                     | SecretStoreCapabilities::WRITE
-                    | SecretStoreCapabilities::DELETE,
+                    | SecretStoreCapabilities::DELETE
+                    | SecretStoreCapabilities::TAGS
+                    | SecretStoreCapabilities::DESCRIPTION,
             ),
             secrets: RwLock::new(fake_flat_secrets().into_iter().map(label_current).collect()),
             default_page_size: 4,
@@ -1038,7 +1190,9 @@ pub(super) fn fake_secret_stores(state: &Arc<FakeDriverState>) -> Vec<FakeSecret
                     | SecretStoreCapabilities::HIERARCHICAL
                     | SecretStoreCapabilities::TYPED_VALUES
                     | SecretStoreCapabilities::WRITE
-                    | SecretStoreCapabilities::DELETE,
+                    | SecretStoreCapabilities::DELETE
+                    | SecretStoreCapabilities::TAGS
+                    | SecretStoreCapabilities::DESCRIPTION,
             ),
             secrets: RwLock::new(fake_parameters()),
             default_page_size: 2,

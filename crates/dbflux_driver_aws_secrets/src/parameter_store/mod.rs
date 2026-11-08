@@ -2,15 +2,15 @@ mod hierarchy;
 
 use aws_sdk_ssm::Client;
 use aws_sdk_ssm::types::{
-    ParameterHistory, ParameterMetadata, ParameterStringFilter, ParameterType,
+    ParameterHistory, ParameterMetadata, ParameterStringFilter, ParameterTier, ParameterType,
     ResourceTypeForTagging,
 };
-use dbflux_core::secrecy::ExposeSecret;
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    DbError, FormattedError, SecretDeleteRequest, SecretDeletion, SecretDetails, SecretListPage,
-    SecretListRequest, SecretPayload, SecretPutRequest, SecretStoreCapabilities,
-    SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag, SecretValue,
-    SecretVersionInfo, SecretVersionStage,
+    DbError, FormattedError, SecretDeleteRequest, SecretDeletion, SecretDescriptionChange,
+    SecretDescriptionUpdate, SecretDetails, SecretListPage, SecretListRequest, SecretPayload,
+    SecretPutRequest, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
+    SecretSummary, SecretTag, SecretTagsUpdate, SecretValue, SecretVersionInfo, SecretVersionStage,
 };
 
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
@@ -45,7 +45,9 @@ impl ParameterStore {
                     | SecretStoreCapabilities::HIERARCHICAL
                     | SecretStoreCapabilities::TYPED_VALUES
                     | SecretStoreCapabilities::WRITE
-                    | SecretStoreCapabilities::DELETE,
+                    | SecretStoreCapabilities::DELETE
+                    | SecretStoreCapabilities::TAGS
+                    | SecretStoreCapabilities::DESCRIPTION,
             ),
         }
     }
@@ -344,6 +346,265 @@ impl SecretStoreSource for ParameterStore {
 
         Ok(SecretDeletion::default())
     }
+
+    /// `AddTagsToResource` for the tags to set (it overwrites a key that
+    /// exists) and `RemoveTagsFromResource` for the keys to remove. Neither
+    /// touches the value or any version. The calls are separate, so a
+    /// removal that fails after the tags were set says so.
+    fn update_tags(&self, update: &SecretTagsUpdate) -> Result<(), DbError> {
+        self.descriptor.ensure_can(
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::TAGS,
+            "edit the tags of",
+            &update.name,
+        )?;
+        update.validate()?;
+
+        // The service answers an unknown parameter itself, but only after
+        // the tags of a different one could have been named; asking first
+        // keeps the answer the same `ParameterNotFound` a read gives.
+        self.describe_metadata(&update.name)?;
+
+        if !update.set.is_empty() {
+            runtime()
+                .block_on(
+                    self.client
+                        .add_tags_to_resource()
+                        .resource_type(ResourceTypeForTagging::Parameter)
+                        .resource_id(&update.name)
+                        .set_tags(Some(ssm_tags(&update.set)?))
+                        .send(),
+                )
+                .map_err(|error| self.operation_error(&error, Some(&update.name)))?;
+        }
+
+        if !update.remove.is_empty() {
+            runtime()
+                .block_on(
+                    self.client
+                        .remove_tags_from_resource()
+                        .resource_type(ResourceTypeForTagging::Parameter)
+                        .resource_id(&update.name)
+                        .set_tag_keys(Some(update.remove.clone()))
+                        .send(),
+                )
+                .map_err(|error| {
+                    let error = self.operation_error(&error, Some(&update.name));
+                    if update.set.is_empty() {
+                        error
+                    } else {
+                        DbError::query_failed(format!(
+                            "The tags of \"{}\" were set, but removing the others failed: {error}",
+                            update.name
+                        ))
+                    }
+                })?;
+        }
+
+        Ok(())
+    }
+
+    /// A parameter's description can only be changed by `PutParameter` with
+    /// `Overwrite`, which writes the value and creates a version. This
+    /// method does that as a value-preserving write, and refuses whenever it
+    /// cannot prove it preserves everything:
+    ///
+    /// - the metadata is read first and [`plan_description_write`] re-sends
+    ///   the existing type, data type, tier, KMS key and allowed pattern
+    ///   explicitly, and refuses a parameter whose type, data type, tier or
+    ///   `SecureString` key is not reported, or that has policies;
+    /// - the current value is read with decryption (a denied `kms:Decrypt`
+    ///   fails the whole change before anything is written), and the change
+    ///   is refused when its version is not the one the metadata described;
+    /// - after the write, the new version must be the very next one, or the
+    ///   error says another version landed in between and points to the
+    ///   history, where the earlier values are still readable.
+    ///
+    /// `PutParameter` has no compare-and-swap, so a value written between the
+    /// read and the write is replaced by the value that was read; the
+    /// version check after the write detects that and the history keeps it.
+    fn update_description(
+        &self,
+        update: &SecretDescriptionUpdate,
+    ) -> Result<SecretDescriptionChange, DbError> {
+        self.descriptor.ensure_can(
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::DESCRIPTION,
+            "edit the description of",
+            &update.name,
+        )?;
+
+        let metadata = self.describe_metadata(&update.name)?;
+        let plan = plan_description_write(&metadata, &update.name, &update.description)?;
+
+        let read = runtime()
+            .block_on(
+                self.client
+                    .get_parameter()
+                    .name(&update.name)
+                    .with_decryption(true)
+                    .send(),
+            )
+            .map_err(|error| self.operation_error(&error, Some(&update.name)))?;
+        let parameter = read.parameter.ok_or_else(|| {
+            DbError::query_failed(format!(
+                "Parameter Store returned no parameter for \"{}\"",
+                update.name
+            ))
+        })?;
+        ensure_unchanged_while_reading(plan.read_version, parameter.version, &update.name)?;
+        let value = SecretString::from(parameter.value.ok_or_else(|| {
+            DbError::query_failed(format!(
+                "Parameter Store returned no value for \"{}\"",
+                update.name
+            ))
+        })?);
+
+        let mut fluent = self
+            .client
+            .put_parameter()
+            .name(&update.name)
+            .value(value.expose_secret())
+            .overwrite(true)
+            .r#type(plan.parameter_type)
+            .data_type(plan.data_type)
+            .tier(plan.tier)
+            .description(plan.description)
+            .set_allowed_pattern(plan.allowed_pattern);
+
+        if let Some(key_id) = plan.key_id {
+            fluent = fluent.key_id(key_id);
+        }
+
+        let payload = SecretPayload::Text(value);
+        let output = runtime().block_on(fluent.send()).map_err(|error| {
+            // The service may echo the re-sent value in its own message; the
+            // error never carries it onward.
+            scrub_submitted_value(self.operation_error(&error, Some(&update.name)), &payload)
+        })?;
+
+        ensure_written_after(plan.read_version, output.version(), &update.name)?;
+
+        Ok(SecretDescriptionChange {
+            version: Some(output.version().to_string()),
+        })
+    }
+}
+
+/// Most characters a parameter description holds.
+const MAX_DESCRIPTION_CHARACTERS: usize = 1024;
+
+/// What a value-preserving description write sends: the new description and
+/// everything the parameter already has, so the write changes nothing but
+/// the description and the version number.
+#[derive(Debug)]
+pub(crate) struct DescriptionWritePlan {
+    pub description: String,
+    pub parameter_type: ParameterType,
+    pub data_type: String,
+    pub tier: ParameterTier,
+    pub key_id: Option<String>,
+    pub allowed_pattern: Option<String>,
+
+    /// The version the metadata describes, which the value read and the
+    /// version written are checked against.
+    pub read_version: i64,
+}
+
+/// Decides a description write from the parameter's metadata, refusing
+/// before any value is read what it could not preserve: a description past
+/// the limit, an empty one (a rewrite cannot clear a description, so the
+/// change is not offered), a parameter with policies, and one whose type,
+/// data type, tier or `SecureString` key is not reported.
+pub(crate) fn plan_description_write(
+    metadata: &ParameterMetadata,
+    name: &str,
+    description: &str,
+) -> Result<DescriptionWritePlan, DbError> {
+    if description.chars().count() > MAX_DESCRIPTION_CHARACTERS {
+        return Err(DbError::constraint_violation(format!(
+            "The description of \"{name}\" is longer than {MAX_DESCRIPTION_CHARACTERS} characters."
+        )));
+    }
+    if description.is_empty() {
+        return Err(DbError::constraint_violation(format!(
+            "The description of \"{name}\" cannot be cleared; write a replacement text instead."
+        )));
+    }
+    if !metadata.policies().is_empty() {
+        return Err(DbError::query_failed(format!(
+            "Parameter \"{name}\" has policies, and rewriting it to change its description \
+             could not keep them; refused."
+        )));
+    }
+
+    let parameter_type = overwrite_type(metadata.r#type(), name)?;
+    let data_type = overwrite_data_type(metadata.data_type(), name)?;
+    let tier = metadata.tier().cloned().ok_or_else(|| {
+        DbError::query_failed(format!(
+            "Parameter Store did not report the tier of \"{name}\"; \
+             rewriting it could not send the parameter's tier explicitly."
+        ))
+    })?;
+    let key_id = if parameter_type == ParameterType::SecureString {
+        Some(existing_key_id(metadata, name)?.to_string())
+    } else {
+        None
+    };
+
+    Ok(DescriptionWritePlan {
+        description: description.to_string(),
+        parameter_type,
+        data_type,
+        tier,
+        key_id,
+        allowed_pattern: metadata.allowed_pattern().map(ToString::to_string),
+        read_version: metadata.version(),
+    })
+}
+
+/// Refuses a description write whose value was read at a different version
+/// than the metadata described: the parameter changed between the two
+/// reads, and writing the value that was read would replace a newer one.
+pub(crate) fn ensure_unchanged_while_reading(
+    described: i64,
+    read: i64,
+    name: &str,
+) -> Result<(), DbError> {
+    if described != read {
+        return Err(DbError::query_failed(format!(
+            "Parameter \"{name}\" changed while its value was being read (version {described} \
+             became {read}); nothing was written. Try again."
+        )));
+    }
+
+    Ok(())
+}
+
+/// Checks that a description write produced the very next version. Any
+/// other number means a version landed between the read and the write, so
+/// the value sent replaced a newer one; the error points to the history.
+pub(crate) fn ensure_written_after(read: i64, written: i64, name: &str) -> Result<(), DbError> {
+    if written != read + 1 {
+        return Err(DbError::query_failed(format!(
+            "Parameter \"{name}\" was rewritten as version {written}, but version {read} was the \
+             one read: another version was written in between and the value sent replaced it. \
+             Its earlier values are in the history of \"{name}\"."
+        )));
+    }
+
+    Ok(())
+}
+
+/// The tags of a request as the SSM SDK takes them.
+pub(crate) fn ssm_tags(tags: &[SecretTag]) -> Result<Vec<aws_sdk_ssm::types::Tag>, DbError> {
+    tags.iter()
+        .map(|tag| {
+            aws_sdk_ssm::types::Tag::builder()
+                .key(&tag.key)
+                .value(&tag.value)
+                .build()
+                .map_err(|error| DbError::query_failed(format!("Invalid tag: {error}")))
+        })
+        .collect()
 }
 
 /// The parameter a `DeleteParameter` call deletes, once the request is one

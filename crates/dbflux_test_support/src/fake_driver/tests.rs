@@ -1539,3 +1539,264 @@ fn a_cron_schedule_is_rescheduled_a_day_out_and_an_hourly_one_by_its_hours() {
         assert_eq!((next - last).num_hours(), hours, "{schedule}");
     }
 }
+
+// --- Tags and description ---
+
+fn tag_pairs(details: &SecretDetails) -> Vec<(String, String)> {
+    details
+        .tags
+        .iter()
+        .map(|tag| (tag.key.clone(), tag.value.clone()))
+        .collect()
+}
+
+fn pair(key: &str, value: &str) -> (String, String) {
+    (key.to_string(), value.to_string())
+}
+
+#[test]
+fn a_tag_edit_overwrites_adds_and_removes_and_touches_no_version() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    store
+        .update_tags(
+            &SecretTagsUpdate::new("prod/api/credentials")
+                .set("env", "staging")
+                .set("owner", "platform")
+                .remove("team")
+                .remove("never-there"),
+        )
+        .expect("a valid tag edit");
+
+    let details = store.describe("prod/api/credentials").expect("describe");
+    assert_eq!(
+        tag_pairs(&details),
+        vec![pair("env", "staging"), pair("owner", "platform")]
+    );
+    assert_eq!(details.version_count, Some(3));
+    assert_eq!(details.summary.version.as_deref(), Some("v-current"));
+    assert_eq!(
+        store
+            .list_versions("prod/api/credentials")
+            .expect("history")
+            .len(),
+        3
+    );
+    assert_eq!(driver.secret_store_calls().mutations.len(), 1);
+}
+
+#[test]
+fn a_tag_edit_on_a_parameter_works_the_same_way() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    store
+        .update_tags(
+            &SecretTagsUpdate::new("/app/prod/db/host")
+                .set("env", "prod")
+                .remove("app"),
+        )
+        .expect("a valid tag edit");
+
+    let details = store.describe("/app/prod/db/host").expect("describe");
+    assert_eq!(tag_pairs(&details), vec![pair("env", "prod")]);
+    assert_eq!(details.summary.version.as_deref(), Some("3"));
+}
+
+#[test]
+fn a_tag_edit_the_service_would_reject_changes_nothing() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+    let before = tag_pairs(&store.describe("prod/api/credentials").expect("describe"));
+
+    let error = store
+        .update_tags(&SecretTagsUpdate::new("prod/api/credentials").set("aws:env", "x"))
+        .expect_err("a reserved key");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+
+    // Fifty tags in total is the ceiling; the secret already has two.
+    let mut many = SecretTagsUpdate::new("prod/api/credentials");
+    for index in 0..49 {
+        many = many.set(format!("key-{index}"), "v");
+    }
+    let error = store.update_tags(&many).expect_err("too many tags overall");
+    assert!(error.to_string().contains("50"), "{error}");
+
+    for error in [
+        store
+            .update_tags(&SecretTagsUpdate::new("prod/db/master").set("a", "b"))
+            .expect_err("managed"),
+        store
+            .update_tags(&SecretTagsUpdate::new("prod/deploy/legacy-token").set("a", "b"))
+            .expect_err("pending deletion"),
+    ] {
+        assert!(
+            matches!(
+                error,
+                DbError::PermissionDenied(_) | DbError::QueryFailed(_)
+            ),
+            "{error}"
+        );
+    }
+    let error = store
+        .update_tags(&SecretTagsUpdate::new("prod/missing").set("a", "b"))
+        .expect_err("missing");
+    assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+
+    assert_eq!(
+        tag_pairs(&store.describe("prod/api/credentials").expect("describe")),
+        before
+    );
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+#[test]
+fn a_secret_description_changes_alone_and_clearing_it_empties_it() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let change = store
+        .update_description(&SecretDescriptionUpdate::new(
+            "prod/api/credentials",
+            "Payments API credentials, rotated monthly",
+        ))
+        .expect("a description edit");
+
+    assert!(change.version.is_none(), "no version is written");
+    let details = store.describe("prod/api/credentials").expect("describe");
+    assert_eq!(
+        details.summary.description.as_deref(),
+        Some("Payments API credentials, rotated monthly")
+    );
+    assert_eq!(details.version_count, Some(3));
+    assert_eq!(details.summary.version.as_deref(), Some("v-current"));
+    assert_eq!(
+        exposed_text(
+            &store
+                .get_value("prod/api/credentials", None)
+                .expect("value")
+        ),
+        format!(r#"{{"username":"api-user","password":"{FAKE_SECRET_PASSWORD}","port":5432}}"#)
+    );
+
+    store
+        .update_description(&SecretDescriptionUpdate::new("prod/api/credentials", ""))
+        .expect("clearing");
+    assert!(
+        store
+            .describe("prod/api/credentials")
+            .expect("describe")
+            .summary
+            .description
+            .is_none()
+    );
+
+    // A description is listed too.
+    assert_eq!(driver.secret_store_calls().mutations.len(), 2);
+
+    let error = store
+        .update_description(&SecretDescriptionUpdate::new(
+            "prod/api/credentials",
+            "d".repeat(2049),
+        ))
+        .expect_err("longer than the service takes");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+}
+
+#[test]
+fn a_parameter_description_is_a_value_preserving_write_that_creates_a_version() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+    let before = exposed_text(&store.get_value("/app/prod/db/host", None).expect("value"));
+
+    let change = store
+        .update_description(&SecretDescriptionUpdate::new(
+            "/app/prod/db/host",
+            "Primary database host",
+        ))
+        .expect("a value-preserving write");
+
+    assert_eq!(change.version.as_deref(), Some("4"));
+    let details = store.describe("/app/prod/db/host").expect("describe");
+    assert_eq!(
+        details.summary.description.as_deref(),
+        Some("Primary database host")
+    );
+    assert_eq!(details.summary.version.as_deref(), Some("4"));
+    assert_eq!(details.summary.value_type.as_deref(), Some("String"));
+    assert_eq!(details.data_type.as_deref(), Some("text"));
+
+    let current = store.get_value("/app/prod/db/host", None).expect("value");
+    assert_eq!(current.version.as_deref(), Some("4"));
+    assert_eq!(exposed_text(&current), before, "the value is untouched");
+
+    let versions = store.list_versions("/app/prod/db/host").expect("history");
+    assert_eq!(versions.len(), 4);
+    assert_eq!(versions[0].id, "4");
+    assert_eq!(
+        versions[0].modified_by.as_deref(),
+        Some("arn:fake:user/editor")
+    );
+
+    let calls = driver.secret_store_calls();
+    assert_eq!(calls.mutations.len(), 1);
+    assert!(
+        calls.put_attempts.is_empty(),
+        "it is not a caller-supplied value write"
+    );
+}
+
+#[test]
+fn a_parameter_description_fails_closed_when_the_value_cannot_be_read() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    let error = store
+        .update_description(&SecretDescriptionUpdate::new(
+            "/app/prod/db/password",
+            "Database password",
+        ))
+        .expect_err("a SecureString the caller may not decrypt cannot be re-sent");
+
+    assert!(matches!(error, DbError::PermissionDenied(_)), "{error}");
+    let details = store.describe("/app/prod/db/password").expect("describe");
+    assert!(details.summary.description.is_none());
+    assert_eq!(details.summary.version.as_deref(), Some("3"));
+    assert!(driver.secret_store_calls().mutations.is_empty());
+
+    let error = store
+        .update_description(&SecretDescriptionUpdate::new(
+            "/app/prod/db/host",
+            "d".repeat(1025),
+        ))
+        .expect_err("longer than the parameter store takes");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+}
+
+#[test]
+fn a_parameter_description_cannot_be_cleared() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    let error = store
+        .update_description(&SecretDescriptionUpdate::new("/app/prod/db/host", ""))
+        .expect_err("a rewrite cannot clear a description");
+
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}

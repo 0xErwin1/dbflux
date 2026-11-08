@@ -10,6 +10,8 @@
 
 use crate::DbError;
 
+use super::SecretTag;
+
 /// A request to make an earlier version of a secret the current one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretRollbackRequest {
@@ -372,4 +374,159 @@ fn parse_positive(text: &str) -> Option<u32> {
     }
 
     text.parse::<u32>().ok().filter(|value| *value > 0)
+}
+
+/// Most tags a secret can carry.
+pub const MAX_TAGS: usize = 50;
+
+/// A change to the tags of a secret: tags to add or overwrite, and keys to
+/// remove. Tags not named are left as they are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretTagsUpdate {
+    /// Full name of the secret, including any path.
+    pub name: String,
+
+    /// Tags to add, or to overwrite when the key already exists.
+    pub set: Vec<SecretTag>,
+
+    /// Keys to remove.
+    pub remove: Vec<String>,
+}
+
+impl SecretTagsUpdate {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            set: Vec::new(),
+            remove: Vec::new(),
+        }
+    }
+
+    pub fn set(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.set.push(SecretTag::new(key, value));
+        self
+    }
+
+    pub fn remove(mut self, key: impl Into<String>) -> Self {
+        self.remove.push(key.into());
+        self
+    }
+
+    /// Refuses what the service would reject, before any call: an update
+    /// that changes nothing, a key or value outside the service's limits, a
+    /// reserved `aws:` key, a key that appears twice or is both set and
+    /// removed, and more than [`MAX_TAGS`] tags to set.
+    pub fn validate(&self) -> Result<(), DbError> {
+        let refuse = |reason: String| {
+            DbError::constraint_violation(format!(
+                "The tags of \"{}\" were not changed: {reason}",
+                self.name
+            ))
+        };
+
+        if self.set.is_empty() && self.remove.is_empty() {
+            return Err(refuse(
+                "the update names no tag to set or remove.".to_string(),
+            ));
+        }
+        if self.set.len() > MAX_TAGS {
+            return Err(refuse(format!("a secret carries at most {MAX_TAGS} tags.")));
+        }
+
+        let mut seen: Vec<&str> = Vec::with_capacity(self.set.len());
+        for tag in &self.set {
+            validate_tag(&tag.key, &tag.value).map_err(refuse)?;
+
+            if seen.contains(&tag.key.as_str()) {
+                return Err(refuse(format!("the key \"{}\" is set twice.", tag.key)));
+            }
+            if self.remove.contains(&tag.key) {
+                return Err(refuse(format!(
+                    "the key \"{}\" is both set and removed.",
+                    tag.key
+                )));
+            }
+            seen.push(&tag.key);
+        }
+
+        for key in &self.remove {
+            validate_tag_key(key).map_err(refuse)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Checks a tag against the limits the services share: a key of 1 to 128
+/// characters that does not start with the reserved `aws:` prefix, a value
+/// of 0 to 256 characters, and only letters, digits, spaces and
+/// `_ . : / = + - @` in both.
+pub fn validate_tag(key: &str, value: &str) -> Result<(), String> {
+    validate_tag_key(key)?;
+
+    if value.chars().count() > 256 {
+        return Err(format!(
+            "the value of tag \"{key}\" is longer than 256 characters."
+        ));
+    }
+    if let Some(bad) = value.chars().find(|c| !is_tag_character(*c)) {
+        return Err(format!(
+            "the value of tag \"{key}\" contains {bad:?}, which tags do not allow."
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_tag_key(key: &str) -> Result<(), String> {
+    let length = key.chars().count();
+
+    if length == 0 || length > 128 {
+        return Err(format!(
+            "the tag key \"{key}\" must be 1 to 128 characters, not {length}."
+        ));
+    }
+    if key.to_ascii_lowercase().starts_with("aws:") {
+        return Err(format!(
+            "the tag key \"{key}\" uses the reserved prefix \"aws:\"."
+        ));
+    }
+    if let Some(bad) = key.chars().find(|c| !is_tag_character(*c)) {
+        return Err(format!(
+            "the tag key \"{key}\" contains {bad:?}, which tags do not allow."
+        ));
+    }
+
+    Ok(())
+}
+
+fn is_tag_character(c: char) -> bool {
+    c.is_alphanumeric() || c == ' ' || "_.:/=+-@".contains(c)
+}
+
+/// A new description for a secret. An empty description clears it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretDescriptionUpdate {
+    /// Full name of the secret, including any path.
+    pub name: String,
+
+    pub description: String,
+}
+
+impl SecretDescriptionUpdate {
+    pub fn new(name: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+        }
+    }
+}
+
+/// What a description change did to the secret's versions.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecretDescriptionChange {
+    /// The version the change created, for a store that can change a
+    /// description only by writing the value again, and `None` for one that
+    /// changes it alone.
+    pub version: Option<String>,
 }

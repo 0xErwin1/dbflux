@@ -7,9 +7,9 @@ use dbflux_core::{
 
 use super::hierarchy::{group_level, normalize_path, path_filter_value};
 use super::{
-    ParameterStore, confirmed_deletion_name, existing_key_id, find_parameter_on_pages,
-    list_versions_on_pages,
-    overwrite_type, page_versions, put_parameter_call, put_text, sort_newest_first,
+    ParameterStore, confirmed_deletion_name, ensure_unchanged_while_reading, ensure_written_after,
+    existing_key_id, find_parameter_on_pages, list_versions_on_pages, overwrite_type, page_versions,
+    plan_description_write, put_parameter_call, put_text, sort_newest_first, ssm_tags,
 };
 use crate::driver::AwsSecretsProfileConfig;
 
@@ -541,5 +541,149 @@ fn a_parameter_has_no_recovery_window_to_schedule() {
         .expect_err("Parameter Store deletes at once");
 
     assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+    assert!(error.to_string().contains("/app/prod/db/host"), "{error}");
+}
+
+fn described_parameter() -> aws_sdk_ssm::types::builders::ParameterMetadataBuilder {
+    ParameterMetadata::builder()
+        .name("/app/prod/db/host")
+        .r#type(ParameterType::String)
+        .data_type("text")
+        .tier(aws_sdk_ssm::types::ParameterTier::Standard)
+        .version(3)
+}
+
+#[test]
+fn a_description_write_re_sends_everything_the_parameter_has() {
+    let metadata = described_parameter().allowed_pattern("^[a-z.]+$").build();
+
+    let plan = plan_description_write(&metadata, "/app/prod/db/host", "Primary host")
+        .expect("a plain String can be rewritten");
+
+    assert_eq!(plan.description, "Primary host");
+    assert_eq!(plan.parameter_type, ParameterType::String);
+    assert_eq!(plan.data_type, "text");
+    assert_eq!(plan.tier, aws_sdk_ssm::types::ParameterTier::Standard);
+    assert_eq!(plan.allowed_pattern.as_deref(), Some("^[a-z.]+$"));
+    assert_eq!(plan.key_id, None);
+    assert_eq!(plan.read_version, 3);
+}
+
+#[test]
+fn a_secure_string_description_write_keeps_its_key_and_refuses_an_unknown_one() {
+    let keyed = described_parameter()
+        .r#type(ParameterType::SecureString)
+        .key_id("alias/app-prod")
+        .tier(aws_sdk_ssm::types::ParameterTier::Advanced)
+        .build();
+
+    let plan = plan_description_write(&keyed, "/app/prod/db/host", "Password")
+        .expect("a keyed SecureString");
+    assert_eq!(plan.key_id.as_deref(), Some("alias/app-prod"));
+    assert_eq!(plan.tier, aws_sdk_ssm::types::ParameterTier::Advanced);
+
+    let unkeyed = described_parameter()
+        .r#type(ParameterType::SecureString)
+        .build();
+    let error = plan_description_write(&unkeyed, "/app/prod/db/host", "Password")
+        .expect_err("an unknown key would re-encrypt under the account default");
+    assert!(error.to_string().contains("encryption key"), "{error}");
+}
+
+#[test]
+fn a_description_write_fails_closed_on_anything_it_cannot_preserve() {
+    let policy = aws_sdk_ssm::types::ParameterInlinePolicy::builder()
+        .policy_text(r#"{"Type":"Expiration"}"#)
+        .policy_type("Expiration")
+        .policy_status("Pending")
+        .build();
+
+    for (label, metadata) in [
+        ("policies", described_parameter().policies(policy).build()),
+        (
+            "no type",
+            ParameterMetadata::builder()
+                .name("/app/prod/db/host")
+                .data_type("text")
+                .tier(aws_sdk_ssm::types::ParameterTier::Standard)
+                .version(3)
+                .build(),
+        ),
+        (
+            "no data type",
+            ParameterMetadata::builder()
+                .name("/app/prod/db/host")
+                .r#type(ParameterType::String)
+                .tier(aws_sdk_ssm::types::ParameterTier::Standard)
+                .version(3)
+                .build(),
+        ),
+        (
+            "no tier",
+            ParameterMetadata::builder()
+                .name("/app/prod/db/host")
+                .r#type(ParameterType::String)
+                .data_type("text")
+                .version(3)
+                .build(),
+        ),
+    ] {
+        let error =
+            plan_description_write(&metadata, "/app/prod/db/host", "text").expect_err(label);
+
+        assert!(
+            error.to_string().contains("/app/prod/db/host"),
+            "{label}: {error}"
+        );
+    }
+}
+
+#[test]
+fn a_description_longer_than_the_parameter_store_takes_is_refused() {
+    let metadata = described_parameter().build();
+
+    plan_description_write(&metadata, "/app/prod/db/host", &"d".repeat(1024))
+        .expect("1024 characters fit");
+    let error = plan_description_write(&metadata, "/app/prod/db/host", &"d".repeat(1025))
+        .expect_err("1025 do not");
+
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+}
+
+#[test]
+fn a_description_write_notices_a_value_that_changed_while_it_was_being_read() {
+    ensure_unchanged_while_reading(3, 3, "/app/prod/db/host").expect("same version");
+    let error = ensure_unchanged_while_reading(3, 4, "/app/prod/db/host")
+        .expect_err("a newer version was written meanwhile");
+    assert!(error.to_string().contains("changed"), "{error}");
+
+    ensure_written_after(3, 4, "/app/prod/db/host").expect("the next version");
+    let error = ensure_written_after(3, 5, "/app/prod/db/host")
+        .expect_err("another version landed between the read and the write");
+    assert!(error.to_string().contains("history"), "{error}");
+}
+
+#[test]
+fn a_parameter_tag_becomes_an_ssm_tag_and_a_bad_one_never_gets_that_far() {
+    let tags = ssm_tags(&[
+        dbflux_core::SecretTag::new("env", "prod"),
+        dbflux_core::SecretTag::new("owner", ""),
+    ])
+    .expect("tags");
+
+    assert_eq!(tags.len(), 2);
+    assert_eq!(tags[0].key(), "env");
+    assert_eq!(tags[0].value(), "prod");
+    assert_eq!(tags[1].value(), "");
+}
+
+#[test]
+fn a_parameter_description_cannot_be_cleared_through_a_rewrite() {
+    let metadata = described_parameter().build();
+
+    let error = plan_description_write(&metadata, "/app/prod/db/host", "")
+        .expect_err("an empty description is not offered");
+
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
     assert!(error.to_string().contains("/app/prod/db/host"), "{error}");
 }

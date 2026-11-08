@@ -529,3 +529,129 @@ fn the_defaults_refuse_a_rotation_instead_of_succeeding_silently() {
         .expect_err("an unimplemented edit must refuse");
     assert!(put_refusal_message(error).contains("prod/api/credentials"));
 }
+
+// --- Tags and description ---
+
+#[test]
+fn a_tag_key_is_one_to_128_characters_without_the_reserved_prefix() {
+    for key in [
+        "env",
+        "cost-center",
+        "team name",
+        "a:b/c=d+e@f.g_h",
+        "über",
+        &"k".repeat(128),
+    ] {
+        validate_tag(key, "value").unwrap_or_else(|error| panic!("{key}: {error}"));
+    }
+
+    for key in [
+        "",
+        &"k".repeat(129),
+        "aws:created",
+        "AWS:created",
+        "Aws:anything",
+        "bad#key",
+        "bad,key",
+        "tab\tkey",
+    ] {
+        let error = validate_tag(key, "value").expect_err("an invalid key is refused");
+        assert!(error.contains("key"), "{key:?}: {error}");
+    }
+
+    // `aws` without the colon is an ordinary key.
+    validate_tag("aws", "value").expect("only the aws: prefix is reserved");
+    validate_tag("awsome", "value").expect("only the aws: prefix is reserved");
+}
+
+#[test]
+fn a_tag_value_is_zero_to_256_characters() {
+    for value in ["", "prod", "a value with spaces", &"v".repeat(256)] {
+        validate_tag("env", value).unwrap_or_else(|error| panic!("{value}: {error}"));
+    }
+
+    for value in [&"v".repeat(257), "bad#value", "line\nbreak"] {
+        let error = validate_tag("env", value).expect_err("an invalid value is refused");
+        assert!(error.contains("value"), "{error}");
+    }
+}
+
+#[test]
+fn a_tag_update_sets_and_removes_keys_and_changes_something() {
+    SecretTagsUpdate::new("prod/api")
+        .set("env", "prod")
+        .set("owner", "")
+        .remove("legacy")
+        .validate()
+        .expect("a valid update");
+
+    SecretTagsUpdate::new("prod/api")
+        .remove("legacy")
+        .validate()
+        .expect("removing alone is an update");
+
+    for update in [
+        SecretTagsUpdate::new("prod/api"),
+        SecretTagsUpdate::new("prod/api")
+            .set("env", "a")
+            .set("env", "b"),
+        SecretTagsUpdate::new("prod/api")
+            .set("env", "a")
+            .remove("env"),
+        SecretTagsUpdate::new("prod/api").set("aws:env", "a"),
+        SecretTagsUpdate::new("prod/api").set("", "a"),
+        SecretTagsUpdate::new("prod/api").remove(""),
+        SecretTagsUpdate::new("prod/api").remove("aws:env"),
+    ] {
+        let error = update.validate().expect_err("an invalid update is refused");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+        assert!(error.to_string().contains("prod/api"), "{error}");
+    }
+}
+
+#[test]
+fn a_tag_update_cannot_set_more_than_fifty_tags() {
+    let mut update = SecretTagsUpdate::new("prod/api");
+    for index in 0..50 {
+        update = update.set(format!("key-{index}"), "value");
+    }
+    update.validate().expect("fifty tags fit");
+
+    let error = update
+        .set("one-too-many", "value")
+        .validate()
+        .expect_err("fifty-one tags do not");
+    assert!(error.to_string().contains("50"), "{error}");
+}
+
+#[test]
+fn a_tag_update_debug_names_the_keys_for_diagnosis() {
+    let rendered = format!("{:?}", SecretTagsUpdate::new("prod/api").set("env", "prod"));
+
+    assert!(rendered.contains("prod/api"), "{rendered}");
+    assert!(rendered.contains("env"), "{rendered}");
+}
+
+#[test]
+fn the_defaults_refuse_tags_and_description_instead_of_succeeding_silently() {
+    let store = DefaultOnlyStore(descriptor_with(
+        SecretStoreCapabilities::WRITE
+            | SecretStoreCapabilities::TAGS
+            | SecretStoreCapabilities::DESCRIPTION,
+    ));
+
+    let error = store
+        .update_tags(&SecretTagsUpdate::new("prod/api/credentials").set("env", "prod"))
+        .expect_err("an unimplemented tag edit must refuse");
+    let message = put_refusal_message(error);
+    assert!(message.contains("test-store"), "{message}");
+    assert!(message.contains("prod/api/credentials"), "{message}");
+
+    let error = store
+        .update_description(&SecretDescriptionUpdate::new(
+            "prod/api/credentials",
+            "text",
+        ))
+        .expect_err("an unimplemented description edit must refuse");
+    assert!(put_refusal_message(error).contains("prod/api/credentials"));
+}

@@ -19,10 +19,11 @@ use super::super::write::*;
 use dbflux_core::observability::{EventCategory, EventRecord, EventSink, EventSinkError};
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
-    DbError, MutationPolicy, ReadOnlyReason, SecretDeleteRequest, SecretDeletion, SecretDetails,
-    SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback,
-    SecretRollbackRequest, SecretRotationStart, SecretRotationUpdate, SecretStoreCapabilities,
-    SecretStoreDescriptor, SecretStoreSource, SecretValue, SecretVersionStage,
+    DbError, MutationPolicy, ReadOnlyReason, SecretDeleteRequest, SecretDeletion,
+    SecretDescriptionChange, SecretDescriptionUpdate, SecretDetails, SecretListPage,
+    SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
+    SecretRotationStart, SecretRotationUpdate, SecretStoreCapabilities, SecretStoreDescriptor,
+    SecretStoreSource, SecretTagsUpdate, SecretValue, SecretVersionStage,
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -944,6 +945,18 @@ impl SecretStoreSource for OperationStore {
     fn update_rotation(&self, _update: &SecretRotationUpdate) -> Result<(), DbError> {
         self.answer()
     }
+    fn update_tags(&self, _update: &SecretTagsUpdate) -> Result<(), DbError> {
+        self.answer()
+    }
+    fn update_description(
+        &self,
+        _update: &SecretDescriptionUpdate,
+    ) -> Result<SecretDescriptionChange, DbError> {
+        self.answer()?;
+        Ok(SecretDescriptionChange {
+            version: Some("4".to_string()),
+        })
+    }
 }
 
 fn operation_cases() -> Vec<OperationCase> {
@@ -1008,6 +1021,33 @@ fn operation_cases() -> Vec<OperationCase> {
             values: Vec::new(),
         },
         OperationCase {
+            label: "edit tags",
+            operation: SecretOperation::EditTags,
+            name: "prod/api/credentials",
+            run: Box::new(|context| {
+                update_secret_tags(
+                    context,
+                    &SecretTagsUpdate::new("prod/api/credentials")
+                        .set("env", "prod")
+                        .remove("legacy"),
+                )
+            }),
+            values: Vec::new(),
+        },
+        OperationCase {
+            label: "edit description",
+            operation: SecretOperation::EditDescription,
+            name: "prod/api/credentials",
+            run: Box::new(|context| {
+                update_secret_description(
+                    context,
+                    &SecretDescriptionUpdate::new("prod/api/credentials", "Payments API"),
+                )
+                .map(|_| ())
+            }),
+            values: Vec::new(),
+        },
+        OperationCase {
             label: "restore",
             operation: SecretOperation::Restore,
             name: "prod/api/credentials",
@@ -1066,6 +1106,16 @@ fn every_operation_pins_its_classification_and_capabilities() {
             SecretOperation::Restore,
             dbflux_core::ExecutionClassification::Write,
             write | SecretStoreCapabilities::SOFT_DELETE,
+        ),
+        (
+            SecretOperation::EditTags,
+            dbflux_core::ExecutionClassification::Write,
+            write | SecretStoreCapabilities::TAGS,
+        ),
+        (
+            SecretOperation::EditDescription,
+            dbflux_core::ExecutionClassification::Write,
+            write | SecretStoreCapabilities::DESCRIPTION,
         ),
         (
             SecretOperation::RotateNow,
@@ -1510,4 +1560,81 @@ fn a_started_rotation_records_the_version_it_created() {
     .expect("started");
 
     assert_eq!(details_of(&sink.events()[0])["version"], "v-rotated");
+}
+
+#[test]
+fn a_tag_edit_records_the_keys_it_changed_and_never_the_values() {
+    let store = OperationStore::new(SecretOperation::EditTags.required_capabilities());
+    let sink = Sink::default();
+
+    update_secret_tags(
+        &context(&store, &sink, MutationPolicy::Allowed, None),
+        &SecretTagsUpdate::new("prod/api/credentials")
+            .set("env", "tag-value-probe-1")
+            .set("owner", "tag-value-probe-2")
+            .remove("legacy"),
+    )
+    .expect("applied");
+
+    let events = sink.events();
+    let details = details_of(&events[0]);
+    assert_eq!(details["set_keys"], serde_json::json!(["env", "owner"]));
+    assert_eq!(details["removed_keys"], serde_json::json!(["legacy"]));
+    assert!(!format!("{events:?}").contains("tag-value-probe"));
+}
+
+#[test]
+fn a_tag_the_service_would_reject_refuses_before_any_call() {
+    for update in [
+        SecretTagsUpdate::new("prod/api/credentials"),
+        SecretTagsUpdate::new("prod/api/credentials").set("aws:env", "x"),
+        SecretTagsUpdate::new("prod/api/credentials").set("", "x"),
+        SecretTagsUpdate::new("prod/api/credentials").set("k", "v".repeat(257)),
+        SecretTagsUpdate::new("prod/api/credentials")
+            .set("env", "a")
+            .remove("env"),
+    ] {
+        let store = OperationStore::new(SecretOperation::EditTags.required_capabilities());
+        let sink = Sink::default();
+
+        let failure = update_secret_tags(
+            &context(&store, &sink, MutationPolicy::Allowed, None),
+            &update,
+        )
+        .expect_err("an invalid tag edit refuses");
+
+        assert_eq!(failure.kind, SecretWriteFailureKind::Refused, "{update:?}");
+        assert!(
+            matches!(failure.error, DbError::ConstraintViolation(_)),
+            "{failure:?}"
+        );
+        assert_eq!(store.calls(), 0, "{update:?}");
+        assert_eq!(details_of(&sink.events()[0])["reason"], "invalid_request");
+    }
+}
+
+#[test]
+fn a_description_edit_never_records_its_text_and_names_a_version_it_created() {
+    let store = OperationStore::new(SecretOperation::EditDescription.required_capabilities());
+    let sink = Sink::default();
+
+    update_secret_description(
+        &context(&store, &sink, MutationPolicy::Allowed, None),
+        &SecretDescriptionUpdate::new("prod/api/credentials", "description-probe-text"),
+    )
+    .expect("applied");
+
+    let events = sink.events();
+    let details = details_of(&events[0]);
+    assert_eq!(details["cleared"], false);
+    assert_eq!(details["version"], "4");
+    assert!(!format!("{events:?}").contains("description-probe-text"));
+
+    let sink = Sink::default();
+    update_secret_description(
+        &context(&store, &sink, MutationPolicy::Allowed, None),
+        &SecretDescriptionUpdate::new("prod/api/credentials", ""),
+    )
+    .expect("cleared");
+    assert_eq!(details_of(&sink.events()[0])["cleared"], true);
 }

@@ -50,7 +50,8 @@ mod operations;
 mod scrub;
 
 pub use operations::{
-    delete_secret, restore_secret, roll_back_secret, rotate_secret_now, update_secret_rotation,
+    delete_secret, restore_secret, roll_back_secret, rotate_secret_now, update_secret_description,
+    update_secret_rotation, update_secret_tags,
 };
 use scrub::scrub_submitted_value;
 
@@ -95,6 +96,12 @@ pub enum SecretOperation {
     /// Turning automatic rotation on or off
     /// (`SecretStoreSource::update_rotation`).
     EditRotation,
+    /// Adding, changing and removing tags
+    /// (`SecretStoreSource::update_tags`).
+    EditTags,
+    /// Changing the description
+    /// (`SecretStoreSource::update_description`).
+    EditDescription,
 }
 
 /// The three audit actions of one operation: the store accepted it, a gate
@@ -259,6 +266,41 @@ impl SecretOperation {
                 audit_lost: "The rotation edit of \"{name}\" landed in {store}, but its audit \
                              event could not be recorded ({error}). Do not repeat the edit to \
                              repair the audit trail.",
+            },
+            Self::EditTags => OperationSpec {
+                classification: ExecutionClassification::Write,
+                actions: OperationActions {
+                    done: "secret_tags_updated",
+                    refused: "secret_tags_update_refused",
+                    failed: "secret_tags_update_failed",
+                },
+                required: write.union(SecretStoreCapabilities::TAGS),
+                verb: "edit the tags of",
+                subject: "tag edit of \"{name}\"",
+                done_summary: "Updated the tags of {name} in {store}",
+                refused_summary: "Refused to update the tags of {name} in {store}",
+                failed_summary: "Could not update the tags of {name} in {store}",
+                audit_lost: "The tag edit of \"{name}\" landed in {store}, but its audit event \
+                             could not be recorded ({error}). Do not repeat the edit to repair \
+                             the audit trail.",
+            },
+            Self::EditDescription => OperationSpec {
+                classification: ExecutionClassification::Write,
+                actions: OperationActions {
+                    done: "secret_description_updated",
+                    refused: "secret_description_update_refused",
+                    failed: "secret_description_update_failed",
+                },
+                required: write.union(SecretStoreCapabilities::DESCRIPTION),
+                verb: "edit the description of",
+                subject: "description edit of \"{name}\"",
+                done_summary: "Updated the description of {name} in {store}",
+                refused_summary: "Refused to update the description of {name} in {store}",
+                failed_summary: "Could not update the description of {name} in {store}",
+                audit_lost: "The description edit of \"{name}\" landed in {store}, but its audit \
+                             event could not be recorded ({error}). Do not repeat the edit to \
+                             repair the audit trail: a store that rewrites the value to change \
+                             the description would create another version.",
             },
         }
     }
