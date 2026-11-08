@@ -3646,6 +3646,7 @@ document:
     write:
       refused_managed: "%{name} 由 %{service} 管理，因此无法在此更改。"
       refused_deletion: "%{name} 已安排删除。请先恢复再更改。"
+      region_switching: "正在切换区域。请等连接稳定后重试；未写入任何内容。"
       connection_replaced: "此对话框打开期间连接已被替换。未写入任何内容。请从当前连接重新打开。"
     rollback:
       button: "回滚"

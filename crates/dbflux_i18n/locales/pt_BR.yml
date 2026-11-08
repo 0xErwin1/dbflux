@@ -3646,6 +3646,7 @@ document:
     write:
       refused_managed: "%{name} é gerenciado por %{service}, então não pode ser alterado aqui."
       refused_deletion: "A exclusão de %{name} está agendada. Restaure-o antes de alterá-lo."
+      region_switching: "A região está sendo trocada. Aguarde a conexão se estabilizar e tente novamente; nada foi gravado."
       connection_replaced: "A conexão foi substituída enquanto este diálogo estava aberto. Nada foi gravado. Abra-o novamente a partir da conexão atual."
     rollback:
       button: "Reverter"

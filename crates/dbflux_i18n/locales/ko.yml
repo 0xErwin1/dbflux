@@ -3646,6 +3646,7 @@ document:
     write:
       refused_managed: "%{name}은(는) %{service}에서 관리하므로 여기서 변경할 수 없습니다."
       refused_deletion: "%{name}의 삭제가 예약되어 있습니다. 변경하려면 먼저 복원하세요."
+      region_switching: "리전을 전환하는 중입니다. 연결이 안정되면 다시 시도하세요. 아무것도 기록되지 않았습니다."
       connection_replaced: "이 대화상자가 열려 있는 동안 연결이 교체되었습니다. 아무것도 기록되지 않았습니다. 현재 연결에서 다시 여세요."
     rollback:
       button: "롤백"

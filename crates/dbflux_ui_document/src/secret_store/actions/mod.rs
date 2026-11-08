@@ -180,6 +180,10 @@ impl SecretStoreDocument {
     /// Captures what a governed write needs from the document. A connection
     /// that is gone is reported, as a save without one is.
     pub(super) fn write_session(&mut self, cx: &mut Context<Self>) -> Option<WriteSession> {
+        if self.region_switch_blocks_writes(cx) {
+            return None;
+        }
+
         let connected = self.app_state.read(cx).connections().get(&self.profile_id);
 
         let Some(connected) = connected else {
@@ -318,6 +322,10 @@ impl SecretStoreDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.region_switch_blocks_writes(cx) {
+            return;
+        }
+
         self.drop_context_menu();
         self.dialog_pin = Some(DialogPin {
             connection: self.connection(cx),
@@ -357,6 +365,46 @@ impl SecretStoreDocument {
     /// on, even while a write is in flight: its landing still reports.
     pub(super) fn close_dialog_for_navigation(&mut self, cx: &mut Context<Self>) {
         self.dismiss_dialog(cx);
+    }
+
+    /// A region switch is reconnecting, so the session a write would land on
+    /// is about to be replaced: nothing starts, and the user is told why.
+    fn region_switch_blocks_writes(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.region_switch_in_flight {
+            return false;
+        }
+
+        self.report_write_warning(
+            dbflux_i18n::t!("document.secret_store.write.region_switching"),
+            cx,
+        );
+        true
+    }
+
+    /// Closes the open dialog when the connection it was opened on is no
+    /// longer the live one, without waiting for a confirm.
+    pub(super) fn close_dialog_if_session_replaced(&mut self, cx: &mut Context<Self>) {
+        let replaced = match (&self.dialog_pin, self.connection(cx)) {
+            (
+                Some(DialogPin {
+                    connection: Some(pinned),
+                    ..
+                }),
+                Some(live),
+            ) => !Arc::ptr_eq(pinned, &live),
+            (
+                Some(DialogPin {
+                    connection: Some(_),
+                    ..
+                }),
+                None,
+            ) => true,
+            _ => false,
+        };
+
+        if replaced && !self.write_in_flight {
+            self.dismiss_dialog(cx);
+        }
     }
 
     /// Whether the open dialog still stands on what it was opened on. A

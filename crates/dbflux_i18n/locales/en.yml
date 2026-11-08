@@ -3646,6 +3646,7 @@ document:
     write:
       refused_managed: "%{name} is managed by %{service}, so it cannot be changed here."
       refused_deletion: "Deletion is scheduled for %{name}. Restore it before changing it."
+      region_switching: "The region is being switched. Wait for the connection to settle, then try again; nothing was written."
       connection_replaced: "The connection was replaced while this dialog was open. Nothing was written. Open it again from the current connection."
     rollback:
       button: "Roll back"

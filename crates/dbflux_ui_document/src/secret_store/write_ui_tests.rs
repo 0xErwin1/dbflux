@@ -2521,3 +2521,37 @@ fn every_control_of_the_details_pane_is_reachable_above_the_action_bar(cx: &mut 
         }
     }
 }
+
+// -- A region switch in flight ---------------------------------------------------
+
+/// While a region switch reconnects, no dialog opens and no write starts: the
+/// session the write would land on is about to be replaced.
+#[gpui::test]
+fn no_write_starts_while_a_region_switch_is_in_flight(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.update(|doc, _| doc.region_switch_in_flight = true);
+
+    opened.click("secret-action-delete");
+    assert!(!opened.dialog_open(), "no dialog opens");
+    opened.click("secret-rotation-rotate-now");
+    opened.click("secret-tags-edit");
+    assert!(!opened.dialog_open());
+
+    assert!(opened.mutations().is_empty(), "{:?}", opened.mutations());
+    assert!(!opened.reported_errors().is_empty(), "the user is told why");
+}
+
+/// A dialog open when the session is replaced closes on its own.
+#[gpui::test]
+fn a_dialog_closes_when_the_session_is_replaced(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-action-delete");
+    assert!(opened.dialog_open());
+
+    let _replacement = opened.replace_connection();
+    opened.announce_state_change();
+
+    assert!(!opened.dialog_open());
+}

@@ -317,6 +317,7 @@ impl SecretStoreDocument {
         // listing on what the connection actually reaches.
         subscriptions.push(
             cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
+                this.close_dialog_if_session_replaced(cx);
                 this.adopt_connection_region(cx);
                 this.adopt_connection_session(HistoryLoad::Automatic, cx);
             }),
