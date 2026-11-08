@@ -154,6 +154,7 @@ impl SecretStoreDocument {
         }
 
         let Some(connection) = self.connection(cx) else {
+            self.missing_connection_reported = true;
             report_error(
                 UserFacingError::new(
                     ErrorKind::User,
@@ -317,6 +318,7 @@ impl SecretStoreDocument {
         let connected = self.app_state.read(cx).connections().get(&self.profile_id);
 
         let Some(connected) = connected else {
+            self.missing_connection_reported = true;
             report_error(
                 UserFacingError::new(
                     ErrorKind::User,

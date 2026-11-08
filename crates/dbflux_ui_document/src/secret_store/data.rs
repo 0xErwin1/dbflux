@@ -252,6 +252,7 @@ impl SecretStoreDocument {
         self.versions_generation = self.versions_generation.wrapping_add(1);
         self.versions = VersionsState::Idle;
         self.versions_session = None;
+        self.missing_connection_reported = false;
     }
 
     /// Lists the versions of `name` for the details pane, on the background
@@ -273,12 +274,17 @@ impl SecretStoreDocument {
         let Some(connection) = self.connection(cx) else {
             let message = dbflux_i18n::t!("document.secret_store.error.connection_unavailable");
 
-            // First catch site: no request goes out, so nothing else reports.
-            report_error(UserFacingError::new(ErrorKind::User, message.clone()), cx);
+            // Only the first catch site reports: an editor path that found
+            // the same loss already did.
+            if !self.missing_connection_reported {
+                self.missing_connection_reported = true;
+                report_error(UserFacingError::new(ErrorKind::User, message.clone()), cx);
+            }
             self.versions = VersionsState::Failed(message);
             return;
         };
 
+        self.missing_connection_reported = false;
         self.versions_session = Some(connection.clone());
 
         let store_id = self.store.id.clone();

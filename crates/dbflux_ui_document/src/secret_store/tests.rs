@@ -4173,19 +4173,16 @@ fn the_edit_value_command_reports_a_missing_connection(cx: &mut TestAppContext) 
     assert!(opened.command(Command::EditValue));
 
     assert!(!opened.read(|doc| doc.is_editing_value()));
-    // The editor's report notifies the app state, which makes the history
-    // retry find the missing connection and report it too: two entries, both
-    // the missing-connection message.
+    // The editor found the loss first; the history retry it triggers stays
+    // quiet, so the loss is reported once.
     let reported = opened.reported_errors();
-    assert_eq!(reported.len(), 2, "{reported:?}");
-    for (_, summary) in &reported {
-        assert!(
-            summary.contains(&dbflux_i18n::t!(
-                "document.secret_store.error.connection_unavailable"
-            )),
-            "{reported:?}"
-        );
-    }
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert!(
+        reported[0].1.contains(&dbflux_i18n::t!(
+            "document.secret_store.error.connection_unavailable"
+        )),
+        "{reported:?}"
+    );
 }
 
 /// The button, the row menu and the pane action open the editor through
@@ -4208,19 +4205,16 @@ fn start_value_edit_reports_a_missing_connection(cx: &mut TestAppContext) {
     opened.start_edit();
 
     assert!(!opened.read(|doc| doc.is_editing_value()));
-    // The editor's report notifies the app state, which makes the history
-    // retry find the missing connection and report it too: two entries, both
-    // the missing-connection message.
+    // The editor found the loss first; the history retry it triggers stays
+    // quiet, so the loss is reported once.
     let reported = opened.reported_errors();
-    assert_eq!(reported.len(), 2, "{reported:?}");
-    for (_, summary) in &reported {
-        assert!(
-            summary.contains(&dbflux_i18n::t!(
-                "document.secret_store.error.connection_unavailable"
-            )),
-            "{reported:?}"
-        );
-    }
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert!(
+        reported[0].1.contains(&dbflux_i18n::t!(
+            "document.secret_store.error.connection_unavailable"
+        )),
+        "{reported:?}"
+    );
 }
 
 // -- Version history ---------------------------------------------------------

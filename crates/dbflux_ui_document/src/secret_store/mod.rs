@@ -126,6 +126,11 @@ pub struct SecretStoreDocument {
     /// The connection the history was listed from, so ids of a replaced
     /// session are never retrieved against the new one.
     versions_session: Option<Arc<dyn Connection>>,
+    /// Some path of this document already reported the missing connection
+    /// for the current selection, so the next one to find the same loss
+    /// stays quiet. Cleared when a connection is found again or the
+    /// selection is reset.
+    missing_connection_reported: bool,
     /// The version whose value the value section shows or is retrieving,
     /// `None` for the current value.
     value_version: Option<String>,
@@ -308,6 +313,7 @@ impl SecretStoreDocument {
             versions: VersionsState::Idle,
             versions_generation: 0,
             versions_session: None,
+            missing_connection_reported: false,
             value_version: None,
             value: ValueState::NotLoaded,
             value_generation: 0,
