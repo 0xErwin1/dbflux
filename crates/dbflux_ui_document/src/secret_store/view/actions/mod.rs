@@ -139,7 +139,7 @@ pub(in crate::secret_store) enum WriteEffect {
 
 impl SecretView {
     /// Whether a write dialog is open over the host.
-    pub fn dialog_is_open(&self) -> bool {
+    pub(crate) fn dialog_is_open(&self) -> bool {
         self.dialog.is_some()
     }
 
@@ -149,7 +149,7 @@ impl SecretView {
     }
 
     /// Whether a governed write is in flight.
-    pub fn write_in_flight(&self) -> bool {
+    pub(crate) fn write_in_flight(&self) -> bool {
         self.write_in_flight
     }
 
@@ -217,7 +217,7 @@ impl SecretView {
             return None;
         }
 
-        let connected = self.app_state.read(cx).connections().get(&self.profile_id);
+        let connected = self.live_profile(cx);
 
         let Some(connected) = connected else {
             self.missing_connection_reported = true;
@@ -489,7 +489,7 @@ impl SecretView {
     }
 
     /// Closes the dialog without writing, and hands the keyboard back.
-    pub fn close_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_dialog(&mut self, cx: &mut Context<Self>) {
         if self.dialog_is_submitting() {
             return;
         }
@@ -600,7 +600,7 @@ impl SecretView {
     ///
     /// Returns whether the confirmed dialog is the host's own (New secret),
     /// which the host sends itself; every other dialog is sent from here.
-    pub fn confirm_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn confirm_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.dialog_is_submitting() || !self.dialog_pin_holds(cx) {
             return false;
         }
@@ -619,10 +619,7 @@ impl SecretView {
         false
     }
 
-    pub(in crate::secret_store) fn render_write_dialog(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    pub(crate) fn render_write_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let dialog = self.dialog.as_ref()?;
 
         Some(match dialog {

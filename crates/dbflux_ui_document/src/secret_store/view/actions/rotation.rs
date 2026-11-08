@@ -123,7 +123,7 @@ impl RotationDialog {
 
 impl SecretView {
     /// Whether the store offers rotation actions at all.
-    pub fn supports_rotation(&self) -> bool {
+    pub(crate) fn supports_rotation(&self) -> bool {
         self.store_allows(ROTATION_CAPABILITIES)
     }
 
@@ -145,7 +145,7 @@ impl SecretView {
     }
 
     /// Whether a rotation action may start now.
-    pub fn can_start_rotation_action(&self) -> bool {
+    pub(crate) fn can_start_rotation_action(&self) -> bool {
         self.supports_rotation()
             && self.connection_present
             && !self.write_in_flight
@@ -156,7 +156,7 @@ impl SecretView {
 
     /// Whether Edit rotation may open: the details are loaded, so the dialog
     /// starts from the rotation the store reports and not from a guess.
-    pub fn can_edit_rotation(&self) -> bool {
+    pub(crate) fn can_edit_rotation(&self) -> bool {
         self.can_start_rotation_action() && matches!(self.details, DetailsState::Loaded(_))
     }
 
@@ -164,7 +164,7 @@ impl SecretView {
     /// the secret's own state, or its rotation being off. The seam refuses a
     /// rotation of a secret that does not rotate too; this keeps the button
     /// from offering what it knows will be refused.
-    pub fn rotate_now_block_reason(&self) -> Option<String> {
+    pub(crate) fn rotate_now_block_reason(&self) -> Option<String> {
         if let Some(reason) = self.write_refusal_reason() {
             return Some(reason);
         }
@@ -183,7 +183,7 @@ impl SecretView {
 
     /// Whether Rotate now may run: the rotation actions are available and the
     /// secret's rotation is not known to be off.
-    pub fn can_rotate_now(&self) -> bool {
+    pub(crate) fn can_rotate_now(&self) -> bool {
         self.can_start_rotation_action() && self.rotate_now_block_reason().is_none()
     }
 
@@ -199,7 +199,7 @@ impl SecretView {
 
     /// Starts a rotation of the selected secret now. Refused, with the
     /// reason and without calling the store, when its rotation is off.
-    pub fn rotate_selected_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn rotate_selected_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_start_rotation_action() {
             return;
         }
@@ -431,7 +431,7 @@ impl SecretView {
 
     /// Opens the Edit rotation dialog on the selected secret's current
     /// settings. Nothing is written until it is confirmed.
-    pub fn open_edit_rotation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_edit_rotation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_edit_rotation() {
             return;
         }
@@ -521,7 +521,7 @@ impl SecretView {
     }
 
     /// Turns the dialog's rotation on or off.
-    pub fn set_rotation_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+    pub(crate) fn set_rotation_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         // The request carries the form as it was when Save was pressed.
         if self.write_in_flight {
             return;

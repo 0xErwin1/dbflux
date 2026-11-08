@@ -97,37 +97,45 @@ fn e_opens_the_secret_editor_through_the_workspace_dispatch(cx: &mut TestAppCont
     });
     window.run_until_parked();
 
-    // Retrieve each row's value until one is editable; the fixtures hold
+    // Retrieve each row's value until the editor opens; the fixtures hold
     // exactly the plaintext secret the editor opens on.
     let rows = window.update(|_, cx| doc.read(cx).rows());
-    let mut editable = false;
+    let mut opened_editor = false;
     for row in rows {
-        window.update(|_, cx| {
-            doc.update(cx, |doc, cx| {
-                doc.select_row(row, cx);
-                doc.view()
-                    .clone()
-                    .update(cx, |view, cx| view.retrieve_selected_value(cx));
+        window.update(|window, cx| {
+            doc.update(cx, |doc, cx| doc.select_row(row, cx));
+            workspace.update(cx, |workspace, cx| {
+                workspace.dispatch(Command::ToggleValuePanel, window, cx);
             });
         });
         window.run_until_parked();
-        if window.update(|_, cx| doc.read(cx).view().read(cx).can_edit_value()) {
-            editable = true;
+        assert!(!editor_is_drawn(window), "retrieving opens no editor");
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.dispatch(Command::EditValue, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        if editor_is_drawn(window) {
+            opened_editor = true;
             break;
         }
     }
-    assert!(editable, "the fixtures hold an editable secret");
-    assert!(!window.update(|_, cx| doc.read(cx).view().read(cx).is_editing_value()));
-
-    window.update(|window, cx| {
-        workspace.update(cx, |workspace, cx| {
-            workspace.dispatch(Command::EditValue, window, cx);
-        });
-    });
-    window.run_until_parked();
 
     assert!(
-        window.update(|_, cx| doc.read(cx).view().read(cx).is_editing_value()),
+        opened_editor,
         "the workspace routes `e` to the active secret store"
     );
+}
+
+/// Whether the secret editor's Save control is drawn.
+fn editor_is_drawn(window: &mut gpui::VisualTestContext) -> bool {
+    let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(window);
+    let frame = capture.frame(window);
+
+    frame
+        .nodes()
+        .any(|(_, node)| node.id() == "secret-value-editor-save")
 }

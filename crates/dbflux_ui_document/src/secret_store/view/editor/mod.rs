@@ -231,7 +231,7 @@ impl SecretView {
     /// not pending, in a store that advertises `WRITE`. A connection whose
     /// policy refuses writes keeps the editor — the refusal happens at Save,
     /// through the seam, where the decision is audited.
-    pub fn can_edit_value(&self) -> bool {
+    pub(crate) fn can_edit_value(&self) -> bool {
         if self.value_edit.is_some() || !self.connection_present {
             return false;
         }
@@ -263,7 +263,7 @@ impl SecretView {
     }
 
     /// Whether the open editor offers the Formatted / Raw toggle.
-    pub fn can_toggle_edit_mode(&self) -> bool {
+    pub(crate) fn can_toggle_edit_mode(&self) -> bool {
         self.edit_mode().is_some() && !self.is_saving_value_edit()
     }
 
@@ -299,7 +299,7 @@ impl SecretView {
     /// owned by `gpui-component` and reachable only through its `Search`
     /// action, so the button focuses the editor first and then dispatches the
     /// action its `ctrl-f` / `cmd-f` binding raises.
-    pub fn find_in_value(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn find_in_value(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(edit) = &self.value_edit else {
             return;
         };
@@ -310,7 +310,7 @@ impl SecretView {
     }
 
     /// Switches to the other mode, for the pane action.
-    pub fn cycle_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn cycle_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let next = match self.edit_mode() {
             Some(EditMode::Formatted) => EditMode::Raw,
             Some(EditMode::Raw) => EditMode::Formatted,
@@ -321,19 +321,19 @@ impl SecretView {
     }
 
     /// Whether the value editor is open.
-    pub fn is_editing_value(&self) -> bool {
+    pub(crate) fn is_editing_value(&self) -> bool {
         self.value_edit.is_some()
     }
 
     /// Whether a governed write of this editor is in flight.
-    pub fn is_saving_value_edit(&self) -> bool {
+    pub(crate) fn is_saving_value_edit(&self) -> bool {
         self.value_edit.as_ref().is_some_and(|edit| edit.saving)
     }
 
     /// Whether the open editor holds text that no save has written: the
     /// dirty dot, the unsaved-changes prompt on close and the guards on the
     /// transitions that would drop the editor all read this.
-    pub fn has_unsaved_value_edits(&self, cx: &App) -> bool {
+    pub(crate) fn has_unsaved_value_edits(&self, cx: &App) -> bool {
         self.value_edit
             .as_ref()
             .is_some_and(|edit| edit.is_changed(cx))
@@ -342,7 +342,7 @@ impl SecretView {
     /// The description the tab's dirty dot and the unsaved-changes prompt
     /// show while the editor holds unsaved text; `None` when there is
     /// nothing unsaved.
-    pub fn unsaved_change_summary(&self, cx: &App) -> Option<String> {
+    pub(crate) fn unsaved_change_summary(&self, cx: &App) -> Option<String> {
         self.has_unsaved_value_edits(cx)
             .then(|| dbflux_i18n::t!("document.secret_store.edit.change_summary").to_string())
     }
@@ -350,7 +350,7 @@ impl SecretView {
     /// Opens the editor on the loaded value with the stored text. A value
     /// that may not be edited ignores the request; a connection that is gone
     /// is reported, as a save without one is.
-    pub fn start_value_edit(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+    pub(crate) fn start_value_edit(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
         if !self.can_edit_value() || self.region_switch_blocks_writes(cx) {
             return;
         }
@@ -464,7 +464,7 @@ impl SecretView {
     /// save is in flight the landing still has to read what was typed after
     /// it started, so Discard sits out, and the pane action is disabled so
     /// the queue cannot carry one into the landing.
-    pub fn discard_value_edit(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn discard_value_edit(&mut self, cx: &mut Context<Self>) {
         if self.is_saving_value_edit() {
             return;
         }
@@ -553,7 +553,7 @@ impl SecretView {
     /// and the session the value came from are re-checked, and a value the
     /// store kept as JSON must still parse as JSON — as any JSON, in the
     /// layout the user typed; the gate checks the type, not the shape.
-    pub fn save_value_edit(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn save_value_edit(&mut self, cx: &mut Context<Self>) {
         let Some(edit) = &self.value_edit else {
             return;
         };
@@ -643,7 +643,7 @@ impl SecretView {
             return None;
         }
 
-        let connected = self.app_state.read(cx).connections().get(&self.profile_id);
+        let connected = self.live_profile(cx);
 
         let Some(connected) = connected else {
             self.missing_connection_reported = true;

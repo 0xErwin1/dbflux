@@ -3418,6 +3418,18 @@ document:
     new: Nova aba
     close_named: "Fechar %{title}"
     unsaved_changes: Alterações não salvas
+  secret:
+    subtitle: "%{store} · %{connection} · %{region}"
+    subtitle_no_region: "%{store} · %{connection}"
+    close: "Fechar aba"
+    removed:
+      title: "Este segredo foi excluído"
+      body: "%{name} não está mais no armazenamento. Esta aba não lê nem grava nada; feche-a ou crie o segredo novamente para vê-lo aqui."
+    region_mismatch:
+      title: "Esta conexão está em outra região"
+      body: "%{name} pertence a %{region} e a conexão está em %{live}. Esta aba não lê nem grava nada até a conexão voltar para %{region}."
+    footer:
+      value_scope: "Valor visível apenas nesta aba, apagado ao fechar"
   secret_store:
     title: "%{store} · %{connection}"
     search_placeholder: "A busca roda no cofre; os valores nunca são listados"
@@ -3531,6 +3543,7 @@ document:
       created: "Criado"
       last_changed: "Última alteração"
       last_retrieved: "Última obtenção"
+      open_in_tab: "Abrir em uma aba"
     versions:
       title: "Versões"
       history_title: "Histórico"
@@ -3566,6 +3579,7 @@ document:
       arn_loading: "O ARN chega com os detalhes…"
       arn_missing: "O armazenamento não informa um identificador de recurso"
       arn_failed: "Não foi possível carregar os detalhes: %{error}"
+      open_in_tab: "Abrir em uma aba"
     toast:
       value_copied: "Valor copiado para a área de transferência"
       resource_id_copied: "ARN copiado para a área de transferência"

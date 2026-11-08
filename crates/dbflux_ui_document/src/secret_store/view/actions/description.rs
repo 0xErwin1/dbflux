@@ -51,7 +51,7 @@ impl DescriptionDialog {
 
 impl SecretView {
     /// Whether the store can change descriptions at all.
-    pub fn supports_description_edit(&self) -> bool {
+    pub(crate) fn supports_description_edit(&self) -> bool {
         self.store_allows(DESCRIPTION_CAPABILITIES)
     }
 
@@ -62,13 +62,13 @@ impl SecretView {
     /// complete record of the value and its description. Where the guess is
     /// wrong, the dialog over-warns: the landing reports the version the
     /// change actually created.
-    pub fn description_edit_rewrites_value(&self) -> bool {
+    pub(crate) fn description_edit_rewrites_value(&self) -> bool {
         self.store_allows(SecretStoreCapabilities::VERSIONS)
             && !self.store_allows(SecretStoreCapabilities::VERSION_LABELS)
     }
 
     /// Whether Edit description may open now.
-    pub fn can_edit_description(&self) -> bool {
+    pub(crate) fn can_edit_description(&self) -> bool {
         self.supports_description_edit()
             && self.connection_present
             && !self.write_in_flight
@@ -80,7 +80,7 @@ impl SecretView {
 
     /// Opens the Edit description dialog on the selected secret's
     /// description. Nothing is written until it is confirmed.
-    pub fn open_edit_description(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_edit_description(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_edit_description() {
             return;
         }

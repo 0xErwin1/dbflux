@@ -20,6 +20,11 @@ impl SecretView {
     /// carry no resource identifier the document copies.
     pub(in crate::secret_store) fn secret_menu_items(&self, name: &str) -> Vec<SecretMenuItem> {
         let mut items = vec![
+            SecretMenuItem::new(
+                SecretMenuAction::OpenInTab,
+                dbflux_i18n::t!("document.secret_store.context_menu.open_in_tab").into(),
+                AppIcon::Maximize2,
+            ),
             self.retrieve_item(name),
             SecretMenuItem::new(
                 SecretMenuAction::CopyName,

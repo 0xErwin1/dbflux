@@ -3418,6 +3418,18 @@ document:
     new: 새 탭
     close_named: "%{title} 닫기"
     unsaved_changes: 저장되지 않은 변경 사항
+  secret:
+    subtitle: "%{store} · %{connection} · %{region}"
+    subtitle_no_region: "%{store} · %{connection}"
+    close: "탭 닫기"
+    removed:
+      title: "이 시크릿이 삭제되었습니다"
+      body: "%{name}은(는) 더 이상 저장소에 없습니다. 이 탭에서는 아무것도 읽거나 쓰지 않습니다. 탭을 닫거나 시크릿을 다시 만들면 여기에 표시됩니다."
+    region_mismatch:
+      title: "이 연결은 다른 리전에 있습니다"
+      body: "%{name}은(는) %{region}에 속하지만 연결은 %{live}에 있습니다. 연결이 다시 %{region}으로 돌아올 때까지 이 탭에서는 아무것도 읽거나 쓰지 않습니다."
+    footer:
+      value_scope: "값은 이 탭에서만 표시되며 닫으면 지워집니다"
   secret_store:
     title: "%{store} · %{connection}"
     search_placeholder: "검색은 저장소에서 실행되며 값은 나열되지 않습니다"
@@ -3531,6 +3543,7 @@ document:
       created: "생성됨"
       last_changed: "마지막 변경"
       last_retrieved: "마지막 조회"
+      open_in_tab: "탭에서 열기"
     versions:
       title: "버전"
       history_title: "기록"
@@ -3566,6 +3579,7 @@ document:
       arn_loading: "ARN은 상세 정보와 함께 로드됩니다…"
       arn_missing: "스토어가 리소스 식별자를 보고하지 않습니다"
       arn_failed: "상세 정보를 로드하지 못했습니다: %{error}"
+      open_in_tab: "탭에서 열기"
     toast:
       value_copied: "값을 클립보드에 복사했습니다"
       resource_id_copied: "ARN을 클립보드에 복사했습니다"

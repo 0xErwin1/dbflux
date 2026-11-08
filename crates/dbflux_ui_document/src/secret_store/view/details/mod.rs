@@ -1,6 +1,7 @@
 //! The details pane of a `SecretView`: the selected secret's value
 //! section, its details, its rotation and its tags.
 
+mod document;
 mod sections;
 mod value;
 mod versions;
@@ -153,6 +154,42 @@ pub(in crate::secret_store) fn short_version_id(id: &str) -> String {
     }
 }
 
+/// The sections of a secret's details, in the slots a host places them.
+pub(in crate::secret_store) struct DetailSections {
+    pub value: AnyElement,
+    pub managed: Option<AnyElement>,
+    pub metadata: Option<AnyElement>,
+    pub versions: Option<AnyElement>,
+    pub rotation: Option<AnyElement>,
+    pub tags: Option<AnyElement>,
+    /// The describe's loading line or failure banner.
+    pub status: Option<AnyElement>,
+}
+
+impl DetailSections {
+    /// The pane's single column: the value, the managed card, then the
+    /// metadata, history, rotation and tags once the describe landed (the
+    /// status and then the history before it did).
+    fn into_column(self) -> Vec<AnyElement> {
+        let described = self.metadata.is_some();
+        let mut column = vec![self.value];
+        column.extend(self.managed);
+        column.extend(self.metadata);
+
+        if described {
+            column.extend(self.versions);
+            column.extend(self.rotation);
+            column.extend(self.tags);
+            column.extend(self.status);
+        } else {
+            column.extend(self.status);
+            column.extend(self.versions);
+        }
+
+        column
+    }
+}
+
 impl SecretView {
     pub(in crate::secret_store) fn render_pane(
         &mut self,
@@ -194,51 +231,70 @@ impl SecretView {
             .into_any_element()
     }
 
+    /// The sections of the shown secret, each built once. The pane stacks
+    /// them in one column; a document lays them out as it sees fit.
+    pub(super) fn detail_sections(
+        &self,
+        summary: &SecretSummary,
+        cx: &mut Context<Self>,
+    ) -> DetailSections {
+        let mut sections = DetailSections {
+            value: self.render_value_section(summary, cx).into_any_element(),
+            managed: summary
+                .owning_service
+                .as_deref()
+                .map(|service| managed_card(&summary.name, service).into_any_element()),
+            metadata: None,
+            versions: self.render_versions_section(cx),
+            rotation: None,
+            tags: None,
+            status: None,
+        };
+
+        // The history loads apart from the describe, so it shows whatever
+        // state the describe is in; it sits after the metadata when there is
+        // one.
+        match &self.details {
+            DetailsState::Loaded(details) => {
+                sections.metadata =
+                    Some(self.render_metadata_section(details, cx).into_any_element());
+
+                if self.store.supports(SecretStoreCapabilities::ROTATION) {
+                    sections.rotation =
+                        Some(self.render_rotation_section(details, cx).into_any_element());
+                }
+
+                sections.tags = Some(self.render_tags_section(details, cx).into_any_element());
+            }
+            DetailsState::Loading => {
+                sections.status = Some(
+                    Text::caption(dbflux_i18n::t!("document.secret_store.details.loading"))
+                        .muted_foreground()
+                        .into_any_element(),
+                )
+            }
+            DetailsState::Failed(error) => {
+                sections.status = Some(
+                    BannerBlock::new(
+                        BannerVariant::Danger,
+                        dbflux_i18n::t!("document.secret_store.details.failed"),
+                    )
+                    .with_body(error.clone())
+                    .into_any_element(),
+                )
+            }
+            DetailsState::Idle => {}
+        }
+
+        sections
+    }
+
     pub(super) fn render_secret_details(
         &self,
         summary: &SecretSummary,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let mut sections: Vec<AnyElement> =
-            vec![self.render_value_section(summary, cx).into_any_element()];
-
-        if let Some(service) = summary.owning_service.as_deref() {
-            sections.push(managed_card(&summary.name, service).into_any_element());
-        }
-
-        // The history loads apart from the describe, so it shows whatever
-        // state the describe is in; it sits after the metadata when there is
-        // one.
-        let mut versions = self.render_versions_section(cx);
-
-        match &self.details {
-            DetailsState::Loaded(details) => {
-                sections.push(self.render_metadata_section(details, cx).into_any_element());
-                sections.extend(versions.take());
-
-                if self.store.supports(SecretStoreCapabilities::ROTATION) {
-                    sections.push(self.render_rotation_section(details, cx).into_any_element());
-                }
-
-                sections.push(self.render_tags_section(details, cx).into_any_element());
-            }
-            DetailsState::Loading => sections.push(
-                Text::caption(dbflux_i18n::t!("document.secret_store.details.loading"))
-                    .muted_foreground()
-                    .into_any_element(),
-            ),
-            DetailsState::Failed(error) => sections.push(
-                BannerBlock::new(
-                    BannerVariant::Danger,
-                    dbflux_i18n::t!("document.secret_store.details.failed"),
-                )
-                .with_body(error.clone())
-                .into_any_element(),
-            ),
-            DetailsState::Idle => {}
-        }
-
-        sections.extend(versions);
+        let sections = self.detail_sections(summary, cx).into_column();
 
         let header = self.render_details_header(summary, cx);
 
@@ -276,9 +332,8 @@ impl SecretView {
             .children(bar)
     }
 
-    /// The secret's name with the pane's two actions: Copy name and Close.
-    /// The artboard's third button, open in a tab, waits for the document per
-    /// secret.
+    /// The secret's name with the pane's actions: Copy name, Delete, open in
+    /// a tab and Close.
     pub(super) fn render_details_header(
         &self,
         summary: &SecretSummary,
@@ -341,6 +396,21 @@ impl SecretView {
                     .disabled(!self.can_delete_selected())
                     .on_click(cx.listener(|this, _, window, cx| this.open_delete(window, cx))),
                 )
+            })
+            .child({
+                let name = summary.name.clone();
+
+                Button::new(
+                    "secret-details-expand",
+                    dbflux_i18n::t!("document.secret_store.details.open_in_tab"),
+                )
+                .ghost()
+                .icon(AppIcon::Maximize2)
+                .icon_only()
+                .tab_stop(false)
+                .on_click(cx.listener(move |_, _, _, cx| {
+                    cx.emit(SecretViewEvent::OpenInTab { name: name.clone() })
+                }))
             })
             .child(
                 Button::new(

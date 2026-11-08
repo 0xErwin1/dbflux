@@ -921,3 +921,33 @@ fn a_disconnect_emits_no_user_error_event(cx: &mut TestAppContext) {
         Some("user_error")
     );
 }
+
+/// A view bound to a region sees no connection while the profile is on
+/// another one: nothing is read and nothing is written, and the view says
+/// the connection is there but elsewhere. Binding it to the region the
+/// profile is on brings the connection back.
+#[gpui::test]
+fn a_view_bound_to_another_region_sees_no_connection(cx: &mut TestAppContext) {
+    let mut opened = open_with_regions(cx, &[OTHER_REGION, CURRENT_REGION]);
+    opened.open_secret(KEY_VALUE_SECRET);
+
+    opened.update_view(|view, cx| view.set_region_pin(Some(OTHER_REGION.to_string()), cx));
+
+    assert!(opened.read_view(|view| !view.can_retrieve_value()));
+    let (mismatch, connected) =
+        opened.update_view(|view, cx| (view.region_mismatch(cx), view.connection(cx).is_some()));
+    assert!(mismatch && !connected);
+
+    let reads_before = opened.driver.secret_store_calls().value_requests.len();
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
+    assert_eq!(
+        opened.driver.secret_store_calls().value_requests.len(),
+        reads_before
+    );
+    assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+
+    opened.update_view(|view, cx| view.set_region_pin(Some(CURRENT_REGION.to_string()), cx));
+    assert!(opened.read_view(|view| view.can_retrieve_value()));
+    assert!(!opened.update_view(|view, cx| view.region_mismatch(cx)));
+}

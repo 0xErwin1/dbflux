@@ -74,7 +74,7 @@ impl DeleteDialog {
 
 impl SecretView {
     /// Whether the store can delete at all.
-    pub fn supports_delete(&self) -> bool {
+    pub(crate) fn supports_delete(&self) -> bool {
         self.store_allows(DELETE_CAPABILITIES)
     }
 
@@ -84,7 +84,7 @@ impl SecretView {
     }
 
     /// Whether Delete may open its dialog for the selection now.
-    pub fn can_delete_selected(&self) -> bool {
+    pub(crate) fn can_delete_selected(&self) -> bool {
         self.supports_delete()
             && self.connection_present
             && !self.write_in_flight
@@ -95,7 +95,7 @@ impl SecretView {
 
     /// Opens the confirmation of deleting the selected secret. Nothing is
     /// written until it is confirmed.
-    pub fn open_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.supports_delete() || self.dialog_is_open() || self.write_in_flight {
             return;
         }
@@ -148,7 +148,7 @@ impl SecretView {
 
     /// Picks the recovery window of the open deletion dialog. A window the
     /// service would refuse is ignored.
-    pub fn set_recovery_window(&mut self, days: u32, cx: &mut Context<Self>) {
+    pub(crate) fn set_recovery_window(&mut self, days: u32, cx: &mut Context<Self>) {
         if !(MIN_RECOVERY_WINDOW_DAYS..=MAX_RECOVERY_WINDOW_DAYS).contains(&days) {
             return;
         }
@@ -261,13 +261,13 @@ impl SecretView {
     // -- Restore ------------------------------------------------------------
 
     /// Whether the store can cancel a scheduled deletion.
-    pub fn supports_restore(&self) -> bool {
+    pub(crate) fn supports_restore(&self) -> bool {
         self.store_allows(RESTORE_CAPABILITIES)
     }
 
     /// Whether the selection is a secret scheduled for deletion that Restore
     /// may cancel now.
-    pub fn can_restore_selected(&self) -> bool {
+    pub(crate) fn can_restore_selected(&self) -> bool {
         self.supports_restore()
             && self.connection_present
             && !self.write_in_flight
@@ -280,7 +280,7 @@ impl SecretView {
     /// Cancels the scheduled deletion of the selected secret through the
     /// seam. Restoring writes nothing the user would lose, so it asks for no
     /// confirmation beyond the button.
-    pub fn restore_selected(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn restore_selected(&mut self, cx: &mut Context<Self>) {
         if !self.can_restore_selected() {
             return;
         }

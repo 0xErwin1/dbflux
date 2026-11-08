@@ -9,6 +9,7 @@
 //! closes. Behavior that differs between stores follows the store's
 //! `SecretStoreCapabilities`, never a driver id.
 
+pub(crate) mod changes;
 mod context_menu;
 mod create;
 mod data;
@@ -18,6 +19,7 @@ mod pane;
 mod pane_actions;
 mod region;
 mod render;
+mod sync;
 mod value;
 mod view;
 mod write;
@@ -50,8 +52,19 @@ use gpui::*;
 use std::cell::Cell;
 use std::rc::Rc;
 use uuid::Uuid;
-use view::SecretViewEvent;
-pub use view::{DetailsState, SecretView, VersionsState};
+pub(crate) use view::SecretViewEvent;
+pub(crate) use view::{DetailsState, SecretView, VersionsState};
+
+/// A request to open one secret in its own tab, raised by the listing and
+/// drained by the workspace. The region is the one the listing is loaded
+/// under: names are region-scoped.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SecretOpenRequest {
+    pub store_id: String,
+    pub name: String,
+    pub version: Option<String>,
+    pub region: Option<String>,
+}
 
 /// Which part of the document owns keyboard input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,23 +157,26 @@ pub struct SecretStoreDocument {
     /// What the listing showed when the create in flight was sent, so its
     /// landing can tell that the user moved on.
     create_origin: Option<create::ListingView>,
+    /// The secret the user asked to open in its own tab, drained by the
+    /// workspace on its next render.
+    pending_open_secret: Option<SecretOpenRequest>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<DocumentEvent> for SecretStoreDocument {}
 
 /// What the document reads from the live connection when it opens.
-struct ConnectionFacts {
-    name: String,
-    descriptor: SecretStoreDescriptor,
-    region: Option<String>,
-    region_switchable: bool,
+pub(crate) struct ConnectionFacts {
+    pub(crate) name: String,
+    pub(crate) descriptor: SecretStoreDescriptor,
+    pub(crate) region: Option<String>,
+    pub(crate) region_switchable: bool,
 }
 
 impl ConnectionFacts {
     /// A connection without the store yields a descriptor that supports
     /// nothing, so the document opens empty with an error.
-    fn read(
+    pub(crate) fn read(
         app_state: &Entity<AppStateEntity>,
         profile_id: Uuid,
         store_id: &str,
@@ -255,6 +271,7 @@ impl SecretStoreDocument {
         // The view redraws itself on its own state; the document draws it.
         subscriptions.push(cx.observe(&view, |_, _, cx| cx.notify()));
         subscriptions.push(cx.subscribe_in(&view, window, Self::on_view_event));
+        subscriptions.push(changes::follow(cx, Self::on_secret_change));
 
         let mut doc = Self {
             id: DocumentId::new(),
@@ -291,6 +308,7 @@ impl SecretStoreDocument {
             clear_search_input: false,
             create_dialog: None,
             create_origin: None,
+            pending_open_secret: None,
             _subscriptions: subscriptions,
         };
 
@@ -362,24 +380,12 @@ impl SecretStoreDocument {
     /// listing on what the connection actually reaches.
     fn watch_app_state(app_state: &Entity<AppStateEntity>, cx: &mut Context<Self>) -> Subscription {
         cx.subscribe(app_state, |this, _, _: &AppStateChanged, cx| {
-            this.view.update(cx, |view, cx| {
-                view.sync_connection_presence(cx);
-                view.close_dialog_if_session_replaced(cx)
-            });
+            this.view
+                .update(cx, |view, cx| view.begin_connection_change(cx));
             this.adopt_connection_region(cx);
-            this.view.update(cx, |view, cx| {
-                view.adopt_connection_session(HistoryLoad::Automatic, cx)
-            });
             this.view
-                .update(cx, |view, cx| view.adopt_details_session(cx));
-            this.view
-                .update(cx, |view, cx| view.drop_value_of_replaced_session(cx));
+                .update(cx, |view, cx| view.finish_connection_change(cx));
         })
-    }
-
-    /// The view of the selected secret.
-    pub fn view(&self) -> &Entity<SecretView> {
-        &self.view
     }
 
     pub fn id(&self) -> DocumentId {
@@ -784,9 +790,18 @@ impl SecretStoreDocument {
         cx: &mut Context<Self>,
     ) {
         match event {
-            SecretViewEvent::ReloadListing => self.reload_listing_in_place(cx),
+            SecretViewEvent::ReloadListing => {
+                self.reload_listing_in_place(cx);
+
+                if let Some(name) = self.view.read(cx).name().map(str::to_string) {
+                    self.announce(name, changes::SecretChangeKind::Changed, cx);
+                }
+            }
             SecretViewEvent::StoreCalled(timing) => self.last_call = Some(*timing),
-            SecretViewEvent::Removed => self.selected = None,
+            SecretViewEvent::Removed { name } => {
+                self.selected = None;
+                self.announce(name.clone(), changes::SecretChangeKind::Removed, cx);
+            }
             SecretViewEvent::DialogOpened => self.drop_context_menu(),
             SecretViewEvent::DialogClosed => {
                 // The event is delivered after the update that closed the
@@ -797,12 +812,14 @@ impl SecretStoreDocument {
                 }
             }
             SecretViewEvent::CloseRequested => self.close_details(window, cx),
+            SecretViewEvent::OpenInTab { name } => self.queue_open_secret(name.clone(), cx),
             SecretViewEvent::Created { name, stands } => {
                 self.land_create(name, *stands, cx);
+                self.announce(name.clone(), changes::SecretChangeKind::Created, cx);
             }
         }
     }
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

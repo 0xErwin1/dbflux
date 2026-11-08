@@ -3418,6 +3418,18 @@ document:
     new: New tab
     close_named: "Close %{title}"
     unsaved_changes: Unsaved changes
+  secret:
+    subtitle: "%{store} · %{connection} · %{region}"
+    subtitle_no_region: "%{store} · %{connection}"
+    close: "Close tab"
+    removed:
+      title: "This secret was deleted"
+      body: "%{name} is no longer in the store. Nothing is read or written from this tab; close it, or create the secret again to see it here."
+    region_mismatch:
+      title: "This connection is on another region"
+      body: "%{name} belongs to %{region}, and the connection is on %{live}. Nothing is read or written from this tab until the connection is back on %{region}."
+    footer:
+      value_scope: "Value visible in this tab only, cleared on close"
   secret_store:
     title: "%{store} · %{connection}"
     search_placeholder: "Search runs on the store, values are never listed"
@@ -3531,6 +3543,7 @@ document:
       created: "Created"
       last_changed: "Last changed"
       last_retrieved: "Last retrieved"
+      open_in_tab: "Open in tab"
     versions:
       title: "Versions"
       history_title: "History"
@@ -3566,6 +3579,7 @@ document:
       arn_loading: "The ARN arrives with the details…"
       arn_missing: "The store reports no resource identifier"
       arn_failed: "The details could not be loaded: %{error}"
+      open_in_tab: "Open in tab"
     toast:
       value_copied: "Value copied to the clipboard"
       resource_id_copied: "ARN copied to the clipboard"

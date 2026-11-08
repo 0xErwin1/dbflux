@@ -271,6 +271,17 @@ impl Tab {
         }
     }
 
+    /// Drains an open-this-secret-in-its-own-tab intent, if this tab has one
+    /// pending. `None` for every other document type.
+    pub fn take_pending_open_secret(
+        &self,
+        cx: &mut App,
+    ) -> Option<crate::secret_store::SecretOpenRequest> {
+        match self {
+            Tab::Pane(p) => p.take_pending_open_secret.as_ref().and_then(|f| f(cx)),
+        }
+    }
+
     /// Opens `path` in this tab when it is a secret store document. A no-op
     /// for every other document type.
     pub fn navigate_secret_path(&self, path: Option<String>, cx: &mut App) {

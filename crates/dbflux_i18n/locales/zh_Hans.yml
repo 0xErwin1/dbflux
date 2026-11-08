@@ -3418,6 +3418,18 @@ document:
     new: 新建标签页
     close_named: "关闭 %{title}"
     unsaved_changes: 未保存的更改
+  secret:
+    subtitle: "%{store} · %{connection} · %{region}"
+    subtitle_no_region: "%{store} · %{connection}"
+    close: "关闭标签页"
+    removed:
+      title: "此密钥已被删除"
+      body: "%{name} 已不在存储中。此标签页不会读取或写入任何内容；请关闭它，或重新创建该密钥以在此处查看。"
+    region_mismatch:
+      title: "此连接位于另一个区域"
+      body: "%{name} 属于 %{region}，而连接位于 %{live}。在连接回到 %{region} 之前，此标签页不会读取或写入任何内容。"
+    footer:
+      value_scope: "值仅在此标签页中可见，关闭时清除"
   secret_store:
     title: "%{store} · %{connection}"
     search_placeholder: "搜索在存储端执行，绝不会列出值"
@@ -3531,6 +3543,7 @@ document:
       created: "创建时间"
       last_changed: "上次更改"
       last_retrieved: "上次获取"
+      open_in_tab: "在标签页中打开"
     versions:
       title: "版本"
       history_title: "历史记录"
@@ -3566,6 +3579,7 @@ document:
       arn_loading: "ARN 将随详情一起加载…"
       arn_missing: "存储未报告资源标识符"
       arn_failed: "无法加载详情：%{error}"
+      open_in_tab: "在标签页中打开"
     toast:
       value_copied: "已将值复制到剪贴板"
       resource_id_copied: "已将 ARN 复制到剪贴板"

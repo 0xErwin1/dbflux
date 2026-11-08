@@ -488,6 +488,50 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Opens one secret in its own tab, or focuses the tab that already shows
+    /// it. The key carries the region the listing was loaded under, so the
+    /// same name in two regions gets two tabs.
+    pub(in crate::ui::views::workspace) fn open_secret_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        request: crate::ui::document::SecretOpenRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = crate::ui::document::DocumentKey::Secret {
+            profile_id,
+            store_id: request.store_id.clone(),
+            name: request.name.clone(),
+            version: request.version.clone(),
+            region: request.region.clone(),
+        };
+
+        if let Some(id) = self.tab_manager.read(cx).find_by_key(&key, cx) {
+            self.tab_manager.update(cx, |mgr, cx| mgr.activate(id, cx));
+            self.set_focus(FocusTarget::Document, window, cx);
+            return;
+        }
+
+        let doc = cx.new(|cx| {
+            crate::ui::document::SecretDocument::new(
+                profile_id,
+                request.store_id,
+                request.name,
+                request.version,
+                request.region,
+                self.app_state.clone(),
+                cx,
+            )
+        });
+        let pane = crate::ui::document::SecretDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     /// Opens the document of one secret store, or focuses the store's
     /// existing tab. A `path` of a hierarchical store opens at that path, and
     /// navigates an existing tab to it.

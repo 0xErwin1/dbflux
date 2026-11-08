@@ -47,7 +47,7 @@ use uuid::Uuid;
 
 use super::RegionListState;
 
-const KEY_VALUE_SECRET: &str = "prod/api/credentials";
+pub(crate) const KEY_VALUE_SECRET: &str = "prod/api/credentials";
 const MANAGED_SECRET: &str = "prod/db/master";
 const PENDING_DELETION_SECRET: &str = "prod/deploy/legacy-token";
 const PLAINTEXT_SECRET: &str = "prod/notify/webhook-token";
@@ -3053,13 +3053,13 @@ fn the_editor_controls_are_covered(cx: &mut TestAppContext) {
 
 // -- Region switch ---------------------------------------------------------
 
-const CURRENT_REGION: &str = "us-east-1";
-const OTHER_REGION: &str = "eu-west-1";
+pub(crate) const CURRENT_REGION: &str = "us-east-1";
+pub(crate) const OTHER_REGION: &str = "eu-west-1";
 
 /// An app state whose profile is an `aws_secrets` connection the manager can
 /// switch by region: the fake driver is registered under the built-in driver
 /// id the profile resolves to, so `prepare_switch_region` finds it.
-fn connected_aws_app_state(
+pub(crate) fn connected_aws_app_state(
     cx: &mut TestAppContext,
     driver: &FakeDriver,
     name: &str,
@@ -3790,6 +3790,7 @@ fn a_secondary_click_opens_a_secret_row_menu(cx: &mut TestAppContext) {
     assert_eq!(
         opened.menu_actions(),
         vec![
+            "OpenInTab",
             "RetrieveValue",
             "CopyName",
             "CopyArn",
@@ -3823,6 +3824,7 @@ fn restricted_secrets_disable_delete_and_say_why(cx: &mut TestAppContext) {
         (
             MANAGED_SECRET,
             vec![
+                "OpenInTab",
                 "RetrieveValue",
                 "CopyName",
                 "CopyArn",
@@ -3834,6 +3836,7 @@ fn restricted_secrets_disable_delete_and_say_why(cx: &mut TestAppContext) {
         (
             PENDING_DELETION_SECRET,
             vec![
+                "OpenInTab",
                 "RetrieveValue",
                 "CopyName",
                 "CopyArn",
@@ -3889,9 +3892,9 @@ fn a_secret_pending_deletion_keeps_retrieve_value_disabled(cx: &mut TestAppConte
             .as_ref()
             .expect("menu open")
             .items
-            .first()
+            .get(1)
             .map(|item| (item.disabled, item.detail.clone()))
-            .expect("Retrieve value is the first entry")
+            .expect("Retrieve value is the second entry")
     });
     assert!(
         detail.0,
@@ -3916,9 +3919,9 @@ fn a_secret_pending_deletion_keeps_retrieve_value_disabled(cx: &mut TestAppConte
             .as_ref()
             .expect("menu open")
             .items
-            .first()
+            .get(1)
             .map(|item| item.disabled)
-            .expect("Retrieve value is the first entry")),
+            .expect("Retrieve value is the second entry")),
         "Retrieve value is enabled for a normal secret"
     );
 }
@@ -3933,7 +3936,13 @@ fn a_parameter_row_offers_copy_name_and_retrieve_value(cx: &mut TestAppContext) 
 
     assert_eq!(
         opened.menu_actions(),
-        vec!["RetrieveValue", "CopyName", "EditTags", "Delete"],
+        vec![
+            "OpenInTab",
+            "RetrieveValue",
+            "CopyName",
+            "EditTags",
+            "Delete"
+        ],
         "a parameter row offers Copy name, Retrieve value, Edit tags and Delete"
     );
     let text = opened.rendered_text();
@@ -3975,8 +3984,9 @@ fn choosing_a_menu_item_runs_it_and_closes_the_menu(cx: &mut TestAppContext) {
 
     opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
 
-    // Copy name is the second entry of the menu.
-    opened.click_menu_item("secret-menu-copy-name-item-1");
+    // Copy name is the third entry of the menu, after Open in tab and
+    // Retrieve value.
+    opened.click_menu_item("secret-menu-copy-name-item-2");
 
     assert_eq!(opened.clipboard(), Some(KEY_VALUE_SECRET.to_string()));
     assert!(
@@ -4052,7 +4062,8 @@ fn the_keyboard_runs_the_menu(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
 
-    // Retrieve value is the first entry: selecting it right away retrieves.
+    // Retrieve value is the second entry, after Open in tab.
+    assert!(opened.command(Command::MenuDown));
     assert!(opened.command(Command::MenuSelect));
     assert!(
         opened.read_view(|view| matches!(view.value(), ValueState::Loading))
@@ -4094,7 +4105,13 @@ fn the_right_click_menu_items_are_covered(cx: &mut TestAppContext) {
         assert!(
             checked
                 .iter()
-                .any(|id| id == "secret-menu-retrieve-value-item-0"),
+                .any(|id| id == "secret-menu-retrieve-value-item-1"),
+            "{checked:?}"
+        );
+        assert!(
+            checked
+                .iter()
+                .any(|id| id == "secret-menu-open-in-tab-item-0"),
             "{checked:?}"
         );
 
@@ -4134,7 +4151,7 @@ fn the_right_click_menu_items_are_covered(cx: &mut TestAppContext) {
     assert!(
         secrets_checked_ids
             .iter()
-            .any(|id| id == "secret-menu-copy-arn-item-2"),
+            .any(|id| id == "secret-menu-copy-arn-item-3"),
         "{secrets_checked_ids:?}"
     );
 }
@@ -4195,12 +4212,16 @@ fn the_menu_entries_carry_the_shortcuts_the_keymap_binds(cx: &mut TestAppContext
     };
 
     assert_eq!(
-        shortcuts[0].as_deref().map(str::to_string),
+        shortcuts[0], None,
+        "Open in tab has no chord and shows none"
+    );
+    assert_eq!(
+        shortcuts[1].as_deref().map(str::to_string),
         expected(Command::ToggleValuePanel),
         "Retrieve value shows the chord the keymap binds"
     );
-    assert_eq!(shortcuts[1], None, "Copy name has no chord and shows none");
-    assert_eq!(shortcuts[2], None, "Copy ARN has no chord and shows none");
+    assert_eq!(shortcuts[2], None, "Copy name has no chord and shows none");
+    assert_eq!(shortcuts[3], None, "Copy ARN has no chord and shows none");
 
     let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
     opened.right_click("secret-path-row-/app/prod/db/");
@@ -4287,6 +4308,8 @@ fn enter_on_a_disabled_entry_leaves_the_menu_open(cx: &mut TestAppContext) {
     opened.right_click(&format!("secret-row-{PENDING_DELETION_SECRET}"));
 
     let before = opened.read(|doc| doc.selected().cloned());
+    // Open in tab is first; Retrieve value, the disabled entry, is second.
+    assert!(opened.command(Command::MenuDown));
     assert!(opened.command(Command::MenuSelect));
 
     assert!(
@@ -8134,7 +8157,7 @@ mod details_design {
     }
 
     #[gpui::test]
-    fn the_pane_header_names_the_secret_with_copy_and_close(cx: &mut TestAppContext) {
+    fn the_pane_header_names_the_secret_with_copy_expand_and_close(cx: &mut TestAppContext) {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.select(KEY_VALUE_SECRET);
 
@@ -8145,12 +8168,7 @@ mod details_design {
         assert!(has("secret-details-name"));
         assert!(has("secret-details-copy-name"));
         assert!(has("secret-details-close"));
-        assert!(
-            !paths
-                .iter()
-                .any(|path| path.contains("secret-details-expand")),
-            "open in tab is a later task"
-        );
+        assert!(has("secret-details-expand"), "{paths:?}");
         assert_eq!(
             node_text(&mut opened, "secret-details-name").as_deref(),
             Some(KEY_VALUE_SECRET)

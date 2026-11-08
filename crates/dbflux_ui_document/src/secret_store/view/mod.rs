@@ -34,8 +34,8 @@ use dbflux_components::controls::InputState;
 use dbflux_components::modals::ModalFocus;
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
-    Connection, SecretDetails, SecretStoreCapabilities, SecretStoreDescriptor, SecretSummary,
-    SecretVersionInfo,
+    ConnectedProfile, Connection, SecretDetails, SecretStoreCapabilities, SecretStoreDescriptor,
+    SecretSummary, SecretVersionInfo,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -48,7 +48,7 @@ use uuid::Uuid;
 
 /// The describe of the selected secret.
 #[derive(Clone, Debug, Default)]
-pub enum DetailsState {
+pub(crate) enum DetailsState {
     #[default]
     Idle,
     Loading,
@@ -59,7 +59,7 @@ pub enum DetailsState {
 /// The version history of the selected secret, loaded apart from its
 /// describe so a slow or refused history never hides the details.
 #[derive(Clone, Debug, Default)]
-pub enum VersionsState {
+pub(crate) enum VersionsState {
     #[default]
     Idle,
     Loading,
@@ -75,7 +75,7 @@ pub enum VersionsState {
 }
 
 /// What a view tells its host.
-pub(super) enum SecretViewEvent {
+pub(crate) enum SecretViewEvent {
     /// A write or a follow-up read changed what the listing shows for the
     /// secret: the host reloads its listing in place.
     ReloadListing,
@@ -84,13 +84,17 @@ pub(super) enum SecretViewEvent {
     StoreCalled(CallTiming),
 
     /// The shown secret no longer exists: the host drops its selection.
-    Removed,
+    Removed { name: String },
 
     /// A write dialog opened over the host, which closes its own menus.
     DialogOpened,
 
     /// The pane's Close button was pressed.
     CloseRequested,
+
+    /// The pane's expand button was pressed: the host opens the secret in its
+    /// own tab.
+    OpenInTab { name: String },
 
     /// The open dialog went away, however it closed: the host drops what it
     /// kept for a dialog of its own.
@@ -101,7 +105,7 @@ pub(super) enum SecretViewEvent {
     Created { name: String, stands: bool },
 }
 
-pub struct SecretView {
+pub(crate) struct SecretView {
     profile_id: Uuid,
     pub(super) store: SecretStoreDescriptor,
     app_state: Entity<AppStateEntity>,
@@ -194,12 +198,19 @@ pub struct SecretView {
     /// Set while the host's region switch reconnects: the session a write
     /// would land on is about to be replaced.
     region_switching: Rc<Cell<bool>>,
+    /// The region the host is bound to. While the profile's live connection
+    /// is on another one, the view sees no connection: it neither reads nor
+    /// writes, whatever the profile's session would serve.
+    region_pin: Option<String>,
+    /// The version Retrieve value fetches: the one a document was opened at,
+    /// `None` for the current value.
+    opened_version: Option<String>,
 }
 
 impl EventEmitter<SecretViewEvent> for SecretView {}
 
 impl SecretView {
-    pub(super) fn new(
+    pub(crate) fn new(
         profile_id: Uuid,
         store: SecretStoreDescriptor,
         app_state: Entity<AppStateEntity>,
@@ -209,6 +220,8 @@ impl SecretView {
         let connection_present = app_state.read(cx).connections().contains_key(&profile_id);
 
         Self {
+            region_pin: None,
+            opened_version: None,
             profile_id,
             store,
             app_state,
@@ -252,8 +265,67 @@ impl SecretView {
     }
 
     /// Whether the profile had a live connection at the last state change.
-    pub fn is_connected(&self) -> bool {
+    pub(crate) fn is_connected(&self) -> bool {
         self.connection_present
+    }
+
+    /// The profile's connection, unless the view is bound to a region the
+    /// connection is not on. The one lookup every read and write goes
+    /// through.
+    pub(crate) fn live_profile<'a>(&self, cx: &'a App) -> Option<&'a ConnectedProfile> {
+        let connected = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&self.profile_id)?;
+
+        match &self.region_pin {
+            Some(pin) if connected.connection.current_region().as_deref() != Some(pin.as_str()) => {
+                None
+            }
+            _ => Some(connected),
+        }
+    }
+
+    /// Whether the profile is connected on another region than the one the
+    /// view is bound to.
+    pub(crate) fn region_mismatch(&self, cx: &App) -> bool {
+        self.region_pin.is_some()
+            && self.live_profile(cx).is_none()
+            && self
+                .app_state
+                .read(cx)
+                .connections()
+                .contains_key(&self.profile_id)
+    }
+
+    /// Makes Retrieve value fetch `version` rather than the current value.
+    pub(crate) fn set_opened_version(&mut self, version: Option<String>) {
+        self.opened_version = version;
+    }
+
+    /// Reads the shown secret again: its details and history, dropping the
+    /// retrieved value the way selecting it afresh does. Refused while the
+    /// editor holds unsaved text.
+    pub(crate) fn refresh_shown(&mut self, cx: &mut Context<Self>) {
+        let Some(name) = self.name.clone() else {
+            return;
+        };
+
+        if self.block_unsaved_value_edits(cx) {
+            return;
+        }
+
+        let row = self.listing_row.clone();
+        self.show_secret(name, row, cx);
+    }
+
+    /// Binds the view to `region` (or releases it). The actions that need a
+    /// connection follow at once.
+    pub(crate) fn set_region_pin(&mut self, region: Option<String>, cx: &mut Context<Self>) {
+        self.region_pin = region;
+        self.sync_connection_presence(cx);
+        cx.notify();
     }
 
     /// Follows the profile's connection coming and going, so the actions that
@@ -271,10 +343,26 @@ impl SecretView {
         }
     }
 
+    /// The first half of following a state change of the app: presence and
+    /// the dialog's session. A host with something of its own to adopt (the
+    /// listing's region) does it between the halves.
+    pub(crate) fn begin_connection_change(&mut self, cx: &mut Context<Self>) {
+        self.sync_connection_presence(cx);
+        self.close_dialog_if_session_replaced(cx);
+    }
+
+    /// The second half: the history, the details and the value follow the
+    /// connection the profile holds now.
+    pub(crate) fn finish_connection_change(&mut self, cx: &mut Context<Self>) {
+        self.adopt_connection_session(crate::secret_store::HistoryLoad::Automatic, cx);
+        self.adopt_details_session(cx);
+        self.drop_value_of_replaced_session(cx);
+    }
+
     /// Runs what the view needs a window for before it draws: the inputs
     /// that show a retrieved value, and the editor a pending Edit value
     /// opens once its retrieval landed.
-    pub(super) fn prepare_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn prepare_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_connection_presence(cx);
 
         // An editor that kept unsaved text across a session change may have
@@ -294,29 +382,32 @@ impl SecretView {
     }
 
     /// Whether the open editor holds the keyboard.
-    pub(super) fn value_editor_focused(&self) -> bool {
+    pub(crate) fn value_editor_focused(&self) -> bool {
         self.value_edit.as_ref().is_some_and(|edit| edit.focused)
     }
 
-    pub fn details(&self) -> &DetailsState {
+    pub(crate) fn details(&self) -> &DetailsState {
         &self.details
     }
 
-    pub fn versions(&self) -> &VersionsState {
+    #[cfg(test)]
+    pub(crate) fn versions(&self) -> &VersionsState {
         &self.versions
     }
 
     /// The version the value section shows, `None` for the current value.
-    pub fn value_version(&self) -> Option<&str> {
+    #[cfg(test)]
+    pub(crate) fn value_version(&self) -> Option<&str> {
         self.value_version.as_deref()
     }
 
-    pub fn value(&self) -> &ValueState {
+    #[cfg(test)]
+    pub(crate) fn value(&self) -> &ValueState {
         &self.value
     }
 
     /// The name of the secret the view shows.
-    pub fn name(&self) -> Option<&str> {
+    pub(crate) fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
 
@@ -331,7 +422,7 @@ impl SecretView {
 
     /// The shown secret's summary: the host's listing row while it holds one,
     /// else the last one the view saw.
-    pub fn selected_summary(&self) -> Option<&SecretSummary> {
+    pub(crate) fn selected_summary(&self) -> Option<&SecretSummary> {
         let name = self.name.as_deref()?;
 
         self.listing_row.as_ref().or_else(|| {
@@ -413,7 +504,7 @@ impl SecretView {
 
     /// Whether Retrieve value may run for the shown secret: one whose
     /// deletion is not pending, with no retrieval in flight.
-    pub fn can_retrieve_value(&self) -> bool {
+    pub(crate) fn can_retrieve_value(&self) -> bool {
         self.connection_present
             && self
                 .selected_summary()
@@ -426,7 +517,7 @@ impl SecretView {
     /// Shows `name`: drops what the previous selection left (dialog, value,
     /// details, history) and describes the new secret. The caller has
     /// already made sure no unsaved edit is lost.
-    pub(super) fn show_secret(
+    pub(crate) fn show_secret(
         &mut self,
         name: String,
         listing_row: Option<SecretSummary>,
@@ -470,11 +561,7 @@ impl SecretView {
 
     /// Drops the shown secret's details, history and value after a deletion
     /// that removed it, and tells the host.
-    pub(in crate::secret_store) fn forget_removed_secret(
-        &mut self,
-        name: &str,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn forget_removed_secret(&mut self, name: &str, cx: &mut Context<Self>) {
         if !self.is_for(name) {
             return;
         }
@@ -485,14 +572,16 @@ impl SecretView {
         self.reset_versions();
         self.name = None;
         self.listing_row = None;
-        cx.emit(SecretViewEvent::Removed);
+        cx.emit(SecretViewEvent::Removed {
+            name: name.to_string(),
+        });
     }
 
     // -- Value -------------------------------------------------------------
 
     /// Drops the retrieved value, the inputs that draw it and any open
     /// editor of it.
-    pub fn clear_value(&mut self) {
+    pub(crate) fn clear_value(&mut self) {
         self.value_generation = self.value_generation.wrapping_add(1);
         self.value_write_generation = self.value_write_generation.wrapping_add(1);
         self.edit_after_retrieve = false;
@@ -506,28 +595,28 @@ impl SecretView {
         self.value_viewer_scroll.set_offset(point(px(0.0), px(0.0)));
     }
 
-    pub fn toggle_reveal(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_reveal(&mut self, index: usize, cx: &mut Context<Self>) {
         if let ValueState::Loaded(value) = &mut self.value {
             value.toggle_reveal(index);
             cx.notify();
         }
     }
 
-    pub fn toggle_reveal_all(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_reveal_all(&mut self, cx: &mut Context<Self>) {
         if let ValueState::Loaded(value) = &mut self.value {
             value.toggle_reveal_all();
             cx.notify();
         }
     }
 
-    pub fn hide_all(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn hide_all(&mut self, cx: &mut Context<Self>) {
         if let ValueState::Loaded(value) = &mut self.value {
             value.hide_all();
             cx.notify();
         }
     }
 
-    pub fn set_value_view(&mut self, view: ValueView, cx: &mut Context<Self>) {
+    pub(crate) fn set_value_view(&mut self, view: ValueView, cx: &mut Context<Self>) {
         #[cfg(test)]
         {
             self.value_view_sets += 1;
@@ -552,7 +641,7 @@ impl SecretView {
     }
 
     /// Copies one field of the retrieved value, on an explicit action only.
-    pub fn copy_value_field(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(crate) fn copy_value_field(&mut self, index: usize, cx: &mut Context<Self>) {
         let ValueState::Loaded(value) = &self.value else {
             return;
         };
@@ -570,7 +659,7 @@ impl SecretView {
 
     /// Copies the whole value: the JSON of a key/value secret, the text of a
     /// plaintext one, the base64 of a binary one.
-    pub fn copy_full_value(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn copy_full_value(&mut self, cx: &mut Context<Self>) {
         let ValueState::Loaded(value) = &self.value else {
             return;
         };
@@ -585,7 +674,7 @@ impl SecretView {
 
     /// Copies the selected secret's name. The one implementation behind the
     /// context menu's Copy name entry and the pane action `m` reaches.
-    pub fn copy_selected_name(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn copy_selected_name(&mut self, cx: &mut Context<Self>) {
         let Some(name) = self.selected_summary().map(|summary| summary.name.clone()) else {
             return;
         };
@@ -597,7 +686,7 @@ impl SecretView {
         );
     }
 
-    pub fn copy_resource_id(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn copy_resource_id(&mut self, cx: &mut Context<Self>) {
         let resource_id = match &self.details {
             DetailsState::Loaded(details) => details.resource_id.clone(),
             _ => None,
@@ -624,7 +713,7 @@ impl SecretView {
     }
 
     /// Copies the text of the failed retrieval's error.
-    pub fn copy_value_error(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn copy_value_error(&mut self, cx: &mut Context<Self>) {
         let ValueState::Failed(failure) = &self.value else {
             return;
         };
@@ -637,7 +726,7 @@ impl SecretView {
     }
 
     /// Opens the audit viewer on the failed retrieval.
-    pub fn view_value_error_in_audit(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn view_value_error_in_audit(&mut self, cx: &mut Context<Self>) {
         let ValueState::Failed(failure) = &self.value else {
             return;
         };
@@ -652,7 +741,7 @@ impl SecretView {
 
     /// Runs the commands that act on the shown secret. Returns whether the
     /// command was one of them.
-    pub(super) fn dispatch_command(
+    pub(crate) fn dispatch_command(
         &mut self,
         cmd: Command,
         window: &mut Window,

@@ -18,7 +18,7 @@ impl SecretView {
     /// Whether Edit value may be pressed: the secret takes writes, no editor
     /// or dialog is open, and the value is either loaded as text or can be
     /// retrieved first.
-    pub fn can_request_edit_value(&self) -> bool {
+    pub(crate) fn can_request_edit_value(&self) -> bool {
         if self.value_edit.is_some()
             || !self.connection_present
             || self.dialog_is_open()
@@ -38,7 +38,7 @@ impl SecretView {
     /// Edit value: opens the editor on the loaded value. A value that is not
     /// loaded is retrieved first — the retrieval is audited like any other —
     /// and the editor opens when it lands.
-    pub fn request_edit_value(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn request_edit_value(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_request_edit_value() {
             return;
         }
