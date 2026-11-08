@@ -13,6 +13,7 @@ mod context_menu;
 mod data;
 mod details;
 mod editor;
+mod list;
 mod listing;
 mod pane;
 mod region;
@@ -90,7 +91,11 @@ pub enum VersionsState {
 /// The last store call and how long it took, for the status bar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoreCall {
-    List { count: usize },
+    /// `hierarchical` picks the noun the status bar uses for the entries.
+    List {
+        count: usize,
+        hierarchical: bool,
+    },
     Describe,
     Retrieve,
 }
@@ -482,6 +487,18 @@ impl SecretStoreDocument {
 
     fn hierarchical(&self) -> bool {
         self.store.supports(SecretStoreCapabilities::HIERARCHICAL)
+    }
+
+    /// What the footer says about the loaded rows: the footer and the status
+    /// bar draw the same counts from here.
+    pub(crate) fn loaded_summary(&self) -> String {
+        list::loaded_summary(
+            self.hierarchical(),
+            self.path_mode,
+            self.path.as_deref(),
+            self.listing.child_paths.len(),
+            self.listing.entries.len(),
+        )
     }
 
     /// The selected secret's listing row, when a secret is selected.
@@ -1062,31 +1079,21 @@ impl SecretStoreDocument {
             actions.push(edit_value);
         }
 
-        // The region picker and the retry of a failed listing are clickable
-        // toolbar controls, so the pane actions are their keyboard path too.
-        if self.region_switchable {
-            if let Some(dropdown) = self.region_dropdown.clone() {
-                actions.push(
-                    PaneAction::callback(
-                        "secret-region",
-                        dbflux_i18n::t!("document.secret_store.region.label"),
-                        move |window, cx| {
-                            dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
-                        },
-                    )
-                    .icon(AppIcon::Globe)
-                    .enabled(matches!(self.regions, RegionListState::Loaded(_))),
-                );
-            }
+        // The region picker is a clickable toolbar control, so the pane
+        // actions are its keyboard path too.
+        if self.region_switchable
+            && let Some(dropdown) = self.region_dropdown.clone()
+        {
             actions.push(
-                callback_action(
-                    &target,
-                    "secret-region-retry",
-                    "document.secret_store.region.retry",
-                    Self::load_regions,
+                PaneAction::callback(
+                    "secret-region",
+                    dbflux_i18n::t!("document.secret_store.region.label"),
+                    move |window, cx| {
+                        dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+                    },
                 )
-                .icon(AppIcon::RefreshCcw)
-                .enabled(matches!(self.regions, RegionListState::Failed(_))),
+                .icon(AppIcon::Globe)
+                .enabled(matches!(self.regions, RegionListState::Loaded(_))),
             );
         }
 

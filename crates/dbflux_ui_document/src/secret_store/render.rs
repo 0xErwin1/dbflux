@@ -2,10 +2,11 @@
 //! path and the store-side search, the rows, and the footer. The details pane
 //! lives in `details.rs`.
 
+use super::list::{format_short_time, rotation_chip};
 use super::listing::{PathMode, child_path_label, path_segments, relative_name};
 use super::{RegionListState, SecretFocusMode, SecretRowKey, SecretStoreDocument, context_menu};
 use crate::chrome::{
-    connection_segment, document_bar, document_footer, footer_item, footer_key_hint, search_field,
+    connection_segment, document_bar, document_footer, footer_key_hint, search_field,
 };
 use crate::handle::DocumentEvent;
 use dbflux_app::keymap::{Command, ContextId};
@@ -16,7 +17,8 @@ use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Badge, BadgeTone, Icon, SegmentedControl, SegmentedItem};
 use dbflux_components::tokens::{
-    ChromeColors, DocumentMetrics, NavigationMetrics, ObjectStoreMetrics, SecretStoreMetrics,
+    ChromeColors, DocumentMetrics, NavigationMetrics, ObjectStoreMetrics, ResultMetrics,
+    SecretStoreMetrics,
 };
 use dbflux_core::chrono::{DateTime, Local, Utc};
 use dbflux_core::{SecretRotation, SecretStoreCapabilities, SecretSummary};
@@ -24,6 +26,11 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
+
+/// Flex shrink factor of the search field. Shrink is proportional to this
+/// factor, so a weight far above the breadcrumb's makes the search absorb the
+/// narrowing until it reaches its minimum width.
+const SEARCH_SHRINK_WEIGHT: f32 = 1000.0;
 
 /// Placeholder for a field the store did not report.
 pub(super) const UNKNOWN: &str = "—";
@@ -89,11 +96,15 @@ pub(super) fn call_timing_label(timing: super::CallTiming) -> String {
     let millis = timing.millis.to_string();
 
     match timing.call {
-        super::StoreCall::List { count } => dbflux_i18n::t!(
-            if count == 1 {
-                "document.secret_store.status.list_timing.one"
-            } else {
-                "document.secret_store.status.list_timing.many"
+        super::StoreCall::List {
+            count,
+            hierarchical,
+        } => dbflux_i18n::t!(
+            match (hierarchical, count == 1) {
+                (false, true) => "document.secret_store.status.list_timing.one",
+                (false, false) => "document.secret_store.status.list_timing.many",
+                (true, true) => "document.secret_store.status.list_timing_parameters.one",
+                (true, false) => "document.secret_store.status.list_timing_parameters.many",
             },
             count = count,
             millis = millis.as_str()
@@ -106,6 +117,16 @@ pub(super) fn call_timing_label(timing: super::CallTiming) -> String {
             "document.secret_store.status.retrieve_timing",
             millis = millis.as_str()
         ),
+    }
+}
+
+/// A version that is a plain number reads "v3"; an opaque version id (a UUID)
+/// is shown as the store reports it.
+pub(super) fn version_label(version: Option<&str>) -> String {
+    match version {
+        Some(version) if version.parse::<u64>().is_ok() => format!("v{version}"),
+        Some(version) => version.to_string(),
+        None => UNKNOWN.to_string(),
     }
 }
 
@@ -204,41 +225,92 @@ impl SecretStoreDocument {
     /// is this", so it sits between the store and the path rather than in the
     /// toolbar among the controls.
     ///
-    /// While the region list is loading or failed, the picker cannot be
-    /// offered; the region then stays visible as a plain segment, so the
-    /// listing never loses the answer to which region it was loaded under.
-    fn render_breadcrumb_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut row = div()
-            .flex()
-            .min_w_0()
-            .items_center()
-            .gap(NavigationMetrics::BREADCRUMB_GAP)
-            .child(Breadcrumb::new(self.identity_segments(cx)).mono());
+    /// While the region list is loading, or when the store cannot list
+    /// regions, the picker cannot be offered; the region then stays visible
+    /// as a plain chip, so the listing never loses the answer to which region
+    /// it was loaded under.
+    fn breadcrumb_parts(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let connection_name = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&self.profile_id)
+            .map(|connected| format!("{} › ", connected.profile.name))
+            .unwrap_or_default();
+        let identity_text = format!("{connection_name}{}", self.store.label);
+
+        // The parts are direct children of the header bar, so the region chip
+        // is never inside a clipping container: only the identity and the
+        // path give way.
+        let mut parts: Vec<AnyElement> = vec![
+            // The identity gives way before the region chip does: it
+            // clips, and the full "connection › store" stays in the
+            // tooltip and the accessible name.
+            div()
+                .id("secret-identity")
+                .flex()
+                .flex_shrink_1()
+                .min_w_0()
+                .overflow_hidden()
+                .role(gpui::accesskit::Role::Label)
+                .aria_label(identity_text.clone())
+                .tooltip(move |window, cx| {
+                    gpui_component::tooltip::Tooltip::new(identity_text.clone()).build(window, cx)
+                })
+                .child(Breadcrumb::new(self.identity_segments(cx)).mono())
+                .into_any_element(),
+        ];
 
         if let Some(picker) = self.render_region_picker() {
-            row = row.child(Self::breadcrumb_separator(cx)).child(picker);
+            parts.push(picker);
         } else if self.region_switchable
             && let Some(region) = self.region.clone()
         {
-            row = row.child(Self::breadcrumb_separator(cx)).child(
-                // The same wrapper id the picker carries, so the plain
-                // segment reaches the accessibility tree too.
+            // The configured region, drawn like the picker's label but with
+            // no chevron: there is nothing to pick from.
+            parts.push(
                 div()
                     .id("secret-region-plain")
                     .flex_shrink_0()
-                    .child(Breadcrumb::new(vec![BreadcrumbSegment::new(region)])),
+                    .font_family(dbflux_components::fonts::editor_family(cx))
+                    .text_size(NavigationMetrics::BREADCRUMB_FONT)
+                    .text_color(cx.theme().muted_foreground)
+                    .child(region)
+                    .into_any_element(),
             );
         }
 
         let path = self.store_path_segments(cx);
 
         if !path.is_empty() {
-            row = row
-                .child(Self::breadcrumb_separator(cx))
-                .child(Breadcrumb::new(path).mono());
+            let full_path = self.path.clone().unwrap_or_default();
+            let tooltip_path = full_path.clone();
+
+            // The path is the one part of the header that gives way: it
+            // clips with an ellipsis, and its full text stays in the tooltip
+            // and the accessible name.
+            parts.push(
+                div()
+                    .id("secret-path")
+                    .flex()
+                    .items_center()
+                    .gap(NavigationMetrics::BREADCRUMB_GAP)
+                    .flex_shrink_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .role(gpui::accesskit::Role::Label)
+                    .aria_label(full_path)
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(tooltip_path.clone())
+                            .build(window, cx)
+                    })
+                    .child(Self::breadcrumb_separator(cx))
+                    .child(Breadcrumb::new(path).mono())
+                    .into_any_element(),
+            );
         }
 
-        row
+        parts
     }
 
     /// The region picker, once the connection listed its regions. It is the
@@ -256,32 +328,6 @@ impl SecretStoreDocument {
                 .child(dropdown.into_any_element())
                 .into_any_element()
         })
-    }
-
-    /// The failure of the region listing: the store's error and the retry,
-    /// where the toolbar keeps transient notices. A failed listing never
-    /// renders as an empty picker.
-    fn render_region_failure(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let RegionListState::Failed(error) = &self.regions else {
-            return Vec::new();
-        };
-
-        vec![
-            div()
-                .id("secret-region-error")
-                .max_w(px(240.0))
-                .truncate()
-                .text_size(DocumentMetrics::TABLE_META_FONT)
-                .text_color(cx.theme().muted_foreground)
-                .child(error.clone())
-                .into_any_element(),
-            Button::new(
-                "secret-region-retry",
-                dbflux_i18n::t!("document.secret_store.region.retry"),
-            )
-            .on_click(cx.listener(|this, _, _, cx| this.load_regions(cx)))
-            .into_any_element(),
-        ]
     }
 
     fn render_path_mode(&self, cx: &mut Context<Self>) -> SegmentedControl {
@@ -319,8 +365,7 @@ impl SecretStoreDocument {
     }
 
     /// Breadcrumb row, the Tree | Flat switch of a hierarchical store, the
-    /// store-side search and Refresh, plus the notice of a failed region
-    /// listing.
+    /// store-side search and Refresh.
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut refresh = Button::new(
             "secret-refresh",
@@ -341,33 +386,27 @@ impl SecretStoreDocument {
 
         let hierarchical = self.hierarchical();
 
-        // The breadcrumb and the search narrow before Refresh does, so a
-        // narrow listing keeps its toolbar actions on screen.
+        // As the header narrows the search gives way first, down to its
+        // minimum, then the path of the breadcrumb; Refresh, the region and
+        // the store identity keep their width.
+        let mut search = div()
+            .id("secret-search")
+            .flex()
+            .w(ObjectStoreMetrics::SEARCH_WIDTH)
+            .min_w(SecretStoreMetrics::SEARCH_MIN_WIDTH)
+            .flex_shrink_1();
+        search.style().flex_shrink = Some(SEARCH_SHRINK_WEIGHT);
+
         document_bar(DocumentMetrics::HEADER_HEIGHT_TALL, cx)
-            .child(
-                div()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .child(self.render_breadcrumb_row(cx)),
-            )
+            .children(self.breadcrumb_parts(cx))
             .child(div().flex_1())
             .when(hierarchical, |bar| bar.child(self.render_path_mode(cx)))
-            .when(self.region_switchable, |bar| {
-                bar.children(self.render_region_failure(cx))
-            })
-            .child(
-                div()
-                    .flex()
-                    .w(ObjectStoreMetrics::SEARCH_WIDTH)
-                    .min_w(SecretStoreMetrics::SEARCH_MIN_WIDTH)
-                    .flex_shrink_1()
-                    .child(search_field(
-                        &self.search_input,
-                        None,
-                        self.focus_mode == SecretFocusMode::Search,
-                        cx,
-                    )),
-            )
+            .child(search.child(search_field(
+                &self.search_input,
+                None,
+                self.focus_mode == SecretFocusMode::Search,
+                cx,
+            )))
             .child(div().flex_shrink_0().child(refresh))
     }
 
@@ -508,6 +547,44 @@ impl SecretStoreDocument {
             )
     }
 
+    /// The rotation column: a chip, success-toned while rotation is enabled.
+    fn rotation_cell(summary: &SecretSummary) -> Stateful<Div> {
+        let chip = rotation_chip(summary.rotation.as_ref());
+        let chip_label = chip.label.clone();
+        let mut badge = Badge::new(chip.label, chip.tone)
+            .id(format!("secret-rotation-{}", summary.name))
+            .aria_label(chip_label.clone());
+
+        if chip.tone == BadgeTone::Success {
+            badge = badge.icon(AppIcon::RefreshCcw);
+        }
+
+        let tooltip = chip_label.clone();
+
+        // The chip clips inside its cell, so a narrow listing never lets it
+        // run over Last changed; the full label stays in the tooltip.
+        div()
+            .id(format!("secret-rotation-cell-{}", summary.name))
+            .flex()
+            .items_center()
+            .w(SecretStoreMetrics::ROTATION_WIDTH)
+            .flex_shrink_1()
+            .min_w_0()
+            .overflow_hidden()
+            .pr(DocumentMetrics::GAP)
+            .tooltip(move |window, cx| {
+                gpui_component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+            })
+            .child(
+                div()
+                    .id(format!("secret-rotation-chip-{}", summary.name))
+                    .flex()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(badge),
+            )
+    }
+
     fn render_secret_row(
         &self,
         summary: &SecretSummary,
@@ -546,10 +623,7 @@ impl SecretStoreDocument {
             )
             .child(name);
 
-        let last_changed = summary
-            .last_changed
-            .map(format_time)
-            .unwrap_or_else(|| UNKNOWN.to_string());
+        let last_changed = format_short_time(summary.last_changed);
 
         if self.store.supports(SecretStoreCapabilities::TYPED_VALUES) {
             let or_unknown =
@@ -568,7 +642,7 @@ impl SecretStoreDocument {
                 ))
                 .child(meta_cell(
                     SecretStoreMetrics::VERSION_WIDTH,
-                    or_unknown(&summary.version),
+                    version_label(summary.version.as_deref()),
                     muted,
                 ))
                 .child(meta_cell(
@@ -590,13 +664,7 @@ impl SecretStoreDocument {
             ))
             .when(
                 self.store.supports(SecretStoreCapabilities::ROTATION),
-                |row| {
-                    row.child(meta_cell(
-                        SecretStoreMetrics::ROTATION_WIDTH,
-                        rotation_label(summary.rotation.as_ref()),
-                        foreground,
-                    ))
-                },
+                |row| row.child(Self::rotation_cell(summary)),
             )
             .child(meta_cell(
                 SecretStoreMetrics::LAST_CHANGED_WIDTH,
@@ -734,39 +802,66 @@ impl SecretStoreDocument {
     }
 
     fn render_footer(&self, cx: &Context<Self>) -> impl IntoElement {
-        let mut hints = vec![
-            (Command::Execute, "document.secret_store.footer.hint.open"),
+        let mut hints = vec![(Command::Execute, "document.secret_store.footer.hint.open")];
+
+        if self.hierarchical() {
+            hints.push((Command::ColumnLeft, "document.secret_store.footer.hint.up"));
+        }
+
+        // Ctrl+C copies the selection's resource id, which the details pane
+        // labels ARN.
+        hints.extend([
             (
                 Command::ToggleValuePanel,
                 "document.secret_store.footer.hint.retrieve",
             ),
             (
                 Command::ResultsCopyCell,
-                "document.secret_store.footer.hint.copy_id",
+                "document.secret_store.footer.hint.copy_arn",
             ),
             (
                 Command::FocusSearch,
                 "document.secret_store.footer.hint.filter",
             ),
-        ];
-
-        if self.hierarchical() {
-            hints.push((Command::ColumnLeft, "document.secret_store.footer.hint.up"));
-        }
+        ]);
 
         let hints = hints.into_iter().filter_map(|(command, key)| {
-            listing_shortcut(command)
-                .map(|shortcut| footer_key_hint(shortcut, dbflux_i18n::t!(key)))
+            listing_shortcut(command).map(|shortcut| {
+                let name = key.rsplit('.').next().unwrap_or(key);
+
+                footer_key_hint(shortcut, dbflux_i18n::t!(key))
+                    .id(format!("secret-footer-hint-{name}"))
+            })
         });
 
+        let summary = self.loaded_summary();
+        let tooltip = summary.clone();
+
+        // The summary takes what the key hints leave and truncates; each hint
+        // keeps its width, so the keys stay readable in a narrow listing.
         document_footer(cx)
             .h(ObjectStoreMetrics::FOOTER_HEIGHT)
-            .child(footer_item(
-                AppIcon::KeyRound,
-                loaded_label(self.listing.entries.len()),
-                cx,
-            ))
-            .child(div().flex_1())
+            .child(
+                div()
+                    .id("secret-footer-summary")
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .items_center()
+                    .gap(ResultMetrics::FOOTER_ITEM_GAP)
+                    .role(gpui::accesskit::Role::Label)
+                    .aria_label(summary.clone())
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+                    })
+                    .child(
+                        Icon::new(AppIcon::KeyRound)
+                            .size(ResultMetrics::FOOTER_ICON)
+                            .color(cx.theme().muted_foreground),
+                    )
+                    .child(div().min_w_0().truncate().child(summary)),
+            )
             .children(hints)
     }
 

@@ -8,7 +8,7 @@ use crate::types::{DocumentIcon, DocumentKind, DocumentMetaSnapshot};
 use gpui::{App, Entity, IntoElement};
 
 impl SecretStoreDocument {
-    /// Status-bar segments: the connection, how many secrets are listed and
+    /// Status-bar segments: the connection, what the listing holds and
     /// the timing of the last store call.
     pub fn status_segments(&self, cx: &App) -> Vec<StatusSegment> {
         let mut segments = Vec::new();
@@ -30,7 +30,7 @@ impl SecretStoreDocument {
         }
 
         segments.push(StatusSegment {
-            text: super::render::loaded_label(self.listing.entries.len()).into(),
+            text: self.loaded_summary().into(),
             tooltip: None,
         });
 
