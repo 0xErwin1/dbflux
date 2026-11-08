@@ -548,13 +548,15 @@ impl SecretStoreDocument {
         }
 
         if let Some(date) = summary.deletion_scheduled_for {
-            badges.push(Badge::new(
-                dbflux_i18n::t!(
+            let label = match crate::secret_store::view::known_deletion_date(date) {
+                Some(date) => dbflux_i18n::t!(
                     "document.secret_store.badge.deletes",
                     date = date.with_timezone(&Local).format("%Y-%m-%d").to_string()
                 ),
-                BadgeTone::Danger,
-            ));
+                None => dbflux_i18n::t!("document.secret_store.value.deletion_scheduled_unknown"),
+            };
+
+            badges.push(Badge::new(label, BadgeTone::Danger));
         }
 
         badges

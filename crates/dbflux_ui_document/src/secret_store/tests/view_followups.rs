@@ -2,8 +2,10 @@
 //! a retrieved value, how a stale answer is discarded, which version the
 //! Versions table highlights, and how a restore reconciles the guards.
 
-use super::super::view::Landing;
+use super::super::view::{DeleteKind, Landing};
 use super::*;
+use crate::secret_store::SecretWriteFailureKind;
+use dbflux_core::SecretSummary;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -405,5 +407,319 @@ fn a_requested_history_without_a_connection_is_reported_once(cx: &mut TestAppCon
             "document.secret_store.error.connection_unavailable"
         )),
         "{errors:?}"
+    );
+}
+
+// -- A write confirmed in this view outranks stale reads -----------------------
+
+use dbflux_core::SecretDetails;
+
+impl Opened<'_> {
+    /// A listing row for the shown secret as a lagging read reports it.
+    fn stale_row(&mut self, scheduled: bool) -> SecretSummary {
+        let mut row = self
+            .read_view(|view| view.selected_summary().cloned())
+            .expect("a shown secret");
+        row.deletion_scheduled_for = scheduled.then(|| row.last_changed.unwrap_or_default());
+        row
+    }
+
+    fn land_stale_listing(&mut self, row: SecretSummary) {
+        self.update_view(|view, cx| view.set_listing_row(Some(row), true, cx));
+    }
+
+    fn land_stale_describe(&mut self, scheduled: bool) {
+        self.window.run_until_parked();
+        let mut details: SecretDetails = self
+            .read_view(|view| match view.details() {
+                DetailsState::Loaded(details) => Some((**details).clone()),
+                _ => None,
+            })
+            .expect("loaded details");
+        details.summary.deletion_scheduled_for =
+            scheduled.then(|| details.summary.last_changed.unwrap_or_default());
+        self.update_view(|view, cx| {
+            let generation = view.details_generation;
+            let name = details.summary.name.clone();
+            view.apply_details(generation, &name, Ok(details), 0, cx)
+        });
+    }
+
+    fn pending(&mut self) -> bool {
+        self.read_view(|view| view.deletion_pending())
+    }
+
+    /// Lands a confirmed scheduled delete of `name` without letting the
+    /// window settle, so the reads that follow it come from a store that has
+    /// not caught up: it still says the secret is active.
+    fn confirm_delete(&mut self, name: &str) {
+        let doc = self.doc.clone();
+        let date = dbflux_core::chrono::Utc::now() + dbflux_core::chrono::Duration::days(7);
+        self.window.update(|_, cx| {
+            let view = doc.read(cx).view.clone();
+            view.update(cx, |view, cx| {
+                view.land_delete(
+                    name,
+                    DeleteKind::Scheduled { window_days: 7 },
+                    Landing::Done(dbflux_core::SecretDeletion {
+                        deletion_scheduled_for: Some(date),
+                    }),
+                    cx,
+                )
+            });
+        });
+    }
+
+    /// The same for a confirmed restore.
+    fn confirm_restore(&mut self, name: &str) {
+        let doc = self.doc.clone();
+        self.window.update(|_, cx| {
+            let view = doc.read(cx).view.clone();
+            view.update(cx, |view, cx| {
+                view.land_restore(name, Landing::Done(()), cx)
+            });
+        });
+    }
+}
+
+/// A listing that still says active after a confirmed delete keeps the
+/// secret blocked, with Restore on offer and the history withheld.
+#[gpui::test]
+fn a_stale_active_listing_after_a_confirmed_delete_keeps_the_blocks(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.confirm_delete(KEY_VALUE_SECRET);
+    assert!(opened.pending());
+
+    let stale = opened.stale_row(false);
+    opened.land_stale_listing(stale);
+
+    assert!(
+        opened.pending(),
+        "the confirmed delete outranks the listing"
+    );
+    assert!(!opened.read_view(|view| view.can_retrieve_value()));
+    assert!(opened.read_view(|view| view.can_restore_selected()));
+    assert!(!opened.read_view(|view| view.can_delete_selected()));
+    assert!(
+        opened.read_view(|view| matches!(view.versions(), VersionsState::ScheduledForDeletion))
+    );
+}
+
+/// A describe that lags after a confirmed delete is ignored the same way.
+#[gpui::test]
+fn a_stale_active_describe_after_a_confirmed_delete_keeps_the_blocks(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.confirm_delete(KEY_VALUE_SECRET);
+
+    opened.land_stale_describe(false);
+
+    assert!(opened.pending());
+    assert!(opened.read_view(|view| view.can_restore_selected()));
+}
+
+/// A describe that lags after a confirmed restore keeps the secret restored.
+#[gpui::test]
+fn a_stale_scheduled_describe_after_a_confirmed_restore_keeps_it_restored(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    opened.confirm_restore(PENDING_DELETION_SECRET);
+    assert!(!opened.pending());
+
+    opened.land_stale_describe(true);
+    let stale = opened.stale_row(true);
+    opened.land_stale_listing(stale);
+
+    assert!(
+        !opened.pending(),
+        "the confirmed restore outranks the reads"
+    );
+    assert!(opened.read_view(|view| view.can_retrieve_value()));
+    assert!(!opened.read_view(|view| view.can_restore_selected()));
+}
+
+fn failure(kind: SecretWriteFailureKind) -> crate::secret_store::SecretWriteFailure {
+    crate::secret_store::SecretWriteFailure {
+        error: DbError::query_failed("audit trail unavailable"),
+        correlation_id: None,
+        kind,
+        audit_unrecorded: false,
+    }
+}
+
+/// A restore whose only loss is its audit row did restore the secret.
+#[gpui::test]
+fn a_restore_with_a_lost_audit_row_reconciles(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+
+    opened.update_view(|view, cx| {
+        view.land_restore(
+            PENDING_DELETION_SECRET,
+            Landing::Stands(failure(SecretWriteFailureKind::AuditLost)),
+            cx,
+        )
+    });
+    opened.land_stale_describe(true);
+
+    assert!(!opened.pending());
+}
+
+/// An indeterminate restore says nothing, so the view keeps what it read.
+#[gpui::test]
+fn an_indeterminate_restore_confirms_nothing(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+
+    opened.update_view(|view, cx| {
+        view.land_restore(
+            PENDING_DELETION_SECRET,
+            Landing::Stands(failure(SecretWriteFailureKind::Indeterminate)),
+            cx,
+        )
+    });
+    opened.land_stale_describe(true);
+
+    assert!(opened.pending());
+}
+
+/// A delete whose only loss is its audit row did schedule the deletion: the
+/// secret stays blocked with Restore on offer, and no date is invented.
+#[gpui::test]
+fn a_delete_with_a_lost_audit_row_blocks_without_a_date(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    // The fake store did not delete: what the view believes is the write's.
+    opened.update_view(|view, cx| {
+        view.land_delete(
+            KEY_VALUE_SECRET,
+            DeleteKind::Scheduled { window_days: 7 },
+            Landing::Stands(failure(SecretWriteFailureKind::AuditLost)),
+            cx,
+        )
+    });
+    let stale = opened.stale_row(false);
+    opened.land_stale_listing(stale);
+    opened.land_stale_describe(false);
+
+    assert!(opened.pending());
+    assert!(!opened.read_view(|view| view.can_retrieve_value()));
+    assert!(opened.read_view(|view| view.can_restore_selected()));
+    let text = opened.rendered_text();
+    assert!(text.contains("Deletion scheduled"), "{text}");
+    assert!(!text.contains("Deletion scheduled for"), "{text}");
+    assert!(!text.contains("Deletes on 19"), "{text}");
+}
+
+/// An indeterminate delete confirms nothing.
+#[gpui::test]
+fn an_indeterminate_delete_confirms_nothing(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+
+    opened.update_view(|view, cx| {
+        view.land_delete(
+            KEY_VALUE_SECRET,
+            DeleteKind::Scheduled { window_days: 7 },
+            Landing::Stands(failure(SecretWriteFailureKind::Indeterminate)),
+            cx,
+        )
+    });
+    let stale = opened.stale_row(false);
+    opened.land_stale_listing(stale);
+
+    assert!(!opened.pending());
+}
+
+/// A store without a version history still reconciles a restore made
+/// elsewhere when the listing shows the secret active.
+#[gpui::test]
+fn a_store_without_versions_reconciles_an_external_restore(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.update_view(|view, _| {
+        view.store
+            .capabilities
+            .remove(SecretStoreCapabilities::VERSIONS)
+    });
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    assert!(opened.pending());
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::NotSupported)));
+
+    let active = opened.stale_row(false);
+    opened.land_stale_listing(active);
+
+    assert!(!opened.pending());
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::NotSupported)));
+}
+
+/// An explicit refresh believes the store over a confirmed write.
+#[gpui::test]
+fn an_explicit_refresh_honors_the_store(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.confirm_delete(KEY_VALUE_SECRET);
+    assert!(opened.pending());
+
+    opened.window.run_until_parked();
+    assert!(opened.pending(), "the lagging store's reads are ignored");
+
+    opened.update(|doc, cx| doc.refresh(cx));
+    opened.load_everything();
+    // Refreshing drops the selection; the store is believed on the next look.
+    opened.open_secret(KEY_VALUE_SECRET);
+
+    assert!(!opened.pending());
+}
+
+/// An explicit retrieval command with no connection says why.
+#[gpui::test]
+fn a_retrieval_command_without_a_connection_is_reported_once(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let _connected = opened.take_connection();
+    opened.announce_state_change();
+    assert!(!opened.read_view(|view| view.can_retrieve_value()));
+    assert!(opened.reported_errors().is_empty());
+
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains(&dbflux_i18n::t!(
+        "document.secret_store.error.connection_unavailable"
+    )));
+    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
+}
+
+/// The disconnect emits no `user_error` event, so no audit row follows; the
+/// request that does report emits exactly one.
+#[gpui::test]
+fn a_disconnect_emits_no_user_error_event(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let _connected = opened.take_connection();
+
+    let ((), events) = dbflux_ui_base::user_error::capture::capture_user_error_events(|| {
+        opened.announce_state_change();
+    });
+    assert!(events.is_empty(), "{events:?}");
+
+    let ((), events) = dbflux_ui_base::user_error::capture::capture_user_error_events(|| {
+        opened.update_view(|view, cx| view.load_versions(KEY_VALUE_SECRET.to_string(), cx));
+    });
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(
+        events[0].get("action").map(String::as_str),
+        Some("user_error")
     );
 }

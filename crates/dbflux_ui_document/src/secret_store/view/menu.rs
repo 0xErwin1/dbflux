@@ -147,10 +147,15 @@ impl SecretView {
         let (detail, disabled) = match deletion_date {
             Some(date) => (
                 Some(
-                    dbflux_i18n::t!(
-                        "document.secret_store.value.deletion_scheduled",
-                        date = short_date(date)
-                    )
+                    match super::known_deletion_date(date) {
+                        Some(date) => dbflux_i18n::t!(
+                            "document.secret_store.value.deletion_scheduled",
+                            date = short_date(date)
+                        ),
+                        None => dbflux_i18n::t!(
+                            "document.secret_store.value.deletion_scheduled_unknown"
+                        ),
+                    }
                     .into(),
                 ),
                 true,

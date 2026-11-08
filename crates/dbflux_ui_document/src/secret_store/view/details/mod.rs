@@ -396,7 +396,7 @@ impl SecretView {
             }
             rows.push(detail_row(
                 label("document.secret_store.delete.row_deletes_on"),
-                format_optional_time(Some(date)),
+                format_optional_time(super::known_deletion_date(date)),
                 cx,
             ));
         }

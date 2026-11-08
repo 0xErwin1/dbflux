@@ -90,7 +90,9 @@ impl SecretView {
             return;
         }
 
-        if let Ok(details) = &result {
+        let mut result = result;
+        if let Ok(details) = &mut result {
+            self.conform_details(details);
             self.summary_cache = Some(details.summary.clone());
         }
 
@@ -451,6 +453,24 @@ impl SecretView {
     /// against the latest current-version information when it is drawn.
     pub(crate) fn retrieve_version(&mut self, version: Option<String>, cx: &mut Context<Self>) {
         if !self.can_retrieve_value() {
+            // The button is disabled without a connection; a command that
+            // still reaches here says why nothing happened.
+            if !self.connection_present
+                && !matches!(self.value, ValueState::Loading)
+                && self
+                    .selected_summary()
+                    .is_some_and(|summary| !summary.is_pending_deletion())
+            {
+                self.missing_connection_reported = true;
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::User,
+                        dbflux_i18n::t!("document.secret_store.error.connection_unavailable"),
+                    ),
+                    cx,
+                );
+            }
+
             return;
         }
 

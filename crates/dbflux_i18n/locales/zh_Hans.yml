@@ -3618,6 +3618,7 @@ document:
       metadata_loaded: "元数据已加载 · 仅值获取失败"
       deletion_scheduled: "计划于 %{date} 删除"
       deletion_scheduled_body: "在恢复之前无法获取其值。"
+      deletion_scheduled_unknown: "已计划删除"
 
     edit:
       open: "编辑值"

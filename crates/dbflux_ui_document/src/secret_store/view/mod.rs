@@ -10,6 +10,8 @@
 
 mod actions;
 mod data;
+mod deletion;
+pub(super) use deletion::known_deletion_date;
 pub(super) mod details;
 pub(super) mod editor;
 mod inputs;
@@ -128,6 +130,8 @@ pub struct SecretView {
     /// current selection, so the next one to find the same loss stays quiet.
     /// Cleared when a connection is found again or the selection is reset.
     pub(super) missing_connection_reported: bool,
+    /// The deletion state this view's own writes confirmed, by secret name.
+    confirmed_deletions: HashMap<String, deletion::ConfirmedDeletion>,
     /// Whether the profile held a live connection when the view last heard of
     /// a state change. The actions that need one are disabled while it is
     /// false; a path that still reaches the store reports the loss.
@@ -220,6 +224,7 @@ impl SecretView {
             value_view_sets: 0,
             versions_session: None,
             missing_connection_reported: false,
+            confirmed_deletions: HashMap::new(),
             connection_present,
             value_version: None,
             value: ValueState::NotLoaded,
@@ -347,17 +352,22 @@ impl SecretView {
         refresh_cache: bool,
         cx: &mut Context<Self>,
     ) {
+        let mut row = row;
+        if let Some(summary) = row.as_mut() {
+            self.conform_summary(summary);
+        }
+
         if refresh_cache && let Some(summary) = &row {
             self.summary_cache = Some(summary.clone());
         }
 
         self.listing_row = row;
 
-        // A restore that reached the listing makes the history available.
-        // The listing is the later word: the describe it outdates is lifted
-        // too, or the guards would keep reading the old deletion.
+        // Without a confirmed state the listing is the later word: a row
+        // that shows the secret active lifts the describe it outdates, or
+        // the guards would keep reading the old deletion, whatever the
+        // store's history support.
         if refresh_cache
-            && matches!(self.versions, VersionsState::ScheduledForDeletion)
             && let Some(name) = self.name.clone()
             && self
                 .listing_row
@@ -365,7 +375,10 @@ impl SecretView {
                 .is_some_and(|row| row.name == name && !row.is_pending_deletion())
         {
             self.mark_restored(&name);
-            self.request_versions(name, crate::secret_store::HistoryLoad::Automatic, cx);
+
+            if matches!(self.versions, VersionsState::ScheduledForDeletion) {
+                self.request_versions(name, crate::secret_store::HistoryLoad::Automatic, cx);
+            }
         }
     }
 

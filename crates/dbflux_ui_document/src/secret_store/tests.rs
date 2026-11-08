@@ -1641,8 +1641,10 @@ fn a_post_save_history_reload_without_a_connection_stays_silent(cx: &mut TestApp
         payload: dbflux_core::SecretPayload::Text(EDITED_VALUE.into()),
     };
     let saved_on = opened.read_view(|view| view.value_session.clone().expect("a retrieved value"));
-    opened.update_view(|view, cx| {
-        view.apply_value_write(generation, PLAINTEXT_SECRET, Ok(written), &saved_on, cx)
+    let ((), events) = dbflux_ui_base::user_error::capture::capture_user_error_events(|| {
+        opened.update_view(|view, cx| {
+            view.apply_value_write(generation, PLAINTEXT_SECRET, Ok(written), &saved_on, cx)
+        });
     });
 
     assert!(
@@ -1652,11 +1654,8 @@ fn a_post_save_history_reload_without_a_connection_stays_silent(cx: &mut TestApp
     );
     assert_eq!(opened.toast_count(), 0);
     assert!(
-        opened.audit_records().iter().all(|event| event
-            .action
-            .as_deref()
-            .is_none_or(|action| action != "user_error")),
-        "no user_error row"
+        events.is_empty(),
+        "no user_error event, so no row: {events:?}"
     );
     assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::NotConnected)));
 }

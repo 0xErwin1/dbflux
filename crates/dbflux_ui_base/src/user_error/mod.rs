@@ -262,6 +262,9 @@ pub fn report_error_async(err: UserFacingError, cx: &AsyncApp) {
     cx.update(move |cx| report_error(err, cx));
 }
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod capture;
+
 #[cfg(test)]
 mod tests;
 

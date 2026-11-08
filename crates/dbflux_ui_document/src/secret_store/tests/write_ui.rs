@@ -51,7 +51,7 @@ impl Opened<'_> {
     }
 
     /// Types `text` where the keyboard is, the way a user does.
-    fn type_text(&mut self, text: &str) {
+    pub(super) fn type_text(&mut self, text: &str) {
         self.window.simulate_input(text);
         self.window.run_until_parked();
     }
@@ -75,7 +75,7 @@ impl Opened<'_> {
     }
 
     /// Left-clicks the drawn element `id`, press and release on its bounds.
-    fn click(&mut self, id: &str) {
+    pub(super) fn click(&mut self, id: &str) {
         let bounds = self.bounds_of(id);
 
         self.window

@@ -3618,6 +3618,7 @@ document:
       metadata_loaded: "Metadados carregados · só o valor falhou"
       deletion_scheduled: "Exclusão agendada para %{date}"
       deletion_scheduled_body: "O valor não pode ser obtido até que seja restaurado."
+      deletion_scheduled_unknown: "Exclusão agendada"
 
     edit:
       open: "Editar valor"

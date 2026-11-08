@@ -153,10 +153,13 @@ impl SecretView {
 
         let mut banner = BannerBlock::new(
             BannerVariant::Warning,
-            dbflux_i18n::t!(
-                "document.secret_store.value.deletion_scheduled",
-                date = crate::secret_store::render::format_time(date)
-            ),
+            match super::super::known_deletion_date(date) {
+                Some(date) => dbflux_i18n::t!(
+                    "document.secret_store.value.deletion_scheduled",
+                    date = crate::secret_store::render::format_time(date)
+                ),
+                None => dbflux_i18n::t!("document.secret_store.value.deletion_scheduled_unknown"),
+            },
         )
         .with_body(body);
 
