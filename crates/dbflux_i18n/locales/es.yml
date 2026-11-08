@@ -3664,7 +3664,7 @@ document:
       title:
         secret: "Eliminar secreto"
         parameter: "Eliminar parámetro"
-      lead_scheduled: "¿Eliminar %{name}? Las aplicaciones que lo leen empezarán a fallar cuando termine el período de recuperación."
+      lead_scheduled: "¿Eliminar %{name}? Las aplicaciones que lo leen empezarán a fallar de inmediato: el secreto no estará disponible hasta que lo restaure. El período de recuperación solo limita cuánto tiempo se puede restaurar."
       lead_irreversible: "¿Eliminar %{name}? No se puede deshacer. El parámetro se elimina de inmediato y las aplicaciones que lo leen empezarán a fallar enseguida."
       window_label: "Período de recuperación"
       window_option: "%{count} días"
@@ -3689,10 +3689,10 @@ document:
       immediately: "Rotar de inmediato"
       refused_off: "La rotación está desactivada para %{name}. Actívela con Editar rotación antes de rotar."
       done: "Se inició una rotación de %{name}"
-      done_version: "Se inició una rotación de %{name}; la versión %{version} es la nueva versión actual"
+      done_version: "Se inició una rotación de %{name}; la versión %{version} será la actual cuando termine la rotación"
       title: "Rotar %{name} ahora"
       lead: "¿Rotar %{name} ahora?"
-      effect: "Esto ejecuta ahora la función de rotación del secreto y crea una nueva versión actual. Las aplicaciones que leen el secreto reciben el valor rotado en cuanto termina la rotación."
+      effect: "Esto ejecuta ahora la función de rotación del secreto y crea una nueva versión que pasa a ser la actual cuando termina la rotación. Hasta entonces, las aplicaciones que leen el secreto siguen recibiendo el valor anterior."
       confirm: "Rotar ahora"
     rotation_edit:
       button: "Editar rotación"

@@ -3664,7 +3664,7 @@ document:
       title:
         secret: "Delete secret"
         parameter: "Delete parameter"
-      lead_scheduled: "Delete %{name}? Applications that read it start failing when the recovery window ends."
+      lead_scheduled: "Delete %{name}? Applications that read it start failing immediately: the secret is unavailable until you restore it. The recovery window only limits how long it can be restored."
       lead_irreversible: "Delete %{name}? This cannot be undone. The parameter is removed at once, and applications that read it start failing immediately."
       window_label: "Recovery window"
       window_option: "%{count} days"
@@ -3689,10 +3689,10 @@ document:
       immediately: "Rotate immediately"
       refused_off: "Rotation is off for %{name}. Turn it on with Edit rotation before rotating."
       done: "Started a rotation of %{name}"
-      done_version: "Started a rotation of %{name}; version %{version} is the new current version"
+      done_version: "Started a rotation of %{name}; version %{version} will become current when the rotation finishes"
       title: "Rotate %{name} now"
       lead: "Rotate %{name} now?"
-      effect: "This runs the secret's rotation function now and creates a new current version. Applications that read the secret receive the rotated value as soon as the rotation finishes."
+      effect: "This runs the secret's rotation function now and creates a new version that becomes current when the rotation finishes. Until then, applications that read the secret still receive the old value."
       confirm: "Rotate now"
     rotation_edit:
       button: "Edit rotation"

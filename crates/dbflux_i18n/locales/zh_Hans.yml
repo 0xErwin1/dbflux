@@ -3664,7 +3664,7 @@ document:
       title:
         secret: "删除密钥"
         parameter: "删除参数"
-      lead_scheduled: "要删除 %{name} 吗？恢复期结束后，读取它的应用将开始失败。"
+      lead_scheduled: "要删除 %{name} 吗？读取它的应用会立即开始失败：在恢复之前该密钥不可用。恢复期只限制可恢复的时长。"
       lead_irreversible: "要删除 %{name} 吗？此操作无法撤销。参数会立即被移除，读取它的应用将立刻开始失败。"
       window_label: "恢复期"
       window_option: "%{count} 天"
@@ -3689,10 +3689,10 @@ document:
       immediately: "立即轮换"
       refused_off: "%{name} 的轮换已关闭。请先在“编辑轮换”中开启，再进行轮换。"
       done: "已开始轮换 %{name}"
-      done_version: "已开始轮换 %{name}；版本 %{version} 是新的当前版本"
+      done_version: "已开始轮换 %{name}；版本 %{version} 将在轮换完成后成为当前版本"
       title: "立即轮换 %{name}"
       lead: "要立即轮换 %{name} 吗？"
-      effect: "这会立即运行该密钥的轮换函数并创建新的当前版本。读取该密钥的应用会在轮换完成后立刻收到轮换后的值。"
+      effect: "这会立即运行该密钥的轮换函数并创建一个在轮换完成后成为当前版本的新版本。在此之前，读取该密钥的应用仍会收到旧值。"
       confirm: "立即轮换"
     rotation_edit:
       button: "编辑轮换"

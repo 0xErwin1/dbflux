@@ -3664,7 +3664,7 @@ document:
       title:
         secret: "Excluir segredo"
         parameter: "Excluir parâmetro"
-      lead_scheduled: "Excluir %{name}? Os aplicativos que o leem começarão a falhar quando o período de recuperação terminar."
+      lead_scheduled: "Excluir %{name}? Os aplicativos que o leem começarão a falhar imediatamente: o segredo fica indisponível até ser restaurado. O período de recuperação só limita por quanto tempo ele pode ser restaurado."
       lead_irreversible: "Excluir %{name}? Isso não pode ser desfeito. O parâmetro é removido imediatamente, e os aplicativos que o leem começarão a falhar logo em seguida."
       window_label: "Período de recuperação"
       window_option: "%{count} dias"
@@ -3689,10 +3689,10 @@ document:
       immediately: "Rotacionar imediatamente"
       refused_off: "A rotação está desativada para %{name}. Ative-a em Editar rotação antes de rotacionar."
       done: "Uma rotação de %{name} foi iniciada"
-      done_version: "Uma rotação de %{name} foi iniciada; a versão %{version} é a nova versão atual"
+      done_version: "Uma rotação de %{name} foi iniciada; a versão %{version} será a atual quando a rotação terminar"
       title: "Rotacionar %{name} agora"
       lead: "Rotacionar %{name} agora?"
-      effect: "Isso executa agora a função de rotação do segredo e cria uma nova versão atual. Os aplicativos que leem o segredo recebem o valor rotacionado assim que a rotação termina."
+      effect: "Isso executa agora a função de rotação do segredo e cria uma nova versão que passa a ser a atual quando a rotação termina. Até lá, os aplicativos que leem o segredo continuam recebendo o valor anterior."
       confirm: "Rotacionar agora"
     rotation_edit:
       button: "Editar rotação"

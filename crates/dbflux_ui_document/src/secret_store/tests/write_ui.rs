@@ -955,7 +955,7 @@ fn rotate_now_starts_a_rotation_through_the_seam(cx: &mut TestAppContext) {
     let text = opened.rendered_text();
     assert!(text.contains(KEY_VALUE_SECRET), "{text}");
     assert!(text.contains("rotation function"), "{text}");
-    assert!(text.contains("new current version"), "{text}");
+    assert!(text.contains("becomes current"), "{text}");
     opened.click("secret-rotate-confirm");
 
     let mutations = opened.mutations();
