@@ -3648,6 +3648,9 @@ document:
       refused_deletion: "A exclusão de %{name} está agendada. Restaure-o antes de alterá-lo."
       region_switching: "A região está sendo trocada. Aguarde a conexão se estabilizar e tente novamente; nada foi gravado."
       connection_replaced: "A conexão foi substituída enquanto este diálogo estava aberto. Nada foi gravado. Abra-o novamente a partir da conexão atual."
+      details_stale: "Os detalhes exibidos foram lidos de uma conexão anterior. Estão sendo lidos novamente; tente de novo em instantes."
+      in_progress: "Outra alteração ainda está sendo gravada. Aguarde o término."
+      landed_on_previous_session: "Uma alteração terminou depois que a conexão foi substituída. Ela foi gravada na conexão anterior e este documento não foi atualizado; atualize-o para ver o estado atual."
     rollback:
       button: "Reverter"
       action: "Reverter para a versão %{version}"

@@ -3648,6 +3648,9 @@ document:
       refused_deletion: "Deletion is scheduled for %{name}. Restore it before changing it."
       region_switching: "The region is being switched. Wait for the connection to settle, then try again; nothing was written."
       connection_replaced: "The connection was replaced while this dialog was open. Nothing was written. Open it again from the current connection."
+      details_stale: "The details shown were read from a previous connection. They are being read again; try again in a moment."
+      in_progress: "Another change is still being written. Wait for it to finish."
+      landed_on_previous_session: "A change finished after the connection was replaced. It was written on the previous connection and this document was not updated; refresh it to see the current state."
     rollback:
       button: "Roll back"
       action: "Roll back to version %{version}"

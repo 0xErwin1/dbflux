@@ -322,6 +322,7 @@ impl SecretStoreDocument {
                 this.close_dialog_if_session_replaced(cx);
                 this.adopt_connection_region(cx);
                 this.adopt_connection_session(HistoryLoad::Automatic, cx);
+                this.adopt_details_session(cx);
             }),
         );
 

@@ -2983,3 +2983,177 @@ fn edit_value_does_not_open_during_a_region_switch(cx: &mut TestAppContext) {
         errors[0].1
     );
 }
+
+// -- Review: session and in-flight fences ----------------------------------------------
+
+/// A write that lands after the connection was replaced reports its outcome
+/// and clears the in-flight state, but touches nothing of the document: a
+/// same-named selection of the new session stays selected.
+#[gpui::test]
+fn a_write_landing_on_a_replaced_session_leaves_the_document_alone(cx: &mut TestAppContext) {
+    let name = "/app/prod/db/host";
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.open_parameter(name);
+    opened.click("secret-action-delete");
+    opened.type_text(name);
+
+    let doc = opened.doc.clone();
+    opened
+        .window
+        .update(|window, cx| doc.update(cx, |doc, cx| doc.confirm_dialog(window, cx)));
+    let _replacement = opened.replace_connection();
+    opened.window.run_until_parked();
+
+    assert_eq!(
+        opened.mutations().len(),
+        1,
+        "the write did happen on the old session"
+    );
+    assert!(
+        !opened.read(|doc| doc.write_in_flight),
+        "in-flight state is cleared"
+    );
+    assert_eq!(
+        opened.read(|doc| doc.selected().cloned()),
+        Some(SecretRowKey::Secret(name.to_string())),
+        "the new session's selection is not forgotten"
+    );
+    assert!(!opened.dialog_open());
+}
+
+/// After a same-region reconnect the selection's details belong to the old
+/// session: no write dialog opens until they are read again, and the refusal
+/// triggers that refresh.
+#[gpui::test]
+fn a_dialog_does_not_open_over_details_from_another_session(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let replacement = opened.replace_connection();
+
+    opened.click("secret-action-delete");
+
+    assert!(!opened.dialog_open(), "no dialog over stale details");
+    assert!(
+        replacement
+            .secret_store_calls()
+            .mutation_attempts
+            .is_empty()
+    );
+    assert!(
+        replacement
+            .secret_store_calls()
+            .described
+            .iter()
+            .any(|(_, described)| described == KEY_VALUE_SECRET),
+        "the details are read again from the live session"
+    );
+
+    opened.click("secret-action-delete");
+    assert!(opened.dialog_open(), "it opens once the details are live");
+}
+
+/// A reconnect refreshes the selected secret on its own, so Restore does not
+/// keep refusing.
+#[gpui::test]
+fn a_reconnect_refreshes_the_selection_so_restore_works(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PENDING_DELETION_SECRET);
+    let replacement = opened.replace_connection();
+    opened.announce_state_change();
+    opened.window.run_until_parked();
+
+    opened.click("secret-restore");
+
+    assert!(opened.mutations().is_empty());
+    assert_eq!(
+        replacement.secret_store_calls().mutation_attempts.len(),
+        1,
+        "{:?}",
+        replacement.secret_store_calls().mutation_attempts
+    );
+    assert!(opened.reported_errors().is_empty());
+}
+
+/// Edit value neither opens nor saves while an action write is in flight.
+#[gpui::test]
+fn the_editor_waits_for_an_action_write(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update(|doc, _| doc.write_in_flight = true);
+
+    opened.start_edit();
+    assert!(!opened.read(|doc| doc.is_editing_value()));
+    assert_eq!(opened.reported_errors().len(), 1);
+
+    opened.update(|doc, _| doc.write_in_flight = false);
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+    opened.update(|doc, _| doc.write_in_flight = true);
+    opened.save_edit();
+
+    assert!(
+        opened.written_values().is_empty(),
+        "no save under an action write"
+    );
+    assert!(opened.read(|doc| doc.is_editing_value()), "the draft stays");
+}
+
+/// An action write cannot start while the editor is saving.
+#[gpui::test]
+fn an_action_write_waits_for_an_editor_save(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.update(|doc, _| {
+        if let Some(edit) = doc.value_edit.as_mut() {
+            edit.saving = true;
+        }
+    });
+
+    opened.click("secret-tags-edit");
+
+    assert!(!opened.dialog_open());
+    assert!(opened.mutations().is_empty());
+}
+
+/// An unchanged editor is dropped when an action write starts, so the write's
+/// landing has no draft to discard.
+#[gpui::test]
+fn a_description_rewrite_leaves_no_draft_to_discard(cx: &mut TestAppContext) {
+    let name = "/app/prod/db/host";
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.open_parameter(name);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    assert!(opened.read(|doc| doc.is_editing_value()));
+
+    opened.click("secret-action-edit-description");
+    opened.fill_input("secret-description-input", NEW_DESCRIPTION);
+    opened.click("secret-description-confirm");
+
+    assert!(
+        !opened.read(|doc| doc.is_editing_value()),
+        "dropped at the start"
+    );
+    assert_eq!(opened.mutations().len(), 1);
+}
+
+/// A write whose connection has no such store never reached the seam, so it
+/// is reported through the standard reporter (which records the attempt), once.
+#[gpui::test]
+fn a_missing_store_write_is_reported_once(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let failure = super::super::SecretWriteFailure {
+        error: dbflux_core::DbError::NotSupported("no such store".to_string()),
+        correlation_id: None,
+        kind: super::super::SecretWriteFailureKind::StoreFailed,
+        audit_unrecorded: false,
+    };
+
+    opened.update(|doc, cx| doc.report_write_failure(&failure, cx));
+
+    assert_eq!(opened.reported_errors().len(), 1);
+}

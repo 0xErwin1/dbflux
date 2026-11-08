@@ -345,6 +345,14 @@ impl SecretStoreDocument {
             return;
         }
 
+        if self.write_in_flight {
+            self.report_write_warning(
+                dbflux_i18n::t!("document.secret_store.write.in_progress"),
+                cx,
+            );
+            return;
+        }
+
         let Some(connection) = self.connection(cx) else {
             self.missing_connection_reported = true;
             report_error(
@@ -520,6 +528,14 @@ impl SecretStoreDocument {
         };
 
         if edit.saving {
+            return;
+        }
+
+        if self.write_in_flight {
+            self.report_write_warning(
+                dbflux_i18n::t!("document.secret_store.write.in_progress"),
+                cx,
+            );
             return;
         }
 

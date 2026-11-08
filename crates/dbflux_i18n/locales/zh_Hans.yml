@@ -3648,6 +3648,9 @@ document:
       refused_deletion: "%{name} 已安排删除。请先恢复再更改。"
       region_switching: "正在切换区域。请等连接稳定后重试；未写入任何内容。"
       connection_replaced: "此对话框打开期间连接已被替换。未写入任何内容。请从当前连接重新打开。"
+      details_stale: "显示的详情来自之前的连接，正在重新读取；请稍后再试。"
+      in_progress: "另一项更改仍在写入。请等待其完成。"
+      landed_on_previous_session: "连接被替换后有一项更改完成。它写入的是之前的连接，此文档未更新；请刷新以查看当前状态。"
     rollback:
       button: "回滚"
       action: "回滚到版本 %{version}"

@@ -3648,6 +3648,9 @@ document:
       refused_deletion: "La eliminación de %{name} está programada. Restáurelo antes de cambiarlo."
       region_switching: "Se está cambiando de región. Espere a que la conexión se estabilice y vuelva a intentarlo; no se escribió nada."
       connection_replaced: "La conexión se reemplazó mientras este diálogo estaba abierto. No se escribió nada. Ábralo de nuevo desde la conexión actual."
+      details_stale: "Los detalles mostrados se leyeron de una conexión anterior. Se están leyendo de nuevo; inténtelo otra vez en un momento."
+      in_progress: "Otro cambio aún se está escribiendo. Espere a que termine."
+      landed_on_previous_session: "Un cambio terminó después de reemplazar la conexión. Se escribió en la conexión anterior y este documento no se actualizó; actualícelo para ver el estado actual."
     rollback:
       button: "Revertir"
       action: "Revertir a la versión %{version}"

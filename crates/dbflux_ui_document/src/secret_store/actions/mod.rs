@@ -181,7 +181,7 @@ impl SecretStoreDocument {
     /// Captures what a governed write needs from the document. A connection
     /// that is gone is reported, as a save without one is.
     pub(super) fn write_session(&mut self, cx: &mut Context<Self>) -> Option<WriteSession> {
-        if self.region_switch_blocks_writes(cx) {
+        if self.region_switch_blocks_writes(cx) || self.editor_save_blocks_writes(cx) {
             return None;
         }
 
@@ -222,7 +222,15 @@ impl SecretStoreDocument {
         cx: &mut Context<Self>,
     ) {
         let entity = cx.entity().clone();
+        let captured = session.connection.clone();
         self.write_in_flight = true;
+
+        // The write may rewrite what the editor holds (a description change
+        // on a store that rewrites the value), so an editor that holds
+        // nothing unsaved closes now, and none opens while this is in flight.
+        if !self.has_unsaved_value_edits(cx) {
+            self.value_edit = None;
+        }
         cx.notify();
 
         let task = cx.background_executor().spawn(async move {
@@ -265,11 +273,89 @@ impl SecretStoreDocument {
             cx.update(|cx| {
                 entity.update(cx, |doc, cx| {
                     doc.write_in_flight = false;
-                    land(doc, result, cx);
+
+                    // The document describes the live session; a write that
+                    // finished on another one changes none of it.
+                    let same_session = doc
+                        .connection(cx)
+                        .is_some_and(|live| Arc::ptr_eq(&live, &captured));
+
+                    if same_session {
+                        land(doc, result, cx);
+                    } else {
+                        doc.land_on_replaced_session(result, cx);
+                    }
                 });
             });
         })
         .detach();
+    }
+
+    /// Reports the outcome of a write that finished after the connection was
+    /// replaced. The write happened (or failed) on the previous session, so
+    /// the document is not touched beyond closing its dialog.
+    fn land_on_replaced_session<T>(&mut self, landing: Landing<T>, cx: &mut Context<Self>) {
+        self.dismiss_dialog(cx);
+
+        match landing {
+            Landing::Done(_) => self.report_write_warning(
+                dbflux_i18n::t!("document.secret_store.write.landed_on_previous_session"),
+                cx,
+            ),
+            Landing::Stands(failure) | Landing::Rejected(failure) => {
+                self.report_write_failure(&failure, cx);
+            }
+        }
+    }
+
+    /// Whether the details of the selection were read from the live session.
+    pub(super) fn details_session_is_live(&self, cx: &Context<Self>) -> bool {
+        match (&self.details_session, self.connection(cx)) {
+            (Some(loaded), Some(live)) => Arc::ptr_eq(loaded, &live),
+            _ => false,
+        }
+    }
+
+    /// Reads the selected secret again from the live session: its details,
+    /// its history and its listing row.
+    pub(super) fn refresh_selection_for_session(&mut self, cx: &mut Context<Self>) {
+        let Some(SecretRowKey::Secret(name)) = self.selected.clone() else {
+            return;
+        };
+
+        self.describe(name.clone(), cx);
+        self.request_versions(name, super::HistoryLoad::Automatic, cx);
+        self.reload_listing_in_place(cx);
+    }
+
+    /// After a reconnect that kept the region, the selection still describes
+    /// the previous session: read it again without waiting for the user.
+    pub(super) fn adopt_details_session(&mut self, cx: &mut Context<Self>) {
+        let stale = self.details_session.is_some()
+            && self.connection(cx).is_some()
+            && !self.details_session_is_live(cx);
+
+        // The history follows the connection on its own
+        // (`adopt_connection_session`); only the details and the row are left.
+        if stale && !self.write_in_flight {
+            if let Some(SecretRowKey::Secret(name)) = self.selected.clone() {
+                self.describe(name, cx);
+                self.reload_listing_in_place(cx);
+            }
+        }
+    }
+
+    /// An editor save is in flight, and an action write would race it.
+    fn editor_save_blocks_writes(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.is_saving_value_edit() {
+            return false;
+        }
+
+        self.report_write_warning(
+            dbflux_i18n::t!("document.secret_store.write.in_progress"),
+            cx,
+        );
+        true
     }
 
     /// Reports a failure the seam already audited, once.
@@ -278,7 +364,21 @@ impl SecretStoreDocument {
         failure: &SecretWriteFailure,
         cx: &mut Context<Self>,
     ) {
-        self.report_seam_write_failure(write_failure_to_user_facing(failure), cx);
+        let user_error = write_failure_to_user_facing(failure);
+
+        // A store failure with no correlation id and no recorded event never
+        // reached the seam (the connection has no such store), so no audit row
+        // exists to point at: the standard reporter records the attempt and
+        // gives the toast a row to open.
+        if failure.kind == SecretWriteFailureKind::StoreFailed
+            && failure.correlation_id.is_none()
+            && !failure.audit_unrecorded
+        {
+            report_error(user_error, cx);
+            return;
+        }
+
+        self.report_seam_write_failure(user_error, cx);
     }
 
     /// Tells the user a write landed.
@@ -323,7 +423,19 @@ impl SecretStoreDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.region_switch_blocks_writes(cx) {
+        if self.region_switch_blocks_writes(cx) || self.editor_save_blocks_writes(cx) {
+            return;
+        }
+
+        // A dialog about an existing secret needs details read from the live
+        // session: after a reconnect they describe another account's secret
+        // of the same name.
+        if !matches!(dialog, WriteDialog::Create(_)) && !self.details_session_is_live(cx) {
+            self.report_write_warning(
+                dbflux_i18n::t!("document.secret_store.write.details_stale"),
+                cx,
+            );
+            self.refresh_selection_for_session(cx);
             return;
         }
 
