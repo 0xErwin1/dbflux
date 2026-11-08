@@ -283,17 +283,27 @@ impl SecretStoreDocument {
             .flex_col()
             .child(header)
             .child(
+                // The viewport ends where the action bar begins, so the bar
+                // stays pinned and never covers content: the sections scroll
+                // inside it on their own handle.
                 div()
-                    .id("secret-details-body")
+                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scrollbar()
-                    .flex()
-                    .flex_col()
-                    .gap(SecretStoreMetrics::SECTION_GAP)
-                    .px(SecretStoreMetrics::DETAILS_PADDING_X)
-                    .py(SecretStoreMetrics::DETAILS_PADDING_Y)
-                    .children(sections),
+                    .child(
+                        div()
+                            .id("secret-details-body")
+                            .size_full()
+                            .track_scroll(&self.details_scroll)
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .gap(SecretStoreMetrics::SECTION_GAP)
+                            .px(SecretStoreMetrics::DETAILS_PADDING_X)
+                            .py(SecretStoreMetrics::DETAILS_PADDING_Y)
+                            .children(sections),
+                    )
+                    .child(Scrollbar::vertical(&self.details_scroll)),
             )
             .children(bar)
     }

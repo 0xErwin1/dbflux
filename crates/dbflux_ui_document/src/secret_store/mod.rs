@@ -194,6 +194,8 @@ pub struct SecretStoreDocument {
     /// Moves the keyboard into the dialog when it opens and hands it back
     /// when it closes.
     dialog_focus: ModalFocus,
+    /// Scroll position of the details pane's sections.
+    details_scroll: ScrollHandle,
     /// The session and the row the open dialog was opened on.
     dialog_pin: Option<actions::DialogPin>,
     /// A governed write is in flight. Another write waits for it, so a
@@ -371,6 +373,7 @@ impl SecretStoreDocument {
             dialog: None,
             dialog_focus: ModalFocus::new(cx),
             dialog_pin: None,
+            details_scroll: ScrollHandle::new(),
             write_in_flight: false,
             rotation_notice: None,
             edit_after_retrieve: false,
@@ -609,6 +612,7 @@ impl SecretStoreDocument {
         }
 
         self.close_dialog_for_navigation(cx);
+        self.details_scroll.set_offset(point(px(0.0), px(0.0)));
         self.clear_value();
         self.details_generation = self.details_generation.wrapping_add(1);
         self.details = DetailsState::Idle;

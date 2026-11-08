@@ -2455,3 +2455,69 @@ fn a_reload_closes_the_open_dialog(cx: &mut TestAppContext) {
 
     assert!(!opened.dialog_open());
 }
+
+// -- The details pane scrolls above its action bar -------------------------------
+
+/// At the default window height a secret with versions, rotation and tags is
+/// taller than the pane: every control is reachable by wheel scrolling, lies
+/// inside the scroll viewport, and none runs under the action bar.
+#[gpui::test]
+fn every_control_of_the_details_pane_is_reachable_above_the_action_bar(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened
+        .window
+        .simulate_resize(gpui::size(gpui::px(1500.0), gpui::px(700.0)));
+    opened.window.run_until_parked();
+    opened.select(KEY_VALUE_SECRET);
+    opened.window.run_until_parked();
+
+    let viewport = opened.bounds_of("secret-details-body");
+    let bar = opened.bounds_of("secret-action-bar");
+    assert!(
+        viewport.bottom() <= bar.top() + gpui::px(0.5),
+        "the scroll area ends above the bar: {viewport:?} / {bar:?}"
+    );
+
+    let controls = [
+        "secret-retrieve-value",
+        "secret-details-edit",
+        "secret-version-rollback-1",
+        "secret-rotation-edit",
+        "secret-rotation-rotate-now",
+        "secret-tags-edit",
+    ];
+
+    for id in controls {
+        let mut steps = 0;
+
+        loop {
+            let bounds = opened.bounds_of(id);
+            let inside = bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom();
+
+            if inside {
+                assert!(
+                    bounds.bottom() <= bar.top() + gpui::px(0.5),
+                    "{id} {bounds:?} runs under the bar {bar:?}"
+                );
+                break;
+            }
+
+            assert!(steps < 40, "{id} never became reachable: {bounds:?}");
+            steps += 1;
+
+            opened.window.simulate_event(gpui::ScrollWheelEvent {
+                position: viewport.center(),
+                delta: gpui::ScrollDelta::Pixels(gpui::point(
+                    gpui::px(0.0),
+                    gpui::px(if bounds.top() < viewport.top() {
+                        120.0
+                    } else {
+                        -120.0
+                    }),
+                )),
+                ..Default::default()
+            });
+            opened.window.run_until_parked();
+        }
+    }
+}
