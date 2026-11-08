@@ -3641,6 +3641,22 @@ document:
         formatted: "서식"
         raw: "원본"
         toggle: "서식 보기와 원본 보기 전환"
+    dialog:
+      cancel: "취소"
+    write:
+      refused_managed: "%{name}은(는) %{service}에서 관리하므로 여기서 변경할 수 없습니다."
+      refused_deletion: "%{name}의 삭제가 예약되어 있습니다. 변경하려면 먼저 복원하세요."
+      connection_replaced: "이 대화상자가 열려 있는 동안 연결이 교체되었습니다. 아무것도 기록되지 않았습니다. 현재 연결에서 다시 여세요."
+    rollback:
+      button: "롤백"
+      action: "버전 %{version}(으)로 롤백"
+      footnote: "롤백은 선택한 버전을 현재 버전으로 만들고, 기존 현재 버전을 이전 버전으로 유지합니다. 값은 다시 기록되지 않습니다."
+      title: "%{name} 롤백"
+      lead: "버전 %{version}을(를) %{name}의 현재 버전으로 만들까요?"
+      effect: "현재 버전을 읽는 애플리케이션은 선택한 버전의 값을 받게 됩니다. 지금 현재 버전인 %{current}은(는) 이전 버전으로 남습니다."
+      confirm: "롤백"
+      done: "%{name}이(가) 이제 버전 %{version}을(를) 사용합니다"
+      no_earlier_version: "%{name}에는 롤백할 이전 버전이 없습니다."
 document_tree:
   search_placeholder: 검색…
   view:

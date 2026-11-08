@@ -9,6 +9,7 @@
 //! closes. Behavior that differs between stores follows the store's
 //! `SecretStoreCapabilities`, never a driver id.
 
+mod actions;
 mod context_menu;
 mod data;
 mod details;
@@ -21,6 +22,7 @@ mod render;
 mod value;
 mod write;
 
+use actions::WriteDialog;
 use data::HistoryLoad;
 pub use listing::{PathMode, SecretListing};
 pub use region::RegionListState;
@@ -40,6 +42,7 @@ use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::controls::{Dropdown, DropdownSelectionChanged, InputEvent, InputState};
+use dbflux_components::modals::ModalFocus;
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
     Connection, DriverCapabilities, RefreshPolicy, SecretDetails, SecretStoreCapabilities,
@@ -186,6 +189,11 @@ pub struct SecretStoreDocument {
     /// The focus handle of the open menu's overlay, which takes the keyboard
     /// while the menu is up.
     context_menu_focus: FocusHandle,
+    /// The write dialog open over the document, if any.
+    dialog: Option<WriteDialog>,
+    /// Moves the keyboard into the dialog when it opens and hands it back
+    /// when it closes.
+    dialog_focus: ModalFocus,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -349,6 +357,8 @@ impl SecretStoreDocument {
             context_menu: None,
             pending_menu_action: None,
             context_menu_focus: cx.focus_handle(),
+            dialog: None,
+            dialog_focus: ModalFocus::new(cx),
             _subscriptions: subscriptions,
         };
 
@@ -477,6 +487,13 @@ impl SecretStoreDocument {
     }
 
     pub fn active_context(&self) -> ContextId {
+        // A dialog owns the keyboard: its inputs keep every letter the
+        // listing would otherwise read as a command, and its buttons answer
+        // Enter and Escape through the dialog itself.
+        if self.dialog.is_some() {
+            return ContextId::TextInput;
+        }
+
         if self.context_menu.is_some() {
             return ContextId::ContextMenu;
         }
@@ -1044,7 +1061,7 @@ impl SecretStoreDocument {
         // a button of the value section: both reachable from the menu.
         if let VersionsState::Loaded(versions) = &self.versions {
             for (index, version) in versions.iter().enumerate() {
-                let target = target.clone();
+                let retrieve_target = target.clone();
                 let history_generation = self.versions_generation;
                 actions.push(
                     PaneAction::callback(
@@ -1054,7 +1071,7 @@ impl SecretStoreDocument {
                             version = details::short_version_id(&version.id)
                         ),
                         move |_window, cx| {
-                            if let Some(doc) = target.upgrade() {
+                            if let Some(doc) = retrieve_target.upgrade() {
                                 doc.update(cx, |doc, cx| {
                                     // The menu was built over another history.
                                     if doc.versions_generation == history_generation {
@@ -1067,6 +1084,37 @@ impl SecretStoreDocument {
                     .icon(AppIcon::History)
                     .enabled(self.can_retrieve_value()),
                 );
+
+                // Roll back is a button on every version that is not
+                // current, so each one has its own entry.
+                if self.supports_roll_back() && !self.is_current_version(&version.id) {
+                    let roll_back_target = target.clone();
+                    let history_generation = self.versions_generation;
+                    let mut roll_back = PaneAction::callback(
+                        format!("secret-version-rollback-{index}"),
+                        dbflux_i18n::t!(
+                            "document.secret_store.rollback.action",
+                            version = details::short_version_id(&version.id)
+                        ),
+                        move |window, cx| {
+                            if let Some(doc) = roll_back_target.upgrade() {
+                                doc.update(cx, |doc, cx| {
+                                    if doc.versions_generation == history_generation {
+                                        doc.open_roll_back(index, window, cx);
+                                    }
+                                });
+                            }
+                        },
+                    )
+                    .icon(AppIcon::RotateCcw)
+                    .enabled(self.can_roll_back_version(index));
+                    roll_back.shortcut = dbflux_ui_base::keymap::shortcut_label(
+                        ContextId::Results,
+                        Command::RollBackVersion,
+                    )
+                    .filter(|_| self.previous_version_index() == Some(index));
+                    actions.push(roll_back);
+                }
             }
         }
 
@@ -1171,6 +1219,12 @@ impl SecretStoreDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // The dialog handles its own keys; nothing reaches the listing under
+        // it.
+        if self.dialog.is_some() {
+            return true;
+        }
+
         if self.context_menu.is_some() {
             return self.dispatch_menu_command(cmd, window, cx);
         }
@@ -1195,6 +1249,9 @@ impl SecretStoreDocument {
             Command::ResultsNextPage => self.load_more(cx),
             Command::EditValue if self.can_edit_value() => {
                 self.start_value_edit(window, cx);
+            }
+            Command::RollBackVersion if self.supports_roll_back() => {
+                self.roll_back_to_previous(window, cx);
             }
             Command::RefreshSchema => self.refresh(cx),
             Command::FocusSearch if self.value_edit.as_ref().is_some_and(|edit| edit.focused) => {

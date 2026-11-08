@@ -732,7 +732,11 @@ impl SecretStoreDocument {
     /// View-in-audit action — but without its tracing event: the audit
     /// bridge turns that event into a second, `user_error` row next to the
     /// one the seam recorded, and a failed write must not be audited twice.
-    fn report_seam_write_failure(&self, failure: UserFacingError, cx: &mut Context<Self>) {
+    pub(super) fn report_seam_write_failure(
+        &self,
+        failure: UserFacingError,
+        cx: &mut Context<Self>,
+    ) {
         let id = failure.correlation_id;
         let id_str = id.to_string();
         let summary = failure.summary.clone();
@@ -790,7 +794,7 @@ impl SecretStoreDocument {
 /// it reads as an audit-storage problem at warning severity, not as a
 /// failure to repeat. The correlation id a store failure carries replaces
 /// the fresh one, so the toast and the failure's audit row tell one story.
-fn write_failure_to_user_facing(failure: &SecretWriteFailure) -> UserFacingError {
+pub(super) fn write_failure_to_user_facing(failure: &SecretWriteFailure) -> UserFacingError {
     let mut user_error = match failure.kind {
         SecretWriteFailureKind::Refused => {
             UserFacingError::new(ErrorKind::User, failure.error.to_string())

@@ -3641,6 +3641,22 @@ document:
         formatted: "Formatado"
         raw: "Bruto"
         toggle: "Alternar entre Formatado e Bruto"
+    dialog:
+      cancel: "Cancelar"
+    write:
+      refused_managed: "%{name} é gerenciado por %{service}, então não pode ser alterado aqui."
+      refused_deletion: "A exclusão de %{name} está agendada. Restaure-o antes de alterá-lo."
+      connection_replaced: "A conexão foi substituída enquanto este diálogo estava aberto. Nada foi gravado. Abra-o novamente a partir da conexão atual."
+    rollback:
+      button: "Reverter"
+      action: "Reverter para a versão %{version}"
+      footnote: "Reverter torna a versão escolhida a atual e mantém como anterior a versão que era a atual. Nenhum valor é regravado."
+      title: "Reverter %{name}"
+      lead: "Tornar a versão %{version} a versão atual de %{name}?"
+      effect: "Os aplicativos que leem a versão atual receberão o valor da versão escolhida. A versão %{current}, atual agora, continua disponível como versão anterior."
+      confirm: "Reverter"
+      done: "%{name} agora usa a versão %{version}"
+      no_earlier_version: "%{name} não tem uma versão anterior para a qual reverter."
 document_tree:
   search_placeholder: Buscar…
   view:

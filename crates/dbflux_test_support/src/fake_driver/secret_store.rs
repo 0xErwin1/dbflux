@@ -407,6 +407,7 @@ impl SecretStoreSource for FakeSecretStore {
             }
 
             for entry in secret.history.iter_mut() {
+                entry.is_current = entry.id == request.version_id;
                 entry.labels.retain(|label| label != "AWSPREVIOUS");
                 if entry.id == current {
                     entry.labels.retain(|label| label != "AWSCURRENT");

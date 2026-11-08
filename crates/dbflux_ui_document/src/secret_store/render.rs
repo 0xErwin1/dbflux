@@ -1136,6 +1136,10 @@ impl Render for SecretStoreDocument {
             root = root.child(element);
         }
 
+        if let Some(dialog) = self.render_write_dialog(cx) {
+            root = root.child(dialog);
+        }
+
         root
     }
 }

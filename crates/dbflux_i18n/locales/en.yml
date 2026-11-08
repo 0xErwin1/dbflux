@@ -3641,6 +3641,22 @@ document:
         formatted: "Formatted"
         raw: "Raw"
         toggle: "Switch between Formatted and Raw"
+    dialog:
+      cancel: "Cancel"
+    write:
+      refused_managed: "%{name} is managed by %{service}, so it cannot be changed here."
+      refused_deletion: "Deletion is scheduled for %{name}. Restore it before changing it."
+      connection_replaced: "The connection was replaced while this dialog was open. Nothing was written. Open it again from the current connection."
+    rollback:
+      button: "Roll back"
+      action: "Roll back to version %{version}"
+      footnote: "Roll back makes the chosen version the current one and keeps the version that was current as the previous one. No value is rewritten."
+      title: "Roll back %{name}"
+      lead: "Make version %{version} the current version of %{name}?"
+      effect: "Applications that read the current version will receive the value of the chosen version. Version %{current}, current now, stays available as the previous version."
+      confirm: "Roll back"
+      done: "%{name} now uses version %{version}"
+      no_earlier_version: "%{name} has no earlier version to roll back to."
 document_tree:
   search_placeholder: Search…
   view:

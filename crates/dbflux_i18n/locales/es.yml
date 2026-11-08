@@ -3641,6 +3641,22 @@ document:
         formatted: "Formateado"
         raw: "Sin formato"
         toggle: "Alternar entre Formateado y Sin formato"
+    dialog:
+      cancel: "Cancelar"
+    write:
+      refused_managed: "%{name} lo gestiona %{service}, así que no se puede cambiar aquí."
+      refused_deletion: "La eliminación de %{name} está programada. Restáurelo antes de cambiarlo."
+      connection_replaced: "La conexión se reemplazó mientras este diálogo estaba abierto. No se escribió nada. Ábralo de nuevo desde la conexión actual."
+    rollback:
+      button: "Revertir"
+      action: "Revertir a la versión %{version}"
+      footnote: "Revertir convierte la versión elegida en la actual y conserva como anterior la versión que era la actual. No se reescribe ningún valor."
+      title: "Revertir %{name}"
+      lead: "¿Convertir la versión %{version} en la versión actual de %{name}?"
+      effect: "Las aplicaciones que leen la versión actual recibirán el valor de la versión elegida. La versión %{current}, actual ahora, sigue disponible como versión anterior."
+      confirm: "Revertir"
+      done: "%{name} ahora usa la versión %{version}"
+      no_earlier_version: "%{name} no tiene una versión anterior a la que revertir."
 document_tree:
   search_placeholder: Buscar…
   view:

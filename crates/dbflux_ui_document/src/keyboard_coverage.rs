@@ -655,7 +655,7 @@ pub(crate) const BUCKETS: SurfaceRegistry = SurfaceRegistry {
 /// region listing.
 pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
     name: "secret store",
-    contexts: &[ContextId::Results, ContextId::ContextMenu],
+    contexts: &[ContextId::Results, ContextId::ContextMenu, ContextId::Modal],
     entries: &[
         ("secret-row-*", KeyboardPath::Command(Command::SelectNext)),
         (
@@ -755,6 +755,24 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
             "secret-version-back-to-current",
             KeyboardPath::Menu("secret-version-current"),
         ),
+        // Roll back is a button on every earlier version, and the `b` key
+        // opens the same confirmation for the most recent one; each button
+        // also has a pane action.
+        (
+            "secret-version-rollback-*",
+            KeyboardPath::Menu("secret-version-rollback-*"),
+        ),
+        // The dialogs the write actions open: Enter confirms and Escape
+        // cancels, from wherever the keyboard is inside the dialog.
+        (
+            "secret-rollback-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-rollback-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("modal-close", KeyboardPath::Command(Command::Cancel)),
         (
             "secret-value-copy-*",
             KeyboardPath::MouseOnly(

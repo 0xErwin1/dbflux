@@ -581,6 +581,12 @@ fn results_layer() -> KeymapLayer {
     // The secret store's Edit value; other documents leave it unhandled.
     layer.bind(KeyChord::new("e", Modifiers::none()), Command::EditValue);
 
+    // The secret store's Roll back; other documents leave it unhandled.
+    layer.bind(
+        KeyChord::new("b", Modifiers::none()),
+        Command::RollBackVersion,
+    );
+
     // Panel navigation (Ctrl+hjkl) — vim-style, literal Ctrl on every platform.
     layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
     layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::FocusToolbar);

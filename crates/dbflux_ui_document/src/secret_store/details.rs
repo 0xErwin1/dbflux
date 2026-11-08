@@ -36,6 +36,9 @@ pub(super) const VIEWER_GUTTER_WIDTH: Rems = ui(28.0);
 /// created columns are narrower here: the details pane is one column wide.
 const VERSION_ID_WIDTH: Rems = ui(80.0);
 const VERSION_CREATED_WIDTH: Rems = ui(118.0);
+/// The Roll back button's column: the label, its icon and the button's
+/// padding.
+const VERSION_ACTION_WIDTH: Rems = ui(92.0);
 const HISTORY_VERSION_WIDTH: Rems = ui(44.0);
 const VERSION_HEADER_HEIGHT: Rems = ui(30.0);
 const VERSION_ROW_HEIGHT: Rems = ui(40.0);
@@ -477,11 +480,28 @@ impl SecretStoreDocument {
             })
             .collect();
 
+        let rollback = staged && self.supports_roll_back();
+
         div()
             .flex()
             .flex_col()
-            .when(staged, |table| table.child(versions_table_header(cx)))
+            .when(staged, |table| {
+                table.child(versions_table_header(rollback, cx))
+            })
             .children(rows)
+            .when(rollback, |table| {
+                table.child(
+                    div()
+                        .id("secret-versions-rollback-note")
+                        .pt(SecretStoreMetrics::ROW_GAP)
+                        .child(
+                            Text::caption(dbflux_i18n::t!(
+                                "document.secret_store.rollback.footnote"
+                            ))
+                            .muted_foreground(),
+                        ),
+                )
+            })
     }
 
     /// One version: clicking it retrieves that version's value. The row
@@ -578,6 +598,38 @@ impl SecretStoreDocument {
                 }))
         };
 
+        // Every row keeps the action column when the store can roll back,
+        // so the created dates stay aligned; the current version has no
+        // button, since there is nothing to roll back to.
+        let action = self.supports_roll_back().then(|| {
+            let cell = div()
+                .w(VERSION_ACTION_WIDTH)
+                .flex_shrink_0()
+                .flex()
+                .justify_end();
+
+            if current {
+                return cell;
+            }
+
+            cell.child(
+                Button::new(
+                    SharedString::from(format!("secret-version-rollback-{index}")),
+                    dbflux_i18n::t!("document.secret_store.rollback.button"),
+                )
+                .inline()
+                .icon(AppIcon::RotateCcw)
+                .tab_stop(false)
+                .disabled(!self.can_roll_back_version(index))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    // The button sits on the row that retrieves the
+                    // version; rolling back must not also retrieve it.
+                    cx.stop_propagation();
+                    this.open_roll_back(index, window, cx);
+                })),
+            )
+        });
+
         row.h(VERSION_ROW_HEIGHT)
             .child(cell(
                 short_version_id(&version.id),
@@ -589,6 +641,7 @@ impl SecretStoreDocument {
                 cell(created, VERSION_CREATED_WIDTH, muted)
                     .text_size(DocumentMetrics::TABLE_META_FONT),
             )
+            .children(action)
             .into_any_element()
     }
 
@@ -1186,7 +1239,7 @@ fn versions_count_label(count: usize) -> String {
 }
 
 /// The column titles of the staged table: Version, Staging labels, Created.
-fn versions_table_header(cx: &App) -> Div {
+fn versions_table_header(with_actions: bool, cx: &App) -> Div {
     let theme = cx.theme();
 
     div()
@@ -1217,6 +1270,9 @@ fn versions_table_header(cx: &App) -> Div {
                     "document.secret_store.versions.column.created"
                 )),
         )
+        .when(with_actions, |header| {
+            header.child(div().w(VERSION_ACTION_WIDTH).flex_shrink_0())
+        })
 }
 
 fn pending_deletion_card(

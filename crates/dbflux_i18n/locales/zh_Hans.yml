@@ -3641,6 +3641,22 @@ document:
         formatted: "格式化"
         raw: "原始"
         toggle: "在格式化与原始之间切换"
+    dialog:
+      cancel: "取消"
+    write:
+      refused_managed: "%{name} 由 %{service} 管理，因此无法在此更改。"
+      refused_deletion: "%{name} 已安排删除。请先恢复再更改。"
+      connection_replaced: "此对话框打开期间连接已被替换。未写入任何内容。请从当前连接重新打开。"
+    rollback:
+      button: "回滚"
+      action: "回滚到版本 %{version}"
+      footnote: "回滚会把所选版本设为当前版本，并把原来的当前版本保留为上一版本。不会重写任何值。"
+      title: "回滚 %{name}"
+      lead: "要把版本 %{version} 设为 %{name} 的当前版本吗？"
+      effect: "读取当前版本的应用将收到所选版本的值。目前的版本 %{current} 仍作为上一版本保留。"
+      confirm: "回滚"
+      done: "%{name} 现在使用版本 %{version}"
+      no_earlier_version: "%{name} 没有可回滚的更早版本。"
 document_tree:
   search_placeholder: 搜索…
   view:

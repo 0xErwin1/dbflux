@@ -68,6 +68,16 @@ impl SecretStoreDocument {
         self.spawn_list(generation, None, cx);
     }
 
+    /// Lists the current level again after a write, leaving the selection,
+    /// its details and its value where they are: the rows are replaced when
+    /// the first page lands, so a changed rotation, description or deletion
+    /// date reads from the store instead of from the listing the write
+    /// outdated.
+    pub(crate) fn reload_listing_in_place(&mut self, cx: &mut Context<Self>) {
+        let generation = self.listing.begin_reload();
+        self.spawn_list(generation, None, cx);
+    }
+
     /// Loads the next page and appends it. A no-op on the last page or while
     /// a page is loading.
     pub fn load_more(&mut self, cx: &mut Context<Self>) {
