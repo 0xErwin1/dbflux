@@ -7541,4 +7541,45 @@ mod details_design {
         let text = opened.rendered_text();
         assert!(text.contains("Version v3"), "{text}");
     }
+
+    #[test]
+    fn last_retrieved_is_a_date_even_across_a_local_offset() {
+        use crate::secret_store::details::last_retrieved_label;
+        use dbflux_core::chrono::{FixedOffset, TimeZone, Utc};
+
+        let midnight = Utc.with_ymd_and_hms(2026, 10, 19, 0, 0, 0).unwrap();
+        let behind = FixedOffset::west_opt(5 * 3600).unwrap();
+        assert_eq!(
+            midnight
+                .with_timezone(&behind)
+                .format("%Y-%m-%d")
+                .to_string(),
+            "2026-10-18",
+            "a local conversion would show the previous day"
+        );
+
+        assert_eq!(last_retrieved_label(Some(midnight)), "2026-10-19");
+        assert_eq!(last_retrieved_label(None), "—");
+    }
+
+    #[gpui::test]
+    fn the_value_actions_share_a_row_at_the_default_width(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(PLAINTEXT_SECRET);
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.rendered_paths();
+
+        let top = |opened: &mut Opened<'_>, id: &str| {
+            node_bounds(opened, id)
+                .unwrap_or_else(|| panic!("`{id}` is drawn"))
+                .origin
+                .y
+        };
+
+        let reveal = top(&mut opened, "secret-value-hide-all");
+        let copy = top(&mut opened, "secret-value-copy-all");
+        let edit = top(&mut opened, "secret-value-edit");
+        assert_eq!(reveal, copy);
+        assert_eq!(copy, edit);
+    }
 }

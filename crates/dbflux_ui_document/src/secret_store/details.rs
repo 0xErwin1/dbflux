@@ -110,6 +110,18 @@ fn detail_row(label: String, value: String, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
+/// The last retrieval as a date. AWS reports it rounded down to the day, as
+/// midnight UTC, so a local time of day would be one that never happened and
+/// could read earlier than the creation date.
+pub(super) fn last_retrieved_label(
+    time: Option<dbflux_core::chrono::DateTime<dbflux_core::chrono::Utc>>,
+) -> String {
+    time.map_or_else(
+        || UNKNOWN.to_string(),
+        |time| time.date_naive().format("%Y-%m-%d").to_string(),
+    )
+}
+
 fn or_unknown(value: Option<&str>) -> String {
     value.map_or_else(|| UNKNOWN.to_string(), str::to_string)
 }
@@ -374,7 +386,7 @@ impl SecretStoreDocument {
             ));
             rows.push(detail_row(
                 label("document.secret_store.details.last_retrieved"),
-                format_optional_time(details.last_accessed),
+                last_retrieved_label(details.last_accessed),
                 cx,
             ));
         }
@@ -944,14 +956,11 @@ impl SecretStoreDocument {
             dbflux_i18n::t!("document.secret_store.value.copy_all")
         };
 
-        let mut copy_all = Button::new("secret-value-copy-all", copy_label)
+        let copy_all = Button::new("secret-value-copy-all", copy_label)
+            .inline()
             .icon(AppIcon::Copy)
             .tab_stop(false)
             .on_click(cx.listener(|this, _, _, cx| this.copy_full_value(cx)));
-
-        if let Some(key) = listing_shortcut(Command::ResultsCopyRow) {
-            copy_all = copy_all.kbd(key);
-        }
 
         let (reveal_key, reveal_icon) = if value.all_revealed() {
             ("document.secret_store.value.hide_all", AppIcon::EyeOff)
@@ -959,14 +968,11 @@ impl SecretStoreDocument {
             ("document.secret_store.value.show_all", AppIcon::Eye)
         };
 
-        let mut reveal_all = Button::new("secret-value-hide-all", dbflux_i18n::t!(reveal_key))
+        let reveal_all = Button::new("secret-value-hide-all", dbflux_i18n::t!(reveal_key))
+            .inline()
             .icon(reveal_icon)
             .tab_stop(false)
             .on_click(cx.listener(|this, _, _, cx| this.toggle_reveal_all(cx)));
-
-        if let Some(key) = listing_shortcut(Command::ExpandCollapse) {
-            reveal_all = reveal_all.kbd(key);
-        }
 
         div()
             .flex()
@@ -980,6 +986,7 @@ impl SecretStoreDocument {
                         "secret-value-edit",
                         dbflux_i18n::t!("document.secret_store.edit.open"),
                     )
+                    .inline()
                     .icon(AppIcon::Pencil)
                     .tab_stop(false)
                     .on_click(cx.listener(|this, _, window, cx| {
