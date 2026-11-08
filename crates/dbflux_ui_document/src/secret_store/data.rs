@@ -278,7 +278,12 @@ impl SecretStoreDocument {
         self.request_versions(name, HistoryLoad::Requested, cx);
     }
 
-    fn request_versions(&mut self, name: String, trigger: HistoryLoad, cx: &mut Context<Self>) {
+    pub(in crate::secret_store) fn request_versions(
+        &mut self,
+        name: String,
+        trigger: HistoryLoad,
+        cx: &mut Context<Self>,
+    ) {
         self.versions_generation = self.versions_generation.wrapping_add(1);
         let generation = self.versions_generation;
 

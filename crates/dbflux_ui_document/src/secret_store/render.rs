@@ -42,7 +42,27 @@ const IDENTITY_MIN_WIDTH: Rems = dbflux_components::tokens::ui(72.0);
 #[derive(Default)]
 pub(super) struct FooterFit {
     width: std::cell::Cell<Pixels>,
+    /// The typography the cached hint widths were measured under.
+    typography: std::cell::Cell<Pixels>,
     hints: std::cell::RefCell<std::collections::HashMap<&'static str, Pixels>>,
+}
+
+impl FooterFit {
+    /// Forgets the measured hint widths when the typography they were
+    /// measured under changes.
+    pub(super) fn track_typography(&self, key: Pixels) {
+        if self.typography.replace(key) != key {
+            self.hints.borrow_mut().clear();
+        }
+    }
+
+    pub(super) fn remember_hint(&self, name: &'static str, width: Pixels) {
+        self.hints.borrow_mut().insert(name, width);
+    }
+
+    pub(super) fn hint_width(&self, name: &str) -> Option<Pixels> {
+        self.hints.borrow().get(name).copied()
+    }
 }
 
 /// The hints that give way as the footer narrows, first to go first. The
@@ -338,7 +358,7 @@ impl SecretStoreDocument {
     /// last segment of the breadcrumb row, and it is the only dropdown of the
     /// document, so its trigger carries the picker's own element id.
     fn render_region_picker(&self) -> Option<AnyElement> {
-        if !matches!(self.regions, RegionListState::Loaded(_)) {
+        if !matches!(&self.regions, RegionListState::Loaded(regions) if !regions.is_empty()) {
             return None;
         }
 
@@ -822,7 +842,9 @@ impl SecretStoreDocument {
             .into_any_element()
     }
 
-    fn render_footer(&self, cx: &Context<Self>) -> impl IntoElement {
+    /// The footer's key hints in priority order: command, element name and
+    /// label key, for the commands that have a shortcut.
+    fn footer_hint_candidates(&self) -> Vec<(String, &'static str, &'static str)> {
         let mut hints = vec![(Command::Execute, "document.secret_store.footer.hint.open")];
 
         if self.hierarchical() {
@@ -846,8 +868,7 @@ impl SecretStoreDocument {
             ),
         ]);
 
-        let fit = self.footer_fit.clone();
-        let shown: Vec<(String, &'static str, &str)> = hints
+        hints
             .into_iter()
             .filter_map(|(command, key)| {
                 let name = key.rsplit('.').next().unwrap_or(key);
@@ -859,65 +880,90 @@ impl SecretStoreDocument {
 
                 listing_shortcut(command).map(|shortcut| (shortcut, name, key))
             })
-            .collect();
+            .collect()
+    }
+
+    /// The hints that do not fit beside the summary's minimum width, lowest
+    /// priority first. Nothing is dropped before the first measurement.
+    fn footer_dropped_hints(
+        &self,
+        shown: &[(String, &'static str, &'static str)],
+        cx: &Context<Self>,
+    ) -> Vec<&'static str> {
+        let fit = &self.footer_fit;
+        let summary_min = dbflux_components::fonts::ui_px(cx, SUMMARY_MIN_WIDTH);
+        fit.track_typography(summary_min);
 
         let gap = ResultMetrics::FOOTER_GAP;
-        let summary_min = dbflux_components::fonts::ui_px(cx, SUMMARY_MIN_WIDTH);
         let slack = DocumentMetrics::PADDING_X * 2.0 + px(1.0);
         let width = fit.width.get();
-        let known = |name: &str| fit.hints.borrow().get(name).copied();
-        let mut dropped: Vec<&str> = Vec::new();
+        let mut dropped: Vec<&'static str> = Vec::new();
 
-        // Before the first measurement everything is drawn; afterwards the
-        // lowest-priority hints go until the rest fit beside the summary's
-        // minimum.
-        if width > px(0.0) {
-            let needed = |dropped: &[&str]| {
-                shown
-                    .iter()
-                    .filter(|(_, name, _)| !dropped.contains(name))
-                    .map(|(_, name, _)| known(name).unwrap_or_default() + gap)
-                    .fold(summary_min + slack, |total, hint| total + hint)
-            };
-
-            for name in HINT_DROP_ORDER {
-                if needed(&dropped) <= width {
-                    break;
-                }
-
-                dropped.push(name);
-            }
+        if width <= px(0.0) {
+            return dropped;
         }
 
+        let needed = |dropped: &[&str]| {
+            shown
+                .iter()
+                .filter(|(_, name, _)| !dropped.contains(name))
+                .map(|(_, name, _)| fit.hint_width(name).unwrap_or_default() + gap)
+                .fold(summary_min + slack, |total, hint| total + hint)
+        };
+
+        for name in HINT_DROP_ORDER {
+            if needed(&dropped) <= width {
+                break;
+            }
+
+            dropped.push(name);
+        }
+
+        dropped
+    }
+
+    /// One key hint, with the canvas that measures its natural width.
+    fn render_footer_hint(
+        &self,
+        shortcut: String,
+        name: &'static str,
+        key: &'static str,
+    ) -> impl IntoElement {
+        let fit = self.footer_fit.clone();
+
+        div()
+            .relative()
+            .flex_shrink_0()
+            .child(
+                footer_key_hint(shortcut, dbflux_i18n::t!(key))
+                    .id(format!("secret-footer-hint-{name}")),
+            )
+            .child(
+                canvas(
+                    move |bounds, window, _| {
+                        let previous = fit.hint_width(name);
+                        fit.remember_hint(name, bounds.size.width);
+
+                        if previous != Some(bounds.size.width) {
+                            window.refresh();
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+    }
+
+    fn render_footer(&self, cx: &Context<Self>) -> impl IntoElement {
+        let fit = self.footer_fit.clone();
+        let shown = self.footer_hint_candidates();
+        let dropped = self.footer_dropped_hints(&shown, cx);
         let hints = shown
             .into_iter()
             .filter(|(_, name, _)| !dropped.contains(name))
-            .map(|(shortcut, name, key)| {
-                let fit = fit.clone();
-
-                div()
-                    .relative()
-                    .flex_shrink_0()
-                    .child(
-                        footer_key_hint(shortcut, dbflux_i18n::t!(key))
-                            .id(format!("secret-footer-hint-{name}")),
-                    )
-                    .child(
-                        canvas(
-                            move |bounds, window, _| {
-                                let previous =
-                                    fit.hints.borrow_mut().insert(name, bounds.size.width);
-
-                                if previous != Some(bounds.size.width) {
-                                    window.refresh();
-                                }
-                            },
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .size_full(),
-                    )
-            });
+            .map(|(shortcut, name, key)| self.render_footer_hint(shortcut, name, key))
+            .collect::<Vec<_>>();
 
         let summary = self.loaded_summary();
         let tooltip = summary.clone();

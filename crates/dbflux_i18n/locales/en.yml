@@ -3546,6 +3546,7 @@ document:
       back_to_current: "Back to current"
       shown: "Showing version %{version}"
       not_current: "This is not the current version. The retrieval is audited, the value is not."
+      current_unknown: "The current version is not known right now. The retrieval is audited, the value is not."
     tags:
       title: "Tags"
       none: "No tags"

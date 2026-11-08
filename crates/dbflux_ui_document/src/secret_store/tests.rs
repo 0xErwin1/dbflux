@@ -1570,6 +1570,106 @@ fn the_footer_stays_inside_the_listing_at_the_minimum_width(cx: &mut TestAppCont
             "{kept} is always drawn"
         );
     }
+
+    resize(&mut opened, 1500.0);
+    for name in names {
+        let id = format!("secret-footer-hint-{name}");
+        assert!(
+            paths(&mut opened).iter().any(|path| path.ends_with(&id)),
+            "{name} returns when the room does"
+        );
+    }
+}
+
+/// A write landing after the connection is gone lists the history
+/// automatically: a loss the editor already reported is not reported again.
+#[gpui::test]
+fn a_post_save_history_reload_does_not_report_a_known_loss_again(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+    let generation = opened.read(|doc| doc.value_write_generation);
+
+    let profile_id = opened.read(|doc| doc.profile_id);
+    let app_state = opened.app_state.clone();
+    opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id));
+    });
+    opened.update(|doc, _| doc.missing_connection_reported = true);
+
+    let written = SecretValue {
+        version: Some("v-written".to_string()),
+        payload: dbflux_core::SecretPayload::Text(EDITED_VALUE.into()),
+    };
+    opened.update(|doc, cx| doc.apply_value_write(generation, PLAINTEXT_SECRET, Ok(written), cx));
+
+    assert!(
+        opened.reported_errors().is_empty(),
+        "{:?}",
+        opened.reported_errors()
+    );
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+}
+
+/// With the current version unknown, the shown version is named and can go
+/// back, but the pane does not claim it is not the current one.
+#[gpui::test]
+fn an_unknown_current_version_is_not_called_older(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| doc.activate_version(1, cx));
+    opened.strip_reported_versions();
+    let profile_id = opened.read(|doc| doc.profile_id);
+    let app_state = opened.app_state.clone();
+    opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id));
+    });
+    opened.announce_state_change();
+
+    let text = opened.rendered_text();
+    assert!(text.contains("Showing version"), "{text}");
+    assert!(text.contains("Back to current"), "{text}");
+    assert!(!text.contains("not the current version"), "{text}");
+}
+
+/// A region list that loaded empty offers nothing to pick: the configured
+/// region stays visible as a plain chip.
+#[gpui::test]
+fn an_empty_region_list_keeps_the_configured_region_chip(cx: &mut TestAppContext) {
+    let mut opened = open_with_regions(cx, &[]);
+    let paths = opened.rendered_paths();
+
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with("secret-region-plain")),
+        "{paths:?}"
+    );
+    assert!(opened.rendered_text().contains(CURRENT_REGION));
+}
+
+/// Hint widths cached under one typography are forgotten when it changes, so
+/// a hint dropped at a large font is measured again at a smaller one.
+#[test]
+fn footer_hint_widths_are_remeasured_when_the_typography_changes() {
+    use super::render::FooterFit;
+
+    let fit = FooterFit::default();
+    fit.track_typography(gpui::px(48.0));
+    fit.remember_hint("filter", gpui::px(120.0));
+    assert_eq!(fit.hint_width("filter"), Some(gpui::px(120.0)));
+
+    fit.track_typography(gpui::px(48.0));
+    assert_eq!(
+        fit.hint_width("filter"),
+        Some(gpui::px(120.0)),
+        "unchanged typography keeps the measurements"
+    );
+
+    fit.track_typography(gpui::px(36.0));
+    assert_eq!(fit.hint_width("filter"), None);
 }
 
 /// Refresh asks for the regions again after a failed discovery, and a
@@ -7602,6 +7702,18 @@ mod editor_review {
         assert!(
             (first - settled).abs() < gpui::px(0.5), // guardrail-allow: test tolerance, not spacing
             "first frame {first:?} vs settled {settled:?}: {tops:?}"
+        );
+
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let glyph = opened
+            .window
+            .update(|_, cx| editor.read(cx).range_to_bounds(&(0..1)))
+            .expect("text laid out")
+            .origin
+            .y;
+        assert!(
+            (first - glyph).abs() < gpui::px(1.5), // guardrail-allow: test tolerance, not spacing
+            "first frame {first:?} vs the first glyph {glyph:?}"
         );
     }
 

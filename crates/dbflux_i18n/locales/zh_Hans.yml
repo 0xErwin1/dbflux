@@ -3546,6 +3546,7 @@ document:
       back_to_current: "返回当前版本"
       shown: "正在显示版本 %{version}"
       not_current: "这不是当前版本。获取操作会被审计，值不会。"
+      current_unknown: "当前版本暂时未知。获取操作会被审计，值不会。"
     tags:
       title: "标签"
       none: "无标签"

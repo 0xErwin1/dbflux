@@ -3546,6 +3546,7 @@ document:
       back_to_current: "Volver a la actual"
       shown: "Mostrando la versión %{version}"
       not_current: "No es la versión actual. La obtención se audita, el valor no."
+      current_unknown: "Ahora mismo no se conoce la versión actual. La obtención se audita, el valor no."
     tags:
       title: "Etiquetas"
       none: "Sin etiquetas"

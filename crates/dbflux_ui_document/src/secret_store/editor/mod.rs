@@ -705,7 +705,11 @@ impl SecretStoreDocument {
                 // again also invalidates a history request still in flight,
                 // which predates the write.
                 if self.selected == Some(SecretRowKey::Secret(name.to_string())) {
-                    self.load_versions(name.to_string(), cx);
+                    self.request_versions(
+                        name.to_string(),
+                        crate::secret_store::HistoryLoad::Automatic,
+                        cx,
+                    );
                 }
             }
             Err(failure) => {
