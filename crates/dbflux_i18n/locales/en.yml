@@ -3566,6 +3566,19 @@ document:
       refused_managed: "The value of %{name} is managed by %{service}, so it cannot be edited."
       refused_deletion: "Deletion is scheduled for %{name}, so its value cannot be edited until it is restored."
       change_summary: "Unsaved value edits"
+      find: "Find"
+      modified: "modified"
+      footer:
+        summary: "UTF-8 · %{size} · version %{version}"
+        summary_unversioned: "UTF-8 · %{size}"
+        changed_one: "1 line changed"
+        changed_other: "%{count} lines changed"
+        caret: "Ln %{line}, Col %{column}"
+      hint_formatted: "Saving writes a new version and makes it current. Formatted saves a value stored on one line back on one line, and a value stored on several lines as it is here; Raw saves the text exactly as it is here."
+      mode:
+        formatted: "Formatted"
+        raw: "Raw"
+        toggle: "Switch between Formatted and Raw"
 document_tree:
   search_placeholder: Search…
   view:

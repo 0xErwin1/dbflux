@@ -3566,6 +3566,19 @@ document:
       refused_managed: "O valor de %{name} é gerenciado por %{service}, portanto não pode ser editado."
       refused_deletion: "A exclusão de %{name} está agendada, então seu valor não pode ser editado até ser restaurado."
       change_summary: "Edições de valor não salvas"
+      find: "Localizar"
+      modified: "modificado"
+      footer:
+        summary: "UTF-8 · %{size} · versão %{version}"
+        summary_unversioned: "UTF-8 · %{size}"
+        changed_one: "1 linha alterada"
+        changed_other: "%{count} linhas alteradas"
+        caret: "Ln %{line}, Col %{column}"
+      hint_formatted: "Salvar grava uma nova versão e a torna a atual. Formatado grava de volta em uma única linha um valor armazenado em uma linha, e um valor armazenado em várias linhas como está aqui; Bruto salva o texto exatamente como está aqui."
+      mode:
+        formatted: "Formatado"
+        raw: "Bruto"
+        toggle: "Alternar entre Formatado e Bruto"
 document_tree:
   search_placeholder: Buscar…
   view:
