@@ -89,6 +89,10 @@ impl SecretStoreDocument {
     /// `ec2:DescribeRegions` brings the picker back without reopening the
     /// document.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.block_unsaved_value_edits(cx) {
+            return;
+        }
+
         if matches!(self.regions, super::RegionListState::Failed(_)) {
             self.load_regions(cx);
         }

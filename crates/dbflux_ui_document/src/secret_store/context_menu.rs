@@ -197,6 +197,22 @@ impl SecretStoreDocument {
         }
     }
 
+    /// Why the resource identifier cannot be copied now: still arriving,
+    /// failed to load, or not reported by the store.
+    pub(super) fn resource_id_unavailable_reason(&self) -> String {
+        match &self.details {
+            DetailsState::Loaded(_) => {
+                dbflux_i18n::t!("document.secret_store.context_menu.arn_missing")
+            }
+            DetailsState::Failed(error) => dbflux_i18n::t!(
+                "document.secret_store.context_menu.arn_failed",
+                error = error.as_str()
+            ),
+            _ => dbflux_i18n::t!("document.secret_store.context_menu.arn_loading"),
+        }
+        .to_string()
+    }
+
     /// Copy ARN is only meaningful once the describe delivered the resource
     /// identifier. Until then it stays disabled and names what is missing —
     /// an identifier still arriving is not the same as a describe that
@@ -215,17 +231,7 @@ impl SecretStoreDocument {
             );
         }
 
-        let reason: SharedString = match &self.details {
-            DetailsState::Loaded(_) => {
-                dbflux_i18n::t!("document.secret_store.context_menu.arn_missing").into()
-            }
-            DetailsState::Failed(error) => dbflux_i18n::t!(
-                "document.secret_store.context_menu.arn_failed",
-                error = error.as_str()
-            )
-            .into(),
-            _ => dbflux_i18n::t!("document.secret_store.context_menu.arn_loading").into(),
-        };
+        let reason: SharedString = self.resource_id_unavailable_reason().into();
 
         SecretMenuItem::new(
             SecretMenuAction::CopyArn,

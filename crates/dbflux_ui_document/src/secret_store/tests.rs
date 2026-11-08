@@ -905,9 +905,21 @@ fn the_footer_counts_paths_and_parameters_and_names_the_keys(cx: &mut TestAppCon
 /// and the short change time.
 #[gpui::test]
 fn the_secrets_footer_and_rows_follow_the_design(cx: &mut TestAppContext) {
+    use dbflux_core::chrono::{Datelike as _, Local, TimeZone as _, Utc};
+
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     let count = opened.read(|doc| doc.listing().entries.len());
-    let text = opened.rendered_text();
+
+    // The row drops the year in the current year, so the expected text must
+    // use the year the render saw: render again if New Year fell in between.
+    let (text, year) = loop {
+        let before = Local::now().year();
+        let text = opened.rendered_text();
+
+        if Local::now().year() == before {
+            break (text, before);
+        }
+    };
 
     assert!(text.contains(&loaded_label(count)), "{text}");
     assert!(text.contains("Every 30 days"), "{text}");
@@ -920,13 +932,12 @@ fn the_secrets_footer_and_rows_follow_the_design(cx: &mut TestAppContext) {
 
     // The fixture's change time, in local time and under the current-year
     // rule, in the row of its own secret.
-    use dbflux_core::chrono::{Datelike as _, Local, TimeZone as _, Utc};
     let changed = Utc
         .with_ymd_and_hms(2026, 9, 20, 3, 0, 0)
         .single()
         .expect("fixture time");
     let local = changed.with_timezone(&Local);
-    let expected = if local.year() == Local::now().year() {
+    let expected = if local.year() == year {
         local.format("%b %-d, %H:%M").to_string()
     } else {
         local.format("%b %-d, %Y, %H:%M").to_string()
@@ -1257,6 +1268,160 @@ fn a_long_profile_name_never_pushes_the_region_out(cx: &mut TestAppContext) {
         opened.rendered_text().contains(name),
         "the full name stays reachable: {}",
         opened.rendered_text()
+    );
+}
+
+/// Hovers the element `id` and returns the text of the tooltip it draws.
+fn hover_tooltip(opened: &mut Opened<'_>, id: &str) -> String {
+    use dbflux_ui_base::keyboard_coverage::FrameCapture;
+
+    let bounds = opened.element_bounds(id);
+    let capture = FrameCapture::observe(opened.window);
+
+    opened
+        .window
+        .simulate_mouse_move(bounds.center(), None, gpui::Modifiers::default());
+    opened.window.run_until_parked();
+    opened
+        .window
+        .simulate_mouse_move(bounds.center(), None, gpui::Modifiers::default());
+    opened
+        .window
+        .executor()
+        .advance_clock(std::time::Duration::from_millis(600));
+    opened.window.run_until_parked();
+
+    let frame = capture.frame(opened.window);
+
+    frame
+        .nodes()
+        .find(|(_, node)| node.id() == "tooltip-popup")
+        .map(|(_, node)| node.content_text().to_string())
+        .unwrap_or_else(|| panic!("hovering `{id}` draws a tooltip"))
+}
+
+/// Pointer users read what the clipped identity and the clipped footer
+/// summary hide from the tooltip, not only from the accessible name.
+#[gpui::test]
+fn clipped_identity_and_footer_summary_show_their_full_text_on_hover(cx: &mut TestAppContext) {
+    let name = "production-payments-eu-west-primary-account-cluster-01";
+    let mut opened = open_named_region_store(
+        cx,
+        name,
+        FAKE_PARAMETER_STORE_ID,
+        Some("/app/prod/"),
+        &[OTHER_REGION, CURRENT_REGION],
+        None,
+    );
+
+    resize(&mut opened, 1500.0);
+    let wide_identity = edges(&mut opened, "secret-identity").2;
+    let wide_summary = edges(&mut opened, "secret-footer-summary").2;
+
+    // The widest document at which both are clipped yet still have room to
+    // be hovered: at the minimum width the identity gives way entirely.
+    let minimum = minimum_document_width(&mut opened);
+    let mut width = 1500.0;
+    while width > minimum {
+        width -= 25.0;
+        resize(&mut opened, width);
+
+        let identity = edges(&mut opened, "secret-identity").2;
+        let summary = edges(&mut opened, "secret-footer-summary").2;
+
+        if identity < wide_identity && identity > 20.0 && summary < wide_summary && summary > 20.0 {
+            break;
+        }
+    }
+    assert!(edges(&mut opened, "secret-identity").2 < wide_identity);
+    assert!(edges(&mut opened, "secret-footer-summary").2 < wide_summary);
+
+    let identity = hover_tooltip(&mut opened, "secret-identity");
+    assert!(identity.contains(name), "{identity}");
+    assert!(identity.contains("Parameter Store"), "{identity}");
+
+    let summary = opened.read(|doc| doc.loaded_summary());
+    assert_eq!(hover_tooltip(&mut opened, "secret-footer-summary"), summary);
+}
+
+/// Refresh with unsaved edits starts neither the region discovery nor the
+/// listing.
+#[gpui::test]
+fn refresh_under_unsaved_edits_starts_nothing(cx: &mut TestAppContext) {
+    let mut opened = open_region_doc(
+        cx,
+        &[OTHER_REGION, CURRENT_REGION],
+        Some("AccessDenied".to_string()),
+    );
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+
+    let regions_before = opened.driver.available_regions_calls();
+    let lists_before = opened.driver.secret_store_calls().list_requests.len();
+
+    opened.update(|doc, cx| doc.refresh(cx));
+    opened.window.run_until_parked();
+
+    assert_eq!(opened.driver.available_regions_calls(), regions_before);
+    assert_eq!(
+        opened.driver.secret_store_calls().list_requests.len(),
+        lists_before
+    );
+    assert!(opened.read(|doc| doc.is_editing_value()));
+}
+
+/// A loaded but empty region list leaves nothing to pick, so the region
+/// action stays disabled.
+#[gpui::test]
+fn the_region_action_needs_at_least_one_region(cx: &mut TestAppContext) {
+    let mut empty = open_with_regions(cx, &[]);
+    assert!(matches!(
+        empty.read(|doc| doc.regions().clone()),
+        RegionListState::Loaded(_)
+    ));
+    assert!(!empty.pane_action("secret-region").enabled);
+
+    let mut listed = open_with_regions(cx, &[OTHER_REGION, CURRENT_REGION]);
+    assert!(listed.pane_action("secret-region").enabled);
+}
+
+/// The footer's Copy ARN shortcut says why it cannot copy while the details
+/// load or after they failed, and still copies once they are there.
+#[gpui::test]
+fn copy_arn_says_why_it_is_unavailable(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.select(HISTORY_PARAMETER);
+
+    let message = |opened: &mut Opened<'_>| {
+        opened.command(Command::ResultsCopyCell);
+        let reported = opened.reported_errors();
+        reported
+            .first()
+            .map(|(_, summary)| summary.clone())
+            .unwrap_or_default()
+    };
+
+    opened.update(|doc, cx| {
+        doc.details = DetailsState::Loading;
+        cx.notify();
+    });
+    assert_eq!(
+        message(&mut opened),
+        dbflux_i18n::t!("document.secret_store.context_menu.arn_loading")
+    );
+
+    opened.update(|doc, cx| {
+        doc.details = DetailsState::Failed("describe refused".to_string());
+        cx.notify();
+    });
+    assert_eq!(
+        message(&mut opened),
+        dbflux_i18n::t!(
+            "document.secret_store.context_menu.arn_failed",
+            error = "describe refused"
+        )
     );
 }
 

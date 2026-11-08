@@ -45,6 +45,7 @@ use dbflux_core::{
 };
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -804,11 +805,21 @@ impl SecretStoreDocument {
 
     /// Copies the selected secret's provider-wide identifier (an ARN).
     pub fn copy_resource_id(&mut self, cx: &mut Context<Self>) {
-        let DetailsState::Loaded(details) = &self.details else {
-            return;
+        let resource_id = match &self.details {
+            DetailsState::Loaded(details) => details.resource_id.clone(),
+            _ => None,
         };
 
-        let Some(resource_id) = details.resource_id.clone() else {
+        let Some(resource_id) = resource_id else {
+            // The shortcut is advertised in the footer, so a press that
+            // cannot copy says why, in the words the menu entry uses.
+            if matches!(self.selected, Some(SecretRowKey::Secret(_))) {
+                report_error(
+                    UserFacingError::new(ErrorKind::User, self.resource_id_unavailable_reason())
+                        .with_severity(dbflux_core::observability::EventSeverity::Warn),
+                    cx,
+                );
+            }
             return;
         };
 
@@ -1094,7 +1105,9 @@ impl SecretStoreDocument {
                     },
                 )
                 .icon(AppIcon::Globe)
-                .enabled(matches!(self.regions, RegionListState::Loaded(_))),
+                .enabled(
+                    matches!(&self.regions, RegionListState::Loaded(regions) if !regions.is_empty()),
+                ),
             );
         }
 
