@@ -370,7 +370,7 @@ impl SecretStoreDocument {
 
     /// A region switch is reconnecting, so the session a write would land on
     /// is about to be replaced: nothing starts, and the user is told why.
-    fn region_switch_blocks_writes(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(super) fn region_switch_blocks_writes(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.region_switch_in_flight {
             return false;
         }

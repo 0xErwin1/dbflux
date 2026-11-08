@@ -225,6 +225,7 @@ impl SecretStoreDocument {
             return;
         };
 
+        self.details_session = Some(connection.clone());
         let store_id = self.store.id.clone();
         let entity = cx.entity().clone();
 

@@ -341,7 +341,7 @@ impl SecretStoreDocument {
     /// that may not be edited ignores the request; a connection that is gone
     /// is reported, as a save without one is.
     pub fn start_value_edit(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
-        if !self.can_edit_value() {
+        if !self.can_edit_value() || self.region_switch_blocks_writes(cx) {
             return;
         }
 

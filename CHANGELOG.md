@@ -42,6 +42,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Secret store: restore and the editor follow the session and region guards** — Restore is refused, with the connection-replaced message, when the details it acts on were loaded from another session, and Edit value does not open while a region switch is reconnecting. The documentation now says the value editor's Save is a button, not a dialog.
 * **Secret store: roll back waits for a write and for the history** — Roll back no longer opens while another write is in flight, and `b` while the version history is still loading says it is loading instead of claiming there is no earlier version.
 * **Secret store: Rotate now asks first** — Rotate now wrote on one click and moved the live credential. It now opens a confirmation that names the secret and says the rotation function runs now and creates a new current version. Restore, which only cancels a scheduled deletion, stays one click, and the documentation now says that every other write asks first.
 * **Secret store: the details pane scrolls above its action bar** — At the default window height the details pane did not scroll and the bottom action bar covered the end of it, leaving Edit rotation, Rotate immediately and Edit tags unreachable by mouse. The sections now scroll inside a viewport that ends where the bar begins, with their own scrollbar, and the position resets when another secret is selected.

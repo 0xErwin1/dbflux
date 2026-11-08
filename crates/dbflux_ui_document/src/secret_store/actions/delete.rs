@@ -30,6 +30,7 @@ use dbflux_core::{
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use std::sync::Arc;
 
 /// The recovery windows the dialog offers: the shortest, a middle one and the
 /// longest the service accepts.
@@ -264,6 +265,21 @@ impl SecretStoreDocument {
         let Some(name) = self.selected_summary().map(|summary| summary.name.clone()) else {
             return;
         };
+
+        // The restore is judged on the details the user saw, which belong to
+        // one session: another one is refused, like a roll back's history.
+        let same_session = match (&self.details_session, self.connection(cx)) {
+            (Some(loaded), Some(live)) => Arc::ptr_eq(loaded, &live),
+            _ => false,
+        };
+
+        if !same_session {
+            self.report_write_warning(
+                dbflux_i18n::t!("document.secret_store.write.connection_replaced"),
+                cx,
+            );
+            return;
+        }
 
         let Some(session) = self.write_session(cx) else {
             return;

@@ -2791,3 +2791,195 @@ fn b_while_the_history_loads_says_it_is_loading(cx: &mut TestAppContext) {
     );
     assert!(!opened.dialog_open());
 }
+// -- Pin and region re-check ---------------------------------------------------------
+
+#[gpui::test]
+fn a_replacement_during_an_in_flight_write_lands_on_the_pinned_session(cx: &mut TestAppContext) {
+    let name = "/app/prod/db/host";
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.open_parameter(name);
+    opened.click("secret-action-delete");
+    opened.type_text(name);
+
+    let doc = opened.doc.clone();
+    opened
+        .window
+        .update(|window, cx| doc.update(cx, |doc, cx| doc.confirm_dialog(window, cx)));
+    let replacement = opened.replace_connection();
+    opened.announce_state_change();
+    opened.window.run_until_parked();
+
+    assert_eq!(opened.mutations().len(), 1, "{:?}", opened.mutations());
+    assert!(
+        replacement
+            .secret_store_calls()
+            .mutation_attempts
+            .is_empty()
+    );
+    assert!(!opened.dialog_open());
+}
+
+#[gpui::test]
+fn a_region_switch_started_after_open_refuses_then_closes(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-tags-edit");
+    opened.click("secret-tags-remove-0");
+    opened.update(|doc, _| doc.region_switch_in_flight = true);
+
+    opened.confirm_open_dialog();
+    assert!(opened.mutations().is_empty());
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].1.contains("region is being switched"),
+        "{}",
+        errors[0].1
+    );
+
+    let replacement = opened.replace_connection();
+    opened.update(|doc, _| doc.region_switch_in_flight = false);
+    opened.announce_state_change();
+    assert!(
+        !opened.dialog_open(),
+        "the replaced session closes the dialog"
+    );
+    opened.confirm_open_dialog();
+    assert!(opened.mutations().is_empty());
+    assert!(
+        replacement
+            .secret_store_calls()
+            .mutation_attempts
+            .is_empty()
+    );
+}
+
+#[gpui::test]
+fn each_attempt_during_a_region_switch_reports_once(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.update(|doc, _| doc.region_switch_in_flight = true);
+
+    for (index, id) in [
+        "secret-action-delete",
+        "secret-action-rotate-now",
+        "secret-tags-edit",
+        "secret-details-edit",
+        "secret-rotation-edit",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        opened.click(id);
+        assert!(!opened.dialog_open(), "{id}");
+        assert_eq!(opened.reported_errors().len(), index + 1, "{id}");
+    }
+    let action = opened.pane_action("secret-rotate-now");
+    opened.run_action(action);
+    assert!(!opened.dialog_open());
+    assert_eq!(opened.reported_errors().len(), 6);
+    opened.command(Command::Cancel);
+    assert!(opened.mutations().is_empty());
+}
+
+#[gpui::test]
+fn restore_is_refused_during_a_region_switch(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PENDING_DELETION_SECRET);
+    opened.update(|doc, _| doc.region_switch_in_flight = true);
+    opened.click("secret-restore");
+    assert!(opened.mutations().is_empty());
+    assert_eq!(opened.reported_errors().len(), 1);
+}
+
+#[gpui::test]
+fn restore_after_a_replacement_is_refused_and_writes_nothing(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PENDING_DELETION_SECRET);
+    let replacement = opened.replace_connection();
+    opened.click("secret-restore");
+    assert!(
+        replacement
+            .secret_store_calls()
+            .mutation_attempts
+            .is_empty(),
+        "new: {:?}",
+        replacement.secret_store_calls().mutation_attempts
+    );
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("was replaced"), "{}", errors[0].1);
+}
+
+#[gpui::test]
+fn rotate_now_pane_action_escape_and_enter(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let action = opened.pane_action("secret-rotate-now");
+    opened.run_action(action);
+    opened.window.run_until_parked();
+    assert!(opened.is_drawn("secret-rotate-dialog"));
+    assert!(opened.mutations().is_empty());
+    opened.press("escape");
+    assert!(!opened.dialog_open());
+    assert!(opened.mutations().is_empty());
+    assert!(opened.audit_actions().is_empty());
+
+    opened.click("secret-rotation-rotate-now");
+    assert!(opened.is_drawn("secret-rotate-dialog"));
+    opened.press("enter");
+    assert_eq!(opened.mutations().len(), 1, "{:?}", opened.mutations());
+    assert!(!opened.dialog_open());
+}
+
+#[gpui::test]
+fn a_parameter_description_dialog_is_pinned_without_a_state_announcement(cx: &mut TestAppContext) {
+    let name = "/app/prod/db/host";
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.open_parameter(name);
+    opened.click("secret-action-edit-description");
+    opened.fill_input("secret-description-input", NEW_DESCRIPTION);
+    let replacement = opened.replace_connection();
+    opened.press("enter");
+    opened.assert_pinned_refusal(&replacement);
+}
+
+/// The row half of the pin: a selection moved without the usual close is
+/// refused at confirm.
+#[gpui::test]
+fn dialog_pin_holds_refuses_a_moved_selection(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-action-delete");
+    opened.type_text(KEY_VALUE_SECRET);
+
+    opened.update(|doc, _| {
+        doc.selected = Some(SecretRowKey::Secret(PLAINTEXT_SECRET.to_string()));
+    });
+    opened.confirm_open_dialog();
+
+    assert!(opened.mutations().is_empty(), "{:?}", opened.mutations());
+    assert!(!opened.dialog_open());
+    assert_eq!(opened.reported_errors().len(), 1);
+}
+
+/// Edit value does not open during a region switch.
+#[gpui::test]
+fn edit_value_does_not_open_during_a_region_switch(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update(|doc, _| doc.region_switch_in_flight = true);
+
+    opened.start_edit();
+
+    assert!(!opened.read(|doc| doc.is_editing_value()));
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].1.contains("region is being switched"),
+        "{}",
+        errors[0].1
+    );
+}

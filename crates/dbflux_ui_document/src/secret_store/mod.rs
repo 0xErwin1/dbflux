@@ -194,6 +194,8 @@ pub struct SecretStoreDocument {
     /// Moves the keyboard into the dialog when it opens and hands it back
     /// when it closes.
     dialog_focus: ModalFocus,
+    /// The connection the selected secret's details were loaded from.
+    details_session: Option<Arc<dyn Connection>>,
     /// Scroll position of the details pane's sections.
     details_scroll: ScrollHandle,
     /// The session and the row the open dialog was opened on.
@@ -375,6 +377,7 @@ impl SecretStoreDocument {
             dialog_focus: ModalFocus::new(cx),
             dialog_pin: None,
             details_scroll: ScrollHandle::new(),
+            details_session: None,
             write_in_flight: false,
             rotation_notice: None,
             edit_after_retrieve: false,
