@@ -15,6 +15,7 @@
 //! never a driver id.
 
 mod bar;
+mod create;
 mod delete;
 mod description;
 mod rollback;
@@ -40,6 +41,7 @@ use gpui::*;
 use std::sync::Arc;
 use uuid::Uuid;
 
+pub(super) use create::CreateDialog;
 pub(super) use delete::{DeleteDialog, DeleteKind};
 pub(super) use description::DescriptionDialog;
 pub(super) use rollback::RollBackDialog;
@@ -54,6 +56,7 @@ pub(super) enum WriteDialog {
     Rotation(RotationDialog),
     Tags(TagsDialog),
     Description(DescriptionDialog),
+    Create(CreateDialog),
 }
 
 /// Everything a governed write takes from the document, captured on the
@@ -349,6 +352,7 @@ impl SecretStoreDocument {
             Some(WriteDialog::Rotation(_)) => self.submit_rotation(window, cx),
             Some(WriteDialog::Tags(_)) => self.submit_tags(window, cx),
             Some(WriteDialog::Description(_)) => self.submit_description(window, cx),
+            Some(WriteDialog::Create(_)) => self.submit_create(window, cx),
             None => {}
         }
     }
@@ -362,6 +366,7 @@ impl SecretStoreDocument {
             WriteDialog::Rotation(dialog) => self.render_rotation_dialog(dialog, cx),
             WriteDialog::Tags(dialog) => self.render_tags_dialog(dialog, cx),
             WriteDialog::Description(dialog) => self.render_description_dialog(dialog, cx),
+            WriteDialog::Create(dialog) => self.render_create_dialog(dialog, cx),
         })
     }
 }

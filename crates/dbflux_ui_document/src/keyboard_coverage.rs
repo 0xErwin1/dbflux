@@ -828,6 +828,22 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
         // (the Details section, or the bottom bar) are pane actions; each
         // dialog's buttons answer Enter and Escape, and its row controls are
         // stops of the dialog.
+        // New secret / New parameter is a pane action; its dialog's buttons
+        // answer Enter and Escape, and the choices and tag rows are stops of
+        // the dialog.
+        ("secret-new", KeyboardPath::Menu("secret-new")),
+        (
+            "secret-create-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-create-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("secret-create-type-*", KeyboardPath::TabStop),
+        ("secret-create-tier-*", KeyboardPath::TabStop),
+        ("secret-create-tag-add", KeyboardPath::TabStop),
+        ("secret-create-tag-remove-*", KeyboardPath::TabStop),
         ("secret-tags-edit", KeyboardPath::Menu("secret-edit-tags")),
         (
             "secret-details-edit",

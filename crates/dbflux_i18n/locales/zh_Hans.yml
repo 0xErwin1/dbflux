@@ -3733,6 +3733,24 @@ document:
       done_version: "已更新 %{name} 的描述；版本 %{version} 包含新的描述"
       rewrites_title: "这会把值重新写成一个新版本"
       rewrites_body: "此存储只能通过重新写入值来更改描述，因此保存会创建新版本。值、类型和键保持不变。"
+    create:
+      button_secret: "新建密钥"
+      button_parameter: "新建参数"
+      title_secret: "新建密钥"
+      title_parameter: "新建参数"
+      name: "名称"
+      name_placeholder: "名称"
+      type: "类型"
+      value: "值"
+      description: "描述"
+      description_placeholder: "可选"
+      tier: "层级"
+      key: "加密密钥"
+      key_placeholder: "默认密钥"
+      tags: "标签"
+      confirm: "创建"
+      done: "已创建 %{name}"
+      exists: "%{name} 已存在。请换一个名称；创建绝不会替换已有的密钥。"
 document_tree:
   search_placeholder: 搜索…
   view:

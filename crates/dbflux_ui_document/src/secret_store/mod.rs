@@ -1223,6 +1223,28 @@ impl SecretStoreDocument {
             actions.push(delete);
         }
 
+        // New secret / New parameter is a button of the toolbar.
+        if self.supports_create() {
+            let create_target = target.clone();
+            actions.push(
+                PaneAction::callback(
+                    "secret-new",
+                    dbflux_i18n::t!(if self.hierarchical() {
+                        "document.secret_store.create.button_parameter"
+                    } else {
+                        "document.secret_store.create.button_secret"
+                    }),
+                    move |window, cx| {
+                        if let Some(doc) = create_target.upgrade() {
+                            doc.update(cx, |doc, cx| doc.open_create(window, cx));
+                        }
+                    },
+                )
+                .icon(AppIcon::Plus)
+                .enabled(self.can_open_create()),
+            );
+        }
+
         // Edit tags and Edit description are buttons of the Tags and Details
         // sections (the description's of the bottom bar on a store that
         // rewrites the value for it).

@@ -3733,6 +3733,24 @@ document:
       done_version: "Se actualizó la descripción de %{name}; la versión %{version} contiene la nueva descripción"
       rewrites_title: "Esto vuelve a escribir el valor como una nueva versión"
       rewrites_body: "Este almacén solo cambia una descripción escribiendo de nuevo el valor, así que guardar crea una nueva versión. El valor, su tipo y su clave se mantienen."
+    create:
+      button_secret: "Nuevo secreto"
+      button_parameter: "Nuevo parámetro"
+      title_secret: "Nuevo secreto"
+      title_parameter: "Nuevo parámetro"
+      name: "Nombre"
+      name_placeholder: "Nombre"
+      type: "Tipo"
+      value: "Valor"
+      description: "Descripción"
+      description_placeholder: "Opcional"
+      tier: "Nivel"
+      key: "Clave de cifrado"
+      key_placeholder: "Clave predeterminada"
+      tags: "Etiquetas"
+      confirm: "Crear"
+      done: "Se creó %{name}"
+      exists: "%{name} ya existe. Elija otro nombre; crear nunca reemplaza un secreto."
 document_tree:
   search_placeholder: Buscar…
   view:

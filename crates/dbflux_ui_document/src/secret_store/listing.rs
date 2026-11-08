@@ -123,6 +123,12 @@ impl SecretListing {
         true
     }
 
+    /// Whether the next page to land replaces the listed rows (a reload that
+    /// kept them until then) instead of appending to them.
+    pub fn replaces_on_next_page(&self) -> bool {
+        self.replace_on_apply
+    }
+
     pub fn has_more(&self) -> bool {
         self.next_page_token.is_some()
     }

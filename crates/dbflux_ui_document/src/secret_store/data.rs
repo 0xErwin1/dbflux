@@ -157,8 +157,19 @@ impl SecretStoreDocument {
         millis: u128,
         cx: &mut Context<Self>,
     ) {
-        let loaded_before = self.listing.entries.len();
-        let paths_before = self.listing.child_paths.len();
+        // A reload that replaces the rows starts from nothing, so a page that
+        // is shorter than the listing it replaces still made progress.
+        let replacing = self.listing.replaces_on_next_page();
+        let loaded_before = if replacing {
+            0
+        } else {
+            self.listing.entries.len()
+        };
+        let paths_before = if replacing {
+            0
+        } else {
+            self.listing.child_paths.len()
+        };
 
         let applied = match result {
             Ok(page) => {

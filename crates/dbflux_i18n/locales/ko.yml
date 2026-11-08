@@ -3733,6 +3733,24 @@ document:
       done_version: "%{name}의 설명을 업데이트했습니다. 버전 %{version}에 새 설명이 들어 있습니다"
       rewrites_title: "값을 새 버전으로 다시 기록합니다"
       rewrites_body: "이 저장소는 값을 다시 기록해야만 설명을 바꿀 수 있으므로 저장하면 새 버전이 만들어집니다. 값, 유형, 키는 그대로 유지됩니다."
+    create:
+      button_secret: "새 시크릿"
+      button_parameter: "새 파라미터"
+      title_secret: "새 시크릿"
+      title_parameter: "새 파라미터"
+      name: "이름"
+      name_placeholder: "이름"
+      type: "유형"
+      value: "값"
+      description: "설명"
+      description_placeholder: "선택 사항"
+      tier: "등급"
+      key: "암호화 키"
+      key_placeholder: "기본 키"
+      tags: "태그"
+      confirm: "만들기"
+      done: "%{name}을(를) 만들었습니다"
+      exists: "%{name}은(는) 이미 있습니다. 다른 이름을 고르세요. 만들기는 시크릿을 대체하지 않습니다."
 document_tree:
   search_placeholder: 검색…
   view:

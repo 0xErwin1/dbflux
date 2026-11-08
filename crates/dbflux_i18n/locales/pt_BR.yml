@@ -3733,6 +3733,24 @@ document:
       done_version: "A descrição de %{name} foi atualizada; a versão %{version} contém a nova descrição"
       rewrites_title: "Isso grava o valor novamente como uma nova versão"
       rewrites_body: "Este armazenamento só altera uma descrição gravando o valor novamente, então salvar cria uma nova versão. O valor, seu tipo e sua chave permanecem como estão."
+    create:
+      button_secret: "Novo segredo"
+      button_parameter: "Novo parâmetro"
+      title_secret: "Novo segredo"
+      title_parameter: "Novo parâmetro"
+      name: "Nome"
+      name_placeholder: "Nome"
+      type: "Tipo"
+      value: "Valor"
+      description: "Descrição"
+      description_placeholder: "Opcional"
+      tier: "Nível"
+      key: "Chave de criptografia"
+      key_placeholder: "Chave padrão"
+      tags: "Tags"
+      confirm: "Criar"
+      done: "%{name} foi criado"
+      exists: "%{name} já existe. Escolha outro nome; criar nunca substitui um segredo."
 document_tree:
   search_placeholder: Buscar…
   view:

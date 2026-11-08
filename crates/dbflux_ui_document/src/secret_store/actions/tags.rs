@@ -28,8 +28,8 @@ const TAGS_CAPABILITIES: SecretStoreCapabilities =
 
 /// One row of the dialog: a tag being edited.
 pub(in crate::secret_store) struct TagRow {
-    key: Entity<InputState>,
-    value: Entity<InputState>,
+    pub(super) key: Entity<InputState>,
+    pub(super) value: Entity<InputState>,
     _subscriptions: [Subscription; 2],
 }
 
@@ -48,7 +48,7 @@ pub(in crate::secret_store) struct TagsDialog {
 
 impl TagRow {
     /// The row's tag, `None` for a row left entirely empty.
-    fn tag(&self, cx: &App) -> Option<SecretTag> {
+    pub(super) fn tag(&self, cx: &App) -> Option<SecretTag> {
         let key = self.key.read(cx).value().to_string();
         let value = self.value.read(cx).value().to_string();
 
@@ -193,7 +193,12 @@ impl SecretStoreDocument {
         );
     }
 
-    fn new_tag_row(key: &str, value: &str, window: &mut Window, cx: &mut Context<Self>) -> TagRow {
+    pub(super) fn new_tag_row(
+        key: &str,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TagRow {
         let build =
             |window: &mut Window, cx: &mut Context<Self>, placeholder: String, text: &str| {
                 cx.new(|cx| {
@@ -224,8 +229,10 @@ impl SecretStoreDocument {
         let watch = |input: &Entity<InputState>, cx: &mut Context<Self>| {
             cx.subscribe(input, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
-                    if let Some(WriteDialog::Tags(dialog)) = &mut this.dialog {
-                        dialog.touched = true;
+                    match &mut this.dialog {
+                        Some(WriteDialog::Tags(dialog)) => dialog.touched = true,
+                        Some(WriteDialog::Create(dialog)) => dialog.touched = true,
+                        _ => {}
                     }
                     cx.notify();
                 }

@@ -1695,3 +1695,453 @@ fn the_tag_and_description_controls_are_covered(cx: &mut TestAppContext) {
         "{checked:?}"
     );
 }
+
+// -- Reload --------------------------------------------------------------------
+
+/// A write reloads the whole listing, not only its first page: the store pages
+/// at four entries here, and the rows past the first page are still listed.
+#[gpui::test]
+fn a_write_reloads_every_page_of_the_listing(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    let before = opened.entry_names();
+    assert_eq!(before.len(), 6, "{before:?}");
+    opened.open_secret(KEY_VALUE_SECRET);
+
+    opened.click("secret-tags-edit");
+    opened.click("secret-tags-remove-0");
+    opened.click("secret-tags-confirm");
+
+    assert_eq!(opened.mutations().len(), 1);
+    let after = opened.entry_names();
+    assert_eq!(after.len(), 6, "{after:?}");
+}
+
+// -- Create --------------------------------------------------------------------
+
+const CREATED_VALUE: &str = "created-secret-value-9021";
+
+impl Opened<'_> {
+    /// Replaces the text of the open create dialog's value area.
+    fn set_create_value(&mut self, text: &str) {
+        let value = self.read(|doc| match &doc.dialog {
+            Some(WriteDialog::Create(dialog)) => dialog.value.clone(),
+            _ => panic!("the create dialog is open"),
+        });
+        let text = text.to_string();
+
+        self.window.update(|window, cx| {
+            value.update(cx, |state, cx| state.set_value(&text, window, cx));
+        });
+        self.window.run_until_parked();
+    }
+
+    /// The create requests the fake store accepted, with the value read out.
+    fn created(&mut self) -> Vec<(dbflux_core::SecretCreateRequest, String)> {
+        use dbflux_core::secrecy::ExposeSecret as _;
+
+        self.driver
+            .secret_store_calls()
+            .mutations
+            .into_iter()
+            .filter_map(|(_, mutation)| match mutation {
+                FakeSecretMutation::Create(request) => {
+                    let value = match &request.payload {
+                        SecretPayload::Text(text) => text.expose_secret().to_string(),
+                        SecretPayload::Binary(_) => String::new(),
+                    };
+                    Some((request, value))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// New secret and New parameter are the toolbar's button, named by what the
+/// store calls its entries.
+#[gpui::test]
+fn the_toolbar_offers_new_secret_or_new_parameter(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    assert!(opened.is_drawn("secret-new"));
+    assert!(opened.rendered_text().contains("New secret"));
+
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+    opened.tall();
+    assert!(opened.is_drawn("secret-new"));
+    assert!(opened.rendered_text().contains("New parameter"));
+}
+
+/// As the listing narrows the New button gives way to its icon and then to
+/// the pane actions menu, so the toolbar's other controls keep their room;
+/// New stays reachable from the keyboard at every width.
+#[gpui::test]
+fn the_new_button_gives_way_as_the_listing_narrows(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+
+    // The width of the button, `None` when the toolbar leaves it out.
+    let width_at = |opened: &mut Opened<'_>, width: f32| -> Option<f32> {
+        opened
+            .window
+            .simulate_resize(gpui::size(gpui::px(width), gpui::px(800.0)));
+        opened.window.run_until_parked();
+
+        opened
+            .is_drawn("secret-new")
+            .then(|| f32::from(opened.bounds_of("secret-new").size.width))
+    };
+
+    let wide = width_at(&mut opened, 1600.0).expect("drawn when wide");
+    let narrower = width_at(&mut opened, 1100.0).expect("drawn as an icon");
+    assert!(narrower < wide, "{narrower} < {wide}: the label gave way");
+    assert_eq!(width_at(&mut opened, 700.0), None, "left out");
+    assert!(
+        opened.pane_action_ids().iter().any(|id| id == "secret-new"),
+        "New stays in the pane actions"
+    );
+}
+
+/// A parameter is created under the path being listed: the name starts at
+/// it, the type, tier, description and tags go with the value, and the new
+/// parameter is selected with its details.
+#[gpui::test]
+fn a_parameter_is_created_under_the_current_path(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.tall();
+    opened.click("secret-new");
+
+    assert!(opened.is_drawn("secret-create-dialog"));
+    let name_input = opened.read(|doc| match &doc.dialog {
+        Some(WriteDialog::Create(dialog)) => dialog.name.clone(),
+        _ => panic!("the create dialog is open"),
+    });
+    let prefilled = opened
+        .window
+        .update(|_, cx| name_input.read(cx).value().to_string());
+    assert_eq!(prefilled, "/app/prod/db/", "the name starts at the path");
+    assert!(opened.is_disabled("secret-create-confirm"), "no value yet");
+    assert!(opened.mutations().is_empty());
+
+    opened.type_text("token");
+    opened.click("secret-create-type-String");
+    opened.click("secret-create-tier-Advanced");
+    assert!(
+        !opened.is_drawn("secret-create-key-input"),
+        "only an encrypted value takes a key"
+    );
+    opened.set_create_value(CREATED_VALUE);
+    opened.fill_input("secret-create-description-input", "A new token");
+    opened.click("secret-create-tag-add");
+    opened.fill_input("secret-create-tag-key-0", "owner");
+    opened.fill_input("secret-create-tag-value-0", "platform");
+    assert!(!opened.is_disabled("secret-create-confirm"));
+
+    opened.click("secret-create-confirm");
+
+    let created = opened.created();
+    assert_eq!(created.len(), 1, "{:?}", opened.mutations());
+    let (request, value) = &created[0];
+    assert_eq!(request.name, "/app/prod/db/token");
+    assert_eq!(value, CREATED_VALUE);
+    assert_eq!(request.value_type.as_deref(), Some("String"));
+    assert_eq!(request.tier.as_deref(), Some("Advanced"));
+    assert_eq!(request.description.as_deref(), Some("A new token"));
+    assert_eq!(request.encryption_key, None);
+    assert_eq!(
+        request
+            .tags
+            .iter()
+            .map(|tag| (tag.key.as_str(), tag.value.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("owner", "platform")]
+    );
+    assert_eq!(opened.audit_actions(), vec!["secret_created"]);
+    assert!(!opened.dialog_open());
+
+    assert!(
+        opened
+            .entry_names()
+            .contains(&"/app/prod/db/token".to_string())
+    );
+    assert_eq!(
+        opened.read(|doc| doc.selected().cloned()),
+        Some(SecretRowKey::Secret("/app/prod/db/token".to_string()))
+    );
+    let text = opened.rendered_text();
+    assert!(text.contains("A new token"), "{text}");
+}
+
+/// An encrypted parameter takes an encryption key.
+#[gpui::test]
+fn an_encrypted_parameter_takes_the_key_that_was_typed(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.tall();
+    opened.click("secret-new");
+    opened.type_text("secure");
+    assert!(
+        opened.is_drawn("secret-create-key-input"),
+        "SecureString is the default type and takes a key"
+    );
+    opened.set_create_value(CREATED_VALUE);
+    opened.fill_input("secret-create-key-input", "alias/team");
+
+    opened.click("secret-create-confirm");
+
+    let created = opened.created();
+    assert_eq!(created.len(), 1, "{:?}", opened.mutations());
+    assert_eq!(created[0].0.value_type.as_deref(), Some("SecureString"));
+    assert_eq!(created[0].0.encryption_key.as_deref(), Some("alias/team"));
+}
+
+/// A store whose values are not typed asks for no type and no tier, and sends
+/// neither.
+#[gpui::test]
+fn a_secret_is_created_without_a_type_or_a_tier(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    opened.click("secret-new");
+
+    assert!(!opened.is_drawn("secret-create-type-String"));
+    assert!(!opened.is_drawn("secret-create-tier-Standard"));
+
+    opened.type_text("prod/new/credentials");
+    opened.set_create_value(CREATED_VALUE);
+    opened.click("secret-create-confirm");
+
+    let created = opened.created();
+    assert_eq!(created.len(), 1, "{:?}", opened.mutations());
+    let (request, value) = &created[0];
+    assert_eq!(request.name, "prod/new/credentials");
+    assert_eq!(value, CREATED_VALUE);
+    assert_eq!(request.value_type, None);
+    assert_eq!(request.tier, None);
+    assert_eq!(opened.audit_actions(), vec!["secret_created"]);
+    assert!(
+        opened
+            .entry_names()
+            .contains(&"prod/new/credentials".to_string())
+    );
+    assert_eq!(
+        opened.read(|doc| doc.selected().cloned()),
+        Some(SecretRowKey::Secret("prod/new/credentials".to_string()))
+    );
+}
+
+/// A name the listing already holds is refused before anything is sent.
+#[gpui::test]
+fn a_name_that_exists_is_refused_before_anything_is_sent(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    opened.click("secret-new");
+    opened.type_text(KEY_VALUE_SECRET);
+    opened.set_create_value(CREATED_VALUE);
+
+    assert!(opened.is_disabled("secret-create-confirm"));
+    assert!(opened.is_drawn("secret-create-problem"));
+    let text = opened.rendered_text();
+    assert!(text.contains("already exists"), "{text}");
+
+    let doc = opened.doc.clone();
+    opened
+        .window
+        .update(|window, cx| doc.update(cx, |doc, cx| doc.confirm_dialog(window, cx)));
+    opened.window.run_until_parked();
+
+    assert!(opened.mutations().is_empty(), "{:?}", opened.mutations());
+    assert!(opened.audit_actions().is_empty());
+}
+
+/// A name the listing does not show is refused by the store, and the secret
+/// that has it is not overwritten.
+#[gpui::test]
+fn a_name_the_store_has_is_refused_and_never_overwrites(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    // The listing shows nothing, so only the store knows the name.
+    opened.update(|doc, cx| doc.apply_name_filter("zzz".to_string(), cx));
+    assert!(opened.entry_names().is_empty());
+
+    opened.click("secret-new");
+    opened.type_text(KEY_VALUE_SECRET);
+    opened.set_create_value(CREATED_VALUE);
+    opened.click("secret-create-confirm");
+
+    assert!(opened.created().is_empty(), "nothing was created");
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        !errors[0].1.contains(CREATED_VALUE),
+        "the refusal never carries the value: {}",
+        errors[0].1
+    );
+    assert!(opened.dialog_open(), "the dialog stays for another name");
+    assert_eq!(opened.audit_actions(), vec!["secret_create_failed"]);
+
+    // The secret that has the name still reads its own value.
+    opened.update(|doc, cx| doc.apply_name_filter(String::new(), cx));
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    let text = opened.rendered_text();
+    assert!(!text.contains(CREATED_VALUE), "{text}");
+}
+
+/// The value reaches no element id, no accessibility node and no rendered
+/// frame while it is typed, after the write and in the audit trail.
+#[gpui::test]
+fn the_created_value_reaches_no_node_of_the_accessibility_update(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    opened.click("secret-new");
+    opened.type_text("prod/new/credentials");
+    opened.set_create_value(CREATED_VALUE);
+
+    let typing_text = opened.accessibility_update_text();
+    let typing_paths = opened.rendered_paths();
+    assert!(!typing_text.contains(CREATED_VALUE), "{typing_text}");
+    assert!(
+        !typing_paths.iter().any(|path| path.contains(CREATED_VALUE)),
+        "{typing_paths:?}"
+    );
+
+    opened.click("secret-create-confirm");
+
+    let written_text = opened.accessibility_update_text();
+    let written_paths = opened.rendered_paths();
+    assert!(!written_text.contains(CREATED_VALUE), "{written_text}");
+    assert!(
+        !written_paths
+            .iter()
+            .any(|path| path.contains(CREATED_VALUE)),
+        "{written_paths:?}"
+    );
+    let audit = format!("{:?}", opened.audit_records());
+    assert!(!audit.contains(CREATED_VALUE), "{audit}");
+    assert_eq!(opened.created()[0].1, CREATED_VALUE);
+}
+
+/// An incomplete request says what is missing under the fields, after the
+/// first edit, and sends nothing.
+#[gpui::test]
+fn an_incomplete_create_shows_the_seams_message(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    opened.click("secret-new");
+    assert!(
+        !opened.is_drawn("secret-create-problem"),
+        "an untouched form is not told off"
+    );
+
+    opened.type_text("prod/new/credentials");
+    let text = opened.rendered_text();
+    assert!(text.contains("needs a value"), "{text}");
+    assert!(opened.is_disabled("secret-create-confirm"));
+    assert!(opened.mutations().is_empty());
+}
+
+/// Cancelling writes nothing.
+#[gpui::test]
+fn cancelling_create_writes_nothing(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    opened.click("secret-new");
+    opened.type_text("prod/new/credentials");
+    opened.set_create_value(CREATED_VALUE);
+
+    opened.click("secret-create-cancel");
+
+    assert!(!opened.dialog_open());
+    assert!(opened.mutations().is_empty());
+    assert!(opened.audit_actions().is_empty());
+}
+
+/// A refusal at the seam and a store failure are each reported once and keep
+/// the dialog, without the value.
+#[gpui::test]
+fn a_refused_or_failed_create_is_reported_once(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    opened.set_policy(
+        MutationPolicy::ReadOnly,
+        Some(ReadOnlyReason::ProfileSetting),
+    );
+    opened.click("secret-new");
+    opened.type_text("prod/new/credentials");
+    opened.set_create_value(CREATED_VALUE);
+
+    opened.click("secret-create-confirm");
+
+    assert!(opened.mutations().is_empty());
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("read-only"), "{}", errors[0].1);
+    assert!(!errors[0].1.contains(CREATED_VALUE));
+    assert!(opened.dialog_open());
+    assert_eq!(opened.audit_actions(), vec!["secret_create_refused"]);
+}
+
+#[gpui::test]
+fn a_failed_create_names_its_cause_once(cx: &mut TestAppContext) {
+    let driver = FakeDriver::new(DbKind::AwsSecrets)
+        .with_secret_write_error("prod/new/credentials", "not authorized to create");
+    let mut opened = open_with(cx, driver, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    opened.click("secret-new");
+    opened.type_text("prod/new/credentials");
+    opened.set_create_value(CREATED_VALUE);
+
+    opened.click("secret-create-confirm");
+
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("not authorized"), "{}", errors[0].1);
+    assert!(!errors[0].1.contains(CREATED_VALUE));
+    assert!(opened.dialog_open());
+    assert_eq!(opened.audit_actions(), vec!["secret_create_failed"]);
+}
+
+/// Every control of the create dialog and the toolbar button has a keyboard
+/// path.
+#[gpui::test]
+fn the_create_controls_are_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::SECRET_STORE;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.tall();
+
+    let entries = opened.pane_action_ids();
+    assert!(
+        entries.iter().any(|entry| entry == "secret-new"),
+        "{entries:?}"
+    );
+    let capture = FrameCapture::observe(opened.window);
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(entries.clone())
+        .assert_covered(&capture.frame(opened.window));
+    assert!(checked.iter().any(|id| id == "secret-new"), "{checked:?}");
+
+    opened.click("secret-new");
+    opened.type_text("covered");
+    opened.set_create_value(CREATED_VALUE);
+    opened.click("secret-create-tag-add");
+    opened.fill_input("secret-create-tag-key-0", "owner");
+    opened.fill_input("secret-create-tag-value-0", "platform");
+    let capture = FrameCapture::observe(opened.window);
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(entries)
+        .assert_covered(&capture.frame(opened.window));
+    for id in [
+        "secret-create-confirm",
+        "secret-create-cancel",
+        "secret-create-type-String",
+        "secret-create-tier-Standard",
+        "secret-create-tag-add",
+        "secret-create-tag-remove-0",
+    ] {
+        assert!(
+            checked.iter().any(|checked| checked == id),
+            "{id}: {checked:?}"
+        );
+    }
+}

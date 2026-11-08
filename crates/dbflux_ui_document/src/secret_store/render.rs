@@ -73,6 +73,13 @@ const HINT_DROP_ORDER: [&str; 3] = ["filter", "copy_arn", "up"];
 /// The narrowest the footer summary gets, for the same reason.
 const SUMMARY_MIN_WIDTH: Rems = dbflux_components::tokens::ui(48.0);
 
+/// The listing width from which the toolbar's New button shows its label, and
+/// the narrower one from which it shows its icon alone. Below that the button
+/// is left out, and New stays in the pane actions menu: the toolbar's other
+/// controls keep their room at the document's minimum width.
+const NEW_LABEL_MIN_WIDTH: Rems = dbflux_components::tokens::ui(900.0);
+const NEW_ICON_MIN_WIDTH: Rems = dbflux_components::tokens::ui(640.0);
+
 /// Placeholder for a field the store did not report.
 pub(super) const UNKNOWN: &str = "—";
 
@@ -448,7 +455,47 @@ impl SecretStoreDocument {
                 self.focus_mode == SecretFocusMode::Search,
                 cx,
             )))
+            .children(
+                self.new_button(cx)
+                    .map(|button| div().flex_shrink_0().child(button)),
+            )
             .child(div().flex_shrink_0().child(refresh))
+    }
+
+    /// New secret or New parameter, by what the store calls its entries. The
+    /// button gives way to its icon, and then to the pane actions menu, as
+    /// the listing narrows; it waits for the first measurement of the
+    /// listing's width.
+    fn new_button(&self, cx: &mut Context<Self>) -> Option<Button> {
+        if !self.supports_create() {
+            return None;
+        }
+
+        let width = self.footer_fit.width.get();
+        let label_min = dbflux_components::fonts::ui_px(cx, NEW_LABEL_MIN_WIDTH);
+        let icon_min = dbflux_components::fonts::ui_px(cx, NEW_ICON_MIN_WIDTH);
+
+        if width < icon_min {
+            return None;
+        }
+
+        let label = if self.hierarchical() {
+            dbflux_i18n::t!("document.secret_store.create.button_parameter")
+        } else {
+            dbflux_i18n::t!("document.secret_store.create.button_secret")
+        };
+
+        let button = Button::new("secret-new", label)
+            .icon(AppIcon::Plus)
+            .tab_stop(false)
+            .disabled(!self.can_open_create())
+            .on_click(cx.listener(|this, _, window, cx| this.open_create(window, cx)));
+
+        Some(if width < label_min {
+            button.icon_only()
+        } else {
+            button
+        })
     }
 
     fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {

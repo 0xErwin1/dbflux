@@ -3733,6 +3733,24 @@ document:
       done_version: "Updated the description of %{name}; version %{version} holds the new description"
       rewrites_title: "This writes the value again as a new version"
       rewrites_body: "This store changes a description only by writing the value again, so saving creates a new version. The value, its type and its key stay as they are."
+    create:
+      button_secret: "New secret"
+      button_parameter: "New parameter"
+      title_secret: "New secret"
+      title_parameter: "New parameter"
+      name: "Name"
+      name_placeholder: "Name"
+      type: "Type"
+      value: "Value"
+      description: "Description"
+      description_placeholder: "Optional"
+      tier: "Tier"
+      key: "Encryption key"
+      key_placeholder: "Default key"
+      tags: "Tags"
+      confirm: "Create"
+      done: "Created %{name}"
+      exists: "%{name} already exists. Choose another name; creating never replaces a secret."
 document_tree:
   search_placeholder: Search…
   view:
