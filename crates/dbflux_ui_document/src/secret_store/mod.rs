@@ -165,6 +165,8 @@ pub struct SecretStoreDocument {
     region: Option<String>,
     /// The regions the connection offers.
     regions: RegionListState,
+    /// What the footer measured of itself, to decide which key hints fit.
+    footer_fit: std::rc::Rc<render::FooterFit>,
     /// Bumped by every region discovery, so a result that a newer discovery or
     /// a replaced connection made stale is dropped instead of shown.
     regions_generation: u64,
@@ -331,6 +333,7 @@ impl SecretStoreDocument {
             value_edit: None,
             value_write_generation: 0,
             last_call: None,
+            footer_fit: Default::default(),
             region_switchable,
             region,
             regions: RegionListState::Idle,

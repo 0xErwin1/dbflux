@@ -1462,7 +1462,7 @@ fn the_rotation_chip_stays_in_its_cell(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_footer_summary_truncates_and_the_hints_keep_their_space(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
-    let hint = "secret-footer-hint-filter";
+    let hint = "secret-footer-hint-open";
 
     resize(&mut opened, 1500.0);
     let wide_hint = edges(&mut opened, hint).2;
@@ -1499,6 +1499,77 @@ fn the_footer_summary_truncates_and_the_hints_keep_their_space(cx: &mut TestAppC
         opened.rendered_text().contains("loaded under /app/prod/"),
         "the full summary stays reachable"
     );
+}
+
+/// At the minimum width every footer element, the summary and each key hint
+/// that is drawn, ends inside the listing, and a hint is never cut: the ones
+/// that do not fit are dropped, lowest priority first.
+#[gpui::test]
+fn the_footer_stays_inside_the_listing_at_the_minimum_width(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+    let names = ["open", "up", "retrieve", "copy_arn", "filter"];
+    let paths = |opened: &mut Opened<'_>| opened.rendered_paths();
+
+    resize(&mut opened, 1500.0);
+    let natural: Vec<f32> = names
+        .iter()
+        .map(|name| edges(&mut opened, &format!("secret-footer-hint-{name}")).2)
+        .collect();
+
+    let minimum = minimum_document_width(&mut opened);
+    let mut width = 1500.0;
+    while width >= minimum {
+        resize(&mut opened, width);
+        let listing = edges(&mut opened, "secret-listing").1;
+        let drawn = paths(&mut opened);
+        let present = |name: &str| {
+            let id = format!("secret-footer-hint-{name}");
+            drawn.iter().any(|path| path.ends_with(&id))
+        };
+
+        // Dropped lowest priority first: filter, then copy ARN, then up.
+        assert!(
+            present("filter") <= present("copy_arn"),
+            "filter outlived copy ARN at {width}"
+        );
+        assert!(
+            present("copy_arn") <= present("up"),
+            "copy ARN outlived up at {width}"
+        );
+
+        for (name, natural) in names.iter().zip(&natural) {
+            if !present(name) {
+                continue;
+            }
+
+            let hint = edges(&mut opened, &format!("secret-footer-hint-{name}"));
+            assert_eq!(hint.2, *natural, "{name} is cut at {width}");
+            assert!(
+                hint.1 <= listing + 0.5,
+                "{name} overflows at {width}: {} > {listing}",
+                hint.1
+            );
+        }
+
+        let summary = edges(&mut opened, "secret-footer-summary");
+        assert!(summary.1 <= listing + 0.5, "summary overflows at {width}");
+        width -= 25.0;
+    }
+
+    assert!(
+        !paths(&mut opened)
+            .iter()
+            .any(|path| path.ends_with("secret-footer-hint-filter")),
+        "the lowest-priority hint is dropped at the minimum width"
+    );
+
+    for kept in ["open", "retrieve"] {
+        let id = format!("secret-footer-hint-{kept}");
+        assert!(
+            paths(&mut opened).iter().any(|path| path.ends_with(&id)),
+            "{kept} is always drawn"
+        );
+    }
 }
 
 /// Refresh asks for the regions again after a failed discovery, and a

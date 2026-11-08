@@ -36,6 +36,20 @@ const SEARCH_SHRINK_WEIGHT: f32 = 1000.0;
 /// before the ellipsis, so it stays visible and hoverable for its tooltip.
 const IDENTITY_MIN_WIDTH: Rems = dbflux_components::tokens::ui(72.0);
 
+/// What the footer measured of itself: its own width and the natural width of
+/// every key hint it has drawn. A hint that was dropped keeps its last width,
+/// so it comes back when the room does.
+#[derive(Default)]
+pub(super) struct FooterFit {
+    width: std::cell::Cell<Pixels>,
+    hints: std::cell::RefCell<std::collections::HashMap<&'static str, Pixels>>,
+}
+
+/// The hints that give way as the footer narrows, first to go first. The
+/// others (open, retrieve) are never dropped; each drop is still reachable
+/// from the pane actions menu.
+const HINT_DROP_ORDER: [&str; 3] = ["filter", "copy_arn", "up"];
+
 /// The narrowest the footer summary gets, for the same reason.
 const SUMMARY_MIN_WIDTH: Rems = dbflux_components::tokens::ui(48.0);
 
@@ -832,14 +846,78 @@ impl SecretStoreDocument {
             ),
         ]);
 
-        let hints = hints.into_iter().filter_map(|(command, key)| {
-            listing_shortcut(command).map(|shortcut| {
+        let fit = self.footer_fit.clone();
+        let shown: Vec<(String, &'static str, &str)> = hints
+            .into_iter()
+            .filter_map(|(command, key)| {
                 let name = key.rsplit('.').next().unwrap_or(key);
+                let name = HINT_DROP_ORDER
+                    .iter()
+                    .copied()
+                    .chain(["open", "retrieve"])
+                    .find(|candidate| *candidate == name)?;
 
-                footer_key_hint(shortcut, dbflux_i18n::t!(key))
-                    .id(format!("secret-footer-hint-{name}"))
+                listing_shortcut(command).map(|shortcut| (shortcut, name, key))
             })
-        });
+            .collect();
+
+        let gap = ResultMetrics::FOOTER_GAP;
+        let summary_min = dbflux_components::fonts::ui_px(cx, SUMMARY_MIN_WIDTH);
+        let slack = DocumentMetrics::PADDING_X * 2.0 + px(1.0);
+        let width = fit.width.get();
+        let known = |name: &str| fit.hints.borrow().get(name).copied();
+        let mut dropped: Vec<&str> = Vec::new();
+
+        // Before the first measurement everything is drawn; afterwards the
+        // lowest-priority hints go until the rest fit beside the summary's
+        // minimum.
+        if width > px(0.0) {
+            let needed = |dropped: &[&str]| {
+                shown
+                    .iter()
+                    .filter(|(_, name, _)| !dropped.contains(name))
+                    .map(|(_, name, _)| known(name).unwrap_or_default() + gap)
+                    .fold(summary_min + slack, |total, hint| total + hint)
+            };
+
+            for name in HINT_DROP_ORDER {
+                if needed(&dropped) <= width {
+                    break;
+                }
+
+                dropped.push(name);
+            }
+        }
+
+        let hints = shown
+            .into_iter()
+            .filter(|(_, name, _)| !dropped.contains(name))
+            .map(|(shortcut, name, key)| {
+                let fit = fit.clone();
+
+                div()
+                    .relative()
+                    .flex_shrink_0()
+                    .child(
+                        footer_key_hint(shortcut, dbflux_i18n::t!(key))
+                            .id(format!("secret-footer-hint-{name}")),
+                    )
+                    .child(
+                        canvas(
+                            move |bounds, window, _| {
+                                let previous =
+                                    fit.hints.borrow_mut().insert(name, bounds.size.width);
+
+                                if previous != Some(bounds.size.width) {
+                                    window.refresh();
+                                }
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+            });
 
         let summary = self.loaded_summary();
         let tooltip = summary.clone();
@@ -847,7 +925,23 @@ impl SecretStoreDocument {
         // The summary takes what the key hints leave and truncates; each hint
         // keeps its width, so the keys stay readable in a narrow listing.
         document_footer(cx)
+            .relative()
             .h(ObjectStoreMetrics::FOOTER_HEIGHT)
+            .child(
+                canvas(
+                    {
+                        let fit = fit.clone();
+                        move |bounds, window, _| {
+                            if fit.width.replace(bounds.size.width) != bounds.size.width {
+                                window.refresh();
+                            }
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .child(
                 div()
                     .id("secret-footer-summary")
@@ -957,6 +1051,7 @@ impl Render for SecretStoreDocument {
         }
 
         let listing = div()
+            .id("secret-listing")
             .flex_1()
             .min_w(SecretStoreMetrics::LISTING_MIN_WIDTH)
             .overflow_hidden()
