@@ -23,6 +23,19 @@ use secrecy::{ExposeSecret, SecretSlice, SecretString};
 
 use crate::DbError;
 
+mod operations;
+mod scrub;
+
+pub use operations::{
+    DEFAULT_RECOVERY_WINDOW_DAYS, MAX_RECOVERY_WINDOW_DAYS, MAX_TAGS, MIN_RECOVERY_WINDOW_DAYS,
+    SecretCreateRequest, SecretCreated, SecretDeleteRequest, SecretDeletion,
+    SecretDescriptionChange, SecretDescriptionUpdate, SecretRollback, SecretRollbackRequest,
+    SecretRotationChange, SecretRotationStart, SecretRotationUpdate, SecretTagsUpdate,
+    require_name, validate_rotation_function, validate_rotation_schedule, validate_rotation_window,
+    validate_rotation_window_fits, validate_tag,
+};
+pub use scrub::{encode_base64, scrub_echoed_values, scrub_submitted_payload};
+
 bitflags! {
     /// Behavior that differs between secret stores. The UI gates actions on
     /// these flags and never on a driver id.
@@ -53,6 +66,24 @@ bitflags! {
         /// `SecretStoreSource::put_value`. A store that cannot write does not
         /// advertise it, and the UI reads its secrets read only.
         const WRITE = 1 << 6;
+
+        /// Secrets can be deleted through `SecretStoreSource::delete_secret`.
+        /// With `SOFT_DELETE` the deletion is scheduled with a recovery
+        /// window and can be restored; without it the deletion is
+        /// irreversible and needs the secret's exact name as confirmation.
+        const DELETE = 1 << 7;
+
+        /// Tags can be added, changed and removed through
+        /// `SecretStoreSource::update_tags`.
+        const TAGS = 1 << 8;
+
+        /// The description can be changed through
+        /// `SecretStoreSource::update_description`.
+        const DESCRIPTION = 1 << 9;
+
+        /// New secrets can be created through
+        /// `SecretStoreSource::create_secret`.
+        const CREATE = 1 << 10;
     }
 }
 
@@ -98,6 +129,27 @@ impl SecretStoreDescriptor {
 
         Err(DbError::NotSupported(format!(
             "Secret store \"{}\" ({}) does not support writing values; refused the write to \"{name}\".",
+            self.label, self.id
+        )))
+    }
+
+    /// Refuses when this store lacks any capability in `required`, naming
+    /// the operation the caller asked for and the secret it targets. Every
+    /// write operation other than `put_value` begins with this check, with
+    /// `WRITE` and the capability of its own, and so does the governed seam
+    /// before it calls the store.
+    pub fn ensure_can(
+        &self,
+        required: SecretStoreCapabilities,
+        operation: &str,
+        name: &str,
+    ) -> Result<(), DbError> {
+        if self.supports(required) {
+            return Ok(());
+        }
+
+        Err(DbError::NotSupported(format!(
+            "Secret store \"{}\" ({}) does not support this operation; refused to {operation} \"{name}\".",
             self.label, self.id
         )))
     }
@@ -456,6 +508,19 @@ impl<'de> serde::Deserialize<'de> for OrderedObject {
     }
 }
 
+/// The refusal of a write operation a store does not implement, naming the
+/// store and the secret and never a value.
+fn refuse_unimplemented<T>(
+    descriptor: &SecretStoreDescriptor,
+    operation: &str,
+    name: &str,
+) -> Result<T, DbError> {
+    Err(DbError::NotSupported(format!(
+        "Secret store \"{}\" does not implement {operation}; refused it for \"{name}\".",
+        descriptor.id
+    )))
+}
+
 /// A browsable secret store.
 ///
 /// Methods are synchronous and block on the driver's own runtime, like
@@ -511,6 +576,87 @@ pub trait SecretStoreSource: Send + Sync {
             "Secret store \"{}\" does not implement listing versions; refused the history of \"{name}\".",
             self.descriptor().id
         )))
+    }
+
+    /// Makes `request.version_id` the current version of `request.name`
+    /// and the version that was current the previous one, by moving the
+    /// staging labels. No value is rewritten and no version is created. It
+    /// refuses rolling back to the version that is already current.
+    ///
+    /// Stores advertising `VERSION_LABELS` and `WRITE` implement it; the
+    /// default refuses.
+    fn roll_back(&self, request: &SecretRollbackRequest) -> Result<SecretRollback, DbError> {
+        refuse_unimplemented(self.descriptor(), "rolling back", &request.name)
+    }
+
+    /// Deletes a secret. A `Scheduled` request puts the deletion behind the
+    /// recovery window of a `SOFT_DELETE` store, and an `Irreversible` one,
+    /// accepted only by a store without that window and only with the exact
+    /// name as confirmation, removes it for good. A store refuses the kind
+    /// it does not offer before any call.
+    ///
+    /// Stores advertising `DELETE` and `WRITE` implement it; the default
+    /// refuses.
+    fn delete_secret(&self, request: &SecretDeleteRequest) -> Result<SecretDeletion, DbError> {
+        refuse_unimplemented(self.descriptor(), "deleting secrets", request.name())
+    }
+
+    /// Cancels a scheduled deletion, so the secret and its versions are
+    /// available again. Stores advertising `SOFT_DELETE` and `WRITE`
+    /// implement it; the default refuses.
+    fn restore_secret(&self, name: &str) -> Result<(), DbError> {
+        refuse_unimplemented(self.descriptor(), "restoring secrets", name)
+    }
+
+    /// Starts a rotation of `name` now, with the rotation already
+    /// configured on the secret. A secret whose rotation is not enabled is
+    /// refused rather than having it switched on as a side effect. Stores
+    /// advertising `ROTATION` and `WRITE` implement it; the default refuses.
+    fn rotate_now(&self, name: &str) -> Result<SecretRotationStart, DbError> {
+        refuse_unimplemented(self.descriptor(), "rotating secrets", name)
+    }
+
+    /// Turns automatic rotation on with `update`'s schedule, window and
+    /// function, or off, without rotating the secret now. Turning it off
+    /// while a rotation is in progress reports the version it left
+    /// unfinished in `SecretRotationChange::unfinished_version`. Stores
+    /// advertising `ROTATION` and `WRITE` implement it; the default refuses.
+    fn update_rotation(
+        &self,
+        update: &SecretRotationUpdate,
+    ) -> Result<SecretRotationChange, DbError> {
+        refuse_unimplemented(self.descriptor(), "editing rotation", &update.name)
+    }
+
+    /// Creates the secret `request.name` with `request`'s value and
+    /// settings, and returns what the store reports about it. It never
+    /// overwrites: a name that already exists is refused (a constraint
+    /// violation), so creating cannot replace a secret's value. Like
+    /// `put_value`, it never logs, formats or stores the value outside the
+    /// `secrecy` types it travels in, and a failure carries the store's
+    /// reason only. Stores advertising `CREATE` and `WRITE` implement it; the
+    /// default refuses.
+    fn create_secret(&self, request: &SecretCreateRequest) -> Result<SecretCreated, DbError> {
+        refuse_unimplemented(self.descriptor(), "creating secrets", &request.name)
+    }
+
+    /// Adds, changes and removes tags without touching the value or any
+    /// version. Stores advertising `TAGS` and `WRITE` implement it; the
+    /// default refuses.
+    fn update_tags(&self, update: &SecretTagsUpdate) -> Result<(), DbError> {
+        refuse_unimplemented(self.descriptor(), "editing tags", &update.name)
+    }
+
+    /// Changes the description. A store that changes it alone leaves the
+    /// versions as they are; a store that can only change it by writing the
+    /// value again must keep the value, type and key exactly as they are and
+    /// report the version it created, or refuse. Stores advertising
+    /// `DESCRIPTION` and `WRITE` implement it; the default refuses.
+    fn update_description(
+        &self,
+        update: &SecretDescriptionUpdate,
+    ) -> Result<SecretDescriptionChange, DbError> {
+        refuse_unimplemented(self.descriptor(), "editing descriptions", &update.name)
     }
 }
 

@@ -93,9 +93,16 @@ pub use connection::root_section::{
     RootSectionPage, RootSectionPresentation, RootSectionSource,
 };
 pub use connection::secret_store::{
-    SecretDetails, SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest,
-    SecretRotation, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
-    SecretSummary, SecretTag, SecretValue, SecretVersionInfo, SecretVersionStage,
+    DEFAULT_RECOVERY_WINDOW_DAYS, MAX_RECOVERY_WINDOW_DAYS, MAX_TAGS, MIN_RECOVERY_WINDOW_DAYS,
+    SecretCreateRequest, SecretCreated, SecretDeleteRequest, SecretDeletion,
+    SecretDescriptionChange, SecretDescriptionUpdate, SecretDetails, SecretListPage,
+    SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
+    SecretRotation, SecretRotationChange, SecretRotationStart, SecretRotationUpdate,
+    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
+    SecretTagsUpdate, SecretValue, SecretVersionInfo, SecretVersionStage, encode_base64,
+    require_name, scrub_echoed_values, scrub_submitted_payload, validate_rotation_function,
+    validate_rotation_schedule, validate_rotation_window, validate_rotation_window_fits,
+    validate_tag,
 };
 
 pub use connection::dump_analysis::{

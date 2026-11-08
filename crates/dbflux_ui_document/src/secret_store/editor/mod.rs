@@ -627,6 +627,7 @@ impl SecretStoreDocument {
                     // The connection has no such store — a lost connection,
                     // not a gate's decision.
                     kind: SecretWriteFailureKind::StoreFailed,
+                    audit_unrecorded: false,
                 }),
             }
         });
@@ -796,6 +797,9 @@ fn write_failure_to_user_facing(failure: &SecretWriteFailure) -> UserFacingError
                 .with_severity(EventSeverity::Warn)
         }
         SecretWriteFailureKind::StoreFailed => db_error_to_user_facing(&failure.error),
+        SecretWriteFailureKind::Indeterminate => {
+            db_error_to_user_facing(&failure.error).with_severity(EventSeverity::Warn)
+        }
         SecretWriteFailureKind::AuditLost => {
             UserFacingError::new(ErrorKind::Storage, failure.error.to_string())
                 .with_severity(EventSeverity::Warn)
@@ -804,6 +808,19 @@ fn write_failure_to_user_facing(failure: &SecretWriteFailure) -> UserFacingError
 
     if let Some(correlation_id) = failure.correlation_id {
         user_error.correlation_id = correlation_id;
+    }
+
+    if failure.kind == SecretWriteFailureKind::Indeterminate {
+        user_error.summary.push_str(&format!(
+            " {}",
+            dbflux_i18n::t!("document.secret_store.error.may_have_landed")
+        ));
+    }
+    if failure.audit_unrecorded {
+        user_error.summary.push_str(&format!(
+            " {}",
+            dbflux_i18n::t!("document.secret_store.error.audit_unrecorded")
+        ));
     }
 
     user_error
@@ -823,6 +840,7 @@ fn an_audit_loss_after_a_landed_write_says_the_write_landed() {
         ),
         correlation_id: None,
         kind: SecretWriteFailureKind::AuditLost,
+        audit_unrecorded: false,
     };
 
     let user_error = write_failure_to_user_facing(&failure);
@@ -845,6 +863,7 @@ fn a_reported_write_failure_keeps_the_correlation_id_its_event_recorded() {
         error: DbError::permission_denied("put was denied"),
         correlation_id: Some(id),
         kind: SecretWriteFailureKind::StoreFailed,
+        audit_unrecorded: false,
     };
 
     assert_eq!(write_failure_to_user_facing(&failure).correlation_id, id);
@@ -863,6 +882,7 @@ fn a_refused_write_reports_as_a_decision() {
         ),
         correlation_id: None,
         kind: SecretWriteFailureKind::Refused,
+        audit_unrecorded: false,
     };
 
     let user_error = write_failure_to_user_facing(&failure);
@@ -882,9 +902,36 @@ fn a_store_failure_reports_as_a_driver_error_even_when_its_variant_looks_like_a_
         error: DbError::NotSupported("The connection has no store secrets-manager".to_string()),
         correlation_id: None,
         kind: SecretWriteFailureKind::StoreFailed,
+        audit_unrecorded: false,
     };
 
     let user_error = write_failure_to_user_facing(&failure);
     assert_eq!(user_error.kind, ErrorKind::Driver);
     assert_eq!(user_error.severity, EventSeverity::Error);
+}
+
+/// A failure that may have landed, and one whose own audit event was lost,
+/// each say so in the message the user reads.
+#[test]
+fn an_indeterminate_or_unaudited_failure_tells_the_user_what_to_check() {
+    let failure = SecretWriteFailure {
+        error: DbError::Timeout,
+        correlation_id: None,
+        kind: SecretWriteFailureKind::Indeterminate,
+        audit_unrecorded: true,
+    };
+
+    let user_error = write_failure_to_user_facing(&failure);
+
+    assert!(
+        user_error.summary.contains("may have applied"),
+        "{}",
+        user_error.summary
+    );
+    assert!(
+        user_error.summary.contains("audit trail"),
+        "{}",
+        user_error.summary
+    );
+    assert_eq!(user_error.severity, EventSeverity::Warn);
 }

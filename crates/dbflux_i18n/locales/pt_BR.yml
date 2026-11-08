@@ -3454,6 +3454,8 @@ document:
     error:
       connection_unavailable: "A conexão não está disponível"
       store_unavailable: "A conexão não tem o cofre %{store}"
+      may_have_landed: "O serviço pode ter aplicado a alteração antes de falhar. Verifique o segredo antes de tentar novamente."
+      audit_unrecorded: "Não foi possível registrar a falha na auditoria."
     footer:
       loaded:
         one: "%{count} segredo carregado"
