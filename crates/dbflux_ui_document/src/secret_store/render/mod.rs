@@ -537,7 +537,10 @@ impl SecretStoreDocument {
 
     /// The badges after a secret's name: the service that manages it and a
     /// pending deletion.
-    fn summary_badges(summary: &SecretSummary) -> Vec<Badge> {
+    fn summary_badges(
+        summary: &SecretSummary,
+        deletion: Option<Option<DateTime<Utc>>>,
+    ) -> Vec<Badge> {
         let mut badges = Vec::new();
 
         if let Some(service) = summary.owning_service.as_deref() {
@@ -547,8 +550,8 @@ impl SecretStoreDocument {
             ));
         }
 
-        if let Some(date) = summary.deletion_scheduled_for {
-            let label = match crate::secret_store::view::known_deletion_date(date) {
+        if let Some(date) = deletion {
+            let label = match date {
                 Some(date) => dbflux_i18n::t!(
                     "document.secret_store.badge.deletes",
                     date = date.with_timezone(&Local).format("%Y-%m-%d").to_string()
@@ -658,8 +661,9 @@ impl SecretStoreDocument {
             summary.name.clone()
         };
 
+        let deletion = self.view.read(cx).deletion_of(summary);
         let name = Self::row_name(AppIcon::KeyRound, lock_color, display_name, cx)
-            .children(Self::summary_badges(summary));
+            .children(Self::summary_badges(summary, deletion));
 
         let frame = self
             .row_frame(format!("secret-row-{}", summary.name).into(), selected, cx)

@@ -133,7 +133,7 @@ impl SecretView {
     pub(super) fn render_pending_deletion(
         &self,
         summary: &SecretSummary,
-        date: dbflux_core::chrono::DateTime<dbflux_core::chrono::Utc>,
+        date: Option<dbflux_core::chrono::DateTime<dbflux_core::chrono::Utc>>,
         cx: &mut Context<Self>,
     ) -> Div {
         let deleted_at = match &self.details {
@@ -141,8 +141,8 @@ impl SecretView {
             _ => None,
         };
 
-        let body = match deleted_at {
-            Some(deleted_at) => dbflux_i18n::t!(
+        let body = match deleted_at.zip(date) {
+            Some((deleted_at, date)) => dbflux_i18n::t!(
                 "document.secret_store.delete.scheduled_detail",
                 name = summary.name.as_str(),
                 deleted = format_optional_time(Some(deleted_at)),
@@ -153,7 +153,7 @@ impl SecretView {
 
         let mut banner = BannerBlock::new(
             BannerVariant::Warning,
-            match super::super::known_deletion_date(date) {
+            match date {
                 Some(date) => dbflux_i18n::t!(
                     "document.secret_store.value.deletion_scheduled",
                     date = crate::secret_store::render::format_time(date)

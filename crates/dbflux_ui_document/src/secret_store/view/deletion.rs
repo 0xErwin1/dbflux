@@ -6,52 +6,42 @@
 //! one taken right after a restore can still say scheduled. A delete or
 //! restore the view's own write landed is the authority for that secret until
 //! an observation agrees with it or the user refreshes explicitly.
+//!
+//! Observed summaries are stored as observed; every guard and display reads
+//! the deletion through [`SecretView::deletion_of`], which applies the
+//! override. A confirmed delete whose date is unknown (its audit row was
+//! lost, so the answer never arrived) keeps that in the override and never
+//! invents a date.
 
-use super::{DetailsState, SecretView};
+use super::SecretView;
+use dbflux_core::SecretSummary;
 use dbflux_core::chrono::{DateTime, Utc};
-use dbflux_core::{SecretDetails, SecretSummary};
-
-/// The date a confirmed deletion carries when the store did not say when it
-/// takes effect (its audit row was lost, so the answer never arrived). Every
-/// guard reads the deletion as scheduled; nothing draws this value, see
-/// [`known_deletion_date`].
-const UNKNOWN_DELETION_DATE: DateTime<Utc> = DateTime::UNIX_EPOCH;
-
-/// The date a scheduled deletion takes effect, `None` when it is scheduled
-/// but the date is unknown.
-pub(in crate::secret_store) fn known_deletion_date(date: DateTime<Utc>) -> Option<DateTime<Utc>> {
-    (date != UNKNOWN_DELETION_DATE).then_some(date)
-}
 
 /// What this view's own write established about a secret's deletion.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum ConfirmedDeletion {
-    /// A delete was scheduled to take effect on this date, when it is known.
-    Scheduled(Option<DateTime<Utc>>),
+    /// A delete was scheduled; `date` is when it takes effect, if known.
+    Scheduled { date: Option<DateTime<Utc>> },
 
     /// A scheduled deletion was cancelled.
     Restored,
 }
 
 impl SecretView {
-    /// Records that a delete of `name` was confirmed, and conforms the view's
-    /// copies of the row to it.
+    /// Records that a delete of `name` was confirmed.
     pub(in crate::secret_store) fn confirm_deletion_scheduled(
         &mut self,
         name: &str,
         date: Option<DateTime<Utc>>,
     ) {
         self.confirmed_deletions
-            .insert(name.to_string(), ConfirmedDeletion::Scheduled(date));
-        self.conform_copies(name);
+            .insert(name.to_string(), ConfirmedDeletion::Scheduled { date });
     }
 
-    /// Records that a restore of `name` was confirmed, and conforms the
-    /// view's copies of the row to it.
+    /// Records that a restore of `name` was confirmed.
     pub(in crate::secret_store) fn confirm_restored(&mut self, name: &str) {
         self.confirmed_deletions
             .insert(name.to_string(), ConfirmedDeletion::Restored);
-        self.conform_copies(name);
     }
 
     /// An explicit refresh asks the store again and believes its answer.
@@ -59,75 +49,37 @@ impl SecretView {
         self.confirmed_deletions.clear();
     }
 
-    /// Conforms an observed summary to a confirmed deletion state. An
-    /// observation that agrees ends the override; one that disagrees is
-    /// rewritten, so every guard reads the confirmed state.
-    pub(in crate::secret_store) fn conform_summary(&mut self, summary: &mut SecretSummary) {
-        let Some(confirmed) = self.confirmed_deletions.get(&summary.name).copied() else {
-            return;
+    /// Offers an observation to the override: one that agrees ends it.
+    pub(in crate::secret_store) fn observe_deletion(&mut self, summary: &SecretSummary) {
+        let agrees = match self.confirmed_deletions.get(&summary.name) {
+            Some(ConfirmedDeletion::Scheduled { .. }) => summary.is_pending_deletion(),
+            Some(ConfirmedDeletion::Restored) => !summary.is_pending_deletion(),
+            None => return,
         };
 
-        match confirmed {
-            ConfirmedDeletion::Scheduled(date) => {
-                if summary.deletion_scheduled_for.is_some() {
-                    self.confirmed_deletions.remove(&summary.name);
-                } else {
-                    summary.deletion_scheduled_for = Some(date.unwrap_or(UNKNOWN_DELETION_DATE));
-                }
-            }
-            ConfirmedDeletion::Restored => {
-                if summary.deletion_scheduled_for.is_none() {
-                    self.confirmed_deletions.remove(&summary.name);
-                } else {
-                    summary.deletion_scheduled_for = None;
-                }
-            }
+        if agrees {
+            self.confirmed_deletions.remove(&summary.name);
         }
     }
 
-    /// [`Self::conform_summary`] for a describe, whose request moment goes
-    /// with a cancelled deletion.
-    pub(in crate::secret_store) fn conform_details(&mut self, details: &mut SecretDetails) {
-        self.conform_summary(&mut details.summary);
-
-        if details.summary.deletion_scheduled_for.is_none() {
-            details.deleted_at = None;
-        }
-    }
-
-    fn conform_copies(&mut self, name: &str) {
-        if !self.is_for(name) {
-            return;
-        }
-
-        let mut row = self.listing_row.take();
-        let mut cache = self.summary_cache.take();
-
-        for summary in [row.as_mut(), cache.as_mut()].into_iter().flatten() {
-            self.force_summary(summary);
-        }
-
-        self.listing_row = row;
-        self.summary_cache = cache;
-
-        if let DetailsState::Loaded(details) = &mut self.details {
-            let mut loaded = details.clone();
-            self.force_summary(&mut loaded.summary);
-            if loaded.summary.deletion_scheduled_for.is_none() {
-                loaded.deleted_at = None;
-            }
-            self.details = DetailsState::Loaded(loaded);
-        }
-    }
-
-    /// Writes the confirmed state into `summary` without ending the override.
-    fn force_summary(&self, summary: &mut SecretSummary) {
+    /// The deletion of `summary`'s secret: `None` when it is active,
+    /// `Some(None)` when it is scheduled for an unknown date, `Some(Some(d))`
+    /// when it takes effect on `d`. A confirmed state wins over the summary.
+    pub(in crate::secret_store) fn deletion_of(
+        &self,
+        summary: &SecretSummary,
+    ) -> Option<Option<DateTime<Utc>>> {
         match self.confirmed_deletions.get(&summary.name) {
-            Some(ConfirmedDeletion::Scheduled(date)) => {
-                summary.deletion_scheduled_for = Some(date.unwrap_or(UNKNOWN_DELETION_DATE));
+            Some(ConfirmedDeletion::Scheduled { date }) => {
+                Some(date.or(summary.deletion_scheduled_for))
             }
-            Some(ConfirmedDeletion::Restored) => summary.deletion_scheduled_for = None,
-            None => {}
+            Some(ConfirmedDeletion::Restored) => None,
+            None => summary.deletion_scheduled_for.map(Some),
         }
+    }
+
+    /// Whether `summary`'s secret is scheduled for deletion.
+    pub(in crate::secret_store) fn is_deletion_pending(&self, summary: &SecretSummary) -> bool {
+        self.deletion_of(summary).is_some()
     }
 }

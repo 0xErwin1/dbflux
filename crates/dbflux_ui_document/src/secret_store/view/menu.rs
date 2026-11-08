@@ -80,7 +80,7 @@ impl SecretView {
         if self.supports_restore()
             && self
                 .selected_summary()
-                .is_some_and(|summary| summary.is_pending_deletion())
+                .is_some_and(|summary| self.is_deletion_pending(summary))
         {
             items.push(self.write_item(
                 SecretMenuItem::new(
@@ -136,18 +136,18 @@ impl SecretView {
     }
 
     fn retrieve_item(&self, name: &str) -> SecretMenuItem {
-        let deletion_date = self
+        let deletion = self
             .listed_summary()
             .filter(|summary| summary.name == name)
-            .and_then(|summary| summary.deletion_scheduled_for);
+            .and_then(|summary| self.deletion_of(summary));
 
         // A scheduled deletion keeps the value unreachable: the retrieval is
         // already blocked by the document, so the entry says why instead of
         // running into that block.
-        let (detail, disabled) = match deletion_date {
+        let (detail, disabled) = match deletion {
             Some(date) => (
                 Some(
-                    match super::known_deletion_date(date) {
+                    match date {
                         Some(date) => dbflux_i18n::t!(
                             "document.secret_store.value.deletion_scheduled",
                             date = short_date(date)

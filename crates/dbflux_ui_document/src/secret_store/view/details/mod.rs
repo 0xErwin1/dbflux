@@ -386,7 +386,7 @@ impl SecretView {
 
         // A scheduled deletion leads the details, as its state does. The
         // moment it was requested is shown only when the store reports it.
-        if let Some(date) = summary.deletion_scheduled_for {
+        if let Some(date) = self.deletion_of(summary) {
             if let Some(requested) = details.deleted_at {
                 rows.push(detail_row(
                     label("document.secret_store.delete.row_deleted"),
@@ -394,11 +394,13 @@ impl SecretView {
                     cx,
                 ));
             }
-            rows.push(detail_row(
-                label("document.secret_store.delete.row_deletes_on"),
-                format_optional_time(super::known_deletion_date(date)),
-                cx,
-            ));
+            if date.is_some() {
+                rows.push(detail_row(
+                    label("document.secret_store.delete.row_deletes_on"),
+                    format_optional_time(date),
+                    cx,
+                ));
+            }
         }
 
         rows.push(detail_row(

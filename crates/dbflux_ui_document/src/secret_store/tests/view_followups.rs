@@ -616,6 +616,8 @@ fn a_delete_with_a_lost_audit_row_blocks_without_a_date(cx: &mut TestAppContext)
     assert!(text.contains("Deletion scheduled"), "{text}");
     assert!(!text.contains("Deletion scheduled for"), "{text}");
     assert!(!text.contains("Deletes on 19"), "{text}");
+    assert!(!text.contains("1970"), "{text}");
+    assert!(!text.contains("Deletes on"), "{text}");
 }
 
 /// An indeterminate delete confirms nothing.

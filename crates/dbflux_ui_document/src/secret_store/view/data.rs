@@ -90,16 +90,15 @@ impl SecretView {
             return;
         }
 
-        let mut result = result;
-        if let Ok(details) = &mut result {
-            self.conform_details(details);
+        if let Ok(details) = &result {
+            self.observe_deletion(&details.summary);
             self.summary_cache = Some(details.summary.clone());
         }
 
         let pending = result
             .as_ref()
             .ok()
-            .map(|details| details.summary.is_pending_deletion());
+            .map(|details| self.is_deletion_pending(&details.summary));
 
         self.details = match result {
             Ok(details) => DetailsState::Loaded(Box::new(details)),
@@ -118,10 +117,10 @@ impl SecretView {
     /// can outdate.
     pub(crate) fn deletion_pending(&self) -> bool {
         match &self.details {
-            DetailsState::Loaded(details) => details.summary.is_pending_deletion(),
+            DetailsState::Loaded(details) => self.is_deletion_pending(&details.summary),
             _ => self
                 .selected_summary()
-                .is_some_and(|summary| summary.is_pending_deletion()),
+                .is_some_and(|summary| self.is_deletion_pending(summary)),
         }
     }
 
@@ -459,7 +458,7 @@ impl SecretView {
                 && !matches!(self.value, ValueState::Loading)
                 && self
                     .selected_summary()
-                    .is_some_and(|summary| !summary.is_pending_deletion())
+                    .is_some_and(|summary| !self.is_deletion_pending(summary))
             {
                 self.missing_connection_reported = true;
                 report_error(

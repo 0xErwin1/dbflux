@@ -355,7 +355,7 @@ impl SecretView {
         if self.supports_restore()
             && self
                 .selected_summary()
-                .is_some_and(|summary| summary.is_pending_deletion())
+                .is_some_and(|summary| self.is_deletion_pending(summary))
         {
             actions.push(
                 callback_action(

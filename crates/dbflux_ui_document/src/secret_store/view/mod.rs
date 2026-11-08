@@ -11,7 +11,6 @@
 mod actions;
 mod data;
 mod deletion;
-pub(super) use deletion::known_deletion_date;
 pub(super) mod details;
 pub(super) mod editor;
 mod inputs;
@@ -352,9 +351,8 @@ impl SecretView {
         refresh_cache: bool,
         cx: &mut Context<Self>,
     ) {
-        let mut row = row;
-        if let Some(summary) = row.as_mut() {
-            self.conform_summary(summary);
+        if let Some(summary) = &row {
+            self.observe_deletion(summary);
         }
 
         if refresh_cache && let Some(summary) = &row {
@@ -372,9 +370,9 @@ impl SecretView {
             && self
                 .listing_row
                 .as_ref()
-                .is_some_and(|row| row.name == name && !row.is_pending_deletion())
+                .is_some_and(|row| row.name == name && !self.is_deletion_pending(row))
         {
-            self.mark_restored(&name);
+            self.lift_stale_deletion(&name);
 
             if matches!(self.versions, VersionsState::ScheduledForDeletion) {
                 self.request_versions(name, crate::secret_store::HistoryLoad::Automatic, cx);
@@ -407,7 +405,7 @@ impl SecretView {
         self.connection_present
             && self
                 .selected_summary()
-                .is_some_and(|summary| !summary.is_pending_deletion())
+                .is_some_and(|summary| !self.is_deletion_pending(summary))
             && !matches!(self.value, ValueState::Loading)
     }
 

@@ -249,7 +249,7 @@ impl SecretView {
         };
 
         summary.owning_service.is_none()
-            && summary.deletion_scheduled_for.is_none()
+            && !self.is_deletion_pending(summary)
             && self.store.supports(SecretStoreCapabilities::WRITE)
     }
 
@@ -491,7 +491,7 @@ impl SecretView {
             ));
         }
 
-        if summary.deletion_scheduled_for.is_some() {
+        if self.is_deletion_pending(summary) {
             return Some(dbflux_i18n::t!(
                 "document.secret_store.edit.refused_deletion",
                 name = summary.name.as_str()
@@ -509,7 +509,7 @@ impl SecretView {
                 ));
             }
 
-            if summary.deletion_scheduled_for.is_some() {
+            if self.is_deletion_pending(summary) {
                 return Some(dbflux_i18n::t!(
                     "document.secret_store.edit.refused_deletion",
                     name = summary.name.as_str()

@@ -274,7 +274,7 @@ impl SecretView {
             && !self.dialog_is_open()
             && self
                 .selected_summary()
-                .is_some_and(|summary| summary.is_pending_deletion())
+                .is_some_and(|summary| self.is_deletion_pending(summary))
     }
 
     /// Cancels the scheduled deletion of the selected secret through the
@@ -347,9 +347,9 @@ impl SecretView {
         }
     }
 
-    /// Records on the view's copies of the row that `name`'s deletion is
-    /// cancelled, until the describe and the listing say so themselves.
-    pub(in crate::secret_store) fn mark_restored(&mut self, name: &str) {
+    /// A newer listing row shows `name` active: the describe and the cached
+    /// row it outdates stop saying the deletion is scheduled.
+    pub(in crate::secret_store) fn lift_stale_deletion(&mut self, name: &str) {
         if !self.is_for(name) {
             return;
         }
