@@ -348,11 +348,15 @@ impl SecretView {
 
     /// Records the host's listing row of the shown secret. `refresh_cache`
     /// is false when the listing that produced it failed, so a failed page
-    /// does not replace what a describe learned.
+    /// does not replace what a describe learned. `observed_by` is the
+    /// generation of the listing request that read the row, `None` for a copy
+    /// the selection brings along or a row a failed page retained: those are
+    /// no observation of the store.
     pub(super) fn set_listing_row(
         &mut self,
         row: Option<SecretSummary>,
         refresh_cache: bool,
+        observed_by: Option<u64>,
         cx: &mut Context<Self>,
     ) {
         self.drop_confirmations_of_replaced_session(cx);
@@ -361,8 +365,8 @@ impl SecretView {
         // observation.
         let mut row = row;
         if let Some(summary) = row.as_mut() {
-            if refresh_cache {
-                self.observe_listed(summary);
+            if refresh_cache && let Some(generation) = observed_by {
+                self.observe_listed(summary, generation);
             }
             self.conform_summary(summary);
         }
@@ -436,7 +440,7 @@ impl SecretView {
         self.summary_cache = None;
         self.listing_row = None;
         self.name = Some(name.clone());
-        self.set_listing_row(listing_row, true, cx);
+        self.set_listing_row(listing_row, true, None, cx);
         self.describe(name.clone(), cx);
         self.load_versions(name, cx);
     }

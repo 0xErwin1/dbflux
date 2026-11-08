@@ -3686,6 +3686,7 @@ document:
       confirm_irreversible: "Eliminar definitivamente"
       done: "Se eliminó %{name}"
       done_scheduled: "La eliminación de %{name} está programada para el %{date}"
+      done_scheduled_undated: "La eliminación de %{name} está programada"
       scheduled_detail: "%{name} se eliminó el %{deleted} con un período de recuperación de %{days} días. Su valor no se puede obtener hasta que se restaure."
       row_deleted: "Eliminado"
       row_deletes_on: "Se elimina el"

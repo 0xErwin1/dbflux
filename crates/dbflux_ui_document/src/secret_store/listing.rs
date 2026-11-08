@@ -123,6 +123,11 @@ impl SecretListing {
         true
     }
 
+    /// The generation of the latest load started.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Whether the next page to land replaces the listed rows (a reload that
     /// kept them until then) instead of appending to them.
     pub fn replaces_on_next_page(&self) -> bool {
