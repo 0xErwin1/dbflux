@@ -4014,6 +4014,60 @@ fn a_finished_rotation_follow_up_is_forgotten(cx: &mut TestAppContext) {
     );
 }
 
+/// A secret scheduled for deletion is not asked for its history: the call
+/// fails on the service, and the failure toast would cover Restore. The
+/// section says why instead, and nothing is reported.
+#[gpui::test]
+fn a_secret_scheduled_for_deletion_does_not_load_its_history(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+
+    assert!(
+        opened
+            .driver
+            .secret_store_calls()
+            .version_listings
+            .iter()
+            .all(|(_, name)| name != PENDING_DELETION_SECRET),
+        "no history request for a scheduled secret"
+    );
+    assert!(opened.reported_errors().is_empty());
+    assert!(
+        opened.read_view(|view| matches!(view.versions(), VersionsState::ScheduledForDeletion))
+    );
+    assert!(
+        opened
+            .rendered_text()
+            .contains("Scheduled for deletion; restore it to see its versions")
+    );
+}
+
+/// Restoring the secret lists its history again once the listing shows it
+/// is no longer scheduled.
+#[gpui::test]
+fn restoring_a_scheduled_secret_loads_its_history(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+
+    opened.update(|doc, cx| {
+        if let Some(entry) = doc
+            .listing
+            .entries
+            .iter_mut()
+            .find(|entry| entry.name == PENDING_DELETION_SECRET)
+        {
+            entry.deletion_scheduled_for = None;
+        }
+        doc.push_listing_row(cx);
+    });
+
+    assert!(
+        opened.read_view(|view| !matches!(view.versions(), VersionsState::ScheduledForDeletion))
+    );
+}
+
 /// A store that declares tiers but no value types shows no type group and
 /// sends no value type.
 #[gpui::test]

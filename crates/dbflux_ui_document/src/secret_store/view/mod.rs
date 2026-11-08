@@ -64,6 +64,9 @@ pub enum VersionsState {
     Failed(String),
     /// The store does not advertise `SecretStoreCapabilities::VERSIONS`.
     NotSupported,
+    /// The secret is scheduled for deletion: the service refuses its
+    /// history, so it is not asked until the secret is restored.
+    ScheduledForDeletion,
 }
 
 /// What a view tells its host.
@@ -300,12 +303,27 @@ impl SecretView {
     /// Records the host's listing row of the shown secret. `refresh_cache`
     /// is false when the listing that produced it failed, so a failed page
     /// does not replace what a describe learned.
-    pub(super) fn set_listing_row(&mut self, row: Option<SecretSummary>, refresh_cache: bool) {
+    pub(super) fn set_listing_row(
+        &mut self,
+        row: Option<SecretSummary>,
+        refresh_cache: bool,
+        cx: &mut Context<Self>,
+    ) {
         if refresh_cache && let Some(summary) = &row {
             self.summary_cache = Some(summary.clone());
         }
 
         self.listing_row = row;
+
+        // A restore that reached the listing makes the history available.
+        if matches!(self.versions, VersionsState::ScheduledForDeletion)
+            && let Some(name) = self.name.clone()
+            && !self
+                .selected_summary()
+                .is_some_and(|summary| summary.is_pending_deletion())
+        {
+            self.request_versions(name, crate::secret_store::HistoryLoad::Automatic, cx);
+        }
     }
 
     /// Whether Retrieve value may run for the shown secret: one whose

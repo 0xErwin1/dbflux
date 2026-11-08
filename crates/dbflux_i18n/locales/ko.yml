@@ -3545,6 +3545,7 @@ document:
       history_version: "v%{id}"
       loading: "버전을 불러오는 중…"
       failed: "버전을 불러오지 못했습니다"
+      scheduled_for_deletion: "삭제 예약됨. 버전을 보려면 복원하세요"
       retrieve: "%{version} 버전 가져오기"
       back_to_current: "현재 버전으로 돌아가기"
       shown: "%{version} 버전 표시 중"

@@ -60,6 +60,11 @@ impl SecretView {
                     .muted_foreground()
                     .into_any_element()
             }
+            VersionsState::ScheduledForDeletion => Text::caption(dbflux_i18n::t!(
+                "document.secret_store.versions.scheduled_for_deletion"
+            ))
+            .muted_foreground()
+            .into_any_element(),
             VersionsState::Failed(reason) => BannerBlock::new(
                 BannerVariant::Danger,
                 dbflux_i18n::t!("document.secret_store.versions.failed"),

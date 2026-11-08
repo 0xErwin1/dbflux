@@ -135,6 +135,17 @@ impl SecretView {
             return;
         }
 
+        // The service refuses the history of a secret scheduled for
+        // deletion, so it is not asked until the secret is restored.
+        if self
+            .selected_summary()
+            .is_some_and(|summary| summary.is_pending_deletion())
+        {
+            self.versions = VersionsState::ScheduledForDeletion;
+            self.versions_session = None;
+            return;
+        }
+
         self.versions = VersionsState::Loading;
         self.versions_session = None;
 
@@ -206,9 +217,8 @@ impl SecretView {
         self.versions = match result {
             Ok(versions) => VersionsState::Loaded(versions),
             Err(error) => {
-                // First catch site, and only for a failure that still
-                // applies: a superseded request fails silently above.
-                report_error(db_error_to_user_facing(&error), cx);
+                // Shown inline in the section: a toast would cover the
+                // pane's own controls, and the history never blocks them.
                 VersionsState::Failed(error.to_string())
             }
         };
@@ -239,8 +249,10 @@ impl SecretView {
             return;
         };
 
-        if matches!(self.versions, VersionsState::NotSupported)
-            || self.history_session_is_live(cx)
+        if matches!(
+            self.versions,
+            VersionsState::NotSupported | VersionsState::ScheduledForDeletion
+        ) || self.history_session_is_live(cx)
             || (self.versions_session.is_none() && self.connection(cx).is_none())
         {
             return;

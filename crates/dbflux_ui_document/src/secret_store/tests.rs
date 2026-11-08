@@ -7080,11 +7080,10 @@ fn a_history_response_of_a_replaced_session_is_dropped(cx: &mut TestAppContext) 
     assert_eq!(replacement.secret_store_calls().version_listings.len(), 1);
 }
 
-/// A history failure is reported where it lands, after the checks that tell
-/// whether it still matters: the current request's failure is reported once,
-/// a superseded request's failure is not reported at all.
+/// A history failure lands inline in the section, never as a toast, and only
+/// when it still applies: a superseded request's failure is dropped.
 #[gpui::test]
-fn a_history_failure_is_reported_only_when_it_applies(cx: &mut TestAppContext) {
+fn a_history_failure_shows_inline_only_when_it_applies(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
     let stale = opened
@@ -7101,6 +7100,7 @@ fn a_history_failure_is_reported_only_when_it_applies(cx: &mut TestAppContext) {
         );
     });
     assert!(opened.reported_errors().is_empty());
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Loaded(_))));
 
     opened.update_view(|view, cx| {
         view.apply_versions(
@@ -7110,19 +7110,20 @@ fn a_history_failure_is_reported_only_when_it_applies(cx: &mut TestAppContext) {
             cx,
         );
     });
-    assert_eq!(opened.reported_errors().len(), 1);
+    assert!(opened.reported_errors().is_empty());
     assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
 }
 
-/// The real load of a refused history reports it once, not twice.
+/// A refused history shows inline and raises no toast.
 #[gpui::test]
-fn a_refused_history_is_reported_once(cx: &mut TestAppContext) {
+fn a_refused_history_raises_no_toast(cx: &mut TestAppContext) {
     let driver = FakeDriver::new(DbKind::AwsSecrets)
         .with_secret_versions_error(KEY_VALUE_SECRET, "not authorized");
     let mut opened = open_with(cx, driver, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
 
-    assert_eq!(opened.reported_errors().len(), 1);
+    assert!(opened.reported_errors().is_empty());
+    assert!(opened.read_view(|view| matches!(view.versions(), VersionsState::Failed(_))));
 }
 
 /// A connection that went away and came back (here with a new session)

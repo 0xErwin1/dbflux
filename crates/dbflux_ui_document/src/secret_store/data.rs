@@ -210,7 +210,7 @@ impl SecretStoreDocument {
 
     /// Gives the view the listing's row of the selected secret. A failed page
     /// keeps the rows but does not refresh what the view remembers of them.
-    fn push_listing_row(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn push_listing_row(&mut self, cx: &mut Context<Self>) {
         let row = match &self.selected {
             Some(SecretRowKey::Secret(name)) => self.listing.find(name).cloned(),
             _ => None,
@@ -218,7 +218,7 @@ impl SecretStoreDocument {
         let refresh_cache = self.listing.error.is_none();
 
         self.view
-            .update(cx, |view, _| view.set_listing_row(row, refresh_cache));
+            .update(cx, |view, cx| view.set_listing_row(row, refresh_cache, cx));
     }
 }
 

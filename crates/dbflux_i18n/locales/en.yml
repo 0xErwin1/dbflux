@@ -3545,6 +3545,7 @@ document:
       history_version: "v%{id}"
       loading: "Loading the versions…"
       failed: "The versions could not be loaded"
+      scheduled_for_deletion: "Scheduled for deletion; restore it to see its versions"
       retrieve: "Retrieve version %{version}"
       back_to_current: "Back to current"
       shown: "Showing version %{version}"
