@@ -4135,3 +4135,204 @@ fn provider_defined_choices_reach_the_create_request(cx: &mut TestAppContext) {
     assert_eq!(request.value_type.as_deref(), Some("Sealed"));
     assert_eq!(request.tier.as_deref(), Some("Mid"));
 }
+
+/// V3: the host drops its selection when the view reports `Removed`, so the
+/// view and the listing never disagree on what is shown after a delete.
+#[gpui::test]
+fn removed_clears_both_selections(cx: &mut TestAppContext) {
+    let name = "/app/prod/db/host";
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.open_parameter(name);
+    opened.click("secret-action-delete");
+    opened.type_text(name);
+    opened.click("secret-delete-confirm");
+
+    assert_eq!(opened.mutations().len(), 1, "{:?}", opened.mutations());
+    assert!(opened.read(|doc| doc.selected().is_none()));
+    assert!(opened.read_view(|view| view.name().is_none()));
+    let doc = opened.doc.clone();
+    let ids: Vec<String> = opened.window.update(|_, cx| {
+        doc.read(cx)
+            .pane_actions(&doc, cx)
+            .into_iter()
+            .map(|action| action.id.to_string())
+            .collect()
+    });
+    assert!(
+        !ids.iter().any(|id| id == "secret-details-close"),
+        "{ids:?}"
+    );
+}
+
+/// V3/V4: a delete that lands after the user selected another secret in the
+/// same turn leaves the newer selection alone in both the host and the view.
+#[gpui::test]
+fn delete_landing_after_reselection_keeps_the_new_secret(cx: &mut TestAppContext) {
+    let name = "/app/prod/db/host";
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.open_parameter(name);
+    let other = opened
+        .entry_names()
+        .into_iter()
+        .find(|entry| entry != name)
+        .expect("a second parameter");
+    opened.click("secret-action-delete");
+    opened.type_text(name);
+
+    let doc = opened.doc.clone();
+    let target = other.clone();
+    opened.window.update(|window, cx| {
+        doc.update(cx, |doc, cx| {
+            doc.confirm_dialog(window, cx);
+            doc.select_row(SecretRowKey::Secret(target), cx);
+        })
+    });
+    opened.window.run_until_parked();
+
+    assert_eq!(opened.mutations().len(), 1, "{:?}", opened.mutations());
+    assert_eq!(
+        opened.read(|doc| doc.selected().cloned()),
+        Some(SecretRowKey::Secret(other.clone()))
+    );
+    assert_eq!(
+        opened.read_view(|view| view.name().map(str::to_string)),
+        Some(other.clone())
+    );
+    assert!(opened.read_view(|view| matches!(
+        view.details(),
+        DetailsState::Loaded(details) if details.summary.name == other
+    )));
+}
+
+/// V4: a deletion scheduled outside the pane reaches the view through the
+/// listing reload, and every gate that reads the row follows it.
+#[gpui::test]
+fn reloaded_listing_row_updates_the_gates(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    assert!(opened.read_view(|view| view.can_retrieve_value()));
+
+    let connection = opened.live_connection();
+    connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("store")
+        .delete_secret(&SecretDeleteRequest::Scheduled {
+            name: KEY_VALUE_SECRET.to_string(),
+            recovery_window_days: 7,
+        })
+        .expect("scheduled");
+    opened.update(|doc, cx| doc.reload_listing_in_place(cx));
+
+    assert!(opened.read_view(|view| {
+        view.selected_summary()
+            .is_some_and(|summary| summary.is_pending_deletion())
+    }));
+    assert!(!opened.read_view(|view| view.can_retrieve_value()));
+    assert!(opened.read_view(|view| view.write_refusal_reason().is_some()));
+}
+
+/// V4: two selections in one turn: only the last secret's describe and
+/// listing row stay.
+#[gpui::test]
+fn a_superseded_describe_is_dropped(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    opened.update(|doc, cx| {
+        doc.select_row(SecretRowKey::Secret(KEY_VALUE_SECRET.to_string()), cx);
+        doc.select_row(SecretRowKey::Secret(PLAINTEXT_SECRET.to_string()), cx);
+    });
+
+    assert!(opened.read_view(|view| matches!(
+        view.details(),
+        DetailsState::Loaded(details) if details.summary.name == PLAINTEXT_SECRET
+    )));
+    assert_eq!(
+        opened.read_view(|view| view.selected_summary().map(|summary| summary.name.clone())),
+        Some(PLAINTEXT_SECRET.to_string())
+    );
+}
+
+/// V4: a describe still out when the pane closes does not bring it back.
+#[gpui::test]
+fn a_describe_after_close_is_dropped(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.tall();
+    let doc = opened.doc.clone();
+    opened.window.update(|window, cx| {
+        doc.update(cx, |doc, cx| {
+            doc.select_row(SecretRowKey::Secret(KEY_VALUE_SECRET.to_string()), cx);
+            doc.close_details(window, cx);
+        })
+    });
+    opened.window.run_until_parked();
+
+    assert!(opened.read(|doc| doc.selected().is_none()));
+    assert!(opened.read_view(|view| matches!(view.details(), DetailsState::Idle)));
+    assert!(opened.read_view(|view| view.selected_summary().is_none()));
+}
+
+/// V3: a dialog the view opens while the row menu is up drops the menu and
+/// any entry it queued.
+#[gpui::test]
+fn a_dialog_opened_under_the_menu_drops_it(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.open_menu_at(
+        SecretRowKey::Secret(KEY_VALUE_SECRET.to_string()),
+        gpui::point(gpui::px(200.0), gpui::px(200.0)),
+    );
+    assert!(opened.read(|doc| doc.context_menu.is_some()));
+    opened.update(|doc, _| {
+        doc.pending_menu_action = Some(super::super::context_menu::SecretMenuAction::RotateNow)
+    });
+
+    let action = opened.pane_action("secret-delete");
+    opened.run_action(action);
+
+    assert!(opened.dialog_open());
+    assert!(opened.read(|doc| doc.context_menu.is_none()));
+    assert!(opened.read(|doc| doc.pending_menu_action.is_none()));
+}
+
+/// V3: moving the selection under an open New secret dialog drops the
+/// host's fields with the view's slot, and a later confirm writes nothing.
+#[gpui::test]
+fn selection_change_drops_the_create_dialog(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let doc = opened.doc.clone();
+    opened
+        .window
+        .update(|window, cx| doc.update(cx, |doc, cx| doc.open_create(window, cx)));
+    opened.window.run_until_parked();
+    assert!(opened.dialog_open());
+    assert!(opened.read(|doc| doc.create_dialog.is_some()));
+
+    opened.select(PLAINTEXT_SECRET);
+
+    assert!(!opened.dialog_open());
+    assert!(opened.read(|doc| doc.create_dialog.is_none()));
+    opened.confirm_open_dialog();
+    assert!(opened.mutations().is_empty(), "{:?}", opened.mutations());
+}
+
+/// V2: two confirms of the view's dialog in one turn send one write.
+#[gpui::test]
+fn two_confirms_in_one_turn_send_one_write(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-action-delete");
+    opened.type_text(KEY_VALUE_SECRET);
+
+    let doc = opened.doc.clone();
+    opened.window.update(|window, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, cx| {
+            view.confirm_dialog(window, cx);
+            view.confirm_dialog(window, cx);
+        })
+    });
+    opened.window.run_until_parked();
+
+    assert_eq!(opened.mutations().len(), 1, "{:?}", opened.mutations());
+}
