@@ -521,6 +521,11 @@ impl SecretView {
 
     /// Turns the dialog's rotation on or off.
     pub fn set_rotation_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        // The request carries the form as it was when Save was pressed.
+        if self.write_in_flight {
+            return;
+        }
+
         if let Some(WriteDialog::Rotation(dialog)) = &mut self.dialog {
             dialog.enabled = enabled;
             dialog.touched = true;
@@ -679,12 +684,13 @@ impl SecretView {
                         "document.secret_store.rotation_edit.enabled"
                     ))
                     .checked(dialog.enabled)
+                    .disabled(self.write_in_flight)
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.set_rotation_enabled(*checked, cx);
                     })),
             )
             .child(rotation_field(
-                dialog.enabled,
+                dialog.enabled && !self.write_in_flight,
                 "document.secret_store.rotation_edit.schedule",
                 "document.secret_store.rotation_edit.schedule_hint",
                 "secret-rotation-schedule-input",
@@ -692,7 +698,7 @@ impl SecretView {
                 cx,
             ))
             .child(rotation_field(
-                dialog.enabled,
+                dialog.enabled && !self.write_in_flight,
                 "document.secret_store.rotation_edit.window",
                 "document.secret_store.rotation_edit.window_hint",
                 "secret-rotation-window-input",
@@ -700,7 +706,7 @@ impl SecretView {
                 cx,
             ))
             .child(rotation_field(
-                dialog.enabled,
+                dialog.enabled && !self.write_in_flight,
                 "document.secret_store.rotation_edit.function",
                 "document.secret_store.rotation_edit.function_hint",
                 "secret-rotation-function-input",

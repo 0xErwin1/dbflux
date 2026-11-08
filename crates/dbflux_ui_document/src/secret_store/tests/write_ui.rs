@@ -4161,6 +4161,87 @@ fn a_describe_confirming_a_restore_loads_the_history(cx: &mut TestAppContext) {
     assert!(opened.reported_errors().is_empty());
 }
 
+/// While a tag save is in flight the dialog keeps what the request carries:
+/// the fields, Add and Remove are locked, so a later edit cannot be lost to
+/// the landing that closes the dialog.
+#[gpui::test]
+fn the_tags_dialog_is_locked_while_its_save_is_in_flight(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-tags-edit");
+    assert!(!opened.is_disabled("secret-tags-key-0"));
+    let rows = opened.read_view(|view| match &view.dialog {
+        Some(WriteDialog::Tags(dialog)) => dialog.rows.len(),
+        _ => panic!("the tags dialog is open"),
+    });
+
+    opened.update_view(|view, cx| {
+        view.write_in_flight = true;
+        cx.notify();
+    });
+    opened.update_view(|view, cx| view.remove_tag_row(0, cx));
+
+    for id in ["secret-tags-add", "secret-tags-remove-0"] {
+        assert!(opened.is_disabled(id), "{id} is locked");
+    }
+    let key_input = opened.read_view(|view| match &view.dialog {
+        Some(WriteDialog::Tags(dialog)) => dialog.rows[0].key.clone(),
+        _ => panic!("the tags dialog is open"),
+    });
+    let before = opened
+        .window
+        .update(|_, cx| key_input.read(cx).value().to_string());
+    opened.click("secret-tags-key-0");
+    opened.type_text("zz");
+    let typed = opened
+        .window
+        .update(|_, cx| key_input.read(cx).value().to_string());
+    assert_eq!(typed, before, "typing into a locked field did nothing");
+    let after = opened.read_view(|view| match &view.dialog {
+        Some(WriteDialog::Tags(dialog)) => dialog.rows.len(),
+        _ => panic!("the tags dialog is open"),
+    });
+    assert_eq!(after, rows, "Remove did nothing");
+}
+
+/// The Edit rotation form is locked the same way.
+#[gpui::test]
+fn the_rotation_dialog_is_locked_while_its_save_is_in_flight(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-rotation-edit");
+    assert!(!opened.is_disabled("secret-rotation-schedule-input"));
+    let enabled = opened.read_view(|view| match &view.dialog {
+        Some(WriteDialog::Rotation(dialog)) => dialog.enabled,
+        _ => panic!("the rotation dialog is open"),
+    });
+
+    opened.update_view(|view, cx| {
+        view.write_in_flight = true;
+        cx.notify();
+    });
+    opened.update_view(|view, cx| view.set_rotation_enabled(!enabled, cx));
+
+    let schedule = opened.read_view(|view| match &view.dialog {
+        Some(WriteDialog::Rotation(dialog)) => dialog.schedule.clone(),
+        _ => panic!("the rotation dialog is open"),
+    });
+    let before = opened
+        .window
+        .update(|_, cx| schedule.read(cx).value().to_string());
+    opened.click("secret-rotation-schedule-input");
+    opened.type_text("zz");
+    let typed = opened
+        .window
+        .update(|_, cx| schedule.read(cx).value().to_string());
+    assert_eq!(typed, before, "typing into a locked field did nothing");
+    let after = opened.read_view(|view| match &view.dialog {
+        Some(WriteDialog::Rotation(dialog)) => dialog.enabled,
+        _ => panic!("the rotation dialog is open"),
+    });
+    assert_eq!(after, enabled, "the switch did nothing");
+}
+
 /// A store that declares tiers but no value types shows no type group and
 /// sends no value type.
 #[gpui::test]

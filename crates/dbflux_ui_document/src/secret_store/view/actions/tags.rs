@@ -258,6 +258,10 @@ impl SecretView {
     /// Adds an empty row to the open dialog and moves the keyboard to its
     /// key.
     pub fn add_tag_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.write_in_flight {
+            return;
+        }
+
         let Some(WriteDialog::Tags(dialog)) = &self.dialog else {
             return;
         };
@@ -280,6 +284,10 @@ impl SecretView {
 
     /// Removes the row at `index` from the open dialog.
     pub fn remove_tag_row(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.write_in_flight {
+            return;
+        }
+
         if let Some(WriteDialog::Tags(dialog)) = &mut self.dialog
             && index < dialog.rows.len()
         {
@@ -399,11 +407,14 @@ impl SecretView {
         at_limit: bool,
         cx: &mut Context<Self>,
     ) -> Div {
+        // The request carries the rows as they were when Save was pressed, so
+        // the form keeps them until the write answers.
+        let locked = self.write_in_flight;
         let rows: Vec<AnyElement> = dialog
             .rows
             .iter()
             .enumerate()
-            .map(|(index, row)| render_tag_row(index, row, cx))
+            .map(|(index, row)| render_tag_row(index, row, locked, cx))
             .collect();
 
         let mut body = div().flex().flex_col().gap(ModalMetrics::HEADER_GAP).child(
@@ -425,7 +436,7 @@ impl SecretView {
                     dbflux_i18n::t!("document.secret_store.tags_edit.add"),
                 )
                 .icon(AppIcon::Plus)
-                .disabled(at_limit)
+                .disabled(at_limit || locked)
                 .on_click(cx.listener(|this, _, window, cx| this.add_tag_row(window, cx))),
             ),
         );
@@ -443,7 +454,12 @@ impl SecretView {
 }
 
 /// One editable tag: its key, its value and the button that removes it.
-fn render_tag_row(index: usize, row: &TagRow, cx: &mut Context<SecretView>) -> AnyElement {
+fn render_tag_row(
+    index: usize,
+    row: &TagRow,
+    locked: bool,
+    cx: &mut Context<SecretView>,
+) -> AnyElement {
     div()
         .flex()
         .items_center()
@@ -456,6 +472,7 @@ fn render_tag_row(index: usize, row: &TagRow, cx: &mut Context<SecretView>) -> A
                         "document.secret_store.tags_edit.key_label",
                         row = index + 1
                     ))
+                    .disabled(locked)
                     .w_full(),
             ),
         )
@@ -467,6 +484,7 @@ fn render_tag_row(index: usize, row: &TagRow, cx: &mut Context<SecretView>) -> A
                         "document.secret_store.tags_edit.value_label",
                         row = index + 1
                     ))
+                    .disabled(locked)
                     .w_full(),
             ),
         )
@@ -478,6 +496,7 @@ fn render_tag_row(index: usize, row: &TagRow, cx: &mut Context<SecretView>) -> A
             .ghost()
             .icon(AppIcon::X)
             .icon_only()
+            .disabled(locked)
             .on_click(cx.listener(move |this, _, _, cx| this.remove_tag_row(index, cx))),
         )
         .into_any_element()
