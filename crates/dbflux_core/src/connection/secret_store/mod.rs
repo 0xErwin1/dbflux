@@ -87,6 +87,96 @@ bitflags! {
     }
 }
 
+/// The value types and tiers a store accepts when it creates a secret, in the
+/// store's own names, so a create dialog renders them without knowing which
+/// store it talks to. The store still checks the request: this is what it
+/// offers, not what it enforces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretCreateChoices {
+    value_types: Vec<String>,
+    default_value_type: String,
+    encrypted_value_type: Option<String>,
+    tiers: Vec<String>,
+    default_tier: Option<String>,
+}
+
+impl SecretCreateChoices {
+    /// The value types in the order they are offered, and the one a new value
+    /// starts as. A default the list does not hold falls back to its first
+    /// entry.
+    pub fn new(
+        value_types: impl IntoIterator<Item = impl Into<String>>,
+        default_value_type: impl Into<String>,
+    ) -> Self {
+        let value_types: Vec<String> = value_types.into_iter().map(Into::into).collect();
+        let default_value_type =
+            Self::default_of(&value_types, default_value_type.into()).unwrap_or_default();
+
+        Self {
+            value_types,
+            default_value_type,
+            encrypted_value_type: None,
+            tiers: Vec::new(),
+            default_tier: None,
+        }
+    }
+
+    /// Names the value type that is encrypted, the only one that takes an
+    /// encryption key. Ignored when the store does not offer it.
+    pub fn with_encrypted_value_type(mut self, value_type: impl Into<String>) -> Self {
+        let value_type = value_type.into();
+
+        if self.value_types.contains(&value_type) {
+            self.encrypted_value_type = Some(value_type);
+        }
+
+        self
+    }
+
+    /// The tiers in the order they are offered, and the one a new value
+    /// starts in. A default the list does not hold falls back to its first
+    /// entry.
+    pub fn with_tiers(
+        mut self,
+        tiers: impl IntoIterator<Item = impl Into<String>>,
+        default_tier: impl Into<String>,
+    ) -> Self {
+        self.tiers = tiers.into_iter().map(Into::into).collect();
+        self.default_tier = Self::default_of(&self.tiers, default_tier.into());
+        self
+    }
+
+    fn default_of(offered: &[String], preferred: String) -> Option<String> {
+        if offered.contains(&preferred) {
+            Some(preferred)
+        } else {
+            offered.first().cloned()
+        }
+    }
+
+    pub fn value_types(&self) -> &[String] {
+        &self.value_types
+    }
+
+    pub fn default_value_type(&self) -> &str {
+        &self.default_value_type
+    }
+
+    /// Whether a secret of `value_type` takes an encryption key.
+    pub fn takes_encryption_key(&self, value_type: &str) -> bool {
+        self.encrypted_value_type.as_deref() == Some(value_type)
+    }
+
+    /// The tiers on offer; empty for a store without tiers.
+    pub fn tiers(&self) -> &[String] {
+        &self.tiers
+    }
+
+    pub fn default_tier(&self) -> Option<&str> {
+        self.default_tier.as_deref()
+    }
+}
+
 /// One store a connection exposes, such as "Secrets Manager".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretStoreDescriptor {
@@ -98,6 +188,11 @@ pub struct SecretStoreDescriptor {
     pub label: String,
 
     pub capabilities: SecretStoreCapabilities,
+
+    /// What a create dialog offers for a store whose values are typed
+    /// (`TYPED_VALUES`). `None` for a store whose secrets have neither a
+    /// type nor a tier.
+    pub create_choices: Option<SecretCreateChoices>,
 }
 
 impl SecretStoreDescriptor {
@@ -110,7 +205,14 @@ impl SecretStoreDescriptor {
             id: id.into(),
             label: label.into(),
             capabilities,
+            create_choices: None,
         }
+    }
+
+    /// Declares the value types and tiers a create dialog offers.
+    pub fn with_create_choices(mut self, choices: SecretCreateChoices) -> Self {
+        self.create_choices = Some(choices);
+        self
     }
 
     pub fn supports(&self, capability: SecretStoreCapabilities) -> bool {

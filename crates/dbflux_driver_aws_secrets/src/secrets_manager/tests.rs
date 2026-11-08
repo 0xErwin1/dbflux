@@ -257,6 +257,13 @@ fn the_real_secrets_manager_store_advertises_write() {
     );
 }
 
+/// A secret has neither a type nor a tier, so the store declares no choices
+/// for a create dialog to render.
+#[test]
+fn the_secrets_manager_declares_no_create_choices() {
+    assert_eq!(offline_store().descriptor().create_choices, None);
+}
+
 #[test]
 fn a_payload_maps_onto_the_exclusive_put_fields() {
     let text = put_payload(&SecretPayload::Text(SecretString::from("hunter2")));

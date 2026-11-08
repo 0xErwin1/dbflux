@@ -1108,3 +1108,40 @@ fn a_description_rewrite_is_refused_when_the_version_moves_just_before_the_write
         endpoint.operations()
     );
 }
+
+/// The create dialog renders what the descriptor declares, so every declared
+/// type and tier must be one `plan_create` takes, and the defaults are the
+/// ones the dialog always started with.
+#[test]
+fn the_parameter_store_declares_the_choices_its_create_accepts() {
+    let store = offline_store();
+    let choices = store
+        .descriptor()
+        .create_choices
+        .as_ref()
+        .expect("a typed store declares its choices");
+
+    assert_eq!(
+        choices.value_types(),
+        ["String", "StringList", "SecureString"]
+    );
+    assert_eq!(choices.default_value_type(), "SecureString");
+    assert!(choices.takes_encryption_key("SecureString"));
+    assert!(!choices.takes_encryption_key("String"));
+    assert_eq!(
+        choices.tiers(),
+        ["Standard", "Advanced", "Intelligent-Tiering"]
+    );
+    assert_eq!(choices.default_tier(), Some("Standard"));
+
+    for value_type in choices.value_types() {
+        for tier in choices.tiers() {
+            let request = SecretCreateRequest::text("/app/token", "v")
+                .with_value_type(value_type.as_str())
+                .with_tier(tier.as_str());
+
+            plan_create(&request, "us-east-1")
+                .unwrap_or_else(|error| panic!("{value_type}/{tier}: {error}"));
+        }
+    }
+}

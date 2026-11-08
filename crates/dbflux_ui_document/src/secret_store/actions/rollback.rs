@@ -8,6 +8,7 @@
 use super::{
     DialogShell, FooterSpec, Landing, WriteDialog, WriteEffect, dialog_footer, dialog_modal,
 };
+use crate::secret_store::SecretOperation;
 use crate::secret_store::details::short_version_id;
 use crate::secret_store::write::roll_back_secret;
 use crate::secret_store::{SecretRowKey, SecretStoreDocument, VersionsState};
@@ -75,14 +76,38 @@ impl SecretStoreDocument {
         }
     }
 
-    /// The index of the most recent earlier version, which `b` rolls back
-    /// to. The history lists newest first.
+    /// The index of the most recent version created before the current one,
+    /// which `b` rolls back to. The current version is not always the newest
+    /// (after a roll back it is an older one), so a newer version is never
+    /// "previous": only the versions older than the current one count. A
+    /// version with no creation date is placed by its position in the
+    /// history, which lists newest first.
     pub(in crate::secret_store) fn previous_version_index(&self) -> Option<usize> {
         let VersionsState::Loaded(versions) = &self.versions else {
             return None;
         };
 
-        (0..versions.len()).find(|index| self.version_to_roll_back(*index).is_some())
+        let current = versions
+            .iter()
+            .position(|version| self.is_current_version(&version.id));
+        let current_created = current
+            .and_then(|index| versions.get(index))
+            .and_then(|version| version.created);
+
+        let is_older = |index: usize, created| match (current, current_created, created) {
+            (_, Some(current_created), Some(created)) => created < current_created,
+            (Some(current), ..) => index > current,
+            (None, ..) => true,
+        };
+
+        versions
+            .iter()
+            .enumerate()
+            .filter(|(index, version)| {
+                is_older(*index, version.created) && self.version_to_roll_back(*index).is_some()
+            })
+            .min_by_key(|(index, version)| (std::cmp::Reverse(version.created), *index))
+            .map(|(index, _)| index)
     }
 
     fn has_pending_earlier_version(&self) -> bool {
@@ -214,6 +239,8 @@ impl SecretStoreDocument {
 
         self.run_governed_write(
             session,
+            SecretOperation::RollBack,
+            name.clone(),
             move |context| Landing::of(roll_back_secret(context, &request)),
             move |doc, landing, cx| doc.land_roll_back(&name, &version_id, landing, cx),
             cx,

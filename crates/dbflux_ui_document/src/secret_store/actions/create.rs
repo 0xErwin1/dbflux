@@ -13,6 +13,7 @@ use super::tags::TagRow;
 use super::{
     DialogShell, FooterSpec, Landing, WriteDialog, WriteEffect, dialog_footer, dialog_modal,
 };
+use crate::secret_store::SecretOperation;
 use crate::secret_store::write::create_secret;
 use crate::secret_store::{SecretRowKey, SecretStoreDocument};
 use dbflux_components::controls::{Button, Input, InputEvent, InputState};
@@ -20,7 +21,9 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::parts::modal_field;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::{ModalMetrics, Spacing};
-use dbflux_core::{MAX_TAGS, SecretCreateRequest, SecretCreated, SecretStoreCapabilities};
+use dbflux_core::{
+    MAX_TAGS, SecretCreateChoices, SecretCreateRequest, SecretCreated, SecretStoreCapabilities,
+};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -30,18 +33,15 @@ use gpui_component::input::{Textarea, TextareaState};
 const CREATE_CAPABILITIES: SecretStoreCapabilities =
     SecretStoreCapabilities::WRITE.union(SecretStoreCapabilities::CREATE);
 
-/// The value types a typed store takes, and the one a new value starts as.
-/// The store checks the choice, and refuses a name it does not know.
-const VALUE_TYPES: [&str; 3] = ["String", "StringList", "SecureString"];
-const DEFAULT_VALUE_TYPE: &str = "SecureString";
-
-/// The type whose value is encrypted, the only one that takes an encryption
-/// key on a typed store.
-const ENCRYPTED_VALUE_TYPE: &str = "SecureString";
-
-/// The tiers a typed store takes, and the one a new value starts in.
-const TIERS: [&str; 3] = ["Standard", "Advanced", "Intelligent-Tiering"];
-const DEFAULT_TIER: &str = "Standard";
+/// What the document showed when a create was sent: the level, the filter and
+/// the selection, so its landing can tell that the user moved on.
+#[derive(PartialEq, Eq)]
+struct ListingView {
+    path: Option<String>,
+    path_mode: crate::secret_store::PathMode,
+    name_filter: String,
+    selected: Option<SecretRowKey>,
+}
 
 /// The New secret dialog.
 pub(in crate::secret_store) struct CreateDialog {
@@ -51,10 +51,11 @@ pub(in crate::secret_store) struct CreateDialog {
     key: Entity<InputState>,
     tags: Vec<TagRow>,
 
-    /// The store's values are typed, so the type and the tier are asked.
-    typed: bool,
-    value_type: &'static str,
-    pub(in crate::secret_store) tier: &'static str,
+    /// What the store declares for a create: present when its values are
+    /// typed, so the type and the tier are asked from it.
+    choices: Option<SecretCreateChoices>,
+    value_type: String,
+    pub(in crate::secret_store) tier: Option<String>,
 
     /// A field was edited since the dialog opened, so an incomplete request
     /// is worth reporting.
@@ -84,9 +85,11 @@ impl CreateProblem {
 
 impl CreateDialog {
     /// Whether the encryption key applies: always on a store whose values are
-    /// not typed, and for the type that is encrypted on one whose are.
+    /// not typed, and for the type the store marks encrypted on one whose are.
     fn takes_key(&self) -> bool {
-        !self.typed || self.value_type == ENCRYPTED_VALUE_TYPE
+        self.choices
+            .as_ref()
+            .is_none_or(|choices| choices.takes_encryption_key(&self.value_type))
     }
 
     /// The text of a single-line field, `None` when it is empty.
@@ -106,10 +109,12 @@ impl CreateDialog {
             request = request.with_description(description);
         }
 
-        if self.typed {
-            request = request
-                .with_value_type(self.value_type)
-                .with_tier(self.tier);
+        if self.choices.is_some() {
+            request = request.with_value_type(self.value_type.as_str());
+        }
+
+        if let Some(tier) = &self.tier {
+            request = request.with_tier(tier.as_str());
         }
 
         if self.takes_key()
@@ -225,6 +230,7 @@ impl SecretStoreDocument {
         subscriptions.push(cx.observe(&value, |_, _, cx| cx.notify()));
 
         let focus = name.read(cx).focus_handle(cx);
+        let choices = self.store.create_choices.clone();
 
         self.open_dialog(
             WriteDialog::Create(CreateDialog {
@@ -233,9 +239,14 @@ impl SecretStoreDocument {
                 description,
                 key,
                 tags: Vec::new(),
-                typed: self.store_allows(SecretStoreCapabilities::TYPED_VALUES),
-                value_type: DEFAULT_VALUE_TYPE,
-                tier: DEFAULT_TIER,
+                value_type: choices
+                    .as_ref()
+                    .map(|choices| choices.default_value_type().to_string())
+                    .unwrap_or_default(),
+                tier: choices
+                    .as_ref()
+                    .and_then(|choices| choices.default_tier().map(str::to_string)),
+                choices,
                 touched: false,
                 _subscriptions: subscriptions,
             }),
@@ -260,14 +271,14 @@ impl SecretStoreDocument {
             return;
         }
 
-        let Some(chosen) = VALUE_TYPES.iter().find(|known| **known == value_type) else {
-            return;
-        };
-
         if let Some(WriteDialog::Create(dialog)) = &mut self.dialog
-            && dialog.typed
+            && let Some(choices) = &dialog.choices
+            && let Some(chosen) = choices
+                .value_types()
+                .iter()
+                .find(|known| known.as_str() == value_type)
         {
-            dialog.value_type = chosen;
+            dialog.value_type = chosen.clone();
             dialog.touched = true;
             cx.notify();
         }
@@ -279,14 +290,11 @@ impl SecretStoreDocument {
             return;
         }
 
-        let Some(chosen) = TIERS.iter().find(|known| **known == tier) else {
-            return;
-        };
-
         if let Some(WriteDialog::Create(dialog)) = &mut self.dialog
-            && dialog.typed
+            && let Some(choices) = &dialog.choices
+            && let Some(chosen) = choices.tiers().iter().find(|known| known.as_str() == tier)
         {
-            dialog.tier = chosen;
+            dialog.tier = Some(chosen.clone());
             dialog.touched = true;
             cx.notify();
         }
@@ -351,6 +359,7 @@ impl SecretStoreDocument {
 
         let request = dialog.request(cx);
         let name = request.name.clone();
+        let view = self.listing_view();
 
         let Some(session) = self.write_session(cx) else {
             return;
@@ -358,13 +367,21 @@ impl SecretStoreDocument {
 
         self.run_governed_write(
             session,
+            SecretOperation::Create,
+            name.clone(),
             move |context| Landing::of(create_secret(context, &request)),
-            move |doc, landing, cx| doc.land_create(&name, landing, cx),
+            move |doc, landing, cx| doc.land_create(&name, view, landing, cx),
             cx,
         );
     }
 
-    fn land_create(&mut self, name: &str, landing: Landing<SecretCreated>, cx: &mut Context<Self>) {
+    fn land_create(
+        &mut self,
+        name: &str,
+        sent_from: ListingView,
+        landing: Landing<SecretCreated>,
+        cx: &mut Context<Self>,
+    ) {
         match landing {
             Landing::Done(_) => {
                 self.dismiss_dialog(cx);
@@ -372,20 +389,38 @@ impl SecretStoreDocument {
                     dbflux_i18n::t!("document.secret_store.create.done", name = name),
                     cx,
                 );
-                self.show_created(name, cx);
+                self.show_created(name, &sent_from, cx);
             }
             Landing::Stands(failure) => {
                 self.dismiss_dialog(cx);
                 self.report_write_failure(&failure, cx);
-                self.show_created(name, cx);
+                self.show_created(name, &sent_from, cx);
             }
             Landing::Rejected(failure) => self.report_write_failure(&failure, cx),
         }
     }
 
+    /// What the user is looking at: the level, the filter and the selection.
+    fn listing_view(&self) -> ListingView {
+        ListingView {
+            path: self.path.clone(),
+            path_mode: self.path_mode,
+            name_filter: self.name_filter.clone(),
+            selected: self.selected.clone(),
+        }
+    }
+
     /// Selects the new secret and reads the listing again, so it shows up in
-    /// its row with its details.
-    fn show_created(&mut self, name: &str, cx: &mut Context<Self>) {
+    /// its row with its details. A user who navigated or selected something
+    /// else while the create was in flight keeps what they chose: the listing
+    /// is refreshed and the new secret is left unselected, since it may not
+    /// even be in the listing in view.
+    fn show_created(&mut self, name: &str, sent_from: &ListingView, cx: &mut Context<Self>) {
+        if self.listing_view() != *sent_from {
+            self.refresh_after_write(name, WriteEffect::Metadata, cx);
+            return;
+        }
+
         self.widen_scope_to(name);
         self.select_row(SecretRowKey::Secret(name.to_string()), cx);
         self.refresh_after_write(name, WriteEffect::Metadata, cx);
@@ -409,7 +444,11 @@ impl SecretStoreDocument {
                 .strip_prefix(path.as_str())
                 .is_some_and(|rest| !rest.contains('/')),
             (Some(path), crate::secret_store::PathMode::Flat) => name.starts_with(path.as_str()),
-            (None, _) => true,
+            // The root lists one level too: a nested name is below it.
+            (None, crate::secret_store::PathMode::Tree) => {
+                !name.trim_start_matches('/').contains('/')
+            }
+            (None, crate::secret_store::PathMode::Flat) => true,
         };
 
         if !visible {
@@ -485,13 +524,13 @@ impl SecretStoreDocument {
                 cx,
             ));
 
-        if dialog.typed {
+        if let Some(choices) = &dialog.choices {
             body = body.child(modal_field(
                 dbflux_i18n::t!("document.secret_store.create.type"),
                 self.render_choice_group(
                     "secret-create-type",
-                    &VALUE_TYPES,
-                    dialog.value_type,
+                    choices.value_types(),
+                    &dialog.value_type,
                     |this, choice, cx| this.set_create_value_type(choice, cx),
                     cx,
                 ),
@@ -515,13 +554,17 @@ impl SecretStoreDocument {
             cx,
         ));
 
-        if dialog.typed {
+        if let Some(choices) = dialog
+            .choices
+            .as_ref()
+            .filter(|choices| !choices.tiers().is_empty())
+        {
             body = body.child(modal_field(
                 dbflux_i18n::t!("document.secret_store.create.tier"),
                 self.render_choice_group(
                     "secret-create-tier",
-                    &TIERS,
-                    dialog.tier,
+                    choices.tiers(),
+                    dialog.tier.as_deref().unwrap_or_default(),
                     |this, choice, cx| this.set_create_tier(choice, cx),
                     cx,
                 ),
@@ -560,7 +603,7 @@ impl SecretStoreDocument {
     fn render_choice_group(
         &self,
         id: &'static str,
-        choices: &[&'static str],
+        choices: &[String],
         chosen: &str,
         on_pick: fn(&mut SecretStoreDocument, &str, &mut Context<SecretStoreDocument>),
         cx: &mut Context<Self>,
@@ -572,14 +615,14 @@ impl SecretStoreDocument {
         let buttons: Vec<Button> = choices
             .iter()
             .map(|choice| {
-                let choice = *choice;
+                let picked = choice.clone();
 
-                Button::new(SharedString::from(format!("{id}-{choice}")), choice)
+                Button::new(SharedString::from(format!("{id}-{choice}")), choice.clone())
                     .ghost()
                     .selected(choice == chosen)
                     .toggled(choice == chosen)
                     .disabled(self.write_in_flight)
-                    .on_click(cx.listener(move |this, _, _, cx| on_pick(this, choice, cx)))
+                    .on_click(cx.listener(move |this, _, _, cx| on_pick(this, &picked, cx)))
             })
             .collect();
 

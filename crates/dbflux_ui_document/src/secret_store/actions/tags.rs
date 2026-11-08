@@ -12,6 +12,7 @@
 use super::{
     DialogShell, FooterSpec, Landing, WriteDialog, WriteEffect, dialog_footer, dialog_modal,
 };
+use crate::secret_store::SecretOperation;
 use crate::secret_store::write::update_secret_tags;
 use crate::secret_store::{DetailsState, SecretRowKey, SecretStoreDocument};
 use dbflux_components::controls::{Button, Input, InputEvent, InputState};
@@ -308,6 +309,8 @@ impl SecretStoreDocument {
 
         self.run_governed_write(
             session,
+            SecretOperation::EditTags,
+            name.clone(),
             move |context| Landing::of(update_secret_tags(context, &update)),
             move |doc, landing, cx| doc.land_tags(&name, landing, cx),
             cx,

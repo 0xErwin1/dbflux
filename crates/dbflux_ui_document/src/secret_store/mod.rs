@@ -208,6 +208,10 @@ pub struct SecretStoreDocument {
     /// A governed write is in flight. Another write waits for it, so a
     /// double click cannot send the request twice.
     write_in_flight: bool,
+    /// An editor save is in flight. Kept apart from the editor, which a
+    /// refresh or a reselection clears while the save is still out, so an
+    /// action write waits for the answer whatever became of the editor.
+    editor_save_in_flight: bool,
     /// A rotation cancelled before it finished, shown in the Rotation
     /// section while its secret stays selected.
     rotation_notice: Option<RotationNotice>,
@@ -387,6 +391,7 @@ impl SecretStoreDocument {
             selected_cache: None,
             clear_search_input: false,
             write_in_flight: false,
+            editor_save_in_flight: false,
             rotation_notice: None,
             edit_after_retrieve: false,
             _subscriptions: subscriptions,

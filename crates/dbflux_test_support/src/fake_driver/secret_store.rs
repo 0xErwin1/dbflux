@@ -1552,6 +1552,11 @@ pub(super) fn fake_secret_stores(state: &Arc<FakeDriverState>) -> Vec<FakeSecret
                     | SecretStoreCapabilities::TAGS
                     | SecretStoreCapabilities::DESCRIPTION
                     | SecretStoreCapabilities::CREATE,
+            )
+            .with_create_choices(
+                SecretCreateChoices::new(["String", "StringList", "SecureString"], "SecureString")
+                    .with_encrypted_value_type("SecureString")
+                    .with_tiers(["Standard", "Advanced", "Intelligent-Tiering"], "Standard"),
             ),
             secrets: RwLock::new(fake_parameters()),
             default_page_size: 2,

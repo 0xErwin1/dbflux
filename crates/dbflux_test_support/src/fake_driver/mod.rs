@@ -10,12 +10,12 @@ use dbflux_core::{
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use dbflux_core::{
-    MAX_TAGS, SecretCreateRequest, SecretCreated, SecretDeleteRequest, SecretDeletion,
-    SecretDescriptionChange, SecretDescriptionUpdate, SecretDetails, SecretListPage,
-    SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
-    SecretRotation, SecretRotationChange, SecretRotationStart, SecretRotationUpdate,
-    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
-    SecretTagsUpdate, SecretValue, SecretVersionInfo, SecretVersionStage,
+    MAX_TAGS, SecretCreateChoices, SecretCreateRequest, SecretCreated, SecretDeleteRequest,
+    SecretDeletion, SecretDescriptionChange, SecretDescriptionUpdate, SecretDetails,
+    SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback,
+    SecretRollbackRequest, SecretRotation, SecretRotationChange, SecretRotationStart,
+    SecretRotationUpdate, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
+    SecretSummary, SecretTag, SecretTagsUpdate, SecretValue, SecretVersionInfo, SecretVersionStage,
 };
 use dbflux_driver_cloudwatch::CLOUDWATCH_FORM;
 use dbflux_driver_dynamodb::DYNAMODB_FORM;

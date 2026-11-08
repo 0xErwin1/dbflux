@@ -13,7 +13,7 @@ use dbflux_core::{
     SecretSummary, SecretTag, SecretTagsUpdate, SecretValue, SecretVersionInfo, SecretVersionStage,
     scrub_submitted_payload,
 };
-use dbflux_core::{SecretCreateRequest, SecretCreated};
+use dbflux_core::{SecretCreateChoices, SecretCreateRequest, SecretCreated};
 
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
 use crate::error_formatter::{
@@ -50,7 +50,8 @@ impl ParameterStore {
                     | SecretStoreCapabilities::TAGS
                     | SecretStoreCapabilities::DESCRIPTION
                     | SecretStoreCapabilities::CREATE,
-            ),
+            )
+            .with_create_choices(create_choices()),
         }
     }
 
@@ -623,6 +624,14 @@ pub(crate) struct CreateParameterPlan {
 
 /// Most levels a hierarchical parameter name has.
 const MAX_PARAMETER_LEVELS: usize = 15;
+
+/// The types and tiers a create dialog offers: every one `plan_create`
+/// accepts, so a choice the dialog shows is never refused as unknown.
+fn create_choices() -> SecretCreateChoices {
+    SecretCreateChoices::new(["String", "StringList", "SecureString"], "SecureString")
+        .with_encrypted_value_type("SecureString")
+        .with_tiers(["Standard", "Advanced", "Intelligent-Tiering"], "Standard")
+}
 
 /// Decides a parameter create, refusing before any call what the service
 /// would reject, with messages that name the parameter and never the value:

@@ -2465,3 +2465,33 @@ fn a_standard_tier_value_over_4096_bytes_is_refused() {
         )
         .expect("the advanced tier holds more");
 }
+
+#[test]
+fn the_fake_parameter_store_declares_choices_and_the_manager_store_none() {
+    let (_driver, connection) = connected();
+
+    let parameters = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+    let choices = parameters
+        .descriptor()
+        .create_choices
+        .as_ref()
+        .expect("the typed fake declares choices");
+    assert_eq!(
+        choices.value_types(),
+        ["String", "StringList", "SecureString"]
+    );
+    assert_eq!(choices.default_value_type(), "SecureString");
+    assert!(choices.takes_encryption_key("SecureString"));
+    assert_eq!(
+        choices.tiers(),
+        ["Standard", "Advanced", "Intelligent-Tiering"]
+    );
+    assert_eq!(choices.default_tier(), Some("Standard"));
+
+    let manager = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake manager store exists");
+    assert_eq!(manager.descriptor().create_choices, None);
+}

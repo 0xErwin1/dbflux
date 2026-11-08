@@ -18,6 +18,7 @@
 use super::{
     DialogShell, FooterSpec, Landing, WriteDialog, WriteEffect, dialog_footer, dialog_modal,
 };
+use crate::secret_store::SecretOperation;
 use crate::secret_store::write::{rotate_secret_now, update_secret_rotation};
 use crate::secret_store::{DetailsState, SecretRowKey, SecretStoreDocument};
 use dbflux_components::controls::{Checkbox, Input, InputEvent, InputState};
@@ -248,13 +249,15 @@ impl SecretStoreDocument {
 
         self.run_governed_write(
             session,
+            SecretOperation::RotateNow,
+            name.clone(),
             move |context| Landing::of(rotate_secret_now(context, &request_name)),
             move |doc, landing, cx| doc.land_rotate_now(&name, landing, cx),
             cx,
         );
     }
 
-    fn land_rotate_now(
+    pub(in crate::secret_store) fn land_rotate_now(
         &mut self,
         name: &str,
         landing: Landing<SecretRotationStart>,
@@ -281,6 +284,9 @@ impl SecretStoreDocument {
             Landing::Stands(failure) => {
                 self.dismiss_dialog(cx);
                 self.report_write_failure(&failure, cx);
+                // The rotation started, or may have: it can finish after the
+                // refresh whether or not its audit event was recorded.
+                self.follow_up_rotation(name, cx);
                 self.refresh_after_write(name, WriteEffect::Versions, cx);
             }
             Landing::Rejected(failure) => self.report_write_failure(&failure, cx),
@@ -526,6 +532,8 @@ impl SecretStoreDocument {
 
         self.run_governed_write(
             session,
+            SecretOperation::EditRotation,
+            name.clone(),
             move |context| Landing::of(update_secret_rotation(context, &update)),
             move |doc, landing, cx| doc.land_rotation_edit(&name, landing, cx),
             cx,

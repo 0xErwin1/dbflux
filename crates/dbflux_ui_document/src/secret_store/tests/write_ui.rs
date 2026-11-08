@@ -3110,6 +3110,7 @@ fn an_action_write_waits_for_an_editor_save(cx: &mut TestAppContext) {
         if let Some(edit) = doc.value_edit.as_mut() {
             edit.saving = true;
         }
+        doc.editor_save_in_flight = true;
     });
 
     opened.click("secret-tags-edit");
@@ -3138,24 +3139,6 @@ fn a_description_rewrite_leaves_no_draft_to_discard(cx: &mut TestAppContext) {
         "dropped at the start"
     );
     assert_eq!(opened.mutations().len(), 1);
-}
-
-/// A write whose connection has no such store never reached the seam, so it
-/// is reported through the standard reporter (which records the attempt), once.
-#[gpui::test]
-fn a_missing_store_write_is_reported_once(cx: &mut TestAppContext) {
-    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
-    opened.open_secret(KEY_VALUE_SECRET);
-    let failure = super::super::SecretWriteFailure {
-        error: dbflux_core::DbError::NotSupported("no such store".to_string()),
-        correlation_id: None,
-        kind: super::super::SecretWriteFailureKind::StoreFailed,
-        audit_unrecorded: false,
-    };
-
-    opened.update(|doc, cx| doc.report_write_failure(&failure, cx));
-
-    assert_eq!(opened.reported_errors().len(), 1);
 }
 
 // -- Review: remaining behaviours --------------------------------------------------------
@@ -3215,10 +3198,14 @@ fn the_create_form_is_locked_while_it_is_sent(cx: &mut TestAppContext) {
 
     opened.update(|doc, cx| doc.set_create_tier("Advanced", cx));
     let tier = opened.read(|doc| match &doc.dialog {
-        Some(WriteDialog::Create(dialog)) => dialog.tier,
-        _ => "",
+        Some(WriteDialog::Create(dialog)) => dialog.tier.clone(),
+        _ => None,
     });
-    assert_eq!(tier, "Standard", "a pick during the write is ignored");
+    assert_eq!(
+        tier.as_deref(),
+        Some("Standard"),
+        "a pick during the write is ignored"
+    );
 }
 
 /// Edit rotation needs loaded details: with the describe still loading, the
@@ -3494,4 +3481,335 @@ fn b_says_why_when_every_earlier_version_is_pending(cx: &mut TestAppContext) {
     let errors = opened.reported_errors();
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(errors[0].1.contains("unfinished"), "{}", errors[0].1);
+}
+
+// -- Post-merge review follow-ups (L4) ----------------------------------------
+
+/// An editor save still in flight blocks action writes after the editor and
+/// its `saving` flag are gone (a refresh or a reselection clears them), and
+/// releases them only when the save has answered.
+#[gpui::test]
+fn an_editor_save_in_flight_blocks_writes_after_the_editor_is_gone(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+
+    let doc = opened.doc.clone();
+    let blocked = opened.window.update(|_, cx| {
+        doc.update(cx, |doc, cx| {
+            doc.save_value_edit(cx);
+            doc.clear_value();
+            doc.write_session(cx).is_none()
+        })
+    });
+
+    assert!(!opened.read(|doc| doc.is_editing_value()));
+    assert!(
+        opened.written_values().is_empty(),
+        "the store has not answered"
+    );
+    assert!(blocked, "the save in flight blocks an action write");
+
+    opened.window.run_until_parked();
+
+    assert_eq!(opened.written_values().len(), 1);
+    assert!(
+        opened.update(|doc, cx| doc.write_session(cx).is_some()),
+        "the answered save releases the guard"
+    );
+}
+
+/// After V3 -> V1 -> V2 the current version is V2, and `b` rolls back to V1,
+/// the most recent version created before it, never to the newer V3.
+#[gpui::test]
+fn b_rolls_back_to_the_latest_version_created_before_the_current_one(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    // Newest first: v-current (V3), v-previous (V2, now current), v-oldest (V1).
+    opened.update(|doc, _| {
+        if let VersionsState::Loaded(versions) = &mut doc.versions {
+            versions[0].is_current = false;
+            versions[1].is_current = true;
+        }
+        if let DetailsState::Loaded(details) = &mut doc.details {
+            details.summary.version = Some("v-previous".to_string());
+        }
+    });
+
+    assert_eq!(opened.read(|doc| doc.previous_version_index()), Some(2));
+    assert!(opened.command(Command::RollBackVersion));
+
+    let target = opened.read(|doc| match &doc.dialog {
+        Some(WriteDialog::RollBack(dialog)) => dialog.version_id.clone(),
+        _ => panic!("the roll back dialog is open"),
+    });
+    assert_eq!(target, "v-oldest");
+}
+
+/// A rejected tag write leaves an unchanged value editor open: tags never
+/// rewrite the value.
+#[gpui::test]
+fn a_rejected_tag_write_keeps_an_unchanged_editor_open(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.open_parameter("/app/prod/db/host");
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    assert!(opened.read(|doc| doc.is_editing_value()));
+
+    opened.set_policy(
+        MutationPolicy::ReadOnly,
+        Some(ReadOnlyReason::ProfileSetting),
+    );
+    opened.click("secret-tags-edit");
+    opened.click("secret-tags-remove-0");
+    opened.click("secret-tags-confirm");
+
+    assert!(opened.mutations().is_empty());
+    assert!(opened.dialog_open(), "the rejected write keeps its dialog");
+    assert!(
+        opened.read(|doc| doc.is_editing_value()),
+        "the editor holds the value the tag write never touched"
+    );
+}
+
+/// Creation finishing after the user moved on refreshes the listing and
+/// leaves the newer selection, its details and its value alone; a created
+/// secret outside the listing in view is not selected.
+#[gpui::test]
+fn a_create_finishing_after_navigation_keeps_the_newer_selection(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.tall();
+    opened.click("secret-new");
+    opened.type_text("token");
+    opened.set_create_value(CREATED_VALUE);
+
+    let doc = opened.doc.clone();
+    opened.window.update(|window, cx| {
+        doc.update(cx, |doc, cx| {
+            doc.confirm_dialog(window, cx);
+            doc.navigate_to(Some("/app/prod/".to_string()), cx);
+            doc.select_row(SecretRowKey::Secret("/app/prod/region".to_string()), cx);
+        })
+    });
+    opened.window.run_until_parked();
+
+    assert_eq!(opened.created().len(), 1, "the create reached the store");
+    assert_eq!(
+        opened.read(|doc| doc.selected().cloned()),
+        Some(SecretRowKey::Secret("/app/prod/region".to_string()))
+    );
+    assert_eq!(
+        opened.read(|doc| doc.path().map(str::to_string)).as_deref(),
+        Some("/app/prod/")
+    );
+    assert!(matches!(
+        opened.read(|doc| doc.details().clone()),
+        DetailsState::Loaded(details) if details.summary.name == "/app/prod/region"
+    ));
+}
+
+/// Details first requested with no connection leave no details session; the
+/// connection coming back reads them, unless a write is in flight.
+#[gpui::test]
+fn a_live_connection_with_no_details_session_reloads_the_details(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let lost = |doc: &mut SecretStoreDocument| {
+        doc.details_session = None;
+        doc.details = DetailsState::Failed("no connection".to_string());
+    };
+
+    opened.update(|doc, _| {
+        lost(doc);
+        doc.write_in_flight = true;
+    });
+    opened.update(|doc, cx| doc.adopt_details_session(cx));
+    assert!(
+        matches!(
+            opened.read(|doc| doc.details().clone()),
+            DetailsState::Failed(_)
+        ),
+        "a write in flight keeps the reload back"
+    );
+
+    opened.update(|doc, cx| {
+        doc.write_in_flight = false;
+        doc.adopt_details_session(cx);
+    });
+
+    assert!(matches!(
+        opened.read(|doc| doc.details().clone()),
+        DetailsState::Loaded(_)
+    ));
+    assert!(opened.read(|doc| doc.details_session.is_some()));
+}
+
+/// A parameter created from the root in Tree mode below the top level moves
+/// to its parent path, where the new row shows; a top-level one stays at the
+/// root, and Flat mode lists everything from the root.
+#[gpui::test]
+fn a_nested_parameter_created_from_the_root_moves_to_its_parent(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, None);
+    opened.tall();
+    opened.click("secret-new");
+    opened.type_text("app/prod/token");
+    opened.set_create_value(CREATED_VALUE);
+    opened.click("secret-create-confirm");
+
+    assert_eq!(
+        opened.read(|doc| doc.path().map(str::to_string)).as_deref(),
+        Some("/app/prod/")
+    );
+    assert!(
+        opened
+            .entry_names()
+            .contains(&"/app/prod/token".to_string())
+    );
+
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, None);
+    opened.tall();
+    opened.click("secret-new");
+    opened.type_text("toplevel");
+    opened.set_create_value(CREATED_VALUE);
+    opened.click("secret-create-confirm");
+
+    assert_eq!(opened.read(|doc| doc.path().map(str::to_string)), None);
+    assert!(opened.entry_names().contains(&"/toplevel".to_string()));
+}
+
+/// A rotation that started while its audit event was lost still stands, so
+/// the follow-up reads are scheduled for it too.
+#[gpui::test]
+fn a_rotation_whose_audit_event_was_lost_is_followed_up(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let failure = super::super::SecretWriteFailure {
+        error: dbflux_core::DbError::query_failed("the rotation started; the audit event was lost"),
+        correlation_id: None,
+        kind: super::super::SecretWriteFailureKind::AuditLost,
+        audit_unrecorded: false,
+    };
+
+    opened.update(|doc, cx| {
+        doc.land_rotate_now(
+            KEY_VALUE_SECRET,
+            super::super::actions::Landing::Stands(failure),
+            cx,
+        )
+    });
+    let after_landing = opened.driver.secret_store_calls().described.len();
+
+    cx_advance(&mut opened, 31);
+
+    assert!(
+        opened.driver.secret_store_calls().described.len() > after_landing,
+        "the details were read again after the rotation could have finished"
+    );
+}
+
+/// The create dialog renders the types and tiers the store declares, with its
+/// default, and asks for a key only for the type the store marks encrypted.
+#[gpui::test]
+fn the_create_dialog_offers_what_the_store_declares(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.tall();
+    opened.update(|doc, _| {
+        doc.store.create_choices = Some(
+            dbflux_core::SecretCreateChoices::new(["String", "SecureString"], "String")
+                .with_encrypted_value_type("SecureString"),
+        );
+    });
+    opened.click("secret-new");
+
+    assert!(opened.is_drawn("secret-create-type-String"));
+    assert!(opened.is_drawn("secret-create-type-SecureString"));
+    assert!(!opened.is_drawn("secret-create-type-StringList"));
+    assert!(!opened.is_drawn("secret-create-tier-Standard"), "no tiers");
+    assert!(
+        !opened.is_drawn("secret-create-key-input"),
+        "the declared default is not encrypted"
+    );
+
+    opened.click("secret-create-type-SecureString");
+    assert!(opened.is_drawn("secret-create-key-input"));
+    opened.click("secret-create-type-String");
+
+    opened.type_text("declared");
+    opened.set_create_value(CREATED_VALUE);
+    opened.click("secret-create-confirm");
+
+    let created = opened.created();
+    assert_eq!(created.len(), 1, "{:?}", opened.mutations());
+    assert_eq!(created[0].0.value_type.as_deref(), Some("String"));
+    assert_eq!(created[0].0.tier, None);
+}
+
+/// A store that declares no choices is asked for neither a type nor a tier,
+/// whatever its other capabilities.
+#[gpui::test]
+fn a_store_with_no_declared_choices_is_asked_for_no_type_or_tier(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.tall();
+    opened.update(|doc, _| doc.store.create_choices = None);
+    opened.click("secret-new");
+
+    assert!(!opened.is_drawn("secret-create-type-String"));
+    assert!(!opened.is_drawn("secret-create-tier-Standard"));
+}
+
+/// A write whose connection has no such store is recorded as an attempt of
+/// that operation on that secret, and the error the user sees carries the
+/// recorded row's correlation id.
+#[gpui::test]
+fn a_missing_store_write_is_recorded_as_that_operations_attempt(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-tags-edit");
+    opened.click("secret-tags-remove-0");
+    opened.update(|doc, _| doc.store.id = "gone".to_string());
+
+    opened.click("secret-tags-confirm");
+
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let events = opened.audit_records();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(
+        events[0].action.as_deref(),
+        Some("secret_tags_update_failed")
+    );
+    assert_eq!(events[0].object_id.as_deref(), Some(KEY_VALUE_SECRET));
+    assert_eq!(
+        events[0].correlation_id.as_deref(),
+        Some(errors[0].0.to_string().as_str())
+    );
+}
+
+/// The editor's save reports a missing store the same way.
+#[gpui::test]
+fn a_missing_store_save_is_recorded_as_a_value_write_attempt(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+    opened.update(|doc, _| doc.store.id = "gone".to_string());
+
+    opened.save_edit();
+
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let failed: Vec<_> = opened
+        .audit_records()
+        .into_iter()
+        .filter(|event| event.action.as_deref() == Some(SECRET_VALUE_WRITE_FAILED_ACTION))
+        .collect();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].object_id.as_deref(), Some(PLAINTEXT_SECRET));
+    assert_eq!(
+        failed[0].correlation_id.as_deref(),
+        Some(errors[0].0.to_string().as_str())
+    );
 }

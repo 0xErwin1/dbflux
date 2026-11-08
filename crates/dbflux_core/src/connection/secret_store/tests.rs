@@ -88,6 +88,71 @@ fn descriptor_reports_its_capabilities() {
     assert!(!descriptor.supports(SecretStoreCapabilities::ROTATION));
 }
 
+// --- Create choices ---
+
+#[test]
+fn a_descriptor_declares_no_create_choices_unless_the_store_gives_them() {
+    let descriptor = SecretStoreDescriptor::new(
+        "plain",
+        "Plain",
+        SecretStoreCapabilities::WRITE | SecretStoreCapabilities::CREATE,
+    );
+
+    assert_eq!(descriptor.create_choices, None);
+}
+
+#[test]
+fn create_choices_keep_the_order_the_store_declared_and_its_defaults() {
+    let choices =
+        SecretCreateChoices::new(["String", "StringList", "SecureString"], "SecureString")
+            .with_encrypted_value_type("SecureString")
+            .with_tiers(["Standard", "Advanced"], "Standard");
+    let descriptor =
+        descriptor_with(SecretStoreCapabilities::TYPED_VALUES).with_create_choices(choices.clone());
+
+    assert_eq!(descriptor.create_choices.as_ref(), Some(&choices));
+    assert_eq!(
+        choices.value_types(),
+        ["String", "StringList", "SecureString"]
+    );
+    assert_eq!(choices.default_value_type(), "SecureString");
+    assert_eq!(choices.tiers(), ["Standard", "Advanced"]);
+    assert_eq!(choices.default_tier(), Some("Standard"));
+}
+
+#[test]
+fn only_the_encrypted_value_type_takes_an_encryption_key() {
+    let choices =
+        SecretCreateChoices::new(["Plain", "Sealed"], "Plain").with_encrypted_value_type("Sealed");
+
+    assert!(choices.takes_encryption_key("Sealed"));
+    assert!(!choices.takes_encryption_key("Plain"));
+    assert!(!choices.takes_encryption_key("Unknown"));
+
+    let none_declared = SecretCreateChoices::new(["Plain"], "Plain");
+    assert!(!none_declared.takes_encryption_key("Plain"));
+
+    let not_offered =
+        SecretCreateChoices::new(["Plain"], "Plain").with_encrypted_value_type("Sealed");
+    assert!(!not_offered.takes_encryption_key("Sealed"));
+}
+
+#[test]
+fn a_default_the_store_does_not_offer_falls_back_to_its_first_choice() {
+    let choices = SecretCreateChoices::new(["A", "B"], "Z").with_tiers(["Low", "High"], "Z");
+
+    assert_eq!(choices.default_value_type(), "A");
+    assert_eq!(choices.default_tier(), Some("Low"));
+}
+
+#[test]
+fn a_store_without_tiers_declares_none() {
+    let choices = SecretCreateChoices::new(["A"], "A");
+
+    assert!(choices.tiers().is_empty());
+    assert_eq!(choices.default_tier(), None);
+}
+
 // --- Writing a value ---
 
 fn descriptor_with(capabilities: SecretStoreCapabilities) -> SecretStoreDescriptor {

@@ -403,6 +403,12 @@ impl SecretOperation {
         self.spec().actions
     }
 
+    /// Whether the operation may change the value an open editor holds, or
+    /// the version it was read from. Tags are the one that never does.
+    pub const fn may_rewrite_value(self) -> bool {
+        !matches!(self, Self::EditTags)
+    }
+
     /// Every capability the store must advertise: `WRITE`, plus the ones
     /// the operation itself needs.
     pub const fn required_capabilities(self) -> SecretStoreCapabilities {
@@ -1049,6 +1055,38 @@ fn audit_object_name(name: &str) -> &str {
         "(blank name)"
     } else {
         name
+    }
+}
+
+/// The failure of a write whose connection has no such store. The write never
+/// reached the seam, so nothing recorded it: this records the attempt as a
+/// failure of `operation` on the secret and the connection `target` names, and
+/// hands back the failure carrying that event's correlation id, so the caller
+/// reports the same row the audit trail holds.
+pub(super) fn store_unavailable_failure(
+    audit: &dyn EventSink,
+    operation: SecretOperation,
+    target: &WriteTarget<'_>,
+    error: DbError,
+) -> SecretWriteFailure {
+    let message = error.to_string();
+    let event = operation_event(
+        operation,
+        target,
+        OperationOutcome::Failed { message: &message },
+        &serde_json::Map::new(),
+    );
+    let correlation_id = event
+        .correlation_id
+        .as_deref()
+        .and_then(|correlation_id| Uuid::parse_str(correlation_id).ok());
+    let recorded = record(audit, event);
+
+    SecretWriteFailure {
+        error,
+        correlation_id: recorded.then_some(correlation_id).flatten(),
+        kind: SecretWriteFailureKind::StoreFailed,
+        audit_unrecorded: !recorded,
     }
 }
 
