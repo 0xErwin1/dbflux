@@ -124,16 +124,23 @@ impl SecretStoreDocument {
 
         if self.supports_rotation() {
             buttons.push(
-                blocked(
-                    Button::new(
+                {
+                    let button = Button::new(
                         "secret-action-rotate-now",
                         dbflux_i18n::t!("document.secret_store.rotate.button"),
                     )
                     .icon(AppIcon::Zap)
                     .tab_stop(false)
-                    .disabled(!self.can_start_rotation_action())
-                    .on_click(cx.listener(|this, _, _, cx| this.rotate_selected_now(cx))),
-                )
+                    .disabled(!self.can_rotate_now())
+                    .on_click(cx.listener(|this, _, _, cx| this.rotate_selected_now(cx)));
+
+                    match self.rotate_now_block_reason() {
+                        Some(reason) => {
+                            crate::secret_store::details::rotate_with_reason(button, reason)
+                        }
+                        None => button,
+                    }
+                }
                 .into_any_element(),
             );
         }

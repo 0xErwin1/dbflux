@@ -3670,6 +3670,7 @@ document:
       confirm_label:
         secret: "Type the secret name to confirm"
         parameter: "Type the parameter name to confirm"
+      confirm_placeholder: "Name"
       confirm_aria: "Type %{name} to confirm the deletion"
       confirm_scheduled: "Schedule deletion"
       confirm_irreversible: "Delete permanently"

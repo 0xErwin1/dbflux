@@ -3670,6 +3670,7 @@ document:
       confirm_label:
         secret: "Digite o nome do segredo para confirmar"
         parameter: "Digite o nome do parâmetro para confirmar"
+      confirm_placeholder: "Nome"
       confirm_aria: "Digite %{name} para confirmar a exclusão"
       confirm_scheduled: "Agendar exclusão"
       confirm_irreversible: "Excluir permanentemente"

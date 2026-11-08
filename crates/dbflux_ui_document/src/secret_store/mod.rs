@@ -1295,7 +1295,7 @@ impl SecretStoreDocument {
                     Self::rotate_selected_now,
                 )
                 .icon(AppIcon::Zap)
-                .enabled(self.can_start_rotation_action()),
+                .enabled(self.can_rotate_now()),
             );
 
             let edit_target = target.clone();

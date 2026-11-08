@@ -161,15 +161,16 @@ impl SecretStoreDocument {
 
                 // Rotate now starts a rotation of a secret that rotates.
                 if self.supports_rotation() {
-                    items.push(self.write_item(
-                        SecretMenuItem::new(
-                            SecretMenuAction::RotateNow,
-                            dbflux_i18n::t!("document.secret_store.rotate.button").into(),
-                            AppIcon::Zap,
-                        ),
-                        self.can_start_rotation_action(),
-                        true,
-                    ));
+                    let rotate = SecretMenuItem::new(
+                        SecretMenuAction::RotateNow,
+                        dbflux_i18n::t!("document.secret_store.rotate.button").into(),
+                        AppIcon::Zap,
+                    );
+
+                    items.push(match self.rotate_now_block_reason() {
+                        Some(reason) => rotate.disabled_with_reason(reason.into()),
+                        None => self.write_item(rotate, self.can_rotate_now(), true),
+                    });
                 }
 
                 // Edit tags opens the dialog the Tags section's button opens.

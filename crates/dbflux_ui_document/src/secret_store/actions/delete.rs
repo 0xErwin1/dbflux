@@ -119,7 +119,11 @@ impl SecretStoreDocument {
             DeleteKind::Irreversible
         };
 
-        let confirmation = cx.new(|cx| InputState::new(window, cx).placeholder(name.clone()));
+        let confirmation = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "document.secret_store.delete.confirm_placeholder"
+            ))
+        });
         let subscription = cx.subscribe(&confirmation, |_, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 cx.notify();

@@ -13,7 +13,7 @@ use crate::secret_store::write::roll_back_secret;
 use crate::secret_store::{SecretRowKey, SecretStoreDocument, VersionsState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::parts::modal_lead;
-use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::primitives::Text;
 use dbflux_components::tokens::ModalMetrics;
 use dbflux_core::{SecretRollbackRequest, SecretStoreCapabilities};
 use gpui::prelude::*;
@@ -229,22 +229,17 @@ impl SecretStoreDocument {
             .flex()
             .flex_col()
             .gap(ModalMetrics::BODY_GAP)
-            .child(modal_lead(lead, cx));
+            .child(div().id("secret-rollback-lead").child(modal_lead(lead, cx)));
 
         if let Some(current) = &dialog.current_version {
             body = body.child(
-                div()
-                    .flex()
-                    .items_start()
-                    .gap(ModalMetrics::HEADER_GAP)
-                    .child(Icon::new(AppIcon::Info).small())
-                    .child(
-                        Text::caption(dbflux_i18n::t!(
-                            "document.secret_store.rollback.effect",
-                            current = current.as_str()
-                        ))
-                        .muted_foreground(),
-                    ),
+                div().id("secret-rollback-effect").child(
+                    Text::caption(dbflux_i18n::t!(
+                        "document.secret_store.rollback.effect",
+                        current = current.as_str()
+                    ))
+                    .muted_foreground(),
+                ),
             );
         }
 

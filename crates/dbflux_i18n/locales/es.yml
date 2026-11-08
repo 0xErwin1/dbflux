@@ -3670,6 +3670,7 @@ document:
       confirm_label:
         secret: "Escriba el nombre del secreto para confirmar"
         parameter: "Escriba el nombre del parámetro para confirmar"
+      confirm_placeholder: "Nombre"
       confirm_aria: "Escriba %{name} para confirmar la eliminación"
       confirm_scheduled: "Programar eliminación"
       confirm_irreversible: "Eliminar definitivamente"

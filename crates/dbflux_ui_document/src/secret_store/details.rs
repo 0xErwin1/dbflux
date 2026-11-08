@@ -36,9 +36,10 @@ pub(super) const VIEWER_GUTTER_WIDTH: Rems = ui(28.0);
 /// created columns are narrower here: the details pane is one column wide.
 const VERSION_ID_WIDTH: Rems = ui(80.0);
 const VERSION_CREATED_WIDTH: Rems = ui(118.0);
-/// The Roll back button's column: the label, its icon and the button's
-/// padding.
-const VERSION_ACTION_WIDTH: Rems = ui(92.0);
+/// The Roll back button's column: an icon-only button, named by its tooltip,
+/// so the column does not take the room the staging labels need in the
+/// default 380 px pane.
+const VERSION_ACTION_WIDTH: Rems = ui(28.0);
 const HISTORY_VERSION_WIDTH: Rems = ui(44.0);
 const VERSION_HEADER_HEIGHT: Rems = ui(30.0);
 const VERSION_ROW_HEIGHT: Rems = ui(40.0);
@@ -75,6 +76,17 @@ fn section_title(title: String, cx: &App) -> Div {
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(cx.theme().muted_foreground)
         .child(title.to_uppercase())
+}
+
+/// A disabled Rotate now button that says why: the reason is its tooltip and
+/// part of its accessible name.
+pub(super) fn rotate_with_reason(button: Button, reason: String) -> Button {
+    button
+        .aria_label(format!(
+            "{}: {reason}",
+            dbflux_i18n::t!("document.secret_store.rotate.button")
+        ))
+        .tooltip(reason)
 }
 
 /// A section whose title row ends with an action button, such as the Edit of
@@ -667,11 +679,8 @@ impl SecretStoreDocument {
                     .muted_foreground(),
             )
         } else {
-            div()
-                .flex()
-                .flex_wrap()
-                .gap(LABEL_CHIP_GAP)
-                .children(version.labels.iter().map(|label| {
+            div().flex().flex_wrap().gap(LABEL_CHIP_GAP).children(
+                version.labels.iter().enumerate().map(|(chip, label)| {
                     Badge::new(
                         label.clone(),
                         if current {
@@ -680,7 +689,11 @@ impl SecretStoreDocument {
                             BadgeTone::Neutral
                         },
                     )
-                }))
+                    .id(SharedString::from(format!(
+                        "secret-version-{index}-label-{chip}"
+                    )))
+                }),
+            )
         };
 
         // Every row keeps the action column when the store can roll back,
@@ -688,6 +701,7 @@ impl SecretStoreDocument {
         // button, since there is nothing to roll back to.
         let action = self.supports_roll_back().then(|| {
             let cell = div()
+                .id(SharedString::from(format!("secret-version-{index}-action")))
                 .w(VERSION_ACTION_WIDTH)
                 .flex_shrink_0()
                 .flex()
@@ -700,10 +714,14 @@ impl SecretStoreDocument {
             cell.child(
                 Button::new(
                     SharedString::from(format!("secret-version-rollback-{index}")),
-                    dbflux_i18n::t!("document.secret_store.rollback.button"),
+                    dbflux_i18n::t!(
+                        "document.secret_store.rollback.action",
+                        version = short_version_id(&version.id)
+                    ),
                 )
-                .inline()
+                .ghost()
                 .icon(AppIcon::RotateCcw)
+                .icon_only()
                 .tab_stop(false)
                 .disabled(!self.can_roll_back_version(index))
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -716,14 +734,23 @@ impl SecretStoreDocument {
         });
 
         row.h(VERSION_ROW_HEIGHT)
-            .child(cell(
-                short_version_id(&version.id),
-                VERSION_ID_WIDTH,
-                strong,
-            ))
-            .child(div().flex_1().min_w_0().child(labels))
+            .child(
+                cell(short_version_id(&version.id), VERSION_ID_WIDTH, strong)
+                    .id(SharedString::from(format!("secret-version-{index}-id"))),
+            )
+            .child(
+                div()
+                    .id(SharedString::from(format!("secret-version-{index}-labels")))
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(labels),
+            )
             .child(
                 cell(created, VERSION_CREATED_WIDTH, muted)
+                    .id(SharedString::from(format!(
+                        "secret-version-{index}-created"
+                    )))
                     .text_size(DocumentMetrics::TABLE_META_FONT),
             )
             .children(action)
@@ -802,12 +829,16 @@ impl SecretStoreDocument {
             )
             .icon(AppIcon::Zap)
             .tab_stop(false)
-            .disabled(!self.can_start_rotation_action())
+            .disabled(!self.can_rotate_now())
             .on_click(cx.listener(|this, _, _, cx| this.rotate_selected_now(cx)));
 
-            let (edit, rotate) = match refusal {
-                Some(reason) => (edit.tooltip(reason.clone()), rotate.tooltip(reason)),
-                None => (edit, rotate),
+            let edit = match refusal {
+                Some(reason) => edit.tooltip(reason),
+                None => edit,
+            };
+            let rotate = match self.rotate_now_block_reason() {
+                Some(reason) => rotate_with_reason(rotate, reason),
+                None => rotate,
             };
 
             rows.push(
@@ -1486,19 +1517,31 @@ fn versions_table_header(with_actions: bool, cx: &App) -> Div {
         .text_color(theme.muted_foreground)
         .child(
             div()
+                .id("secret-versions-col-version")
                 .w(VERSION_ID_WIDTH)
                 .flex_shrink_0()
+                .whitespace_nowrap()
                 .child(dbflux_i18n::t!(
                     "document.secret_store.versions.column.version"
                 )),
         )
-        .child(div().flex_1().min_w_0().child(dbflux_i18n::t!(
-            "document.secret_store.versions.column.labels"
-        )))
         .child(
             div()
+                .id("secret-versions-col-labels")
+                .flex_1()
+                .min_w_0()
+                .whitespace_nowrap()
+                .truncate()
+                .child(dbflux_i18n::t!(
+                    "document.secret_store.versions.column.labels"
+                )),
+        )
+        .child(
+            div()
+                .id("secret-versions-col-created")
                 .w(VERSION_CREATED_WIDTH)
                 .flex_shrink_0()
+                .whitespace_nowrap()
                 .child(dbflux_i18n::t!(
                     "document.secret_store.versions.column.created"
                 )),

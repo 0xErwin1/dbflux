@@ -142,6 +142,33 @@ impl SecretStoreDocument {
             && matches!(self.selected, Some(SecretRowKey::Secret(_)))
     }
 
+    /// Why Rotate now cannot run for the selection, when something says so:
+    /// the secret's own state, or its rotation being off. The seam refuses a
+    /// rotation of a secret that does not rotate too; this keeps the button
+    /// from offering what it knows will be refused.
+    pub fn rotate_now_block_reason(&self) -> Option<String> {
+        if let Some(reason) = self.write_refusal_reason() {
+            return Some(reason);
+        }
+
+        if !self.rotation_is_off() {
+            return None;
+        }
+
+        let name = self.selected_summary()?.name.clone();
+
+        Some(dbflux_i18n::t!(
+            "document.secret_store.rotate.refused_off",
+            name = name.as_str()
+        ))
+    }
+
+    /// Whether Rotate now may run: the rotation actions are available and the
+    /// secret's rotation is not known to be off.
+    pub fn can_rotate_now(&self) -> bool {
+        self.can_start_rotation_action() && self.rotate_now_block_reason().is_none()
+    }
+
     /// The rotation notice of the selected secret, if its last rotation edit
     /// left one.
     pub(in crate::secret_store) fn rotation_notice_for_selection(&self) -> Option<&RotationNotice> {

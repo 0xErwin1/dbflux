@@ -181,6 +181,29 @@ fn roll_back_asks_before_it_writes_and_names_the_version(cx: &mut TestAppContext
     );
 }
 
+/// The effect line wraps inside the dialog body, from the same left edge as
+/// the lead paragraph, instead of running past the dialog's right edge.
+#[gpui::test]
+fn the_roll_back_effect_line_wraps_inside_the_dialog(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-version-rollback-1");
+
+    let effect = opened.bounds_of("secret-rollback-effect");
+    let lead = opened.bounds_of("secret-rollback-lead");
+    let confirm = opened.bounds_of("secret-rollback-confirm");
+
+    assert!(
+        effect.right() <= confirm.right(),
+        "the effect line {effect:?} runs past the dialog edge {confirm:?}"
+    );
+    assert_eq!(effect.left(), lead.left(), "same left edge as the lead");
+    assert!(
+        f32::from(effect.size.height) > 20.0,
+        "a long sentence wraps onto more than one line: {effect:?}"
+    );
+}
+
 /// Cancelling the dialog writes nothing and audits nothing.
 #[gpui::test]
 fn cancelling_the_roll_back_writes_nothing(cx: &mut TestAppContext) {
@@ -380,6 +403,60 @@ fn the_roll_back_controls_are_covered(cx: &mut TestAppContext) {
     );
 }
 
+// -- Versions table at the default width ---------------------------------------
+
+/// At the default details width the table's cells sit side by side: no cell
+/// overlaps its neighbour, the label chips stay inside their column and the
+/// header is one line.
+#[gpui::test]
+fn the_versions_table_fits_the_default_details_width(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+
+    let edge = |value: gpui::Pixels| f32::from(value);
+    let header_labels = opened.bounds_of("secret-versions-col-labels");
+    let one_line = f32::from(opened.bounds_of("secret-versions-col-version").size.height);
+    assert!(
+        f32::from(header_labels.size.height) <= one_line + 1.0,
+        "the Staging labels header is one line: {header_labels:?} vs {one_line}"
+    );
+
+    for index in 0..3 {
+        let id = opened.bounds_of(&format!("secret-version-{index}-id"));
+        let labels = opened.bounds_of(&format!("secret-version-{index}-labels"));
+        let created = opened.bounds_of(&format!("secret-version-{index}-created"));
+
+        assert!(
+            edge(id.right()) <= edge(labels.left()) + 0.5,
+            "row {index}: id/labels"
+        );
+        assert!(
+            edge(labels.right()) <= edge(created.left()) + 0.5,
+            "row {index}: labels {labels:?} overlap created {created:?}"
+        );
+
+        if opened.is_drawn(&format!("secret-version-{index}-action")) {
+            let action = opened.bounds_of(&format!("secret-version-{index}-action"));
+            assert!(
+                edge(created.right()) <= edge(action.left()) + 0.5,
+                "row {index}: created/action"
+            );
+        }
+
+        for chip in 0..2 {
+            let chip_id = format!("secret-version-{index}-label-{chip}");
+
+            if opened.is_drawn(&chip_id) {
+                let chip = opened.bounds_of(&chip_id);
+                assert!(
+                    edge(chip.right()) <= edge(labels.right()) + 0.5,
+                    "row {index}: chip {chip:?} runs out of its column {labels:?}"
+                );
+            }
+        }
+    }
+}
+
 // -- Delete and restore ------------------------------------------------------
 
 /// The same Delete is reachable from the pane header, the bottom bar and the
@@ -536,6 +613,26 @@ fn confirming_a_scheduled_deletion_writes_the_window_and_shows_the_state(cx: &mu
     let text = opened.rendered_text();
     assert!(text.contains("Deletion scheduled for"), "{text}");
     assert!(text.contains("14 day recovery window"), "{text}");
+}
+
+/// The confirmation input's placeholder is a short hint, never the name
+/// itself: a name drawn in the field reads as text that is already typed.
+#[gpui::test]
+fn the_delete_input_does_not_show_the_name_as_its_placeholder(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-action-delete");
+
+    let frame = opened.observe_frame();
+    let placeholder = frame
+        .nodes()
+        .find(|(_, node)| node.id() == "secret-delete-name-input")
+        .and_then(|(_, node)| frame.accessibility_node(node))
+        .and_then(|node| node.placeholder().map(str::to_string))
+        .unwrap_or_default();
+
+    assert!(!placeholder.contains(KEY_VALUE_SECRET), "{placeholder}");
+    assert!(!placeholder.is_empty(), "the input still has a hint");
 }
 
 /// Cancelling the dialog writes nothing and audits nothing.
@@ -890,26 +987,75 @@ fn the_bar_and_the_menu_start_the_same_rotation(cx: &mut TestAppContext) {
     assert_eq!(opened.mutations().len(), 2, "{:?}", opened.mutations());
 }
 
-/// A secret whose rotation is off is refused with the reason, and the store is
-/// never called.
+/// A secret whose rotation is off draws Rotate now disabled, with the reason
+/// in its accessible name, in the bar, the Rotation section, the row menu and
+/// the pane actions; clicking calls nothing. The seam-side refusal stays the
+/// backstop for a caller that gets past the button.
 #[gpui::test]
-fn rotate_now_on_a_secret_without_rotation_shows_the_refusal_and_calls_nothing(
-    cx: &mut TestAppContext,
-) {
+fn rotate_now_is_disabled_with_the_reason_when_rotation_is_off(cx: &mut TestAppContext) {
+    use dbflux_ui_base::keyboard_coverage::FrameCapture;
+
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(PLAINTEXT_SECRET);
 
-    opened.click("secret-action-rotate-now");
+    for id in ["secret-action-rotate-now", "secret-rotation-rotate-now"] {
+        assert!(opened.is_disabled(id), "{id} is disabled");
+
+        let capture = FrameCapture::observe(opened.window);
+        let frame = capture.frame(opened.window);
+        let name = frame
+            .nodes()
+            .find(|(_, node)| node.id() == id)
+            .and_then(|(_, node)| frame.accessibility_node(node))
+            .and_then(|node| node.label().map(str::to_string))
+            .unwrap_or_default();
+        assert!(name.contains("Rotation is off"), "{id}: {name}");
+
+        opened.click(id);
+    }
 
     assert!(opened.mutations().is_empty(), "{:?}", opened.mutations());
-    let errors = opened.reported_errors();
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    assert!(errors[0].1.contains("Rotation is off"), "{}", errors[0].1);
-    assert!(opened.audit_actions().is_empty());
+    assert!(
+        opened.reported_errors().is_empty(),
+        "nothing to refuse after"
+    );
 
-    opened.click("secret-rotation-rotate-now");
+    opened.right_click(&format!("secret-row-{PLAINTEXT_SECRET}"));
+    let rotate = opened.read(|doc| {
+        doc.context_menu
+            .as_ref()
+            .expect("menu open")
+            .items
+            .iter()
+            .find(|item| item.action == super::super::context_menu::SecretMenuAction::RotateNow)
+            .map(|item| (item.disabled, item.detail.clone()))
+            .expect("the menu offers Rotate now")
+    });
+    assert!(rotate.0, "the menu entry is disabled");
+    assert!(
+        rotate
+            .1
+            .is_some_and(|detail| detail.contains("Rotation is off")),
+        "and says why"
+    );
+    opened.command(Command::Cancel);
+
+    let enabled = opened.window.update(|_, cx| {
+        opened
+            .doc
+            .read(cx)
+            .pane_actions(&opened.doc)
+            .into_iter()
+            .find(|action| action.id == "secret-rotate-now")
+            .map(|action| action.enabled)
+    });
+    assert_eq!(enabled, Some(false));
+
+    // The backstop: a direct call is still refused with the reason, and the
+    // store is not called.
+    opened.update(|doc, cx| doc.rotate_selected_now(cx));
     assert!(opened.mutations().is_empty());
-    assert_eq!(opened.reported_errors().len(), 2, "each press is told why");
+    assert_eq!(opened.reported_errors().len(), 1);
 }
 
 /// A read-only connection refuses Rotate now at the seam.

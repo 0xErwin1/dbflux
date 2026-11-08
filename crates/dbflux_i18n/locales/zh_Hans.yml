@@ -3670,6 +3670,7 @@ document:
       confirm_label:
         secret: "输入密钥名称以确认"
         parameter: "输入参数名称以确认"
+      confirm_placeholder: "名称"
       confirm_aria: "输入 %{name} 以确认删除"
       confirm_scheduled: "安排删除"
       confirm_irreversible: "永久删除"

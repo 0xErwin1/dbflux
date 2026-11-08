@@ -3670,6 +3670,7 @@ document:
       confirm_label:
         secret: "확인하려면 시크릿 이름을 입력하세요"
         parameter: "확인하려면 파라미터 이름을 입력하세요"
+      confirm_placeholder: "이름"
       confirm_aria: "삭제를 확인하려면 %{name}을(를) 입력하세요"
       confirm_scheduled: "삭제 예약"
       confirm_irreversible: "영구 삭제"
