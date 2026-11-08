@@ -128,6 +128,8 @@ pub struct SecretStoreDocument {
     details_generation: u64,
     versions: VersionsState,
     versions_generation: u64,
+    #[cfg(test)]
+    value_view_sets: usize,
     /// The connection the history was listed from, so ids of a replaced
     /// session are never retrieved against the new one.
     versions_session: Option<Arc<dyn Connection>>,
@@ -317,6 +319,8 @@ impl SecretStoreDocument {
             details_generation: 0,
             versions: VersionsState::Idle,
             versions_generation: 0,
+            #[cfg(test)]
+            value_view_sets: 0,
             versions_session: None,
             missing_connection_reported: false,
             value_version: None,
@@ -582,6 +586,28 @@ impl SecretStoreDocument {
         cx.notify();
     }
 
+    /// Closes the details pane: deselects the secret and drops its value,
+    /// the way moving to another secret does. Refused while the editor holds
+    /// unsaved text.
+    pub fn close_details(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected.is_none() || self.block_unsaved_value_edits(cx) {
+            return;
+        }
+
+        // The editor goes away with the value; focus it holds would go with
+        // it and leave the document's shortcuts without a target.
+        if self.value_edit.as_ref().is_some_and(|edit| edit.focused) {
+            self.focus_handle.focus(window, cx);
+        }
+
+        self.clear_value();
+        self.details_generation = self.details_generation.wrapping_add(1);
+        self.details = DetailsState::Idle;
+        self.reset_versions();
+        self.selected = None;
+        cx.notify();
+    }
+
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
         let rows = self.rows();
 
@@ -722,6 +748,11 @@ impl SecretStoreDocument {
     }
 
     pub fn set_value_view(&mut self, view: ValueView, cx: &mut Context<Self>) {
+        #[cfg(test)]
+        {
+            self.value_view_sets += 1;
+        }
+
         if let ValueState::Loaded(value) = &mut self.value {
             value.set_view(view);
             cx.notify();
@@ -948,6 +979,19 @@ impl SecretStoreDocument {
                 "secret-copy-name",
                 "document.secret_store.context_menu.copy_name",
                 Self::copy_selected_name,
+            ));
+        }
+
+        if self.selected.is_some() {
+            let target = target.clone();
+            actions.push(PaneAction::callback(
+                "secret-details-close",
+                dbflux_i18n::t!("document.secret_store.details.close"),
+                move |window, cx| {
+                    if let Some(doc) = target.upgrade() {
+                        doc.update(cx, |doc, cx| doc.close_details(window, cx));
+                    }
+                },
             ));
         }
 

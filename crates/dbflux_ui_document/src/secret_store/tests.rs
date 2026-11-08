@@ -3517,7 +3517,10 @@ fn choosing_a_menu_item_runs_it_and_closes_the_menu(cx: &mut TestAppContext) {
 
     assert_eq!(opened.clipboard(), Some(KEY_VALUE_SECRET.to_string()));
     assert!(
-        !opened.rendered_text().contains("Copy name"),
+        !opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.contains("secret-menu-")),
         "the menu closed after the choice"
     );
 }
@@ -3546,7 +3549,10 @@ fn escape_and_a_click_outside_close_the_menu(cx: &mut TestAppContext) {
 
     assert!(opened.command(Command::Cancel));
     assert!(
-        !opened.rendered_text().contains("Copy name"),
+        !opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.contains("secret-menu-")),
         "Escape closes the menu"
     );
 
@@ -3568,7 +3574,10 @@ fn escape_and_a_click_outside_close_the_menu(cx: &mut TestAppContext) {
     opened.window.run_until_parked();
 
     assert!(
-        !opened.rendered_text().contains("Copy name"),
+        !opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.contains("secret-menu-")),
         "a click outside closes the menu"
     );
 }
@@ -3588,7 +3597,10 @@ fn the_keyboard_runs_the_menu(cx: &mut TestAppContext) {
         "MenuSelect on the highlighted Retrieve value retrieves"
     );
     assert!(
-        !opened.rendered_text().contains("Copy name"),
+        !opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.contains("secret-menu-")),
         "the menu closed after the choice"
     );
 
@@ -3892,7 +3904,10 @@ fn switching_away_from_the_tab_closes_the_menu(cx: &mut TestAppContext) {
         "a deactivated tab's menu is closed"
     );
     assert!(
-        !opened.rendered_text().contains("Copy name"),
+        !opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.contains("secret-menu-")),
         "the frame no longer draws the menu"
     );
 
@@ -7200,5 +7215,456 @@ mod editor_review {
         open_find(&mut opened);
         opened.rendered_paths();
         aligned(&mut opened, "find open");
+    }
+}
+
+// -- The details pane against its design -------------------------------------
+
+mod details_design {
+    use super::*;
+    use crate::secret_store::value::ValueKind;
+
+    fn plain(text: &str) -> RetrievedValue {
+        RetrievedValue::new(&SecretValue::text(None, text.to_string()))
+    }
+
+    fn kind_chip(text: &str) -> String {
+        plain(text).kind_label()
+    }
+
+    #[test]
+    fn the_kind_of_a_value_comes_from_its_content() {
+        let dotenv = "# runtime\nPORT=3000\n\nENV=prod\nexport URL=postgres://a@b/c?x=1\n";
+        assert_eq!(plain(dotenv).kind(), ValueKind::Dotenv { lines: 5 });
+        assert_eq!(kind_chip(dotenv), "dotenv · 5 lines");
+
+        assert_eq!(kind_chip("TOKEN=abc"), "dotenv · 1 line");
+        assert_eq!(kind_chip(r#"{"a":1,"b":{"c":2},"d":[]}"#), "JSON · 3 keys");
+        assert_eq!(kind_chip(r#"{"a":1}"#), "JSON · 1 key");
+        assert_eq!(kind_chip("[1,2,3]"), "JSON · 3 items");
+        assert_eq!(kind_chip("[1]"), "JSON · 1 item");
+        assert_eq!(kind_chip("just a token"), "text · 1 line");
+        assert_eq!(kind_chip("one\ntwo\nthree"), "text · 3 lines");
+    }
+
+    #[test]
+    fn text_that_only_looks_like_assignments_is_not_dotenv() {
+        assert_eq!(kind_chip("PORT=3000\nnot an assignment"), "text · 2 lines");
+        assert_eq!(kind_chip("YWJjZA=="), "text · 1 line");
+        assert_eq!(kind_chip("1BAD=key"), "text · 1 line");
+        assert_eq!(kind_chip("# only a comment"), "text · 1 line");
+        assert_eq!(kind_chip(""), "text · 0 lines");
+    }
+
+    #[test]
+    fn the_chip_of_a_binary_value_names_no_content() {
+        let binary = RetrievedValue::new(&SecretValue::binary(None, vec![1, 2, 3]));
+        assert_eq!(binary.kind_label(), "binary");
+    }
+
+    fn close_details(opened: &mut Opened<'_>) {
+        let doc = opened.doc.clone();
+        opened
+            .window
+            .update(|window, cx| doc.update(cx, |doc, cx| doc.close_details(window, cx)));
+        opened.window.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn closing_with_unsaved_edits_is_refused_by_the_shared_guard(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(PLAINTEXT_SECRET);
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.start_edit();
+        opened.set_editor_text("an unsaved edit");
+
+        close_details(&mut opened);
+
+        assert!(opened.read(|doc| {
+            matches!(doc.selected(), Some(SecretRowKey::Secret(name)) if name == PLAINTEXT_SECRET)
+        }));
+        assert_eq!(opened.editor_text(), "an unsaved edit");
+        assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+    }
+
+    #[gpui::test]
+    fn closing_a_focused_clean_editor_moves_focus_to_the_document(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.window.update(|window, _| window.activate_window());
+        opened.window.run_until_parked();
+        opened.rendered_paths();
+        opened.select(PLAINTEXT_SECRET);
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.start_edit();
+        opened.rendered_paths();
+        assert!(opened.read(|doc| doc.value_edit.as_ref().is_some_and(|edit| edit.focused)));
+
+        close_details(&mut opened);
+
+        let doc = opened.doc.clone();
+        let focused = opened
+            .window
+            .update(|window, cx| doc.read(cx).focus_handle.is_focused(window));
+        assert!(focused, "the document owns focus after the editor is gone");
+    }
+
+    #[gpui::test]
+    fn closing_without_a_focused_editor_leaves_focus_alone(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.window.update(|window, _| window.activate_window());
+        opened.select(KEY_VALUE_SECRET);
+        opened.rendered_paths();
+        let doc = opened.doc.clone();
+        opened
+            .window
+            .update(|window, cx| window.focus(&cx.focus_handle(), cx));
+        let before = opened
+            .window
+            .update(|window, cx| doc.read(cx).focus_handle.is_focused(window));
+        assert!(!before);
+
+        close_details(&mut opened);
+
+        let after = opened
+            .window
+            .update(|window, cx| doc.read(cx).focus_handle.is_focused(window));
+        assert!(!after, "no focus change without a focused editor");
+    }
+
+    #[test]
+    fn dotenv_values_may_start_with_an_equals_sign() {
+        assert_eq!(
+            kind_chip("USER=service\nPASSWORD==secret"),
+            "dotenv · 2 lines"
+        );
+        assert_eq!(kind_chip("YWJj=="), "text · 1 line");
+        assert_eq!(kind_chip("YWJjZA=="), "text · 1 line");
+    }
+
+    fn node_bounds(opened: &mut Opened<'_>, id: &str) -> Option<gpui::Bounds<gpui::Pixels>> {
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
+        let frame = capture.frame(opened.window);
+        frame
+            .nodes()
+            .find(|(_, node)| node.id() == id)
+            .map(|(_, node)| node.bounds())
+    }
+
+    fn node_text(opened: &mut Opened<'_>, id: &str) -> Option<String> {
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
+        let frame = capture.frame(opened.window);
+        frame
+            .nodes()
+            .find(|(_, node)| node.id() == id)
+            .map(|(_, node)| node.content_text().to_string())
+    }
+
+    fn click(opened: &mut Opened<'_>, id: &str) {
+        let bounds = node_bounds(opened, id).unwrap_or_else(|| panic!("`{id}` is drawn"));
+        opened
+            .window
+            .simulate_click(bounds.center(), gpui::Modifiers::default());
+        opened.window.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn the_pane_header_names_the_secret_with_copy_and_close(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(KEY_VALUE_SECRET);
+
+        let paths = opened.rendered_paths();
+        let has = |id: &str| paths.iter().any(|path| path.ends_with(id));
+
+        assert!(has("secret-details-header"), "{paths:?}");
+        assert!(has("secret-details-name"));
+        assert!(has("secret-details-copy-name"));
+        assert!(has("secret-details-close"));
+        assert!(
+            !paths
+                .iter()
+                .any(|path| path.contains("secret-details-expand")),
+            "open in tab is a later task"
+        );
+        assert_eq!(
+            node_text(&mut opened, "secret-details-name").as_deref(),
+            Some(KEY_VALUE_SECRET)
+        );
+    }
+
+    #[gpui::test]
+    fn the_header_copies_the_name_and_closes_the_pane(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(KEY_VALUE_SECRET);
+
+        opened.rendered_paths();
+        click(&mut opened, "secret-details-copy-name");
+        assert_eq!(opened.clipboard().as_deref(), Some(KEY_VALUE_SECRET));
+
+        click(&mut opened, "secret-details-close");
+        assert!(opened.read(|doc| doc.selected().is_none()));
+        assert!(
+            node_bounds(&mut opened, "secret-details-header").is_none(),
+            "the pane shows its empty state"
+        );
+    }
+
+    #[gpui::test]
+    fn closing_the_pane_drops_the_retrieved_value(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(KEY_VALUE_SECRET);
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        assert!(opened.read(|doc| matches!(doc.value(), ValueState::Loaded(_))));
+
+        close_details(&mut opened);
+
+        assert!(opened.read(|doc| matches!(doc.value(), ValueState::NotLoaded)));
+        assert!(opened.read(|doc| doc.selected().is_none()));
+    }
+
+    #[gpui::test]
+    fn the_header_controls_are_keyboard_reachable(cx: &mut TestAppContext) {
+        use crate::keyboard_coverage::SECRET_STORE;
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(KEY_VALUE_SECRET);
+
+        let entries: Vec<String> = opened.window.update(|_, cx| {
+            opened
+                .doc
+                .read(cx)
+                .pane_actions(&opened.doc)
+                .into_iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+
+        let capture = FrameCapture::observe(opened.window);
+        let checked = Coverage::new(SECRET_STORE)
+            .with_menu_entries(entries)
+            .assert_covered(&capture.frame(opened.window));
+
+        for id in ["secret-details-copy-name", "secret-details-close"] {
+            assert!(checked.iter().any(|checked| checked == id), "{checked:?}");
+        }
+    }
+
+    #[gpui::test]
+    fn the_value_not_loaded_card_has_a_compact_retrieve_button(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(KEY_VALUE_SECRET);
+
+        let text = opened.rendered_text();
+        assert!(text.contains("Value not loaded"), "{text}");
+
+        let card = node_bounds(&mut opened, "secret-value-card").expect("the card is drawn");
+        let button = node_bounds(&mut opened, "secret-retrieve-value").expect("the button");
+        assert!(
+            button.size.width < card.size.width * 0.7,
+            "a compact button, not a bar: {:?} in {:?}",
+            button.size.width,
+            card.size.width
+        );
+        assert!(node_bounds(&mut opened, "secret-value-card-lock").is_some());
+    }
+
+    #[gpui::test]
+    fn a_plaintext_value_offers_the_two_tab_control_with_key_value_muted(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(PLAINTEXT_SECRET);
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+
+        let paths = opened.rendered_paths();
+        let has = |id: &str| paths.iter().any(|path| path.ends_with(id));
+
+        assert!(has("segmented-secret-value-view-key-value"), "{paths:?}");
+        assert!(has("segmented-secret-value-view-plaintext"));
+        assert!(!has("secret-value-view-key-value-unavailable"));
+
+        let text = opened.rendered_text();
+        assert!(
+            !text.contains("Key/value opens only when the value parses"),
+            "the paragraph is gone: {text}"
+        );
+    }
+
+    #[test]
+    fn key_value_is_muted_with_its_reason_when_the_value_is_not_an_object() {
+        use crate::secret_store::details::value_view_items;
+
+        let items = value_view_items(false);
+        let key_value = items.first().expect("the first tab");
+        assert_eq!(key_value.id.as_ref(), "key-value");
+        assert!(key_value.disabled);
+        assert!(
+            key_value
+                .disabled_reason
+                .as_ref()
+                .is_some_and(|reason| reason.starts_with("Key/value is not available")),
+            "{:?}",
+            key_value.disabled_reason
+        );
+
+        let plaintext = items.get(1).expect("the second tab");
+        assert_eq!(plaintext.id.as_ref(), "plaintext");
+        assert!(!plaintext.disabled);
+
+        let items = value_view_items(true);
+        assert!(items.iter().all(|item| !item.disabled));
+    }
+
+    #[gpui::test]
+    fn clicking_the_muted_key_value_tab_changes_nothing(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(PLAINTEXT_SECRET);
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.rendered_paths();
+
+        let before = opened.read(|doc| doc.value_view_sets);
+        click(&mut opened, "segmented-secret-value-view-key-value");
+        assert_eq!(
+            opened.read(|doc| doc.value_view_sets),
+            before,
+            "the muted tab never reaches the view setter"
+        );
+
+        assert!(opened.read(|doc| match doc.value() {
+            ValueState::Loaded(value) => value.view == ValueView::Plaintext,
+            _ => false,
+        }));
+    }
+
+    #[gpui::test]
+    fn a_key_value_secret_keeps_both_tabs_enabled_and_every_key_masked(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(KEY_VALUE_SECRET);
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+
+        let text = opened.rendered_text();
+        assert!(!text.contains("Key/value is not available"), "{text}");
+        assert!(!text.contains(FAKE_SECRET_PASSWORD));
+        assert!(!text.contains("api-user"), "{text}");
+        assert!(!text.contains("5432"), "{text}");
+    }
+
+    #[gpui::test]
+    fn the_kind_chip_sits_beside_value_and_holds_no_value_text(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(KEY_VALUE_SECRET);
+
+        assert!(
+            node_bounds(&mut opened, "secret-value-kind").is_none(),
+            "no chip before the value is retrieved"
+        );
+
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        assert_eq!(
+            node_text(&mut opened, "secret-value-kind").as_deref(),
+            Some("JSON · 3 keys")
+        );
+
+        opened.show_value(MULTILINE_SECRET);
+        assert_eq!(
+            node_text(&mut opened, "secret-value-kind").as_deref(),
+            Some("dotenv · 3 lines")
+        );
+
+        opened.show_value("a plain token");
+        assert_eq!(
+            node_text(&mut opened, "secret-value-kind").as_deref(),
+            Some("text · 1 line")
+        );
+
+        let announced = opened.accessibility_update_text();
+        assert!(announced.contains("text · 1 line"), "{announced}");
+        assert!(!announced.contains("a plain token"), "{announced}");
+    }
+
+    #[gpui::test]
+    fn the_header_and_chip_reach_the_accessibility_tree_without_a_value(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(KEY_VALUE_SECRET);
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        assert!(opened.command(Command::ExpandCollapse));
+
+        let announced = opened.accessibility_update_text();
+        assert!(announced.contains("Copy name"), "{announced}");
+        assert!(announced.contains("Close"), "{announced}");
+        assert!(announced.contains("JSON · 3 keys"), "{announced}");
+
+        for secret in [FAKE_SECRET_PASSWORD, "api-user"] {
+            assert!(!announced.contains(secret), "{announced}");
+        }
+    }
+
+    #[gpui::test]
+    fn tags_are_key_value_chips_in_a_wrapping_row_without_an_edit_button(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(KEY_VALUE_SECRET);
+
+        assert_eq!(
+            node_text(&mut opened, "secret-tag-0").as_deref(),
+            Some("team=payments")
+        );
+        assert_eq!(
+            node_text(&mut opened, "secret-tag-1").as_deref(),
+            Some("env=prod")
+        );
+
+        let paths = opened.rendered_paths();
+        assert!(
+            !paths.iter().any(|path| path.contains("secret-tags-edit")),
+            "the write UI comes later"
+        );
+    }
+
+    #[gpui::test]
+    fn the_version_row_of_a_typed_store_reads_v3(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+        opened.select(DENIED_PARAMETER);
+
+        let text = opened.rendered_text();
+        assert!(text.contains("Version v3"), "{text}");
+    }
+
+    #[test]
+    fn last_retrieved_is_a_date_even_across_a_local_offset() {
+        use crate::secret_store::details::last_retrieved_label;
+        use dbflux_core::chrono::{FixedOffset, TimeZone, Utc};
+
+        let midnight = Utc.with_ymd_and_hms(2026, 10, 19, 0, 0, 0).unwrap();
+        let behind = FixedOffset::west_opt(5 * 3600).unwrap();
+        assert_eq!(
+            midnight
+                .with_timezone(&behind)
+                .format("%Y-%m-%d")
+                .to_string(),
+            "2026-10-18",
+            "a local conversion would show the previous day"
+        );
+
+        assert_eq!(last_retrieved_label(Some(midnight)), "2026-10-19");
+        assert_eq!(last_retrieved_label(None), "—");
+    }
+
+    #[gpui::test]
+    fn the_value_actions_share_a_row_at_the_default_width(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(PLAINTEXT_SECRET);
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened.rendered_paths();
+
+        let top = |opened: &mut Opened<'_>, id: &str| {
+            node_bounds(opened, id)
+                .unwrap_or_else(|| panic!("`{id}` is drawn"))
+                .origin
+                .y
+        };
+
+        let reveal = top(&mut opened, "secret-value-hide-all");
+        let copy = top(&mut opened, "secret-value-copy-all");
+        let edit = top(&mut opened, "secret-value-edit");
+        assert_eq!(reveal, copy);
+        assert_eq!(copy, edit);
     }
 }

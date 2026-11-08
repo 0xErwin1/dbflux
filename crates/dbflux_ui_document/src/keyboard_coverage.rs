@@ -649,7 +649,7 @@ pub(crate) const BUCKETS: SurfaceRegistry = SurfaceRegistry {
 };
 
 /// A secret store tab: its listing and details pane. The pane actions (`m`)
-/// list Retrieve value, the copy actions, Hide all, the error actions, Load
+/// list Retrieve value, the copy actions, Close details, Hide all, the error actions, Load
 /// next page, Refresh and, on a hierarchical store, the path mode and Up; on
 /// a region-capable driver also the region picker and the retry of a failed
 /// region listing.
@@ -715,6 +715,15 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
         // pane actions, Save and Discard are its own entries while it is
         // open (Save also answers the SaveQuery command in the dispatch).
         ("secret-value-edit", KeyboardPath::Menu("secret-edit-value")),
+        // The details pane's header: Copy name and Close are pane actions.
+        (
+            "secret-details-copy-name",
+            KeyboardPath::Menu("secret-copy-name"),
+        ),
+        (
+            "secret-details-close",
+            KeyboardPath::Menu("secret-details-close"),
+        ),
         (
             "secret-value-editor-save",
             KeyboardPath::Menu("secret-editor-save"),

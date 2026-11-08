@@ -1,7 +1,7 @@
 //! The details pane of `SecretStoreDocument`: the selected secret's value
 //! section, its details, its rotation and its tags.
 
-use super::render::{UNKNOWN, format_optional_time, listing_shortcut};
+use super::render::{UNKNOWN, format_optional_time, listing_shortcut, version_label};
 use super::value::{MASK, RetrievedValue, ValueContent, ValueFailure, ValueView};
 use super::{DetailsState, SecretRowKey, SecretStoreDocument, ValueState, VersionsState};
 use crate::buckets_table::format_bytes;
@@ -45,6 +45,9 @@ const VERSION_ROW_FONT: Rems = ui(12.5);
 
 /// Gap between the label chips of one version, as the artboard sets it.
 const LABEL_CHIP_GAP: Pixels = px(6.0); // guardrail-allow: artboard 02 spacing between staging label chips, no token carries 6 px here
+
+/// Vertical padding of a tag chip, as the artboard sets it.
+const TAG_CHIP_PADDING_Y: Pixels = px(3.0); // guardrail-allow: artboard 01 tag chip padding, no token carries 3 px here
 
 /// Characters of a version id the table shows before the ellipsis.
 const VERSION_ID_CHARS: usize = 8;
@@ -105,6 +108,18 @@ fn detail_row(label: String, value: String, cx: &App) -> AnyElement {
                 .child(value),
         )
         .into_any_element()
+}
+
+/// The last retrieval as a date. AWS reports it rounded down to the day, as
+/// midnight UTC, so a local time of day would be one that never happened and
+/// could read earlier than the creation date.
+pub(super) fn last_retrieved_label(
+    time: Option<dbflux_core::chrono::DateTime<dbflux_core::chrono::Utc>>,
+) -> String {
+    time.map_or_else(
+        || UNKNOWN.to_string(),
+        |time| time.date_naive().format("%Y-%m-%d").to_string(),
+    )
 }
 
 fn or_unknown(value: Option<&str>) -> String {
@@ -218,40 +233,90 @@ impl SecretStoreDocument {
 
         sections.extend(versions);
 
-        let theme = cx.theme();
+        let header = self.render_details_header(summary, cx);
 
         div()
-            .id("secret-details-body")
             .flex_1()
             .min_h_0()
-            .overflow_y_scrollbar()
             .flex()
             .flex_col()
-            .gap(SecretStoreMetrics::SECTION_GAP)
-            .px(SecretStoreMetrics::DETAILS_PADDING_X)
-            .py(SecretStoreMetrics::DETAILS_PADDING_Y)
+            .child(header)
             .child(
                 div()
+                    .id("secret-details-body")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
                     .flex()
-                    .items_center()
-                    .gap(DocumentMetrics::GAP)
-                    .child(
-                        Icon::new(AppIcon::KeyRound)
-                            .size(DocumentMetrics::TITLE_ICON)
-                            .color(theme.warning),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .font_family(dbflux_components::fonts::editor_family(cx))
-                            .font_weight(FontWeight::BOLD)
-                            .text_size(SecretStoreMetrics::NAME_FONT)
-                            .text_color(ChromeColors::strong(theme))
-                            .child(summary.name.clone()),
-                    ),
+                    .flex_col()
+                    .gap(SecretStoreMetrics::SECTION_GAP)
+                    .px(SecretStoreMetrics::DETAILS_PADDING_X)
+                    .py(SecretStoreMetrics::DETAILS_PADDING_Y)
+                    .children(sections),
             )
-            .children(sections)
+    }
+
+    /// The secret's name with the pane's two actions: Copy name and Close.
+    /// The artboard's third button, open in a tab, waits for the document per
+    /// secret.
+    fn render_details_header(
+        &self,
+        summary: &SecretSummary,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = cx.theme();
+        let border = theme.border;
+        let warning = theme.warning;
+        let strong = ChromeColors::strong(theme);
+
+        div()
+            .id("secret-details-header")
+            .flex()
+            .items_center()
+            .gap(DocumentMetrics::GAP)
+            .px(SecretStoreMetrics::DETAILS_PADDING_X)
+            .py(SecretStoreMetrics::DETAILS_PADDING_Y)
+            .border_b_1()
+            .border_color(border)
+            .child(
+                Icon::new(AppIcon::KeyRound)
+                    .size(DocumentMetrics::TITLE_ICON)
+                    .color(warning),
+            )
+            .child(
+                div()
+                    .id("secret-details-name")
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(fonts::editor_family(cx))
+                    .font_weight(FontWeight::BOLD)
+                    .text_size(SecretStoreMetrics::NAME_FONT)
+                    .text_color(strong)
+                    .child(summary.name.clone()),
+            )
+            .child(
+                Button::new(
+                    "secret-details-copy-name",
+                    dbflux_i18n::t!("document.secret_store.context_menu.copy_name"),
+                )
+                .ghost()
+                .icon(AppIcon::Copy)
+                .icon_only()
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| this.copy_selected_name(cx))),
+            )
+            .child(
+                Button::new(
+                    "secret-details-close",
+                    dbflux_i18n::t!("document.secret_store.details.close"),
+                )
+                .ghost()
+                .icon(AppIcon::X)
+                .icon_only()
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, window, cx| this.close_details(window, cx))),
+            )
     }
 
     /// The details the describe reported. A typed store shows its type, tier
@@ -300,7 +365,7 @@ impl SecretStoreDocument {
         if typed {
             rows.push(detail_row(
                 label("document.secret_store.details.version"),
-                or_unknown(summary.version.as_deref()),
+                version_label(summary.version.as_deref()),
                 cx,
             ));
             rows.push(detail_row(
@@ -321,7 +386,7 @@ impl SecretStoreDocument {
             ));
             rows.push(detail_row(
                 label("document.secret_store.details.last_retrieved"),
-                format_optional_time(details.last_accessed),
+                last_retrieved_label(details.last_accessed),
                 cx,
             ));
         }
@@ -540,6 +605,9 @@ impl SecretStoreDocument {
                 dbflux_i18n::t!("document.secret_store.value.title"),
                 cx,
             ))
+            .when_some(self.value_kind_label(), |header, label| {
+                header.child(Badge::new(label, BadgeTone::Accent).id("secret-value-kind"))
+            })
             .child(div().flex_1())
             .when_some(self.value_header_meta(), |header, meta| {
                 header.child(Text::caption(meta).muted_foreground())
@@ -595,6 +663,14 @@ impl SecretStoreDocument {
         .with_actions(back)
     }
 
+    /// "dotenv · 9 lines" once a value is shown: counts only, no text.
+    fn value_kind_label(&self) -> Option<String> {
+        match &self.value {
+            ValueState::Loaded(value) => Some(value.kind_label()),
+            _ => None,
+        }
+    }
+
     /// "Retrieved 14:02 · audited" once a value is shown.
     fn value_header_meta(&self) -> Option<String> {
         let ValueState::Loaded(value) = &self.value else {
@@ -625,7 +701,7 @@ impl SecretStoreDocument {
         button
     }
 
-    fn render_value_not_loaded(&self, cx: &mut Context<Self>) -> Div {
+    fn render_value_not_loaded(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let encryption_key = match &self.details {
             DetailsState::Loaded(details)
                 if self.store.supports(SecretStoreCapabilities::TYPED_VALUES) =>
@@ -640,13 +716,36 @@ impl SecretStoreDocument {
             None => dbflux_i18n::t!("document.secret_store.value.not_loaded_hint"),
         };
 
+        let theme = cx.theme();
+        let fill = theme.popover;
+        let border = theme.border;
+        let muted = theme.muted_foreground;
+
         div()
+            .id("secret-value-card")
+            .relative()
             .flex()
             .flex_col()
             .gap(SecretStoreMetrics::ROW_GAP)
-            .child(Text::body(dbflux_i18n::t!(
-                "document.secret_store.value.not_loaded"
-            )))
+            .px(DocumentMetrics::DETAIL_BLOCK_PADDING_X)
+            .py(DocumentMetrics::DETAIL_BLOCK_PADDING_Y)
+            .child(Chamfer::new(ChamferCut::CARD).fill(fill).border(border))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(DocumentMetrics::GAP)
+                    .child(
+                        div().id("secret-value-card-lock").child(
+                            Icon::new(AppIcon::Lock)
+                                .size(DocumentMetrics::TITLE_ICON)
+                                .color(muted),
+                        ),
+                    )
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(Text::body(
+                        dbflux_i18n::t!("document.secret_store.value.not_loaded"),
+                    ))),
+            )
             .child(Text::caption(explanation).muted_foreground())
             .when_some(encryption_key, |body, key| {
                 body.child(
@@ -657,7 +756,7 @@ impl SecretStoreDocument {
                     .muted_foreground(),
                 )
             })
-            .child(div().child(self.retrieve_button(cx)))
+            .child(div().flex().child(self.retrieve_button(cx)))
     }
 
     fn render_value_view_switch(
@@ -672,16 +771,7 @@ impl SecretStoreDocument {
         };
 
         let switch = SegmentedControl::new(
-            vec![
-                SegmentedItem::new(
-                    "key-value",
-                    dbflux_i18n::t!("document.secret_store.value.view.key_value"),
-                ),
-                SegmentedItem::new(
-                    "plaintext",
-                    dbflux_i18n::t!("document.secret_store.value.view.plaintext"),
-                ),
-            ],
+            value_view_items(value.content.has_key_value_view()),
             active,
             move |id, _window, cx| {
                 let view = if id.as_ref() == "plaintext" {
@@ -711,27 +801,9 @@ impl SecretStoreDocument {
         }
 
         body = match &value.content {
-            ValueContent::KeyValue { .. } => body.child(self.render_value_view_switch(value, cx)),
-            ValueContent::Plaintext(_) => body.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(SecretStoreMetrics::ROW_GAP)
-                    .child(
-                        Button::new(
-                            "secret-value-view-key-value-unavailable",
-                            dbflux_i18n::t!("document.secret_store.value.view.key_value"),
-                        )
-                        .disabled(true)
-                        .tab_stop(false),
-                    )
-                    .child(
-                        Text::caption(dbflux_i18n::t!(
-                            "document.secret_store.value.plaintext_only"
-                        ))
-                        .muted_foreground(),
-                    ),
-            ),
+            ValueContent::KeyValue { .. } | ValueContent::Plaintext(_) => {
+                body.child(self.render_value_view_switch(value, cx))
+            }
             ValueContent::Binary { size, .. } => body.child(
                 div()
                     .flex()
@@ -884,14 +956,11 @@ impl SecretStoreDocument {
             dbflux_i18n::t!("document.secret_store.value.copy_all")
         };
 
-        let mut copy_all = Button::new("secret-value-copy-all", copy_label)
+        let copy_all = Button::new("secret-value-copy-all", copy_label)
+            .inline()
             .icon(AppIcon::Copy)
             .tab_stop(false)
             .on_click(cx.listener(|this, _, _, cx| this.copy_full_value(cx)));
-
-        if let Some(key) = listing_shortcut(Command::ResultsCopyRow) {
-            copy_all = copy_all.kbd(key);
-        }
 
         let (reveal_key, reveal_icon) = if value.all_revealed() {
             ("document.secret_store.value.hide_all", AppIcon::EyeOff)
@@ -899,14 +968,11 @@ impl SecretStoreDocument {
             ("document.secret_store.value.show_all", AppIcon::Eye)
         };
 
-        let mut reveal_all = Button::new("secret-value-hide-all", dbflux_i18n::t!(reveal_key))
+        let reveal_all = Button::new("secret-value-hide-all", dbflux_i18n::t!(reveal_key))
+            .inline()
             .icon(reveal_icon)
             .tab_stop(false)
             .on_click(cx.listener(|this, _, _, cx| this.toggle_reveal_all(cx)));
-
-        if let Some(key) = listing_shortcut(Command::ExpandCollapse) {
-            reveal_all = reveal_all.kbd(key);
-        }
 
         div()
             .flex()
@@ -920,6 +986,7 @@ impl SecretStoreDocument {
                         "secret-value-edit",
                         dbflux_i18n::t!("document.secret_store.edit.open"),
                     )
+                    .inline()
                     .icon(AppIcon::Pencil)
                     .tab_stop(false)
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -928,6 +995,31 @@ impl SecretStoreDocument {
                 )
             })
     }
+}
+
+/// The two tabs of the value view. Key/value is muted, with the reason in
+/// its tooltip, on a value that does not open as a one-level JSON object.
+pub(super) fn value_view_items(key_value_available: bool) -> Vec<SegmentedItem> {
+    let key_value = SegmentedItem::new(
+        "key-value",
+        dbflux_i18n::t!("document.secret_store.value.view.key_value"),
+    );
+
+    let key_value = if key_value_available {
+        key_value
+    } else {
+        key_value.disabled_reason(dbflux_i18n::t!(
+            "document.secret_store.value.view.key_value_unavailable"
+        ))
+    };
+
+    vec![
+        key_value,
+        SegmentedItem::new(
+            "plaintext",
+            dbflux_i18n::t!("document.secret_store.value.view.plaintext"),
+        ),
+    ]
 }
 
 /// The reveal and copy buttons of one value field, shared by the single-line
@@ -1202,24 +1294,42 @@ fn render_rotation_section(details: &SecretDetails, cx: &App) -> Div {
     )
 }
 
+/// Tags as `key=value` chips in a row that wraps. The artboard's Edit
+/// button is left out until a tags-edit action exists.
 fn render_tags_section(details: &SecretDetails, cx: &App) -> Div {
-    let rows: Vec<AnyElement> = if details.tags.is_empty() {
-        vec![
-            Text::caption(dbflux_i18n::t!("document.secret_store.tags.none"))
-                .muted_foreground()
-                .into_any_element(),
-        ]
+    let theme = cx.theme();
+    let fill = theme.secondary;
+    let border = theme.border;
+    let muted = theme.muted_foreground;
+    let family = fonts::editor_family(cx);
+
+    let body: AnyElement = if details.tags.is_empty() {
+        Text::caption(dbflux_i18n::t!("document.secret_store.tags.none"))
+            .muted_foreground()
+            .into_any_element()
     } else {
-        details
-            .tags
-            .iter()
-            .map(|tag| detail_row(tag.key.clone(), tag.value.clone(), cx))
-            .collect()
+        div()
+            .flex()
+            .flex_wrap()
+            .gap(LABEL_CHIP_GAP)
+            .children(details.tags.iter().enumerate().map(|(index, tag)| {
+                div()
+                    .id(SharedString::from(format!("secret-tag-{index}")))
+                    .relative()
+                    .px(DocumentMetrics::GAP)
+                    .py(TAG_CHIP_PADDING_Y)
+                    .font_family(family.clone())
+                    .text_size(DocumentMetrics::TABLE_META_FONT)
+                    .text_color(muted)
+                    .child(Chamfer::new(ChamferCut::KEYCAP).fill(fill).border(border))
+                    .child(format!("{}={}", tag.key, tag.value))
+            }))
+            .into_any_element()
     };
 
     section(
         dbflux_i18n::t!("document.secret_store.tags.title"),
-        rows,
+        vec![body],
         cx,
     )
 }
