@@ -3658,6 +3658,7 @@ document:
       confirm: "Reverter"
       done: "%{name} agora usa a versão %{version}"
       no_earlier_version: "%{name} não tem uma versão anterior para a qual reverter."
+      history_loading: "As versões ainda estão sendo carregadas. Tente novamente em instantes."
     delete:
       button: "Excluir"
       title:

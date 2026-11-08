@@ -48,6 +48,7 @@ impl SecretStoreDocument {
         self.supports_roll_back()
             && self.write_refusal_reason().is_none()
             && !self.dialog_is_open()
+            && !self.write_in_flight
             && self.version_to_roll_back(index).is_some()
     }
 
@@ -79,6 +80,14 @@ impl SecretStoreDocument {
             return;
         }
 
+        if matches!(self.versions, VersionsState::Idle | VersionsState::Loading) {
+            self.report_write_warning(
+                dbflux_i18n::t!("document.secret_store.rollback.history_loading"),
+                cx,
+            );
+            return;
+        }
+
         match self.previous_version_index() {
             Some(index) => self.open_roll_back(index, window, cx),
             None => {
@@ -101,7 +110,7 @@ impl SecretStoreDocument {
     /// Opens the confirmation of a roll back to the version at `index` of
     /// the history. Nothing is written until it is confirmed.
     pub fn open_roll_back(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.supports_roll_back() || self.dialog_is_open() {
+        if !self.supports_roll_back() || self.dialog_is_open() || self.write_in_flight {
             return;
         }
 

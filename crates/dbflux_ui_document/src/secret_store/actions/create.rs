@@ -380,9 +380,51 @@ impl SecretStoreDocument {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let problem = self.create_problem(dialog, cx);
+        let body = self.render_create_body(dialog, problem.as_ref(), cx);
+
+        let title_key = if self.hierarchical() {
+            "document.secret_store.create.title_parameter"
+        } else {
+            "document.secret_store.create.title_secret"
+        };
+
+        let footer = dialog_footer(
+            FooterSpec {
+                cancel_id: "secret-create-cancel",
+                confirm_id: "secret-create-confirm",
+                confirm_label: dbflux_i18n::t!("document.secret_store.create.confirm"),
+                confirm_icon: AppIcon::Plus,
+                danger: false,
+                enabled: problem.is_none(),
+                submitting: self.write_in_flight,
+            },
+            cx,
+        );
+
+        dialog_modal(
+            DialogShell {
+                id: "secret-create-dialog",
+                title: dbflux_i18n::t!(title_key),
+                icon: AppIcon::Plus,
+                danger: false,
+                confirm_enabled: problem.is_none() && !self.write_in_flight,
+            },
+            body,
+            footer,
+            self.dialog_focus.handle(),
+            cx,
+        )
+    }
+
+    /// The fields of the dialog and the problem line under them.
+    fn render_create_body(
+        &self,
+        dialog: &CreateDialog,
+        problem: Option<&CreateProblem>,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let touched = dialog.touched || !dialog.value.read(cx).value().is_empty();
         let shown = problem
-            .as_ref()
             .filter(|problem| touched || matches!(problem, CreateProblem::Exists(_)))
             .map(CreateProblem::message);
 
@@ -463,38 +505,7 @@ impl SecretStoreDocument {
             );
         }
 
-        let title_key = if self.hierarchical() {
-            "document.secret_store.create.title_parameter"
-        } else {
-            "document.secret_store.create.title_secret"
-        };
-
-        let footer = dialog_footer(
-            FooterSpec {
-                cancel_id: "secret-create-cancel",
-                confirm_id: "secret-create-confirm",
-                confirm_label: dbflux_i18n::t!("document.secret_store.create.confirm"),
-                confirm_icon: AppIcon::Plus,
-                danger: false,
-                enabled: problem.is_none(),
-                submitting: self.write_in_flight,
-            },
-            cx,
-        );
-
-        dialog_modal(
-            DialogShell {
-                id: "secret-create-dialog",
-                title: dbflux_i18n::t!(title_key),
-                icon: AppIcon::Plus,
-                danger: false,
-                confirm_enabled: problem.is_none() && !self.write_in_flight,
-            },
-            body,
-            footer,
-            self.dialog_focus.handle(),
-            cx,
-        )
+        body
     }
 
     /// A row of buttons of which one is chosen: the type and the tier. Each

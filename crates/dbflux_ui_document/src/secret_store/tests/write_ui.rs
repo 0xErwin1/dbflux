@@ -2751,3 +2751,43 @@ fn the_create_value_box_is_hidden_and_redacted(cx: &mut TestAppContext) {
         "hidden from the accessibility tree"
     );
 }
+
+// -- Roll back advisories -----------------------------------------------------------
+
+/// A roll back does not open while another write is in flight.
+#[gpui::test]
+fn roll_back_is_refused_while_a_write_is_in_flight(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.update(|doc, _| doc.write_in_flight = true);
+
+    assert!(!opened.read(|doc| doc.can_roll_back_version(1)));
+    let doc = opened.doc.clone();
+    opened
+        .window
+        .update(|window, cx| doc.update(cx, |doc, cx| doc.open_roll_back(1, window, cx)));
+    opened.window.run_until_parked();
+
+    assert!(!opened.dialog_open());
+}
+
+/// `b` while the history is still loading says it is loading, not that no
+/// earlier version exists.
+#[gpui::test]
+fn b_while_the_history_loads_says_it_is_loading(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.update(|doc, _| doc.versions = VersionsState::Loading);
+
+    opened.command(Command::RollBackVersion);
+
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("still loading"), "{}", errors[0].1);
+    assert!(
+        !errors[0].1.contains("no earlier version"),
+        "{}",
+        errors[0].1
+    );
+    assert!(!opened.dialog_open());
+}

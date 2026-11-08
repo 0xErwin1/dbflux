@@ -3658,6 +3658,7 @@ document:
       confirm: "Roll back"
       done: "%{name} now uses version %{version}"
       no_earlier_version: "%{name} has no earlier version to roll back to."
+      history_loading: "The versions are still loading. Try again in a moment."
     delete:
       button: "Delete"
       title:

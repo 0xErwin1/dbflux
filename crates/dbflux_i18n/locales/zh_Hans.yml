@@ -3658,6 +3658,7 @@ document:
       confirm: "回滚"
       done: "%{name} 现在使用版本 %{version}"
       no_earlier_version: "%{name} 没有可回滚的更早版本。"
+      history_loading: "版本仍在加载。请稍后再试。"
     delete:
       button: "删除"
       title:
