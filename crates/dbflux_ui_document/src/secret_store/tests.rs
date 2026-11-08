@@ -955,6 +955,132 @@ fn the_breadcrumb_keeps_its_width_while_the_search_narrows(cx: &mut TestAppConte
     );
 }
 
+/// Down to the document's minimum width (listing minimum plus details
+/// minimum) Refresh stays on screen and keeps its width, as do the region
+/// chip and the store identity. The search narrows first, to its minimum;
+/// only then does the path give way.
+#[gpui::test]
+fn the_header_narrows_search_first_then_path_and_keeps_refresh(cx: &mut TestAppContext) {
+    use dbflux_components::tokens::SecretStoreMetrics;
+    use dbflux_ui_base::keyboard_coverage::FrameCapture;
+
+    let mut opened = open_region_store(
+        cx,
+        FAKE_PARAMETER_STORE_ID,
+        Some("/app/prod/"),
+        &[OTHER_REGION, CURRENT_REGION],
+        None,
+    );
+
+    // (width, right edge) of refresh, region, path and search.
+    let measure = |opened: &mut Opened<'_>, width: f32| -> Vec<(f32, f32)> {
+        opened
+            .window
+            .simulate_resize(gpui::size(gpui::px(width), gpui::px(800.0)));
+        opened.window.run_until_parked();
+
+        let capture = FrameCapture::observe(opened.window);
+        let frame = capture.frame(opened.window);
+
+        [
+            "secret-refresh",
+            "secret-region",
+            "secret-path",
+            "secret-search",
+        ]
+        .iter()
+        .map(|id| {
+            let suffix = format!(".{id}");
+            let bounds = frame
+                .nodes()
+                .filter(|(_, node)| node.path().ends_with(&suffix))
+                .min_by_key(|(_, node)| node.path().len())
+                .map(|(_, node)| node.bounds())
+                .unwrap_or_else(|| panic!("no element {id} at {width}"));
+
+            (
+                f32::from(bounds.size.width),
+                f32::from(bounds.origin.x + bounds.size.width),
+            )
+        })
+        .collect()
+    };
+
+    let rem = opened.window.update(|window, _| window.rem_size());
+    let minimum = f32::from(SecretStoreMetrics::LISTING_MIN_WIDTH.to_pixels(rem))
+        + f32::from(SecretStoreMetrics::DETAILS_MIN_WIDTH);
+    let search_minimum = f32::from(SecretStoreMetrics::SEARCH_MIN_WIDTH.to_pixels(rem));
+
+    let wide = measure(&mut opened, 1500.0);
+    let mut previous_path = wide[2].0;
+    let mut path_shrunk_above_search_minimum = false;
+    let mut width = 1500.0;
+
+    while width >= minimum {
+        let sizes = measure(&mut opened, width);
+
+        assert!(
+            sizes[0].1 <= width + 0.5,
+            "Refresh is pushed out of view at {width}: right edge {}",
+            sizes[0].1
+        );
+        assert_eq!(sizes[0].0, wide[0].0, "Refresh keeps its width at {width}");
+        assert_eq!(
+            sizes[1].0, wide[1].0,
+            "the region keeps its width at {width}"
+        );
+
+        if sizes[2].0 < previous_path - 0.5 && sizes[3].0 > search_minimum + 1.0 {
+            path_shrunk_above_search_minimum = true;
+        }
+        previous_path = sizes[2].0;
+        width -= 50.0;
+    }
+
+    assert!(
+        !path_shrunk_above_search_minimum,
+        "the path narrowed while the search was still above its minimum"
+    );
+
+    let narrowest = measure(&mut opened, minimum);
+    assert!(
+        narrowest[2].0 < wide[2].0,
+        "the path gives way at the minimum width: {} -> {}",
+        wide[2].0,
+        narrowest[2].0
+    );
+    assert!(
+        narrowest[3].0 <= search_minimum + 1.0,
+        "the search reached its minimum: {}",
+        narrowest[3].0
+    );
+}
+
+/// The status bar counts what the footer counts, not secrets on a
+/// hierarchical store.
+#[gpui::test]
+fn the_status_bar_uses_the_footer_counts(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+    let expected = opened.read(|doc| doc.loaded_summary());
+    assert!(expected.contains("under /app/prod/"), "{expected}");
+
+    let segments: Vec<String> = opened.window.update(|_, cx| {
+        opened
+            .doc
+            .read(cx)
+            .status_segments(cx)
+            .into_iter()
+            .map(|segment| segment.text.to_string())
+            .collect()
+    });
+
+    assert!(segments.contains(&expected), "{segments:?}");
+    assert!(
+        !segments.iter().any(|text| text.contains("secrets loaded")),
+        "{segments:?}"
+    );
+}
+
 #[gpui::test]
 fn the_reveal_all_button_names_what_it_will_do(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
@@ -2300,6 +2426,16 @@ fn open_region_doc<'a>(
     regions: &[&str],
     list_error: Option<String>,
 ) -> Opened<'a> {
+    open_region_store(cx, FAKE_SECRETS_STORE_ID, None, regions, list_error)
+}
+
+fn open_region_store<'a>(
+    cx: &'a mut TestAppContext,
+    store_id: &str,
+    path: Option<&str>,
+    regions: &[&str],
+    list_error: Option<String>,
+) -> Opened<'a> {
     init_keyboard_runtime(cx);
 
     let driver = FakeDriver::new(DbKind::AwsSecrets).with_region_switch(regions);
@@ -2316,10 +2452,11 @@ fn open_region_doc<'a>(
     });
 
     let state = app_state.clone();
-    let store_id = FAKE_SECRETS_STORE_ID.to_string();
+    let store_id = store_id.to_string();
+    let path = path.map(str::to_string);
 
     let (doc, window) = cx.add_window_view(move |window, cx| {
-        SecretStoreDocument::new(profile_id, store_id, None, state, window, cx)
+        SecretStoreDocument::new(profile_id, store_id, path, state, window, cx)
     });
     window.run_until_parked();
 

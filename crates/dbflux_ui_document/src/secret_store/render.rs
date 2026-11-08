@@ -26,6 +26,11 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 
+/// Flex shrink factor of the search field. Shrink is proportional to this
+/// factor, so a weight far above the breadcrumb's makes the search absorb the
+/// narrowing until it reaches its minimum width.
+const SEARCH_SHRINK_WEIGHT: f32 = 1000.0;
+
 /// Placeholder for a field the store did not report.
 pub(super) const UNKNOWN: &str = "—";
 
@@ -215,7 +220,11 @@ impl SecretStoreDocument {
             .min_w_0()
             .items_center()
             .gap(NavigationMetrics::BREADCRUMB_GAP)
-            .child(Breadcrumb::new(self.identity_segments(cx)).mono());
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .child(Breadcrumb::new(self.identity_segments(cx)).mono()),
+            );
 
         if let Some(picker) = self.render_region_picker() {
             row = row.child(picker);
@@ -238,9 +247,26 @@ impl SecretStoreDocument {
         let path = self.store_path_segments(cx);
 
         if !path.is_empty() {
-            row = row
-                .child(Self::breadcrumb_separator(cx))
-                .child(Breadcrumb::new(path).mono());
+            let full_path = self.path.clone().unwrap_or_default();
+            let tooltip_path = full_path.clone();
+
+            // The path is the one part of the header that gives way: it
+            // clips with an ellipsis, and its full text stays in the tooltip
+            // and the accessible name.
+            row = row.child(Self::breadcrumb_separator(cx)).child(
+                div()
+                    .id("secret-path")
+                    .flex()
+                    .flex_shrink_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .aria_label(full_path)
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(tooltip_path.clone())
+                            .build(window, cx)
+                    })
+                    .child(Breadcrumb::new(path).mono()),
+            );
         }
 
         row
@@ -319,31 +345,34 @@ impl SecretStoreDocument {
 
         let hierarchical = self.hierarchical();
 
-        // The breadcrumb keeps its width: the search narrows first, down to
-        // its minimum, so the path never reads "aws-pr…" at a normal width.
+        // As the header narrows the search gives way first, down to its
+        // minimum, then the path of the breadcrumb; Refresh, the region and
+        // the store identity keep their width.
+        let mut search = div()
+            .id("secret-search")
+            .flex()
+            .w(ObjectStoreMetrics::SEARCH_WIDTH)
+            .min_w(SecretStoreMetrics::SEARCH_MIN_WIDTH)
+            .flex_shrink_1();
+        search.style().flex_shrink = Some(SEARCH_SHRINK_WEIGHT);
+
         document_bar(DocumentMetrics::HEADER_HEIGHT_TALL, cx)
             .child(
                 div()
                     .id("secret-breadcrumb")
-                    .flex_shrink_0()
+                    .flex_shrink_1()
+                    .min_w_0()
+                    .overflow_hidden()
                     .child(self.render_breadcrumb_row(cx)),
             )
             .child(div().flex_1())
             .when(hierarchical, |bar| bar.child(self.render_path_mode(cx)))
-            .child(
-                div()
-                    .id("secret-search")
-                    .flex()
-                    .w(ObjectStoreMetrics::SEARCH_WIDTH)
-                    .min_w(SecretStoreMetrics::SEARCH_MIN_WIDTH)
-                    .flex_shrink_1()
-                    .child(search_field(
-                        &self.search_input,
-                        None,
-                        self.focus_mode == SecretFocusMode::Search,
-                        cx,
-                    )),
-            )
+            .child(search.child(search_field(
+                &self.search_input,
+                None,
+                self.focus_mode == SecretFocusMode::Search,
+                cx,
+            )))
             .child(div().flex_shrink_0().child(refresh))
     }
 
