@@ -200,7 +200,7 @@ con un override de endpoint opcional. Una conexión muestra los dos almacenes en
 el sidebar. El listado se pagina del lado del servidor con búsqueda por nombre,
 y los paths de Parameter Store se recorren de a un nivel. Ni el listado ni el
 panel de detalles leen un valor: el valor se lee solo cuando el usuario ejecuta
-Obtener valor, que registra un evento de auditoría sin el valor. Los secretos
+Obtener valor, que registra un evento de auditoría sin el valor cuando la auditoría está activa y la escritura de auditoría tiene éxito; la lectura en sí puede completarse sin registro. Los secretos
 JSON de clave/valor se muestran como tabla, el resto del texto como texto plano
 y los secretos binarios en base64, y los secretos que pertenecen a otro
 servicio se marcan como de solo lectura. La falta del permiso `kms:Decrypt` se

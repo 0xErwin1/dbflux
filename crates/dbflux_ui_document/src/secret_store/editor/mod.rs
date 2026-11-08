@@ -143,6 +143,12 @@ pub(crate) struct ValueEditState {
     /// Wraps the textarea and its Find panel, so focus inside either one is
     /// focus inside the editor.
     pub(super) focus: gpui::FocusHandle,
+
+    /// Where the row area holding the gutter, the tint and the text starts,
+    /// in window coordinates, as the last frame painted it. The text sits
+    /// lower than that when the Find panel pushes it down, and the gutter
+    /// follows by the difference.
+    pub(super) rows_origin: std::rc::Rc<std::cell::Cell<gpui::Pixels>>,
     _focus_subscriptions: [Subscription; 2],
 
     /// The connection session the value was read from. A save names this
@@ -398,6 +404,7 @@ impl SecretStoreDocument {
             mode,
             focused: true,
             focus: handle,
+            rows_origin: Default::default(),
             _observer: observer,
             _focus_subscriptions: [focus_in, focus_out],
             connection,

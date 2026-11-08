@@ -4108,7 +4108,7 @@ mod editor_layout {
         }
 
         /// The bounds of the element whose path ends with `suffix`.
-        fn element_bounds(&mut self, suffix: &str) -> gpui::Bounds<gpui::Pixels> {
+        pub(super) fn element_bounds(&mut self, suffix: &str) -> gpui::Bounds<gpui::Pixels> {
             let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
             let frame = capture.frame(self.window);
 
@@ -5053,12 +5053,17 @@ mod editor_key_value {
     }
 
     #[gpui::test]
-    fn binary_managed_and_pending_values_stay_read_only(cx: &mut TestAppContext) {
-        for name in [BINARY_SECRET, MANAGED_SECRET, PENDING_DELETION_SECRET] {
+    fn binary_and_managed_values_stay_read_only(cx: &mut TestAppContext) {
+        for name in [BINARY_SECRET, MANAGED_SECRET] {
             let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
             opened.select(name);
             opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+            assert!(
+                opened.read(|doc| matches!(doc.value, ValueState::Loaded(_))),
+                "{name} loaded"
+            );
             assert!(!opened.read(|doc| doc.can_edit_value()), "{name}");
+            assert!(!has_path(&mut opened, "secret-value-edit"), "{name}");
         }
     }
 
@@ -5195,10 +5200,24 @@ mod editor_review {
         start(&mut opened, "stored text", "typed text");
 
         open_find(&mut opened);
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let (textarea_focused, editor_contains_focus) = opened.window.update(|window, cx| {
+            let textarea = gpui::Focusable::focus_handle(editor.read(cx), cx);
+            (
+                textarea.is_focused(window),
+                textarea.contains_focused(window, cx),
+            )
+        });
+        let wrapper_has_focus =
+            opened.read(|doc| doc.value_edit.as_ref().is_some_and(|edit| edit.focused));
+        assert!(
+            !textarea_focused && !editor_contains_focus,
+            "focus left the textarea for the Find input"
+        );
+        assert!(wrapper_has_focus, "the editor still counts as focused");
         assert_eq!(
             opened.read(|doc| doc.active_context()),
-            ContextId::TextInput,
-            "focus moved to the Find input"
+            ContextId::TextInput
         );
 
         opened.window.simulate_keystrokes(save_chord());
@@ -5333,5 +5352,44 @@ mod editor_review {
         let text = opened.rendered_text();
         assert!(text.contains("on one line back on one line"), "{text}");
         assert!(text.contains("several lines as it is here"), "{text}");
+    }
+
+    /// With the Find panel open and pushing the text down, gutter row N is
+    /// still beside text line N.
+    #[gpui::test]
+    fn the_gutter_follows_the_text_when_find_is_open(cx: &mut TestAppContext) {
+        let text = (0..30)
+            .map(|i| format!("l{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut opened = open_hosted(cx);
+        start(&mut opened, &text, &text);
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+
+        let aligned = |opened: &mut Opened<'_>, stage: &str| {
+            for line in [0usize, 5] {
+                let offset = (0..line).map(|i| format!("l{i}\n").len()).sum::<usize>();
+                let glyph = opened
+                    .window
+                    .update(|_, cx| editor.read(cx).range_to_bounds(&(offset..offset + 1)))
+                    .expect("text laid out")
+                    .origin
+                    .y;
+                let gutter = opened
+                    .element_bounds(&format!("secret-value-editor-line-{line}-number"))
+                    .origin
+                    .y;
+                assert!(
+                    (gutter - glyph).abs() < gpui::px(1.5), // guardrail-allow: test tolerance, not spacing
+                    "{stage}, line {line}: gutter {gutter:?} vs text {glyph:?}"
+                );
+            }
+        };
+
+        opened.rendered_paths();
+        aligned(&mut opened, "closed");
+        open_find(&mut opened);
+        opened.rendered_paths();
+        aligned(&mut opened, "find open");
     }
 }

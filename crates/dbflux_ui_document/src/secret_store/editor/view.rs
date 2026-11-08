@@ -217,14 +217,30 @@ impl SecretStoreDocument {
         let last_row = (first_row + VIEWER_VISIBLE_LINES as usize + 2).min(line_count);
         let first_row = first_row.min(last_row);
         let rows_top = offset + line_height * first_row as f32;
+        let rows_origin = self
+            .value_edit
+            .as_ref()
+            .map(|edit| edit.rows_origin.clone())
+            .unwrap_or_default();
+        // The text viewport inside the row area: lower than the top when the
+        // Find panel is open. Rows are placed and clipped against it.
+        let viewport_top = state
+            .text_bounds()
+            .map_or(px(0.0), |bounds| bounds.origin.y - rows_origin.get())
+            .max(px(0.0));
+        let viewport_height = match state.input_bounds().size.height {
+            height if height > px(0.0) => height,
+            _ => line_height * VIEWER_VISIBLE_LINES,
+        };
         let focus = self.value_edit.as_ref().map(|edit| edit.focus.clone());
 
         let tint = div()
             .id("secret-value-editor-tint")
             .absolute()
-            .top_0()
+            .top(viewport_top)
             .left_0()
-            .size_full()
+            .w_full()
+            .h(viewport_height)
             .overflow_hidden()
             .child(
                 div()
@@ -253,46 +269,53 @@ impl SecretStoreDocument {
             .id("secret-value-editor-gutter")
             .relative()
             .flex_shrink_0()
-            .overflow_hidden()
             .aria_hidden(true)
             .text_color(muted)
             .child(
                 div()
                     .absolute()
-                    .top(rows_top)
+                    .top(viewport_top)
                     .left_0()
-                    .flex()
-                    .flex_col()
-                    .children((first_row..last_row).map(|index| {
-                        let marked = changes.marked.get(index).copied().unwrap_or(false);
-
+                    .w_full()
+                    .h(viewport_height)
+                    .overflow_hidden()
+                    .child(
                         div()
-                            .id(SharedString::from(format!(
-                                "secret-value-editor-line-{index}"
-                            )))
+                            .absolute()
+                            .top(rows_top)
+                            .left_0()
                             .flex()
-                            .h(line_height)
-                            .child(
+                            .flex_col()
+                            .children((first_row..last_row).map(|index| {
+                                let marked = changes.marked.get(index).copied().unwrap_or(false);
+
                                 div()
-                                    .w(VIEWER_GUTTER_WIDTH)
-                                    .pr(DocumentMetrics::GAP)
+                                    .id(SharedString::from(format!(
+                                        "secret-value-editor-line-{index}"
+                                    )))
                                     .flex()
-                                    .justify_end()
+                                    .h(line_height)
                                     .child(
                                         div()
-                                            .id(SharedString::from(format!(
-                                                "secret-value-editor-line-{index}-number"
-                                            )))
-                                            .child((index + 1).to_string()),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .w(MARKER_WIDTH)
-                                    .mr(DocumentMetrics::GAP)
-                                    .h_full()
-                                    .when(marked, |bar| {
-                                        bar.child(
+                                            .w(VIEWER_GUTTER_WIDTH)
+                                            .pr(DocumentMetrics::GAP)
+                                            .flex()
+                                            .justify_end()
+                                            .child(
+                                                div()
+                                                    .id(SharedString::from(format!(
+                                                        "secret-value-editor-line-{index}-number"
+                                                    )))
+                                                    .child((index + 1).to_string()),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(MARKER_WIDTH)
+                                            .mr(DocumentMetrics::GAP)
+                                            .h_full()
+                                            .when(marked, |bar| {
+                                                bar.child(
                                             div()
                                                 .id(SharedString::from(format!(
                                                     "secret-value-editor-line-{index}-marker"
@@ -300,9 +323,10 @@ impl SecretStoreDocument {
                                                 .size_full()
                                                 .bg(warning),
                                         )
-                                    }),
-                            )
-                    })),
+                                            }),
+                                    )
+                            })),
+                    ),
             )
             // Reserves the gutter's width; its rows are positioned over it.
             .child(
@@ -328,6 +352,21 @@ impl SecretStoreDocument {
                     .relative()
                     .flex()
                     .when_some(focus, |block, focus| block.track_focus(&focus))
+                    .child(
+                        canvas(
+                            {
+                                let rows_origin = rows_origin.clone();
+                                move |bounds, window, _| {
+                                    if rows_origin.replace(bounds.origin.y) != bounds.origin.y {
+                                        window.refresh();
+                                    }
+                                }
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
                     .child(tint)
                     .child(gutter)
                     .child(
