@@ -3686,6 +3686,7 @@ document:
       confirm_irreversible: "Excluir permanentemente"
       done: "%{name} foi excluído"
       done_scheduled: "A exclusão de %{name} está agendada para %{date}"
+      done_scheduled_undated: "A exclusão de %{name} está agendada"
       scheduled_detail: "%{name} foi excluído em %{deleted} com um período de recuperação de %{days} dias. Seu valor não pode ser obtido até que seja restaurado."
       row_deleted: "Excluído"
       row_deletes_on: "Será excluído em"

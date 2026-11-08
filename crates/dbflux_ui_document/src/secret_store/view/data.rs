@@ -43,6 +43,7 @@ impl SecretView {
             return;
         };
 
+        self.note_describe_issued(&name, generation);
         self.details_session = Some(connection.clone());
         let store_id = self.store.id.clone();
         let entity = cx.entity().clone();
@@ -90,8 +91,18 @@ impl SecretView {
             return;
         }
 
+        self.drop_confirmations_of_replaced_session(cx);
+
         if let Ok(details) = &result {
-            self.observe_deletion(&details.summary);
+            self.observe_described(&details.summary, generation);
+        }
+
+        let result = result.map(|mut details| {
+            self.conform_details(&mut details);
+            details
+        });
+
+        if let Ok(details) = &result {
             self.summary_cache = Some(details.summary.clone());
         }
 
@@ -473,6 +484,22 @@ impl SecretView {
             return;
         }
 
+        // The connection can be gone before the view heard of it. Nothing was
+        // read, so nothing is recorded: the audit row names the driver of the
+        // session that served the read.
+        let Some(connection) = self.connection(cx) else {
+            self.missing_connection_reported = true;
+            self.sync_connection_presence(cx);
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::User,
+                    dbflux_i18n::t!("document.secret_store.error.connection_unavailable"),
+                ),
+                cx,
+            );
+            return;
+        };
+
         // Retrieving replaces the value section and drops the open editor.
         if self.block_unsaved_value_edits(cx) {
             return;
@@ -487,23 +514,6 @@ impl SecretView {
         let generation = self.value_generation;
         self.value = ValueState::Loading;
         cx.notify();
-
-        let Some(connection) = self.connection(cx) else {
-            self.apply_value(
-                ValueAsk {
-                    generation,
-                    name: &name,
-                    requested_version: version.as_deref(),
-                    session: None,
-                },
-                Err(DbError::connection_failed(dbflux_i18n::t!(
-                    "document.secret_store.error.connection_unavailable"
-                ))),
-                0,
-                cx,
-            );
-            return;
-        };
 
         let session = connection.clone();
         let store_id = self.store.id.clone();
@@ -533,7 +543,7 @@ impl SecretView {
                             generation,
                             name: &name,
                             requested_version: version.as_deref(),
-                            session: Some(session),
+                            session,
                         },
                         result,
                         millis,
@@ -567,10 +577,9 @@ impl SecretView {
         // connection was replaced it is not shown under the new one, and the
         // section does not stay loading for it.
         let live = self.connection(cx);
-        let same_session = session.as_ref().is_none_or(|asked_of| {
-            live.as_ref()
-                .is_some_and(|live| Arc::ptr_eq(asked_of, live))
-        });
+        let same_session = live
+            .as_ref()
+            .is_some_and(|live| Arc::ptr_eq(&session, live));
         let is_current = asked && same_session;
 
         if asked && !same_session {
@@ -581,11 +590,7 @@ impl SecretView {
 
         // The store that was read is the originating session's, even when
         // the profile holds no connection any more.
-        let driver_id = session
-            .as_ref()
-            .or(live.as_ref())
-            .map(|connection| connection.metadata().id.clone())
-            .unwrap_or_default();
+        let driver_id = session.metadata().id.clone();
 
         let target = RetrievalTarget {
             profile_id: self.profile_id,
@@ -604,7 +609,7 @@ impl SecretView {
 
                 if is_current {
                     self.value = ValueState::Loaded(Box::new(RetrievedValue::new(&value)));
-                    self.value_session = session;
+                    self.value_session = Some(session);
                 }
             }
             Err(error) => {
@@ -649,6 +654,6 @@ pub(crate) struct ValueAsk<'a> {
     pub name: &'a str,
     /// The version the retrieval named, `None` for the current value.
     pub requested_version: Option<&'a str>,
-    /// The session it was asked of; `None` when there was no connection.
-    pub session: Option<Arc<dyn Connection>>,
+    /// The session it was asked of.
+    pub session: Arc<dyn Connection>,
 }

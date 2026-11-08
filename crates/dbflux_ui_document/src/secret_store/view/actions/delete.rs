@@ -221,21 +221,27 @@ impl SecretView {
             Landing::Done(deletion) => {
                 self.dismiss_dialog(cx);
 
-                let message = match deletion.deletion_scheduled_for {
-                    Some(date) => dbflux_i18n::t!(
+                let message = match (kind, deletion.deletion_scheduled_for) {
+                    (DeleteKind::Scheduled { .. }, Some(date)) => dbflux_i18n::t!(
                         "document.secret_store.delete.done_scheduled",
                         name = name,
                         date = format_time(date)
                     ),
-                    None => dbflux_i18n::t!("document.secret_store.delete.done", name = name),
+                    (DeleteKind::Scheduled { .. }, None) => dbflux_i18n::t!(
+                        "document.secret_store.delete.done_scheduled_undated",
+                        name = name
+                    ),
+                    (DeleteKind::Irreversible, _) => {
+                        dbflux_i18n::t!("document.secret_store.delete.done", name = name)
+                    }
                 };
 
                 self.toast_written(message, cx);
 
                 // The refresh below must not ask for the history with the row
                 // this write outdated.
-                if let Some(date) = deletion.deletion_scheduled_for {
-                    self.confirm_deletion_scheduled(name, Some(date));
+                if matches!(kind, DeleteKind::Scheduled { .. }) {
+                    self.confirm_deletion_scheduled(name, deletion.deletion_scheduled_for, cx);
                 }
                 self.refresh_after_write(name, effect, cx);
             }
@@ -249,7 +255,7 @@ impl SecretView {
                 if matches!(kind, DeleteKind::Scheduled { .. })
                     && failure.kind == SecretWriteFailureKind::AuditLost
                 {
-                    self.confirm_deletion_scheduled(name, None);
+                    self.confirm_deletion_scheduled(name, None, cx);
                 }
                 self.report_write_failure(&failure, cx);
                 self.refresh_after_write(name, effect, cx);
@@ -330,7 +336,7 @@ impl SecretView {
                 );
                 // The reads below may fail or come back stale: the guards
                 // must not keep reading the deletion this write cancelled.
-                self.confirm_restored(name);
+                self.confirm_restored(name, cx);
                 self.refresh_after_write(name, WriteEffect::Versions, cx);
             }
             Landing::Stands(failure) => {
@@ -338,7 +344,7 @@ impl SecretView {
                 // lost: the cancellation stands. An indeterminate failure
                 // says nothing, and the refresh below reads the store.
                 if failure.kind == SecretWriteFailureKind::AuditLost {
-                    self.confirm_restored(name);
+                    self.confirm_restored(name, cx);
                 }
                 self.report_write_failure(&failure, cx);
                 self.refresh_after_write(name, WriteEffect::Versions, cx);

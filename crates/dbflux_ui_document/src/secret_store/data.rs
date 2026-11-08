@@ -105,6 +105,8 @@ impl SecretStoreDocument {
 
     fn spawn_list(&mut self, generation: u64, page_token: Option<String>, cx: &mut Context<Self>) {
         cx.notify();
+        self.view
+            .update(cx, |view, _| view.note_listing_issued(generation));
 
         let Some(connection) = self.connection(cx) else {
             self.listing.apply_error(
@@ -188,7 +190,7 @@ impl SecretStoreDocument {
             return;
         }
 
-        self.push_listing_row(cx);
+        self.push_listing_row(Some(generation), cx);
         cx.notify();
 
         // A failed page ends the chain: the retained rows are not progress, and
@@ -214,15 +216,18 @@ impl SecretStoreDocument {
 
     /// Gives the view the listing's row of the selected secret. A failed page
     /// keeps the rows but does not refresh what the view remembers of them.
-    pub(super) fn push_listing_row(&mut self, cx: &mut Context<Self>) {
+    /// `observed_by` is the generation of the load that just landed, `None`
+    /// when no load did.
+    pub(super) fn push_listing_row(&mut self, observed_by: Option<u64>, cx: &mut Context<Self>) {
         let row = match &self.selected {
             Some(SecretRowKey::Secret(name)) => self.listing.find(name).cloned(),
             _ => None,
         };
         let refresh_cache = self.listing.error.is_none();
 
-        self.view
-            .update(cx, |view, cx| view.set_listing_row(row, refresh_cache, cx));
+        self.view.update(cx, |view, cx| {
+            view.set_listing_row(row, refresh_cache, observed_by, cx)
+        });
     }
 }
 

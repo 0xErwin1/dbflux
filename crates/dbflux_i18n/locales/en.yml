@@ -3686,6 +3686,7 @@ document:
       confirm_irreversible: "Delete permanently"
       done: "Deleted %{name}"
       done_scheduled: "Deletion of %{name} is scheduled for %{date}"
+      done_scheduled_undated: "Deletion of %{name} is scheduled"
       scheduled_detail: "%{name} was deleted on %{deleted} with a %{days} day recovery window. Its value cannot be retrieved until it is restored."
       row_deleted: "Deleted"
       row_deletes_on: "Deletes on"

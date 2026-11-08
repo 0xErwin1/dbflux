@@ -3686,6 +3686,7 @@ document:
       confirm_irreversible: "영구 삭제"
       done: "%{name}을(를) 삭제했습니다"
       done_scheduled: "%{name}의 삭제가 %{date}에 예약되었습니다"
+      done_scheduled_undated: "%{name}의 삭제가 예약되었습니다"
       scheduled_detail: "%{name}은(는) %{deleted}에 복구 기간 %{days}일로 삭제되었습니다. 복원하기 전에는 값을 가져올 수 없습니다."
       row_deleted: "삭제됨"
       row_deletes_on: "삭제 예정일"

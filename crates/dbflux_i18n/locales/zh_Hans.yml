@@ -3686,6 +3686,7 @@ document:
       confirm_irreversible: "永久删除"
       done: "已删除 %{name}"
       done_scheduled: "%{name} 已安排在 %{date} 删除"
+      done_scheduled_undated: "%{name} 已安排删除"
       scheduled_detail: "%{name} 已于 %{deleted} 删除，恢复期为 %{days} 天。恢复之前无法获取其值。"
       row_deleted: "删除时间"
       row_deletes_on: "将于以下时间删除"

@@ -3371,7 +3371,7 @@ fn the_menu_selection_follows_a_shrinking_menu(cx: &mut TestAppContext) {
                 details.summary.deletion_scheduled_for = None;
             }
         });
-        doc.push_listing_row(cx);
+        doc.push_listing_row(None, cx);
     });
     opened.window.run_until_parked();
     let _ = opened.rendered_text();
@@ -3423,7 +3423,7 @@ fn the_selected_summary_survives_a_reload_that_drops_its_row(cx: &mut TestAppCon
         doc.listing
             .entries
             .retain(|entry| entry.name != KEY_VALUE_SECRET);
-        doc.push_listing_row(cx);
+        doc.push_listing_row(None, cx);
     });
 
     assert!(
@@ -4420,7 +4420,7 @@ fn the_landing_refuses_an_answer_asked_of_another_session(cx: &mut TestAppContex
                     generation,
                     name: PLAINTEXT_SECRET,
                     requested_version: None,
-                    session: Some(other),
+                    session: other,
                 },
                 Ok(SecretValue::text(
                     Some("v-1".to_string()),
