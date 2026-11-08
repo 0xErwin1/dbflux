@@ -1088,6 +1088,7 @@ pub(crate) fn page_versions(
             .and_then(smithy_datetime_to_chrono),
         modified_by: entry.last_modified_user().map(ToString::to_string),
         is_current: false,
+        is_pending: false,
     })
 }
 

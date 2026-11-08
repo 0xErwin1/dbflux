@@ -3662,6 +3662,8 @@ document:
       done: "%{name} agora usa a versão %{version}"
       no_earlier_version: "%{name} não tem uma versão anterior para a qual reverter."
       history_loading: "As versões ainda estão sendo carregadas. Tente novamente em instantes."
+      pending_reason: "Esta versão está em etapa por uma rotação inacabada, então não é possível reverter para ela."
+      only_pending: "Todas as versões anteriores estão em etapa por uma rotação inacabada e não é possível reverter para elas."
     delete:
       button: "Excluir"
       title:

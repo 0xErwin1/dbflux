@@ -319,7 +319,17 @@ impl SecretStoreSource for FakeSecretStore {
             return Err(DbError::permission_denied(message));
         }
 
-        self.find(name).map(|secret| secret.history)
+        // Like the real store, a version holding the pending stage says so.
+        self.find(name).map(|secret| {
+            secret
+                .history
+                .into_iter()
+                .map(|mut version| {
+                    version.is_pending = version.labels.iter().any(|label| label == "AWSPENDING");
+                    version
+                })
+                .collect()
+        })
     }
 
     /// One overwrite, following the rules the real stores keep: secrets
@@ -1338,6 +1348,7 @@ const FAKE_WRITER: &str = "arn:fake:user/editor";
 /// The history row of a version a write just created.
 fn written_version(id: &str, labels: Vec<String>) -> SecretVersionInfo {
     SecretVersionInfo {
+        is_pending: false,
         id: id.to_string(),
         labels,
         created: fake_time(11, 7, 12),
@@ -1443,6 +1454,7 @@ fn fake_secret(
 
     let details = details(base);
     let history = vec![SecretVersionInfo {
+        is_pending: false,
         id: version.clone(),
         labels: Vec::new(),
         created: details.created,
@@ -1489,6 +1501,7 @@ fn history_row(
     modified_by: Option<&str>,
 ) -> SecretVersionInfo {
     SecretVersionInfo {
+        is_pending: false,
         id: id.to_string(),
         labels: labels.iter().map(ToString::to_string).collect(),
         created,

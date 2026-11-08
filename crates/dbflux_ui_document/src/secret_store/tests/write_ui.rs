@@ -3431,3 +3431,67 @@ fn a_pending_deletion_disables_rotate_now_and_edit_tags_with_rotation_on(cx: &mu
     );
     assert_eq!(disabled(SecretMenuAction::Delete, &mut opened), Some(true));
 }
+
+// -- Roll back skips a version that holds a pending stage -----------------------------
+
+/// A version staged by an unfinished rotation is not a roll back target: its
+/// button is disabled with the reason, and `b` picks the newest version that is.
+#[gpui::test]
+fn a_pending_version_is_not_a_roll_back_target(cx: &mut TestAppContext) {
+    use dbflux_ui_base::keyboard_coverage::FrameCapture;
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    // The history, newest first: current, a pending version, an older one.
+    opened.update(|doc, _| {
+        if let VersionsState::Loaded(versions) = &mut doc.versions {
+            versions[1].is_pending = true;
+        }
+    });
+    opened.window.run_until_parked();
+
+    assert!(!opened.read(|doc| doc.can_roll_back_version(1)));
+    assert!(opened.read(|doc| doc.can_roll_back_version(2)));
+    assert!(opened.is_disabled("secret-version-rollback-1"));
+
+    let frame = {
+        let capture = FrameCapture::observe(opened.window);
+        capture.frame(opened.window)
+    };
+    let name = frame
+        .nodes()
+        .find(|(_, node)| node.id() == "secret-version-rollback-1")
+        .and_then(|(_, node)| frame.accessibility_node(node))
+        .and_then(|node| node.label().map(str::to_string))
+        .unwrap_or_default();
+    assert!(name.contains("unfinished"), "{name}");
+
+    assert!(opened.command(Command::RollBackVersion));
+    let text = opened.rendered_text();
+    assert!(
+        text.contains("v-oldest"),
+        "b skips the pending version: {text}"
+    );
+    assert!(!text.contains("v-previous"), "{text}");
+}
+
+/// When the only earlier version is pending, `b` says why instead of opening.
+#[gpui::test]
+fn b_says_why_when_every_earlier_version_is_pending(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.update(|doc, _| {
+        if let VersionsState::Loaded(versions) = &mut doc.versions {
+            for version in versions.iter_mut().skip(1) {
+                version.is_pending = true;
+            }
+        }
+    });
+
+    opened.command(Command::RollBackVersion);
+
+    assert!(!opened.dialog_open());
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("unfinished"), "{}", errors[0].1);
+}

@@ -340,6 +340,11 @@ pub struct SecretVersionInfo {
     /// The version the store serves when no version is requested. At most
     /// one row of a history carries it.
     pub is_current: bool,
+
+    /// Staged by an unfinished change (a rotation that has not finished):
+    /// rolling back onto it is refused, because it would promote a value
+    /// nobody validated.
+    pub is_pending: bool,
 }
 
 /// A retrieved or written value.

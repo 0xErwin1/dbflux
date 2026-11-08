@@ -3662,6 +3662,8 @@ document:
       done: "%{name} now uses version %{version}"
       no_earlier_version: "%{name} has no earlier version to roll back to."
       history_loading: "The versions are still loading. Try again in a moment."
+      pending_reason: "This version is staged by an unfinished rotation, so it cannot be rolled back to."
+      only_pending: "Every earlier version is staged by an unfinished rotation and cannot be rolled back to."
     delete:
       button: "Delete"
       title:

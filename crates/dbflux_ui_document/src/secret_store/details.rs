@@ -733,6 +733,19 @@ impl SecretStoreDocument {
                 .icon(AppIcon::RotateCcw)
                 .icon_only()
                 .tab_stop(false)
+                .when(self.version_is_pending(index), |button| {
+                    let reason = dbflux_i18n::t!("document.secret_store.rollback.pending_reason");
+
+                    button
+                        .aria_label(format!(
+                            "{}: {reason}",
+                            dbflux_i18n::t!(
+                                "document.secret_store.rollback.action",
+                                version = short_version_id(&version.id)
+                            )
+                        ))
+                        .tooltip(reason)
+                })
                 .disabled(!self.can_roll_back_version(index))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     // The button sits on the row that retrieves the

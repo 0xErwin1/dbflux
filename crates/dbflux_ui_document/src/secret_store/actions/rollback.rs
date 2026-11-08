@@ -60,7 +60,19 @@ impl SecretStoreDocument {
 
         let version = versions.get(index)?;
 
-        (!version.is_current && !self.is_current_version(&version.id)).then_some(&*version.id)
+        (!version.is_current && !version.is_pending && !self.is_current_version(&version.id))
+            .then_some(&*version.id)
+    }
+
+    /// Whether the version at `index` is staged by an unfinished change, so a
+    /// roll back onto it is refused.
+    pub(in crate::secret_store) fn version_is_pending(&self, index: usize) -> bool {
+        match &self.versions {
+            VersionsState::Loaded(versions) => versions
+                .get(index)
+                .is_some_and(|version| version.is_pending && !version.is_current),
+            _ => false,
+        }
     }
 
     /// The index of the most recent earlier version, which `b` rolls back
@@ -71,6 +83,16 @@ impl SecretStoreDocument {
         };
 
         (0..versions.len()).find(|index| self.version_to_roll_back(*index).is_some())
+    }
+
+    fn has_pending_earlier_version(&self) -> bool {
+        let VersionsState::Loaded(versions) = &self.versions else {
+            return false;
+        };
+
+        versions
+            .iter()
+            .any(|version| version.is_pending && !version.is_current)
     }
 
     /// Roll back to the most recent earlier version: the `b` key. Says why
@@ -90,6 +112,12 @@ impl SecretStoreDocument {
 
         match self.previous_version_index() {
             Some(index) => self.open_roll_back(index, window, cx),
+            None if self.has_pending_earlier_version() => {
+                self.report_write_warning(
+                    dbflux_i18n::t!("document.secret_store.rollback.only_pending"),
+                    cx,
+                );
+            }
             None => {
                 let name = self
                     .selected_summary()

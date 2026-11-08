@@ -3662,6 +3662,8 @@ document:
       done: "%{name}이(가) 이제 버전 %{version}을(를) 사용합니다"
       no_earlier_version: "%{name}에는 롤백할 이전 버전이 없습니다."
       history_loading: "버전을 아직 불러오는 중입니다. 잠시 후 다시 시도하세요."
+      pending_reason: "이 버전은 끝나지 않은 교체로 단계가 지정되어 있어 롤백할 수 없습니다."
+      only_pending: "이전 버전이 모두 끝나지 않은 교체로 단계가 지정되어 있어 롤백할 수 없습니다."
     delete:
       button: "삭제"
       title:

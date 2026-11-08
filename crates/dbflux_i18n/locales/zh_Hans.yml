@@ -3662,6 +3662,8 @@ document:
       done: "%{name} 现在使用版本 %{version}"
       no_earlier_version: "%{name} 没有可回滚的更早版本。"
       history_loading: "版本仍在加载。请稍后再试。"
+      pending_reason: "此版本由未完成的轮换暂存，因此无法回滚到它。"
+      only_pending: "所有较早版本都由未完成的轮换暂存，无法回滚。"
     delete:
       button: "删除"
       title:
