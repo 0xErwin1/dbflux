@@ -4655,6 +4655,7 @@ settings:
       load_more: Cargar más
       edit_expiry: Editar expiración…
       edit_value: Editar valor
+      roll_back_version: "Revertir a la versión anterior"
       copy_preview: Copiar vista previa
       import_items: "Importar…"
       import_from_client: "Importar desde otro cliente…"

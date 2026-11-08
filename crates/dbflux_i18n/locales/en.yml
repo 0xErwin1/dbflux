@@ -4655,6 +4655,7 @@ settings:
       load_more: Load more
       edit_expiry: Edit expiry…
       edit_value: Edit value
+      roll_back_version: "Roll back to the previous version"
       copy_preview: Copy preview
       import_items: "Import…"
       import_from_client: "Import from another client…"
