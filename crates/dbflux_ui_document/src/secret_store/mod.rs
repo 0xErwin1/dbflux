@@ -22,7 +22,7 @@ mod render;
 mod value;
 mod write;
 
-use actions::WriteDialog;
+use actions::{RotationNotice, WriteDialog};
 use data::HistoryLoad;
 pub use listing::{PathMode, SecretListing};
 pub use region::RegionListState;
@@ -197,6 +197,9 @@ pub struct SecretStoreDocument {
     /// A governed write is in flight. Another write waits for it, so a
     /// double click cannot send the request twice.
     write_in_flight: bool,
+    /// A rotation cancelled before it finished, shown in the Rotation
+    /// section while its secret stays selected.
+    rotation_notice: Option<RotationNotice>,
     /// The bottom bar's Edit value was pressed before the value was
     /// retrieved: the editor opens when the retrieval lands.
     edit_after_retrieve: bool,
@@ -366,6 +369,7 @@ impl SecretStoreDocument {
             dialog: None,
             dialog_focus: ModalFocus::new(cx),
             write_in_flight: false,
+            rotation_notice: None,
             edit_after_retrieve: false,
             _subscriptions: subscriptions,
         };
@@ -1217,6 +1221,36 @@ impl SecretStoreDocument {
             delete.shortcut =
                 dbflux_ui_base::keymap::shortcut_label(ContextId::Results, Command::Delete);
             actions.push(delete);
+        }
+
+        // Rotate now and Edit rotation are buttons of the Rotation section,
+        // the bottom bar and the row menu.
+        if self.supports_rotation() && matches!(self.selected, Some(SecretRowKey::Secret(_))) {
+            actions.push(
+                callback_action(
+                    &target,
+                    "secret-rotate-now",
+                    "document.secret_store.rotate.button",
+                    Self::rotate_selected_now,
+                )
+                .icon(AppIcon::Zap)
+                .enabled(self.can_start_rotation_action()),
+            );
+
+            let edit_target = target.clone();
+            actions.push(
+                PaneAction::callback(
+                    "secret-edit-rotation",
+                    dbflux_i18n::t!("document.secret_store.rotation_edit.button"),
+                    move |window, cx| {
+                        if let Some(doc) = edit_target.upgrade() {
+                            doc.update(cx, |doc, cx| doc.open_edit_rotation(window, cx));
+                        }
+                    },
+                )
+                .icon(AppIcon::Pencil)
+                .enabled(self.can_start_rotation_action()),
+            );
         }
 
         if self.supports_restore()

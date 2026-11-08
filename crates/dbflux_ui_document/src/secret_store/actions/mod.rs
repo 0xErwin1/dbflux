@@ -17,6 +17,7 @@
 mod bar;
 mod delete;
 mod rollback;
+mod rotation;
 
 use super::editor::write_failure_to_user_facing;
 use super::write::{SecretWriteFailure, SecretWriteFailureKind, WriteContext};
@@ -39,12 +40,14 @@ use uuid::Uuid;
 
 pub(super) use delete::{DeleteDialog, DeleteKind};
 pub(super) use rollback::RollBackDialog;
+pub(super) use rotation::{RotationDialog, RotationNotice};
 
 /// The dialog open over the document, if any. Only one is ever open: a
 /// dialog is modal, and opening another waits for it to close.
 pub(super) enum WriteDialog {
     RollBack(RollBackDialog),
     Delete(DeleteDialog),
+    Rotation(RotationDialog),
 }
 
 /// Everything a governed write takes from the document, captured on the
@@ -99,6 +102,9 @@ pub(super) enum WriteEffect {
     /// The versions of the secret: the shown value is stale.
     Versions,
 
+    /// The secret's metadata only: the value shown stays valid.
+    Metadata,
+
     /// The secret is gone: nothing of it stays selected.
     Removed,
 }
@@ -147,7 +153,7 @@ impl SecretStoreDocument {
 
     /// Reports a write the document will not start, as a decision of the
     /// kind the editor reports a refused save with.
-    pub(super) fn report_write_refusal(&self, reason: String, cx: &mut Context<Self>) {
+    pub(super) fn report_write_warning(&self, reason: String, cx: &mut Context<Self>) {
         report_error(
             UserFacingError::new(ErrorKind::User, reason).with_severity(EventSeverity::Warn),
             cx,
@@ -334,6 +340,7 @@ impl SecretStoreDocument {
         match &self.dialog {
             Some(WriteDialog::RollBack(_)) => self.submit_roll_back(window, cx),
             Some(WriteDialog::Delete(_)) => self.submit_delete(window, cx),
+            Some(WriteDialog::Rotation(_)) => self.submit_rotation(window, cx),
             None => {}
         }
     }
@@ -344,6 +351,7 @@ impl SecretStoreDocument {
         Some(match dialog {
             WriteDialog::RollBack(dialog) => self.render_roll_back_dialog(dialog, cx),
             WriteDialog::Delete(dialog) => self.render_delete_dialog(dialog, cx),
+            WriteDialog::Rotation(dialog) => self.render_rotation_dialog(dialog, cx),
         })
     }
 }

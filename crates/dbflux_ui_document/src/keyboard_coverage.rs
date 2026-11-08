@@ -800,6 +800,30 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Menu("secret-edit-value"),
         ),
         ("secret-restore", KeyboardPath::Menu("secret-restore")),
+        // Rotate now (the bar, the Rotation section, the row menu) and Edit
+        // rotation are pane actions; the dialog's controls answer Enter and
+        // Escape, and the checkbox is a stop of the dialog.
+        (
+            "secret-action-rotate-now",
+            KeyboardPath::Menu("secret-rotate-now"),
+        ),
+        (
+            "secret-rotation-rotate-now",
+            KeyboardPath::Menu("secret-rotate-now"),
+        ),
+        (
+            "secret-rotation-edit",
+            KeyboardPath::Menu("secret-edit-rotation"),
+        ),
+        (
+            "secret-rotation-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-rotation-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("secret-rotation-enabled", KeyboardPath::TabStop),
         (
             "secret-value-copy-*",
             KeyboardPath::MouseOnly(
@@ -824,6 +848,10 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
         (
             "secret-menu-delete-*",
             KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-menu-rotate-now-*",
+            KeyboardPath::Menu("secret-rotate-now"),
         ),
         (
             "secret-menu-restore-*",

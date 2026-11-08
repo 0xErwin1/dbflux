@@ -48,6 +48,7 @@ pub(super) struct SecretMenuItem {
 pub(super) enum SecretMenuAction {
     RetrieveValue,
     EditValue,
+    RotateNow,
     Restore,
     Delete,
     CopyName,
@@ -63,6 +64,7 @@ impl SecretMenuAction {
         match self {
             SecretMenuAction::RetrieveValue => "secret-menu-retrieve-value",
             SecretMenuAction::EditValue => "secret-menu-edit-value",
+            SecretMenuAction::RotateNow => "secret-menu-rotate-now",
             SecretMenuAction::Restore => "secret-menu-restore",
             SecretMenuAction::Delete => "secret-menu-delete",
             SecretMenuAction::CopyName => "secret-menu-copy-name",
@@ -153,6 +155,19 @@ impl SecretStoreDocument {
                         )
                         .with_shortcut(Command::EditValue),
                     );
+                }
+
+                // Rotate now starts a rotation of a secret that rotates.
+                if self.supports_rotation() {
+                    items.push(self.write_item(
+                        SecretMenuItem::new(
+                            SecretMenuAction::RotateNow,
+                            dbflux_i18n::t!("document.secret_store.rotate.button").into(),
+                            AppIcon::Zap,
+                        ),
+                        self.can_start_rotation_action(),
+                        true,
+                    ));
                 }
 
                 // Restore cancels a scheduled deletion; Delete schedules or
@@ -461,6 +476,7 @@ impl SecretStoreDocument {
                 self.open_delete(window, cx);
                 return;
             }
+            SecretMenuAction::RotateNow => self.rotate_selected_now(cx),
             SecretMenuAction::Restore => self.restore_selected(cx),
             SecretMenuAction::RetrieveValue => self.retrieve_selected_value(cx),
             SecretMenuAction::CopyName => self.copy_selected_name(cx),

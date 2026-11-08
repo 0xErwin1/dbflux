@@ -8,7 +8,8 @@ use super::super::actions::DeleteKind;
 use super::super::actions::WriteDialog;
 use super::*;
 use dbflux_core::SecretDeleteRequest;
-use dbflux_test_support::fake_driver::FakeSecretMutation;
+use dbflux_core::SecretVersionStage;
+use dbflux_test_support::fake_driver::{FAKE_ROTATION_FUNCTION, FakeSecretMutation};
 
 impl Opened<'_> {
     /// Makes the window tall enough that the whole details pane is drawn,
@@ -62,6 +63,15 @@ impl Opened<'_> {
         self.load_everything();
         self.select(name);
         self.window.run_until_parked();
+    }
+
+    /// Replaces the text of the drawn input `id` the way a user does: click
+    /// it, select everything and type.
+    fn fill_input(&mut self, id: &str, text: &str) {
+        self.click(id);
+        self.window.simulate_keystrokes("ctrl-a");
+        self.window.run_until_parked();
+        self.type_text(text);
     }
 
     /// Left-clicks the drawn element `id`, press and release on its bounds.
@@ -788,4 +798,434 @@ fn the_delete_and_restore_controls_are_covered(cx: &mut TestAppContext) {
         checked.iter().any(|id| id == "secret-restore"),
         "{checked:?}"
     );
+}
+
+// -- Rotation ------------------------------------------------------------------
+
+const ROTATION_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:function:rotate-hooks";
+
+/// Rotate now and Edit rotation are drawn in the Rotation section, the bottom
+/// bar and the row menu.
+#[gpui::test]
+fn rotation_actions_are_offered_in_the_section_the_bar_and_the_menu(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+
+    for id in [
+        "secret-rotation-edit",
+        "secret-rotation-rotate-now",
+        "secret-action-rotate-now",
+    ] {
+        assert!(opened.is_drawn(id), "{id}");
+    }
+    let text = opened.rendered_text();
+    assert!(text.contains("Rotate immediately"), "{text}");
+    assert!(text.contains("Edit rotation"), "{text}");
+
+    opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
+    assert!(opened.menu_actions().contains(&"RotateNow".to_string()));
+}
+
+/// A store without rotation draws none of it.
+#[gpui::test]
+fn a_store_without_rotation_draws_no_rotation_action(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.open_parameter("/app/prod/db/host");
+
+    for id in [
+        "secret-rotation-edit",
+        "secret-rotation-rotate-now",
+        "secret-action-rotate-now",
+    ] {
+        assert!(!opened.is_drawn(id), "{id}");
+    }
+}
+
+/// Rotate now starts the rotation through the seam: one request, one audit
+/// event, and the history shows the version it created.
+#[gpui::test]
+fn rotate_now_starts_a_rotation_through_the_seam(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let before = opened.read(|doc| match doc.versions() {
+        VersionsState::Loaded(versions) => versions.len(),
+        _ => 0,
+    });
+
+    opened.click("secret-rotation-rotate-now");
+
+    let mutations = opened.mutations();
+    assert_eq!(mutations.len(), 1, "{mutations:?}");
+    assert!(
+        matches!(&mutations[0], FakeSecretMutation::RotateNow { name } if name == KEY_VALUE_SECRET),
+        "{mutations:?}"
+    );
+    assert_eq!(opened.audit_actions(), vec!["secret_rotation_started"]);
+    let after = opened.read(|doc| match doc.versions() {
+        VersionsState::Loaded(versions) => versions.len(),
+        _ => 0,
+    });
+    assert_eq!(after, before + 1, "the history lists the new version");
+    assert!(opened.reported_errors().is_empty());
+}
+
+/// The bar's and the menu's Rotate now run the same action.
+#[gpui::test]
+fn the_bar_and_the_menu_start_the_same_rotation(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-action-rotate-now");
+    assert_eq!(opened.mutations().len(), 1);
+
+    opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
+    let index = opened
+        .menu_actions()
+        .iter()
+        .position(|action| action == "RotateNow")
+        .expect("the menu offers Rotate now");
+    opened.click_menu_item(&format!("secret-menu-rotate-now-item-{index}"));
+
+    // The second rotation is refused by the store while the first is
+    // unfinished or accepted again; either way both reached the seam.
+    assert_eq!(opened.mutations().len(), 2, "{:?}", opened.mutations());
+}
+
+/// A secret whose rotation is off is refused with the reason, and the store is
+/// never called.
+#[gpui::test]
+fn rotate_now_on_a_secret_without_rotation_shows_the_refusal_and_calls_nothing(
+    cx: &mut TestAppContext,
+) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+
+    opened.click("secret-action-rotate-now");
+
+    assert!(opened.mutations().is_empty(), "{:?}", opened.mutations());
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("Rotation is off"), "{}", errors[0].1);
+    assert!(opened.audit_actions().is_empty());
+
+    opened.click("secret-rotation-rotate-now");
+    assert!(opened.mutations().is_empty());
+    assert_eq!(opened.reported_errors().len(), 2, "each press is told why");
+}
+
+/// A read-only connection refuses Rotate now at the seam.
+#[gpui::test]
+fn a_read_only_connection_refuses_rotate_now(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.set_policy(
+        MutationPolicy::ReadOnly,
+        Some(ReadOnlyReason::ProfileSetting),
+    );
+
+    opened.click("secret-rotation-rotate-now");
+
+    assert!(opened.mutations().is_empty());
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("read-only"), "{}", errors[0].1);
+    assert_eq!(opened.audit_actions(), vec!["secret_rotate_refused"]);
+}
+
+/// A managed secret cannot be rotated from here.
+#[gpui::test]
+fn a_managed_secret_cannot_be_rotated_or_edited(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(MANAGED_SECRET);
+
+    for id in [
+        "secret-action-rotate-now",
+        "secret-rotation-rotate-now",
+        "secret-rotation-edit",
+    ] {
+        assert!(opened.is_disabled(id), "{id}");
+    }
+}
+
+/// Edit rotation opens on the secret's own settings, and Save sends one
+/// request with them changed.
+#[gpui::test]
+fn edit_rotation_changes_the_schedule_through_the_seam(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-rotation-edit");
+
+    assert!(opened.is_drawn("secret-rotation-dialog"));
+    assert!(!opened.is_disabled("secret-rotation-confirm"));
+    assert!(opened.mutations().is_empty());
+
+    opened.fill_input("secret-rotation-schedule-input", "rate(7 days)");
+    opened.click("secret-rotation-confirm");
+
+    let mutations = opened.mutations();
+    assert_eq!(mutations.len(), 1, "{mutations:?}");
+    assert!(
+        matches!(
+            &mutations[0],
+            FakeSecretMutation::UpdateRotation(update)
+                if update.enabled
+                    && update.schedule.as_deref() == Some("rate(7 days)")
+                    && update.window.as_deref() == Some("4h")
+                    && update.function.as_deref() == Some(FAKE_ROTATION_FUNCTION)
+        ),
+        "{mutations:?}"
+    );
+    assert_eq!(opened.audit_actions(), vec!["secret_rotation_updated"]);
+    assert!(!opened.dialog_open());
+    let text = opened.rendered_text();
+    assert!(text.contains("Every 7 days"), "{text}");
+}
+
+/// Turning rotation on for a secret that has none: the fields start empty,
+/// say nothing until touched, and the request carries what was typed.
+#[gpui::test]
+fn edit_rotation_turns_rotation_on_with_what_was_typed(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(PLAINTEXT_SECRET);
+    opened.click("secret-rotation-edit");
+
+    assert!(
+        opened.is_disabled("secret-rotation-confirm"),
+        "nothing to save while rotation stays off"
+    );
+    assert!(
+        opened.rendered_text().contains("already off"),
+        "{}",
+        opened.rendered_text()
+    );
+
+    opened.click("secret-rotation-enabled");
+    assert!(
+        opened.is_disabled("secret-rotation-confirm"),
+        "no schedule yet"
+    );
+
+    opened.fill_input("secret-rotation-schedule-input", "rate(7 days)");
+    opened.fill_input("secret-rotation-window-input", "2h");
+    opened.fill_input("secret-rotation-function-input", ROTATION_ARN);
+    assert!(!opened.is_disabled("secret-rotation-confirm"));
+
+    opened.click("secret-rotation-confirm");
+
+    let mutations = opened.mutations();
+    assert_eq!(mutations.len(), 1, "{mutations:?}");
+    assert!(
+        matches!(
+            &mutations[0],
+            FakeSecretMutation::UpdateRotation(update)
+                if update.enabled
+                    && update.schedule.as_deref() == Some("rate(7 days)")
+                    && update.window.as_deref() == Some("2h")
+                    && update.function.as_deref() == Some(ROTATION_ARN)
+        ),
+        "{mutations:?}"
+    );
+    assert!(opened.rendered_text().contains("Enabled"));
+}
+
+/// The seam's validation message shows under the fields, Save stays disabled
+/// and nothing is sent.
+#[gpui::test]
+fn a_rotation_the_seam_would_refuse_shows_its_message_and_sends_nothing(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-rotation-edit");
+
+    opened.fill_input("secret-rotation-schedule-input", "every day");
+    assert!(opened.is_disabled("secret-rotation-confirm"));
+    assert!(opened.is_drawn("secret-rotation-problem"));
+    let text = opened.rendered_text();
+    assert!(text.contains("is not a valid schedule"), "{text}");
+
+    opened.fill_input("secret-rotation-schedule-input", "rate(4 hours)");
+    opened.fill_input("secret-rotation-window-input", "12h");
+    let text = opened.rendered_text();
+    assert!(text.contains("longer than the 4-hour interval"), "{text}");
+    assert!(opened.is_disabled("secret-rotation-confirm"));
+
+    opened.fill_input("secret-rotation-window-input", "2h");
+    opened.fill_input("secret-rotation-function-input", "not-an-arn");
+    let text = opened.rendered_text();
+    assert!(text.contains("is not a Lambda function ARN"), "{text}");
+    assert!(opened.is_disabled("secret-rotation-confirm"));
+
+    opened.click("secret-rotation-confirm");
+    opened.window.simulate_keystrokes("enter");
+    opened.window.run_until_parked();
+
+    // The dialog's own confirm is the last line, whatever reaches it.
+    let doc = opened.doc.clone();
+    opened
+        .window
+        .update(|window, cx| doc.update(cx, |doc, cx| doc.confirm_dialog(window, cx)));
+    opened.window.run_until_parked();
+
+    assert!(opened.mutations().is_empty(), "{:?}", opened.mutations());
+    assert!(
+        opened.audit_actions().is_empty(),
+        "the dialog sends nothing, so not even a refusal reaches the seam"
+    );
+    assert!(opened.dialog_open());
+}
+
+/// Cancelling the dialog writes nothing.
+#[gpui::test]
+fn cancelling_edit_rotation_writes_nothing(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-rotation-edit");
+    opened.fill_input("secret-rotation-schedule-input", "rate(9 days)");
+
+    opened.click("secret-rotation-cancel");
+
+    assert!(!opened.dialog_open());
+    assert!(opened.mutations().is_empty());
+    assert!(opened.audit_actions().is_empty());
+}
+
+/// Turning rotation off sends a request without settings, and a rotation the
+/// store reports unfinished is shown as a warning naming its version.
+#[gpui::test]
+fn cancelling_rotation_names_the_version_a_rotation_left_pending(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+
+    // A rotation that never finished: a version holding the pending stage.
+    opened
+        .governed_write(
+            &SecretPutRequest::text(KEY_VALUE_SECRET, "{}").with_stage(SecretVersionStage::Pending),
+        )
+        .expect("the fake accepts a staged write");
+    opened.update(|doc, cx| {
+        doc.request_versions(
+            KEY_VALUE_SECRET.to_string(),
+            super::super::HistoryLoad::Automatic,
+            cx,
+        )
+    });
+    let audit_before = opened.audit_actions().len();
+
+    opened.click("secret-rotation-edit");
+    opened.click("secret-rotation-enabled");
+    opened.click("secret-rotation-confirm");
+
+    let mutations = opened.mutations();
+    assert_eq!(mutations.len(), 1, "{mutations:?}");
+    assert!(
+        matches!(
+            &mutations[0],
+            FakeSecretMutation::UpdateRotation(update)
+                if !update.enabled
+                    && update.schedule.is_none()
+                    && update.window.is_none()
+                    && update.function.is_none()
+        ),
+        "{mutations:?}"
+    );
+    assert_eq!(opened.audit_actions().len(), audit_before + 1);
+
+    let version = opened
+        .read(|doc| {
+            doc.rotation_notice
+                .as_ref()
+                .map(|notice| notice.version.clone())
+        })
+        .expect("the store reported an unfinished rotation");
+    assert!(opened.is_drawn("secret-rotation-notice"));
+    let text = opened.rendered_text();
+    assert!(text.contains("left version"), "{text}");
+    assert!(text.contains(&version), "{text}");
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains(&version), "{}", errors[0].1);
+
+    // Moving to another secret drops the notice.
+    opened.select(PLAINTEXT_SECRET);
+    assert!(!opened.is_drawn("secret-rotation-notice"));
+}
+
+/// A failed rotation edit is reported once and keeps the dialog.
+#[gpui::test]
+fn a_failed_rotation_edit_is_reported_once_and_keeps_the_dialog(cx: &mut TestAppContext) {
+    let driver = FakeDriver::new(DbKind::AwsSecrets)
+        .with_secret_write_error(KEY_VALUE_SECRET, "not authorized to edit rotation");
+    let mut opened = open_with(cx, driver, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.click("secret-rotation-edit");
+    opened.fill_input("secret-rotation-schedule-input", "rate(7 days)");
+
+    opened.click("secret-rotation-confirm");
+
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("not authorized"), "{}", errors[0].1);
+    assert!(opened.dialog_open());
+    assert_eq!(
+        opened.audit_actions(),
+        vec!["secret_rotation_update_failed"]
+    );
+}
+
+/// The rotation controls and the dialog's are covered.
+#[gpui::test]
+fn the_rotation_controls_are_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::SECRET_STORE;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+
+    let entries = opened.pane_action_ids();
+    for id in ["secret-rotate-now", "secret-edit-rotation"] {
+        assert!(entries.iter().any(|entry| entry == id), "{id}: {entries:?}");
+    }
+
+    let capture = FrameCapture::observe(opened.window);
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(entries.clone())
+        .assert_covered(&capture.frame(opened.window));
+    for id in [
+        "secret-rotation-edit",
+        "secret-rotation-rotate-now",
+        "secret-action-rotate-now",
+    ] {
+        assert!(
+            checked.iter().any(|checked| checked == id),
+            "{id}: {checked:?}"
+        );
+    }
+
+    opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
+    let capture = FrameCapture::observe(opened.window);
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(entries.clone())
+        .assert_covered(&capture.frame(opened.window));
+    assert!(
+        checked
+            .iter()
+            .any(|id| id.starts_with("secret-menu-rotate-now")),
+        "{checked:?}"
+    );
+    opened.command(Command::Cancel);
+
+    opened.click("secret-rotation-edit");
+    let capture = FrameCapture::observe(opened.window);
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(entries)
+        .assert_covered(&capture.frame(opened.window));
+    for id in [
+        "secret-rotation-confirm",
+        "secret-rotation-cancel",
+        "secret-rotation-enabled",
+    ] {
+        assert!(
+            checked.iter().any(|checked| checked == id),
+            "{id}: {checked:?}"
+        );
+    }
 }

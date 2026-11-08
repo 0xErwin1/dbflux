@@ -278,6 +278,7 @@ impl SecretStoreDocument {
         self.versions = VersionsState::Idle;
         self.versions_session = None;
         self.missing_connection_reported = false;
+        self.rotation_notice = None;
     }
 
     /// Lists the versions of `name` for the details pane, on the background

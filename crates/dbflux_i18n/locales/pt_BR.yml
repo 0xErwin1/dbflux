@@ -3681,6 +3681,31 @@ document:
     restore:
       button: "Restaurar segredo"
       done: "%{name} foi restaurado"
+    rotate:
+      button: "Rotacionar agora"
+      immediately: "Rotacionar imediatamente"
+      refused_off: "A rotação está desativada para %{name}. Ative-a em Editar rotação antes de rotacionar."
+      done: "Uma rotação de %{name} foi iniciada"
+      done_version: "Uma rotação de %{name} foi iniciada; a versão %{version} é a nova versão atual"
+    rotation_edit:
+      button: "Editar rotação"
+      title: "Editar a rotação de %{name}"
+      enabled: "Rotacionar este segredo automaticamente"
+      schedule: "Agendamento"
+      schedule_hint: "rate(30 days), rate(12 hours) ou uma expressão cron(...) de seis campos."
+      schedule_placeholder: "rate(30 days)"
+      window: "Janela de rotação"
+      window_hint: "Horas inteiras, de 1h a 24h. Vazio mantém a janela atual."
+      window_placeholder: "4h"
+      function: "Função de rotação"
+      function_hint: "A função que rotaciona o segredo, como seu ARN. Vazio mantém a função atual."
+      function_placeholder: "ARN da função"
+      already_off: "A rotação já está desativada."
+      confirm: "Salvar rotação"
+      done: "A rotação de %{name} foi atualizada"
+      unfinished: "A rotação está desativada, mas a versão %{version} ainda mantém a etapa pendente de uma rotação que nunca terminou."
+      unfinished_title: "Uma rotação cancelada deixou a versão %{version} pendente"
+      unfinished_body: "Verifique as credenciais da versão %{version} e depois mova ou remova sua etapa pendente. Até lá, uma rotação posterior pode ser recusada."
 document_tree:
   search_placeholder: Buscar…
   view:

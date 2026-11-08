@@ -87,7 +87,7 @@ impl SecretStoreDocument {
                     .map(|summary| summary.name.clone())
                     .unwrap_or_default();
 
-                self.report_write_refusal(
+                self.report_write_warning(
                     dbflux_i18n::t!(
                         "document.secret_store.rollback.no_earlier_version",
                         name = name.as_str()
@@ -110,7 +110,7 @@ impl SecretStoreDocument {
         }
 
         if let Some(reason) = self.write_refusal_reason() {
-            self.report_write_refusal(reason, cx);
+            self.report_write_warning(reason, cx);
             return;
         }
 
@@ -161,7 +161,7 @@ impl SecretStoreDocument {
         // landing it on a version the user did not see.
         if !self.history_session_is_live(cx) {
             self.dismiss_dialog(cx);
-            self.report_write_refusal(
+            self.report_write_warning(
                 dbflux_i18n::t!("document.secret_store.write.connection_replaced"),
                 cx,
             );

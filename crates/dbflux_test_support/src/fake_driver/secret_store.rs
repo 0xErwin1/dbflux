@@ -43,6 +43,10 @@ pub enum FakeSecretMutation {
     Create(SecretCreateRequest),
 }
 
+/// The rotation function the fake flat store's rotating secret reports.
+pub const FAKE_ROTATION_FUNCTION: &str =
+    "arn:aws:lambda:us-east-1:123456789012:function:rotate-api-credentials";
+
 /// Id of the fake flat store, shaped like AWS Secrets Manager.
 pub const FAKE_SECRETS_STORE_ID: &str = "secrets-manager";
 
@@ -1564,7 +1568,8 @@ fn fake_flat_secrets() -> Vec<FakeSecret> {
         enabled: true,
         schedule: Some("rate(30 days)".to_string()),
         window: Some("4h".to_string()),
-        function: Some("rotate-api-credentials".to_string()),
+        // Stores report the rotation function by its ARN.
+        function: Some(FAKE_ROTATION_FUNCTION.to_string()),
         last_rotated: fake_time(9, 20, 3),
         next_rotation: fake_time(10, 20, 3),
     };

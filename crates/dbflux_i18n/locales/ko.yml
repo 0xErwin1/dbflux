@@ -3681,6 +3681,31 @@ document:
     restore:
       button: "시크릿 복원"
       done: "%{name}을(를) 복원했습니다"
+    rotate:
+      button: "지금 교체"
+      immediately: "즉시 교체"
+      refused_off: "%{name}의 교체가 꺼져 있습니다. 교체하기 전에 교체 편집에서 켜세요."
+      done: "%{name}의 교체를 시작했습니다"
+      done_version: "%{name}의 교체를 시작했습니다. 버전 %{version}이(가) 새 현재 버전입니다"
+    rotation_edit:
+      button: "교체 편집"
+      title: "%{name}의 교체 편집"
+      enabled: "이 시크릿을 자동으로 교체"
+      schedule: "일정"
+      schedule_hint: "rate(30 days), rate(12 hours) 또는 여섯 필드의 cron(...) 식입니다."
+      schedule_placeholder: "rate(30 days)"
+      window: "교체 시간대"
+      window_hint: "1h에서 24h까지의 정수 시간입니다. 비워 두면 현재 시간대를 유지합니다."
+      window_placeholder: "4h"
+      function: "교체 함수"
+      function_hint: "시크릿을 교체하는 함수의 ARN입니다. 비워 두면 현재 함수를 유지합니다."
+      function_placeholder: "함수 ARN"
+      already_off: "교체가 이미 꺼져 있습니다."
+      confirm: "교체 저장"
+      done: "%{name}의 교체를 업데이트했습니다"
+      unfinished: "교체는 꺼졌지만 버전 %{version}에 끝나지 않은 교체의 보류 단계가 남아 있습니다."
+      unfinished_title: "취소된 교체로 버전 %{version}이(가) 보류 상태로 남았습니다"
+      unfinished_body: "버전 %{version}의 자격 증명을 확인한 다음 보류 단계를 옮기거나 제거하세요. 그때까지는 이후 교체가 거부될 수 있습니다."
 document_tree:
   search_placeholder: 검색…
   view:

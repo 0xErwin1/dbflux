@@ -3681,6 +3681,31 @@ document:
     restore:
       button: "Restore secret"
       done: "Restored %{name}"
+    rotate:
+      button: "Rotate now"
+      immediately: "Rotate immediately"
+      refused_off: "Rotation is off for %{name}. Turn it on with Edit rotation before rotating."
+      done: "Started a rotation of %{name}"
+      done_version: "Started a rotation of %{name}; version %{version} is the new current version"
+    rotation_edit:
+      button: "Edit rotation"
+      title: "Edit rotation of %{name}"
+      enabled: "Rotate this secret automatically"
+      schedule: "Schedule"
+      schedule_hint: "rate(30 days), rate(12 hours) or a six-field cron(...) expression."
+      schedule_placeholder: "rate(30 days)"
+      window: "Rotation window"
+      window_hint: "Whole hours, from 1h to 24h. Empty keeps the current window."
+      window_placeholder: "4h"
+      function: "Rotation function"
+      function_hint: "The function that rotates the secret, as its ARN. Empty keeps the current function."
+      function_placeholder: "Function ARN"
+      already_off: "Rotation is already off."
+      confirm: "Save rotation"
+      done: "Updated the rotation of %{name}"
+      unfinished: "Rotation is off, but version %{version} still holds the pending stage of a rotation that never finished."
+      unfinished_title: "A cancelled rotation left version %{version} pending"
+      unfinished_body: "Check the credentials behind version %{version}, then move or remove its pending stage. Until then a later rotation can be refused."
 document_tree:
   search_placeholder: Search…
   view:

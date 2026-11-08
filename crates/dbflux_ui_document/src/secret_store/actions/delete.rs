@@ -107,7 +107,7 @@ impl SecretStoreDocument {
         }
 
         if let Some(reason) = self.write_refusal_reason() {
-            self.report_write_refusal(reason, cx);
+            self.report_write_warning(reason, cx);
             return;
         }
 

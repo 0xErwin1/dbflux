@@ -213,7 +213,7 @@ impl SecretStoreDocument {
                 sections.extend(versions.take());
 
                 if self.store.supports(SecretStoreCapabilities::ROTATION) {
-                    sections.push(render_rotation_section(details, cx).into_any_element());
+                    sections.push(self.render_rotation_section(details, cx).into_any_element());
                 }
 
                 sections.push(render_tags_section(details, cx).into_any_element());
@@ -678,6 +678,74 @@ impl SecretStoreDocument {
             )
             .children(action)
             .into_any_element()
+    }
+
+    /// The Rotation section: the settings the store reports, the warning a
+    /// cancelled rotation left, and the buttons that start or edit one.
+    fn render_rotation_section(&self, details: &SecretDetails, cx: &mut Context<Self>) -> Div {
+        let mut rows = rotation_rows(details, cx);
+
+        if let Some(notice) = self.rotation_notice_for_selection() {
+            rows.push(
+                div()
+                    .id("secret-rotation-notice")
+                    .child(
+                        BannerBlock::new(
+                            BannerVariant::Warning,
+                            dbflux_i18n::t!(
+                                "document.secret_store.rotation_edit.unfinished_title",
+                                version = notice.version.as_str()
+                            ),
+                        )
+                        .with_body(dbflux_i18n::t!(
+                            "document.secret_store.rotation_edit.unfinished_body",
+                            version = notice.version.as_str()
+                        )),
+                    )
+                    .into_any_element(),
+            );
+        }
+
+        if self.supports_rotation() {
+            let refusal = self.write_refusal_reason();
+            let edit = Button::new(
+                "secret-rotation-edit",
+                dbflux_i18n::t!("document.secret_store.rotation_edit.button"),
+            )
+            .icon(AppIcon::Pencil)
+            .tab_stop(false)
+            .disabled(!self.can_start_rotation_action())
+            .on_click(cx.listener(|this, _, window, cx| this.open_edit_rotation(window, cx)));
+            let rotate = Button::new(
+                "secret-rotation-rotate-now",
+                dbflux_i18n::t!("document.secret_store.rotate.immediately"),
+            )
+            .icon(AppIcon::Zap)
+            .tab_stop(false)
+            .disabled(!self.can_start_rotation_action())
+            .on_click(cx.listener(|this, _, _, cx| this.rotate_selected_now(cx)));
+
+            let (edit, rotate) = match refusal {
+                Some(reason) => (edit.tooltip(reason.clone()), rotate.tooltip(reason)),
+                None => (edit, rotate),
+            };
+
+            rows.push(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(DocumentMetrics::GAP)
+                    .child(edit)
+                    .child(rotate)
+                    .into_any_element(),
+            );
+        }
+
+        section(
+            dbflux_i18n::t!("document.secret_store.rotation.title"),
+            rows,
+            cx,
+        )
     }
 
     /// The scheduled deletion of the secret: the date it takes effect, when
@@ -1372,10 +1440,11 @@ fn managed_card(name: &str, service: &str) -> BannerBlock {
     ))
 }
 
-fn render_rotation_section(details: &SecretDetails, cx: &App) -> Div {
+/// The rows of the Rotation section: the settings the store reports.
+fn rotation_rows(details: &SecretDetails, cx: &App) -> Vec<AnyElement> {
     let label = |key: &str| dbflux_i18n::t!(key);
 
-    let rows = match &details.summary.rotation {
+    match &details.summary.rotation {
         Some(rotation) => vec![
             detail_row(
                 label("document.secret_store.rotation.status"),
@@ -1412,13 +1481,7 @@ fn render_rotation_section(details: &SecretDetails, cx: &App) -> Div {
             label("document.secret_store.rotation.disabled"),
             cx,
         )],
-    };
-
-    section(
-        dbflux_i18n::t!("document.secret_store.rotation.title"),
-        rows,
-        cx,
-    )
+    }
 }
 
 /// Tags as `key=value` chips in a row that wraps. The artboard's Edit

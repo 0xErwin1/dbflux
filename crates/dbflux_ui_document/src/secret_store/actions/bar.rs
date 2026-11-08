@@ -104,6 +104,22 @@ impl SecretStoreDocument {
             .into_any_element(),
         );
 
+        if self.supports_rotation() {
+            buttons.push(
+                blocked(
+                    Button::new(
+                        "secret-action-rotate-now",
+                        dbflux_i18n::t!("document.secret_store.rotate.button"),
+                    )
+                    .icon(AppIcon::Zap)
+                    .tab_stop(false)
+                    .disabled(!self.can_start_rotation_action())
+                    .on_click(cx.listener(|this, _, _, cx| this.rotate_selected_now(cx))),
+                )
+                .into_any_element(),
+            );
+        }
+
         if self.supports_delete() {
             buttons.push(
                 blocked(
