@@ -489,20 +489,20 @@ fn the_versions_table_fits_the_default_details_width(cx: &mut TestAppContext) {
 
 // -- Delete and restore ------------------------------------------------------
 
-/// The same Delete is reachable from the pane header, the bottom bar and the
-/// row menu, each opening the one dialog and writing nothing.
+/// The same Delete is reachable from the bottom bar and the row menu, each
+/// opening the one dialog and writing nothing. The header beside Close holds
+/// no write, so closing the pane can never end in a deletion.
 #[gpui::test]
-fn delete_is_reachable_from_the_header_the_bar_and_the_row_menu(cx: &mut TestAppContext) {
+fn delete_is_reachable_from_the_bar_and_the_row_menu_never_the_header(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(KEY_VALUE_SECRET);
 
-    for id in ["secret-details-delete", "secret-action-delete"] {
-        assert!(opened.is_drawn(id), "{id}");
-        opened.click(id);
-        assert!(opened.is_drawn("secret-delete-dialog"), "{id} opens it");
-        opened.click("secret-delete-cancel");
-        assert!(!opened.dialog_open());
-    }
+    assert!(!opened.is_drawn("secret-details-delete"));
+    assert!(opened.is_drawn("secret-details-close"));
+    opened.click("secret-action-delete");
+    assert!(opened.is_drawn("secret-delete-dialog"));
+    opened.click("secret-delete-cancel");
+    assert!(!opened.dialog_open());
 
     opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
     let actions = opened.menu_actions();
@@ -775,7 +775,7 @@ fn a_managed_secret_cannot_be_deleted(cx: &mut TestAppContext) {
     opened.open_secret(MANAGED_SECRET);
 
     assert!(opened.is_disabled("secret-action-delete"));
-    assert!(opened.is_disabled("secret-details-delete"));
+    assert!(!opened.is_drawn("secret-details-delete"));
 
     opened.command(Command::Delete);
 
@@ -879,11 +879,7 @@ fn the_delete_and_restore_controls_are_covered(cx: &mut TestAppContext) {
     let checked = Coverage::new(SECRET_STORE)
         .with_menu_entries(entries.clone())
         .assert_covered(&capture.frame(opened.window));
-    for id in [
-        "secret-details-delete",
-        "secret-action-delete",
-        "secret-action-edit-value",
-    ] {
+    for id in ["secret-action-delete", "secret-action-edit-value"] {
         assert!(
             checked.iter().any(|checked| checked == id),
             "{id}: {checked:?}"
@@ -931,22 +927,19 @@ fn the_delete_and_restore_controls_are_covered(cx: &mut TestAppContext) {
 
 const ROTATION_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:function:rotate-hooks";
 
-/// Rotate now and Edit rotation are drawn in the Rotation section, the bottom
-/// bar and the row menu.
+/// Edit rotation is drawn in the Rotation section, Rotate now in the bottom
+/// bar and the row menu, and the pane draws Rotate now once.
 #[gpui::test]
 fn rotation_actions_are_offered_in_the_section_the_bar_and_the_menu(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(KEY_VALUE_SECRET);
 
-    for id in [
-        "secret-rotation-edit",
-        "secret-rotation-rotate-now",
-        "secret-action-rotate-now",
-    ] {
+    for id in ["secret-rotation-edit", "secret-action-rotate-now"] {
         assert!(opened.is_drawn(id), "{id}");
     }
+    assert!(!opened.is_drawn("secret-rotation-rotate-now"));
     let text = opened.rendered_text();
-    assert!(text.contains("Rotate immediately"), "{text}");
+    assert!(!text.contains("Rotate immediately"), "{text}");
     assert!(text.contains("Edit rotation"), "{text}");
 
     opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
@@ -979,7 +972,7 @@ fn rotate_now_starts_a_rotation_through_the_seam(cx: &mut TestAppContext) {
         _ => 0,
     });
 
-    opened.click("secret-rotation-rotate-now");
+    opened.click("secret-action-rotate-now");
     assert!(opened.is_drawn("secret-rotate-dialog"), "it asks first");
     assert!(opened.mutations().is_empty(), "nothing before the confirm");
     let text = opened.rendered_text();
@@ -1038,21 +1031,20 @@ fn rotate_now_is_disabled_with_the_reason_when_rotation_is_off(cx: &mut TestAppC
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.open_secret(PLAINTEXT_SECRET);
 
-    for id in ["secret-action-rotate-now", "secret-rotation-rotate-now"] {
-        assert!(opened.is_disabled(id), "{id} is disabled");
+    let id = "secret-action-rotate-now";
+    assert!(opened.is_disabled(id), "{id} is disabled");
 
-        let capture = FrameCapture::observe(opened.window);
-        let frame = capture.frame(opened.window);
-        let name = frame
-            .nodes()
-            .find(|(_, node)| node.id() == id)
-            .and_then(|(_, node)| frame.accessibility_node(node))
-            .and_then(|node| node.label().map(str::to_string))
-            .unwrap_or_default();
-        assert!(name.contains("Rotation is off"), "{id}: {name}");
+    let capture = FrameCapture::observe(opened.window);
+    let frame = capture.frame(opened.window);
+    let name = frame
+        .nodes()
+        .find(|(_, node)| node.id() == id)
+        .and_then(|(_, node)| frame.accessibility_node(node))
+        .and_then(|node| node.label().map(str::to_string))
+        .unwrap_or_default();
+    assert!(name.contains("Rotation is off"), "{id}: {name}");
 
-        opened.click(id);
-    }
+    opened.click(id);
 
     assert!(opened.mutations().is_empty(), "{:?}", opened.mutations());
     assert!(
@@ -1119,7 +1111,7 @@ fn a_read_only_connection_refuses_rotate_now(cx: &mut TestAppContext) {
         Some(ReadOnlyReason::ProfileSetting),
     );
 
-    opened.click("secret-rotation-rotate-now");
+    opened.click("secret-action-rotate-now");
     opened.click("secret-rotate-confirm");
 
     assert!(opened.mutations().is_empty());
@@ -1137,11 +1129,7 @@ fn a_managed_secret_cannot_be_rotated_or_edited(cx: &mut TestAppContext) {
     opened.load_everything();
     opened.open_secret(MANAGED_SECRET);
 
-    for id in [
-        "secret-action-rotate-now",
-        "secret-rotation-rotate-now",
-        "secret-rotation-edit",
-    ] {
+    for id in ["secret-action-rotate-now", "secret-rotation-edit"] {
         assert!(opened.is_disabled(id), "{id}");
     }
 }
@@ -1388,11 +1376,7 @@ fn the_rotation_controls_are_covered(cx: &mut TestAppContext) {
     let checked = Coverage::new(SECRET_STORE)
         .with_menu_entries(entries.clone())
         .assert_covered(&capture.frame(opened.window));
-    for id in [
-        "secret-rotation-edit",
-        "secret-rotation-rotate-now",
-        "secret-action-rotate-now",
-    ] {
+    for id in ["secret-rotation-edit", "secret-action-rotate-now"] {
         assert!(
             checked.iter().any(|checked| checked == id),
             "{id}: {checked:?}"
@@ -2536,7 +2520,6 @@ fn every_control_of_the_details_pane_is_reachable_above_the_action_bar(cx: &mut 
         "secret-details-edit",
         "secret-version-rollback-1",
         "secret-rotation-edit",
-        "secret-rotation-rotate-now",
         "secret-tags-edit",
     ];
 
@@ -2587,7 +2570,7 @@ fn no_write_starts_while_a_region_switch_is_in_flight(cx: &mut TestAppContext) {
 
     opened.click("secret-action-delete");
     assert!(!opened.dialog_open(), "no dialog opens");
-    opened.click("secret-rotation-rotate-now");
+    opened.click("secret-action-rotate-now");
     opened.click("secret-tags-edit");
     assert!(!opened.dialog_open());
 
@@ -2963,7 +2946,7 @@ fn rotate_now_pane_action_escape_and_enter(cx: &mut TestAppContext) {
     assert!(opened.mutations().is_empty());
     assert!(opened.audit_actions().is_empty());
 
-    opened.click("secret-rotation-rotate-now");
+    opened.click("secret-action-rotate-now");
     assert!(opened.is_drawn("secret-rotate-dialog"));
     opened.press("enter");
     assert_eq!(opened.mutations().len(), 1, "{:?}", opened.mutations());

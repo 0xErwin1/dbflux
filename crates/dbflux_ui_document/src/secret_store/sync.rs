@@ -51,12 +51,13 @@ impl SecretStoreDocument {
 
     /// Queues the request to open `name` in its own tab and wakes the
     /// workspace, which drains it on its next render.
-    pub(super) fn queue_open_secret(&mut self, name: String, cx: &mut Context<Self>) {
+    pub(super) fn queue_open_secret(&mut self, name: String, edit: bool, cx: &mut Context<Self>) {
         self.pending_open_secret = Some(SecretOpenRequest {
             store_id: self.store.id.clone(),
             name,
             version: None,
             region: self.region.clone(),
+            edit,
         });
         cx.emit(DocumentEvent::RequestFocus);
         cx.notify();
@@ -66,7 +67,7 @@ impl SecretStoreDocument {
     /// behind the row menu's Open in tab and the pane action.
     pub fn open_selected_in_tab(&mut self, cx: &mut Context<Self>) {
         if let Some(SecretRowKey::Secret(name)) = self.selected.clone() {
-            self.queue_open_secret(name, cx);
+            self.queue_open_secret(name, false, cx);
         }
     }
 

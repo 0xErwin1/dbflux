@@ -5,7 +5,7 @@
 //! scheduled) is drawn disabled, with the reason in its tooltip.
 
 use crate::secret_store::ValueState;
-use crate::secret_store::view::SecretView;
+use crate::secret_store::view::{SecretView, SecretViewEvent};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::tokens::{ChromeColors, DocumentMetrics, SecretStoreMetrics};
@@ -40,6 +40,15 @@ impl SecretView {
     /// and the editor opens when it lands.
     pub(crate) fn request_edit_value(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_request_edit_value() {
+            return;
+        }
+
+        // The side pane never hosts the editor: the secret's tab does, and it
+        // retrieves the value first when it is not loaded.
+        if self.edit_in_tab
+            && let Some(name) = self.name.clone()
+        {
+            cx.emit(SecretViewEvent::OpenInTab { name, edit: true });
             return;
         }
 

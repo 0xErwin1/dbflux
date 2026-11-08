@@ -29,10 +29,9 @@ impl SecretView {
         let edit = self.supports_tags().then(|| {
             let button = Button::new(
                 "secret-tags-edit",
-                dbflux_i18n::t!("document.secret_store.tags_edit.short"),
+                dbflux_i18n::t!("document.secret_store.tags_edit.button"),
             )
             .icon(AppIcon::Tag)
-            .aria_label(dbflux_i18n::t!("document.secret_store.tags_edit.button"))
             .tab_stop(false)
             .disabled(!self.can_edit_tags())
             .on_click(cx.listener(|this, _, window, cx| this.open_edit_tags(window, cx)));
@@ -116,7 +115,8 @@ impl SecretView {
                     .flex_wrap()
                     .gap(DocumentMetrics::GAP)
                     .child(edit)
-                    .child(rotate)
+                    // The pane's bottom bar owns Rotate now; the tab has no bar.
+                    .when(self.in_tab(), |row| row.child(rotate))
                     .into_any_element(),
             );
         }

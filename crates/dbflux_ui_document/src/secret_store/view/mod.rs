@@ -92,9 +92,10 @@ pub(crate) enum SecretViewEvent {
     /// The pane's Close button was pressed.
     CloseRequested,
 
-    /// The pane's expand button was pressed: the host opens the secret in its
-    /// own tab.
-    OpenInTab { name: String },
+    /// The pane's expand button, or an edit the pane hands over, was pressed:
+    /// the host opens the secret in its own tab, with the editor active when
+    /// `edit` is set.
+    OpenInTab { name: String, edit: bool },
 
     /// The open dialog went away, however it closed: the host drops what it
     /// kept for a dialog of its own.
@@ -205,9 +206,28 @@ pub(crate) struct SecretView {
     /// The version Retrieve value fetches: the one a document was opened at,
     /// `None` for the current value.
     opened_version: Option<String>,
+    host: ViewHost,
+    /// The width the user dragged the details pane to; the default until then.
+    details_width: Option<Pixels>,
+    details_resize: Option<details::resize::DetailsResize>,
+    /// A pane hands editing to the secret's tab instead of editing in the
+    /// side pane. Cleared only by the view-level tests, which edit wherever
+    /// they mount the view.
+    edit_in_tab: bool,
 }
 
 impl EventEmitter<SecretViewEvent> for SecretView {}
+
+/// Where a view is hosted. It decides which actions the view draws itself
+/// (the pane has a bottom bar, the tab the artboard's header and section
+/// buttons, so no action is drawn twice) and where a value is edited.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ViewHost {
+    /// The details pane beside a listing.
+    Pane,
+    /// The tab of one secret.
+    Tab,
+}
 
 impl SecretView {
     pub(crate) fn new(
@@ -215,6 +235,7 @@ impl SecretView {
         store: SecretStoreDescriptor,
         app_state: Entity<AppStateEntity>,
         region_switching: Rc<Cell<bool>>,
+        host: ViewHost,
         cx: &mut Context<Self>,
     ) -> Self {
         let connection_present = app_state.read(cx).connections().contains_key(&profile_id);
@@ -222,6 +243,10 @@ impl SecretView {
         Self {
             region_pin: None,
             opened_version: None,
+            host,
+            details_width: None,
+            details_resize: None,
+            edit_in_tab: host == ViewHost::Pane,
             profile_id,
             store,
             app_state,
@@ -262,6 +287,17 @@ impl SecretView {
             host_context: ContextId::Results,
             region_switching,
         }
+    }
+
+    /// Lets a pane edit in place, which only the view-level tests do.
+    #[cfg(test)]
+    pub(crate) fn set_edit_in_place(&mut self, in_place: bool) {
+        self.edit_in_tab = !in_place;
+    }
+
+    /// Whether the view is hosted as a secret's tab.
+    pub(crate) fn in_tab(&self) -> bool {
+        self.host == ViewHost::Tab
     }
 
     /// Whether the profile had a live connection at the last state change.

@@ -6,6 +6,8 @@ mod write_probes;
 mod write_ui;
 // Follow-ups to the extracted single-secret view.
 mod view_followups;
+// The pane's hand-over of editing, its header, labels and resizing.
+mod pane_chrome;
 
 use super::listing::{
     AUTO_CONTINUE_ENTRY_LIMIT, LARGEST_PAGE_ENTRIES, SecretListing, child_path_label,
@@ -50,7 +52,7 @@ use super::RegionListState;
 pub(crate) const KEY_VALUE_SECRET: &str = "prod/api/credentials";
 const MANAGED_SECRET: &str = "prod/db/master";
 const PENDING_DELETION_SECRET: &str = "prod/deploy/legacy-token";
-const PLAINTEXT_SECRET: &str = "prod/notify/webhook-token";
+pub(crate) const PLAINTEXT_SECRET: &str = "prod/notify/webhook-token";
 const BINARY_SECRET: &str = "prod/tls/signing-key";
 const DENIED_PARAMETER: &str = "/app/prod/db/password";
 /// A `.env` file a user stored in a secret: the line breaks are the point.
@@ -98,6 +100,13 @@ fn open_with<'a>(
         SecretStoreDocument::new(profile_id, store_id, path, state, window, cx)
     });
     window.run_until_parked();
+
+    // The view-level tests exercise the editor where the harness mounts the
+    // view; the pane's hand-over to the secret's tab is tested apart.
+    window.update(|_, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, _| view.set_edit_in_place(true));
+    });
 
     Opened {
         doc,
@@ -2933,7 +2942,7 @@ fn the_edit_value_control_is_covered(cx: &mut TestAppContext) {
         .assert_covered(&capture.frame(opened.window));
 
     assert!(
-        checked.iter().any(|id| id == "secret-value-edit"),
+        checked.iter().any(|id| id == "secret-action-edit-value"),
         "{checked:?}"
     );
 
@@ -3171,6 +3180,13 @@ fn open_named_region_store<'a>(
         SecretStoreDocument::new(profile_id, store_id, path, state, window, cx)
     });
     window.run_until_parked();
+
+    // The view-level tests exercise the editor where the harness mounts the
+    // view; the pane's hand-over to the secret's tab is tested apart.
+    window.update(|_, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, _| view.set_edit_in_place(true));
+    });
 
     Opened {
         doc,
@@ -7376,10 +7392,10 @@ mod editor_key_value {
     fn edit_value_is_offered_for_a_key_value_secret(cx: &mut TestAppContext) {
         let mut opened = opened_key_value(cx);
         assert!(opened.read_view(|view| view.can_edit_value()));
-        assert!(has_path(&mut opened, "secret-value-edit"));
+        assert!(has_path(&mut opened, "secret-action-edit-value"));
 
         opened.update_view(|view, cx| view.set_value_view(ValueView::Plaintext, cx));
-        assert!(has_path(&mut opened, "secret-value-edit"));
+        assert!(has_path(&mut opened, "secret-action-edit-value"));
 
         opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
         assert!(
@@ -7476,7 +7492,10 @@ mod editor_key_value {
                 "{name} loaded"
             );
             assert!(!opened.read_view(|view| view.can_edit_value()), "{name}");
-            assert!(!has_path(&mut opened, "secret-value-edit"), "{name}");
+            assert!(
+                !opened.read_view(|view| view.can_request_edit_value()),
+                "{name}"
+            );
         }
     }
 
@@ -8447,8 +8466,10 @@ mod details_design {
 
         let reveal = top(&mut opened, "secret-value-hide-all");
         let copy = top(&mut opened, "secret-value-copy-all");
-        let edit = top(&mut opened, "secret-value-edit");
         assert_eq!(reveal, copy);
-        assert_eq!(copy, edit);
+        assert!(
+            node_bounds(&mut opened, "secret-value-edit").is_none(),
+            "the bottom bar owns Edit value in the pane"
+        );
     }
 }

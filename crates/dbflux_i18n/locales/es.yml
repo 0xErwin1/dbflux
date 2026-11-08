@@ -3736,7 +3736,6 @@ document:
       unfinished_title: "Una rotación cancelada dejó pendiente la versión %{version}"
       unfinished_body: "Revise las credenciales de la versión %{version} y luego mueva o elimine su etapa pendiente. Hasta entonces se puede rechazar una rotación posterior."
     tags_edit:
-      short: "Editar"
       button: "Editar etiquetas"
       title: "Editar las etiquetas de %{name}"
       lead: "Cambiar una etiqueta no toca el valor ni ninguna versión."
@@ -3751,7 +3750,6 @@ document:
       no_change: "Ninguna etiqueta difiere de las que tiene el secreto."
       duplicate: "La clave %{key} aparece en más de una fila."
     description_edit:
-      short: "Editar"
       button: "Editar descripción"
       title: "Editar la descripción de %{name}"
       label: "Descripción"

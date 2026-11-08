@@ -10,7 +10,7 @@ use crate::keyboard_coverage::{SECRET_DOCUMENT, SECRET_STORE};
 use crate::keyboard_test_support::init_keyboard_runtime;
 use crate::secret_store::changes::{self, SecretChange, SecretChangeKind};
 use crate::secret_store::tests::{
-    CURRENT_REGION, KEY_VALUE_SECRET, OTHER_REGION, connected_aws_app_state,
+    CURRENT_REGION, KEY_VALUE_SECRET, OTHER_REGION, PLAINTEXT_SECRET, connected_aws_app_state,
 };
 use crate::secret_store::{DetailsState, SecretStoreDocument, ValueState};
 use dbflux_app::keymap::Command;
@@ -31,6 +31,17 @@ struct Opened<'a> {
 }
 
 fn open_document<'a>(cx: &'a mut TestAppContext, name: &str, region: Option<&str>) -> Opened<'a> {
+    open_document_with(cx, name, region, false)
+}
+
+/// Opens the tab the way the workspace does for an Edit value handed over by
+/// the pane: the editor is requested before the details have landed.
+fn open_document_with<'a>(
+    cx: &'a mut TestAppContext,
+    name: &str,
+    region: Option<&str>,
+    edit: bool,
+) -> Opened<'a> {
     init_keyboard_runtime(cx);
 
     let driver =
@@ -48,7 +59,7 @@ fn open_document<'a>(cx: &'a mut TestAppContext, name: &str, region: Option<&str
     let region = region.map(str::to_string);
 
     let (doc, window) = cx.add_window_view(move |_window, cx| {
-        SecretDocument::new(
+        let mut document = SecretDocument::new(
             profile_id,
             FAKE_SECRETS_STORE_ID.to_string(),
             name,
@@ -56,7 +67,13 @@ fn open_document<'a>(cx: &'a mut TestAppContext, name: &str, region: Option<&str
             region,
             state,
             cx,
-        )
+        );
+
+        if edit {
+            document.begin_edit(cx);
+        }
+
+        document
     });
     window.simulate_resize(gpui::size(gpui::px(1500.0), gpui::px(1400.0)));
     window.run_until_parked();
@@ -151,6 +168,29 @@ impl Opened<'_> {
     /// Moves the profile's live connection to `region` and announces it.
     fn move_connection_to(&mut self, region: &str) -> FakeDriver {
         self.swap_connection(region, true)
+    }
+
+    fn audit_actions(&mut self) -> Vec<String> {
+        let state = self.app_state.clone();
+        self.window.update(|_, cx| {
+            let filter = dbflux_audit::query::AuditQueryFilter {
+                category: Some("secret_store".to_string()),
+                ..Default::default()
+            };
+            state
+                .read(cx)
+                .audit_service()
+                .query_extended(&filter)
+                .expect("audit query")
+                .into_iter()
+                .filter_map(|event| event.action)
+                .collect()
+        })
+    }
+
+    fn document_state(&mut self) -> crate::types::DocumentState {
+        let doc = self.doc.clone();
+        self.window.update(|_, cx| doc.read(cx).state(cx))
     }
 
     fn swap_connection(&mut self, region: &str, announce: bool) -> FakeDriver {
@@ -541,6 +581,7 @@ fn a_change_announced_by_the_document_reloads_the_listing(cx: &mut TestAppContex
 #[gpui::test]
 fn the_document_controls_are_covered(cx: &mut TestAppContext) {
     let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+    opened.click("secret-retrieve-value");
     let doc = opened.doc.clone();
     let entries: Vec<String> = opened.window.update(|_, cx| {
         doc.read(cx)
@@ -554,10 +595,35 @@ fn the_document_controls_are_covered(cx: &mut TestAppContext) {
         .with_surface(SECRET_STORE)
         .with_menu_entries(entries.clone())
         .assert_covered(&opened.frame());
+    for id in [
+        "secret-document-delete",
+        "secret-value-edit",
+        "secret-rotation-rotate-now",
+    ] {
+        assert!(
+            checked.iter().any(|checked| checked == id),
+            "{id}: {checked:?}"
+        );
+    }
+
+    // The editor, which the tab alone hosts.
+    opened.command(Command::EditValue);
+    let editing_entries: Vec<String> = opened.window.update(|_, cx| {
+        doc.read(cx)
+            .pane_actions(&doc, cx)
+            .into_iter()
+            .map(|action| action.id.to_string())
+            .collect()
+    });
+    let checked = Coverage::new(SECRET_DOCUMENT)
+        .with_surface(SECRET_STORE)
+        .with_menu_entries(editing_entries)
+        .assert_covered(&opened.frame());
     assert!(
-        checked.iter().any(|id| id == "secret-document-delete"),
+        checked.iter().any(|id| id == "secret-value-editor-discard"),
         "{checked:?}"
     );
+    opened.click("secret-value-editor-discard");
 
     // The blocked states draw their own controls.
     opened.announce(SecretChangeKind::Removed, KEY_VALUE_SECRET);
@@ -576,4 +642,111 @@ fn the_document_controls_are_covered(cx: &mut TestAppContext) {
         checked.iter().any(|id| id == "secret-document-close"),
         "{checked:?}"
     );
+}
+
+/// The tab owns no bottom bar: each write is drawn once, where the artboard
+/// puts it (the header's Delete, the value section's Edit value, the
+/// Rotation section's Rotate immediately).
+#[gpui::test]
+fn the_tab_draws_each_action_once_without_a_bottom_bar(cx: &mut TestAppContext) {
+    let mut opened = open_document(cx, PLAINTEXT_SECRET, Some(CURRENT_REGION));
+    opened.click("secret-retrieve-value");
+
+    for id in [
+        "secret-document-delete",
+        "secret-document-refresh",
+        "secret-value-edit",
+        "secret-rotation-rotate-now",
+        "secret-rotation-edit",
+        "secret-tags-edit",
+    ] {
+        assert!(opened.is_drawn(id), "`{id}` is drawn");
+    }
+    for id in [
+        "secret-action-bar",
+        "secret-action-edit-value",
+        "secret-action-rotate-now",
+        "secret-action-delete",
+        "secret-details-delete",
+    ] {
+        assert!(!opened.is_drawn(id), "`{id}` would draw an action twice");
+    }
+}
+
+/// Edit value in the tab, whether it was pressed there or handed over by the
+/// pane before the details landed, retrieves the value first (audited, once)
+/// and opens the editor. It never only reveals.
+#[gpui::test]
+fn edit_value_in_the_tab_retrieves_first_and_opens_the_editor(cx: &mut TestAppContext) {
+    for handed_over in [true, false] {
+        let mut opened =
+            open_document_with(cx, PLAINTEXT_SECRET, Some(CURRENT_REGION), handed_over);
+
+        if !handed_over {
+            assert!(!opened.is_drawn("secret-value-editor-save"));
+            assert!(opened.driver.secret_store_calls().value_requests.is_empty());
+            assert!(opened.command(Command::EditValue));
+        }
+
+        assert!(
+            opened.is_drawn("secret-value-editor-save"),
+            "handed over: {handed_over}"
+        );
+        assert!(opened.read_view(|view| view.is_editing_value()));
+        assert_eq!(opened.driver.secret_store_calls().value_requests.len(), 1);
+        assert_eq!(opened.audit_actions(), vec!["secret_value_retrieved"]);
+    }
+}
+
+/// The editor in the tab saves as a new version through the governed seam,
+/// shows the unsaved text on the tab, and lets go of it once saved.
+#[gpui::test]
+fn a_save_from_the_tab_writes_through_the_seam_and_clears_the_unsaved_state(
+    cx: &mut TestAppContext,
+) {
+    let mut opened = open_document_with(cx, PLAINTEXT_SECRET, Some(CURRENT_REGION), true);
+    assert_eq!(opened.document_state(), crate::types::DocumentState::Clean);
+
+    opened.window.simulate_input("!");
+    opened.window.run_until_parked();
+
+    assert_eq!(
+        opened.document_state(),
+        crate::types::DocumentState::Modified
+    );
+    let doc = opened.doc.clone();
+    assert!(opened.window.update(|_, cx| {
+        let view = doc.read(cx).view().clone();
+        view.read(cx).has_unsaved_value_edits(cx)
+    }));
+
+    opened.click("secret-value-editor-save");
+
+    assert_eq!(opened.driver.secret_store_calls().put_requests.len(), 1);
+    assert!(
+        opened
+            .audit_actions()
+            .contains(&"secret_value_written".to_string())
+    );
+    assert_ne!(
+        opened.document_state(),
+        crate::types::DocumentState::Modified
+    );
+}
+
+/// A save is pinned to the session the value came from: a connection
+/// replaced under the open editor refuses it, writes to neither session and
+/// reports the refusal once.
+#[gpui::test]
+fn a_save_from_the_tab_is_pinned_to_its_session(cx: &mut TestAppContext) {
+    let mut opened = open_document_with(cx, PLAINTEXT_SECRET, Some(CURRENT_REGION), true);
+    opened.window.simulate_input("!");
+    opened.window.run_until_parked();
+
+    let replacement = opened.swap_connection(CURRENT_REGION, false);
+    opened.click("secret-value-editor-save");
+
+    assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+    assert!(replacement.secret_store_calls().put_attempts.is_empty());
+    assert_eq!(opened.unread_errors(), 1, "the refusal is reported once");
 }

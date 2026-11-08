@@ -509,9 +509,20 @@ impl Workspace {
         if let Some(id) = self.tab_manager.read(cx).find_by_key(&key, cx) {
             self.tab_manager.update(cx, |mgr, cx| mgr.activate(id, cx));
             self.set_focus(FocusTarget::Document, window, cx);
+
+            // The tab that exists takes the editor the way a key press would.
+            if request.edit {
+                let tab_manager = self.tab_manager.clone();
+                tab_manager.update(cx, |mgr, cx| {
+                    if let Some(tab) = mgr.document(id) {
+                        tab.dispatch_command(crate::keymap::Command::EditValue, window, cx);
+                    }
+                });
+            }
             return;
         }
 
+        let edit = request.edit;
         let doc = cx.new(|cx| {
             crate::ui::document::SecretDocument::new(
                 profile_id,
@@ -523,6 +534,11 @@ impl Workspace {
                 cx,
             )
         });
+
+        if edit {
+            doc.update(cx, |doc, cx| doc.begin_edit(cx));
+        }
+
         let pane = crate::ui::document::SecretDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {

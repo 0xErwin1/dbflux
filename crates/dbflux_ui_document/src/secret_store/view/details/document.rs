@@ -34,7 +34,6 @@ impl SecretView {
 
         let sections = self.detail_sections(&summary, cx);
         let header = self.render_document_header(&summary, subtitle, cx);
-        let bar = self.render_action_bar(cx);
         let editing = self.is_editing_value();
 
         // The artboard stacks the sections in one column, in this order.
@@ -84,7 +83,6 @@ impl SecretView {
                     )
                     .child(Scrollbar::vertical(&self.details_scroll)),
             )
-            .children(bar)
             .into_any_element()
     }
 

@@ -52,8 +52,8 @@ use gpui::*;
 use std::cell::Cell;
 use std::rc::Rc;
 use uuid::Uuid;
-pub(crate) use view::SecretViewEvent;
 pub(crate) use view::{DetailsState, SecretView, VersionsState};
+pub(crate) use view::{SecretViewEvent, ViewHost};
 
 /// A request to open one secret in its own tab, raised by the listing and
 /// drained by the workspace. The region is the one the listing is loaded
@@ -64,6 +64,9 @@ pub struct SecretOpenRequest {
     pub name: String,
     pub version: Option<String>,
     pub region: Option<String>,
+    /// Open with the value editor active: the tab retrieves the value first
+    /// when it is not loaded, and never only reveals it.
+    pub edit: bool,
 }
 
 /// Which part of the document owns keyboard input.
@@ -265,6 +268,7 @@ impl SecretStoreDocument {
                 descriptor.clone(),
                 app_state.clone(),
                 region_switch_in_flight.clone(),
+                ViewHost::Pane,
                 cx,
             )
         });
@@ -812,7 +816,9 @@ impl SecretStoreDocument {
                 }
             }
             SecretViewEvent::CloseRequested => self.close_details(window, cx),
-            SecretViewEvent::OpenInTab { name } => self.queue_open_secret(name.clone(), cx),
+            SecretViewEvent::OpenInTab { name, edit } => {
+                self.queue_open_secret(name.clone(), *edit, cx)
+            }
             SecretViewEvent::Created { name, stands } => {
                 self.land_create(name, *stands, cx);
                 self.announce(name.clone(), changes::SecretChangeKind::Created, cx);

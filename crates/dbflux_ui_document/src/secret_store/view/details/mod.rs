@@ -2,6 +2,7 @@
 //! section, its details, its rotation and its tags.
 
 mod document;
+pub(super) mod resize;
 mod sections;
 mod value;
 mod versions;
@@ -17,7 +18,9 @@ use dbflux_components::controls::Button;
 use dbflux_components::fonts;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text};
-use dbflux_components::tokens::{ChromeColors, DocumentMetrics, SecretStoreMetrics, ui};
+use dbflux_components::tokens::{
+    ChromeColors, DocumentMetrics, PreviewRailMetrics, SecretStoreMetrics, ui,
+};
 use dbflux_core::{SecretDetails, SecretStoreCapabilities, SecretSummary};
 use gpui::prelude::*;
 use gpui::*;
@@ -218,7 +221,8 @@ impl SecretView {
 
         div()
             .id("secret-details")
-            .w(SecretStoreMetrics::DETAILS_WIDTH)
+            .relative()
+            .w(self.details_width())
             .flex_shrink_1()
             .min_w(SecretStoreMetrics::DETAILS_MIN_WIDTH)
             .h_full()
@@ -228,6 +232,7 @@ impl SecretView {
             .border_color(border)
             .bg(background)
             .child(body)
+            .child(self.render_details_grip(cx))
             .into_any_element()
     }
 
@@ -332,8 +337,10 @@ impl SecretView {
             .children(bar)
     }
 
-    /// The secret's name with the pane's actions: Copy name, Delete, open in
-    /// a tab and Close.
+    /// The secret's name with the pane's controls: Copy name, open in a tab
+    /// and Close. The header holds no write, so closing the pane can never
+    /// end in a deletion; the writes live in the bar at the bottom. It is
+    /// laid out like the object browser's preview header.
     pub(super) fn render_details_header(
         &self,
         summary: &SecretSummary,
@@ -342,16 +349,25 @@ impl SecretView {
         let theme = cx.theme();
         let border = theme.border;
         let warning = theme.warning;
-        let danger = theme.danger;
         let strong = ChromeColors::strong(theme);
+        let name = summary.name.clone();
+
+        let icon_button = |id: &'static str, label: String, icon: AppIcon| {
+            Button::new(id, label.clone())
+                .icon(icon)
+                .icon_only()
+                .tooltip(label)
+                .tab_stop(false)
+        };
 
         div()
             .id("secret-details-header")
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .gap(DocumentMetrics::GAP)
-            .px(SecretStoreMetrics::DETAILS_PADDING_X)
-            .py(SecretStoreMetrics::DETAILS_PADDING_Y)
+            .gap(PreviewRailMetrics::HEADER_GAP)
+            .h(DocumentMetrics::HEADER_HEIGHT)
+            .px(DocumentMetrics::PADDING_X)
             .border_b_1()
             .border_color(border)
             .child(
@@ -367,60 +383,36 @@ impl SecretView {
                     .truncate()
                     .font_family(fonts::editor_family(cx))
                     .font_weight(FontWeight::BOLD)
-                    .text_size(SecretStoreMetrics::NAME_FONT)
                     .text_color(strong)
-                    .child(summary.name.clone()),
+                    .child(name.clone()),
             )
             .child(
-                Button::new(
+                icon_button(
                     "secret-details-copy-name",
-                    dbflux_i18n::t!("document.secret_store.context_menu.copy_name"),
+                    dbflux_i18n::t!("document.secret_store.context_menu.copy_name").to_string(),
+                    AppIcon::Copy,
                 )
-                .ghost()
-                .icon(AppIcon::Copy)
-                .icon_only()
-                .tab_stop(false)
                 .on_click(cx.listener(|this, _, _, cx| this.copy_selected_name(cx))),
             )
-            .when(self.supports_delete(), |header| {
-                header.child(
-                    Button::new(
-                        "secret-details-delete",
-                        dbflux_i18n::t!("document.secret_store.delete.button"),
-                    )
-                    .ghost()
-                    .icon(AppIcon::Delete)
-                    .icon_only()
-                    .text_color(danger)
-                    .tab_stop(false)
-                    .disabled(!self.can_delete_selected())
-                    .on_click(cx.listener(|this, _, window, cx| this.open_delete(window, cx))),
-                )
-            })
-            .child({
-                let name = summary.name.clone();
-
-                Button::new(
-                    "secret-details-expand",
-                    dbflux_i18n::t!("document.secret_store.details.open_in_tab"),
-                )
-                .ghost()
-                .icon(AppIcon::Maximize2)
-                .icon_only()
-                .tab_stop(false)
-                .on_click(cx.listener(move |_, _, _, cx| {
-                    cx.emit(SecretViewEvent::OpenInTab { name: name.clone() })
-                }))
-            })
             .child(
-                Button::new(
-                    "secret-details-close",
-                    dbflux_i18n::t!("document.secret_store.details.close"),
+                icon_button(
+                    "secret-details-expand",
+                    dbflux_i18n::t!("document.secret_store.details.open_in_tab").to_string(),
+                    AppIcon::Maximize2,
                 )
-                .ghost()
-                .icon(AppIcon::X)
-                .icon_only()
-                .tab_stop(false)
+                .on_click(cx.listener(move |_, _, _, cx| {
+                    cx.emit(SecretViewEvent::OpenInTab {
+                        name: name.clone(),
+                        edit: false,
+                    })
+                })),
+            )
+            .child(
+                icon_button(
+                    "secret-details-close",
+                    dbflux_i18n::t!("document.secret_store.details.close").to_string(),
+                    AppIcon::X,
+                )
                 .on_click(cx.listener(|_, _, _, cx| cx.emit(SecretViewEvent::CloseRequested))),
             )
     }
@@ -548,12 +540,9 @@ impl SecretView {
         (self.supports_description_edit() && !self.description_edit_rewrites_value()).then(|| {
             let button = Button::new(
                 "secret-details-edit",
-                dbflux_i18n::t!("document.secret_store.description_edit.short"),
+                dbflux_i18n::t!("document.secret_store.description_edit.button"),
             )
             .icon(AppIcon::Pencil)
-            .aria_label(dbflux_i18n::t!(
-                "document.secret_store.description_edit.button"
-            ))
             .tab_stop(false)
             .disabled(!self.can_edit_description())
             .on_click(cx.listener(|this, _, window, cx| this.open_edit_description(window, cx)));

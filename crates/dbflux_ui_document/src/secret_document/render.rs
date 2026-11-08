@@ -121,6 +121,7 @@ impl SecretDocument {
 
 impl Render for SecretDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.open_requested_edit(window, cx);
         self.view
             .update(cx, |view, cx| view.prepare_frame(window, cx));
 

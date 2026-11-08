@@ -15,7 +15,7 @@ mod tests;
 
 use crate::handle::DocumentEvent;
 use crate::secret_store::changes::{self, SecretChange, SecretChangeKind};
-use crate::secret_store::{ConnectionFacts, SecretView, SecretViewEvent};
+use crate::secret_store::{ConnectionFacts, DetailsState, SecretView, SecretViewEvent, ViewHost};
 use crate::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_core::SecretStoreDescriptor;
@@ -52,6 +52,10 @@ pub struct SecretDocument {
     /// on another region, and shows it once the region matches.
     loaded: bool,
     removed: bool,
+    /// An Edit value asked for before the details landed: the editor opens on
+    /// the render pass that finds the secret ready, retrieving the value
+    /// first (audited) when it is not loaded.
+    edit_when_ready: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -76,6 +80,7 @@ impl SecretDocument {
                 store.clone(),
                 app_state.clone(),
                 Rc::new(Cell::new(false)),
+                ViewHost::Tab,
                 cx,
             )
         });
@@ -111,6 +116,7 @@ impl SecretDocument {
             view,
             loaded: false,
             removed: false,
+            edit_when_ready: false,
             _subscriptions: subscriptions,
         };
 
@@ -309,6 +315,37 @@ impl SecretDocument {
         );
     }
 
+    /// Asks for the value editor: it opens as soon as the secret is ready,
+    /// and a value that is not loaded is retrieved first, never only shown.
+    pub fn begin_edit(&mut self, cx: &mut Context<Self>) {
+        self.edit_when_ready = true;
+        cx.notify();
+    }
+
+    /// Opens the editor a pending Edit value asked for, on the render pass
+    /// because the editor is built with a window. The request is dropped when
+    /// the tab can never serve it: blocked, or the details failed.
+    fn open_requested_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.edit_when_ready {
+            return;
+        }
+
+        if self.block(cx).is_some() {
+            self.edit_when_ready = false;
+            return;
+        }
+
+        match self.view.read(cx).details() {
+            DetailsState::Loaded(_) => {
+                self.edit_when_ready = false;
+                self.view
+                    .update(cx, |view, cx| view.request_edit_value(window, cx));
+            }
+            DetailsState::Failed(_) => self.edit_when_ready = false,
+            DetailsState::Idle | DetailsState::Loading => {}
+        }
+    }
+
     /// Reads the secret again.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         if self.block(cx).is_some() {
@@ -337,6 +374,7 @@ impl SecretDocument {
 
         match cmd {
             Command::RefreshSchema => self.refresh(cx),
+            Command::EditValue => self.begin_edit(cx),
             Command::Cancel => {
                 self.focus_handle.focus(window, cx);
                 cx.notify();

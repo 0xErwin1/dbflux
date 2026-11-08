@@ -425,7 +425,8 @@ impl SecretView {
             .gap(DocumentMetrics::GAP)
             .child(reveal_all)
             .child(copy_all)
-            .when(self.can_edit_value(), |actions| {
+            // The pane's bottom bar owns Edit value; the tab has no bar.
+            .when(self.in_tab() && self.can_edit_value(), |actions| {
                 actions.child(
                     Button::new(
                         "secret-value-edit",

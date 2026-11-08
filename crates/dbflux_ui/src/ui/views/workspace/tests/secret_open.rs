@@ -3,6 +3,7 @@
 //! on render and opens, or focuses, the deduplicated tab.
 
 use super::new_workspace_with;
+use crate::keymap::CommandDispatcher;
 use crate::ui::document::{DocumentKey, SecretStoreDocument, Tab};
 use crate::ui::views::workspace::FocusTarget;
 use dbflux_core::{ConnectedProfile, ConnectionProfile, DbConfig, DbKind, MutationPolicy};
@@ -65,6 +66,7 @@ fn connected_app_state(
 }
 
 const SECRET: &str = "prod/api/credentials";
+const PLAINTEXT: &str = "prod/notify/webhook-token";
 
 struct Opened {
     workspace: Entity<crate::ui::views::workspace::Workspace>,
@@ -147,16 +149,30 @@ fn has_secret_tab(opened: &Opened, window: &mut gpui::VisualTestContext) -> bool
 }
 
 fn select_secret(opened: &Opened, window: &mut gpui::VisualTestContext) {
+    select(opened, window, SECRET);
+}
+
+fn select(opened: &Opened, window: &mut gpui::VisualTestContext, name: &str) {
     let listing = opened.listing.clone();
+    let name = name.to_string();
     window.update(|_, cx| {
         listing.update(cx, |listing, cx| {
             listing.select_row(
-                crate::ui::document::secret_store::SecretRowKey::Secret(SECRET.to_string()),
+                crate::ui::document::secret_store::SecretRowKey::Secret(name),
                 cx,
             )
         })
     });
     window.run_until_parked();
+}
+
+fn is_drawn(window: &mut gpui::VisualTestContext, id: &str) -> bool {
+    let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(window);
+
+    capture
+        .frame(window)
+        .nodes()
+        .any(|(_, node)| node.id() == id)
 }
 
 fn click(window: &mut gpui::VisualTestContext, id: &str) {
@@ -240,4 +256,53 @@ fn the_row_menu_opens_the_secret_in_its_own_tab(cx: &mut TestAppContext) {
 
     assert_eq!(tab_count(&opened, window), 2);
     assert!(has_secret_tab(&opened, window));
+}
+
+/// The pane's Edit value opens, or focuses, the secret's tab with the editor
+/// active: the value is retrieved there through the audited path first, the
+/// side pane never hosts the editor, and the editor is not drawn until then.
+#[gpui::test]
+fn edit_value_in_the_pane_opens_the_tab_with_the_editor(cx: &mut TestAppContext) {
+    let (opened, window) = open_listing(cx);
+    select(&opened, window, PLAINTEXT);
+    assert!(!is_drawn(window, "secret-value-editor-save"));
+
+    click(window, "secret-action-edit-value");
+
+    assert_eq!(tab_count(&opened, window), 2);
+    assert!(
+        is_drawn(window, "secret-value-editor-save"),
+        "the new tab shows the editor"
+    );
+
+    // The same press again focuses the tab that exists; nothing opens twice.
+    let listing_id = window.update(|_, cx| opened.listing.read(cx).id());
+    window.update(|_, cx| {
+        opened.workspace.update(cx, |workspace, cx| {
+            workspace
+                .tab_manager
+                .update(cx, |manager, cx| manager.activate(listing_id, cx));
+        })
+    });
+    window.run_until_parked();
+    click(window, "secret-action-edit-value");
+
+    assert_eq!(tab_count(&opened, window), 2);
+}
+
+/// `e` on the listing does the same through the workspace's own dispatch.
+#[gpui::test]
+fn the_e_key_in_the_listing_opens_the_tab_with_the_editor(cx: &mut TestAppContext) {
+    let (opened, window) = open_listing(cx);
+    select(&opened, window, PLAINTEXT);
+
+    window.update(|window, cx| {
+        opened.workspace.update(cx, |workspace, cx| {
+            workspace.dispatch(crate::keymap::Command::EditValue, window, cx);
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(tab_count(&opened, window), 2);
+    assert!(is_drawn(window, "secret-value-editor-save"));
 }

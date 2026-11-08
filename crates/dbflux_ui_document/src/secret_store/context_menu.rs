@@ -284,7 +284,7 @@ impl SecretStoreDocument {
             // then the document gets the keyboard back like any other entry.
             SecretMenuAction::EditValue => {
                 self.view
-                    .update(cx, |view, cx| view.start_value_edit(window, cx));
+                    .update(cx, |view, cx| view.request_edit_value(window, cx));
 
                 if self.view.read(cx).is_editing_value() {
                     return;

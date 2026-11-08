@@ -3736,7 +3736,6 @@ document:
       unfinished_title: "A cancelled rotation left version %{version} pending"
       unfinished_body: "Check the credentials behind version %{version}, then move or remove its pending stage. Until then a later rotation can be refused."
     tags_edit:
-      short: "Edit"
       button: "Edit tags"
       title: "Edit tags of %{name}"
       lead: "Changing a tag does not touch the value or any version."
@@ -3751,7 +3750,6 @@ document:
       no_change: "No tag differs from the ones the secret has."
       duplicate: "The key %{key} appears in more than one row."
     description_edit:
-      short: "Edit"
       button: "Edit description"
       title: "Edit description of %{name}"
       label: "Description"
