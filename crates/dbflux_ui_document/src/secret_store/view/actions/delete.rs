@@ -221,13 +221,19 @@ impl SecretView {
             Landing::Done(deletion) => {
                 self.dismiss_dialog(cx);
 
-                let message = match deletion.deletion_scheduled_for {
-                    Some(date) => dbflux_i18n::t!(
+                let message = match (kind, deletion.deletion_scheduled_for) {
+                    (DeleteKind::Scheduled { .. }, Some(date)) => dbflux_i18n::t!(
                         "document.secret_store.delete.done_scheduled",
                         name = name,
                         date = format_time(date)
                     ),
-                    None => dbflux_i18n::t!("document.secret_store.delete.done", name = name),
+                    (DeleteKind::Scheduled { .. }, None) => dbflux_i18n::t!(
+                        "document.secret_store.delete.done_scheduled_undated",
+                        name = name
+                    ),
+                    (DeleteKind::Irreversible, _) => {
+                        dbflux_i18n::t!("document.secret_store.delete.done", name = name)
+                    }
                 };
 
                 self.toast_written(message, cx);

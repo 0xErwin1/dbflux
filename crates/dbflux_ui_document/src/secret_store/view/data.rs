@@ -40,6 +40,7 @@ impl SecretView {
             return;
         };
 
+        self.note_describe_issued(&name, generation);
         self.details_session = Some(connection.clone());
         let store_id = self.store.id.clone();
         let entity = cx.entity().clone();
@@ -90,7 +91,7 @@ impl SecretView {
         self.drop_confirmations_of_replaced_session(cx);
 
         if let Ok(details) = &result {
-            self.observe_described(&details.summary);
+            self.observe_described(&details.summary, generation);
         }
 
         let result = result.map(|mut details| {

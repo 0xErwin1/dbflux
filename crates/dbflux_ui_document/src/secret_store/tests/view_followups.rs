@@ -191,7 +191,7 @@ fn a_listing_showing_the_secret_active_resumes_the_history(cx: &mut TestAppConte
         .read_view(|view| view.listed_summary().cloned())
         .expect("the listing holds the row");
     active.deletion_scheduled_for = None;
-    opened.update_view(|view, cx| view.set_listing_row(Some(active), true, cx));
+    opened.update_view(|view, cx| view.set_listing_row(Some(active), true, None, cx));
 
     assert!(!opened.version_ids().is_empty(), "the history loaded");
     assert!(opened.reported_errors().is_empty());
@@ -425,7 +425,24 @@ impl Opened<'_> {
     }
 
     fn land_stale_listing(&mut self, row: SecretSummary) {
-        self.update_view(|view, cx| view.set_listing_row(Some(row), true, cx));
+        let generation = self.listing_generation();
+        self.update_view(|view, cx| view.set_listing_row(Some(row), true, Some(generation), cx));
+    }
+
+    /// The generation of the latest listing request the host issued.
+    fn listing_generation(&mut self) -> u64 {
+        self.read(|doc| doc.listing.generation())
+    }
+
+    /// Lands `row` as the answer of a listing request with `generation`.
+    fn land_listing_of(&mut self, row: SecretSummary, generation: u64) {
+        self.update_view(|view, cx| view.set_listing_row(Some(row), true, Some(generation), cx));
+    }
+
+    /// Whether the confirmed state still outranks `row`: a scheduled row is
+    /// read as active after a confirmed restore.
+    fn row_reads_as_pending(&mut self, row: &SecretSummary) -> bool {
+        self.read_view(|view| view.is_deletion_pending(row))
     }
 
     fn land_stale_describe(&mut self, scheduled: bool) {
@@ -443,6 +460,16 @@ impl Opened<'_> {
             let name = details.summary.name.clone();
             view.apply_details(generation, &name, Ok(details), 0, cx)
         });
+    }
+
+    fn last_toast_title(&mut self) -> Option<String> {
+        self.window.update(|_, cx| {
+            let host = cx
+                .global::<dbflux_ui_base::toast::ToastGlobal>()
+                .host
+                .clone();
+            host.read(cx).last_toast_title()
+        })
     }
 
     fn pending(&mut self) -> bool {
@@ -719,6 +746,7 @@ fn an_irreversible_delete_confirms_no_scheduled_state(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.load_everything();
     opened.open_secret(KEY_VALUE_SECRET);
+    let active = opened.stale_row(false);
 
     opened.update_view(|view, cx| {
         view.land_delete(
@@ -729,10 +757,7 @@ fn an_irreversible_delete_confirms_no_scheduled_state(cx: &mut TestAppContext) {
         )
     });
 
-    assert!(!opened.read_view(|view| {
-        view.selected_summary()
-            .is_some_and(|summary| view.is_deletion_pending(summary))
-    }));
+    assert!(!opened.read_view(|view| view.is_deletion_pending(&active)));
 }
 
 /// After a delete, a describe that agrees does not end the override while the
@@ -773,6 +798,9 @@ fn an_agreeing_listing_alone_does_not_end_a_confirmed_restore(cx: &mut TestAppCo
     opened.load_everything();
     opened.open_secret(PENDING_DELETION_SECRET);
     opened.confirm_restore(PENDING_DELETION_SECRET);
+    // The reads the restore asked for land first; the store they read has not
+    // been restored, so they disagree and the lagging ones below come after.
+    opened.window.run_until_parked();
 
     let agreeing = opened.stale_row(false);
     opened.land_stale_listing(agreeing);
@@ -950,4 +978,149 @@ fn a_view_bound_to_another_region_sees_no_connection(cx: &mut TestAppContext) {
     opened.update_view(|view, cx| view.set_region_pin(Some(CURRENT_REGION.to_string()), cx));
     assert!(opened.read_view(|view| view.can_retrieve_value()));
     assert!(!opened.update_view(|view, cx| view.region_mismatch(cx)));
+}
+
+// -- The confirmed deletion, third round ---------------------------------------
+
+/// A source's latest observation is what counts: an agreeing listing that a
+/// later listing contradicts no longer counts as agreement.
+#[gpui::test]
+fn a_disagreeing_listing_clears_that_sources_agreement(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    opened.confirm_restore(PENDING_DELETION_SECRET);
+    let scheduled = opened.stale_row(true);
+
+    let agreeing = opened.stale_row(false);
+    opened.land_stale_listing(agreeing);
+    opened.land_stale_listing(scheduled.clone());
+    opened.land_stale_describe(false);
+
+    assert!(
+        !opened.row_reads_as_pending(&scheduled),
+        "the listing's latest word disagrees, so the restore still outranks the reads"
+    );
+}
+
+/// The same for a describe that a later describe contradicts.
+#[gpui::test]
+fn a_disagreeing_describe_clears_that_sources_agreement(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    opened.confirm_restore(PENDING_DELETION_SECRET);
+    let scheduled = opened.stale_row(true);
+
+    opened.land_stale_describe(false);
+    opened.land_stale_describe(true);
+    let agreeing = opened.stale_row(false);
+    opened.land_stale_listing(agreeing);
+
+    assert!(!opened.row_reads_as_pending(&scheduled));
+}
+
+/// A listing issued before the write cannot have seen it, whatever it says.
+#[gpui::test]
+fn a_listing_issued_before_the_write_does_not_count(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    let issued_before = opened.listing_generation();
+    opened.confirm_restore(PENDING_DELETION_SECRET);
+    let scheduled = opened.stale_row(true);
+
+    let agreeing = opened.stale_row(false);
+    opened.land_listing_of(agreeing, issued_before);
+    opened.land_stale_describe(false);
+
+    assert!(
+        !opened.row_reads_as_pending(&scheduled),
+        "only the describe counted"
+    );
+}
+
+/// A row the selection brings along, or a row a failed reload retained, is a
+/// copy of an older listing and no observation.
+#[gpui::test]
+fn a_retained_row_is_not_an_observation(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.confirm_delete(KEY_VALUE_SECRET);
+    let agreeing = opened.stale_row(true);
+    let active = opened.stale_row(false);
+
+    opened.update_view(|view, cx| {
+        view.show_secret(KEY_VALUE_SECRET.to_string(), Some(agreeing.clone()), cx)
+    });
+    opened.land_stale_describe(true);
+
+    assert!(
+        opened.row_reads_as_pending(&active),
+        "the selection's copy of the row did not count as the listing agreeing"
+    );
+}
+
+/// The summaries a confirmation conformed belong to its session: a session
+/// replacement leaves none of them behind, even when nothing reads again.
+#[gpui::test]
+fn a_session_change_drops_the_conformed_summaries(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.confirm_delete(KEY_VALUE_SECRET);
+    let stale = opened.stale_row(false);
+    opened.land_stale_listing(stale);
+    assert!(
+        opened
+            .read_view(|view| view
+                .selected_summary()
+                .and_then(|row| row.deletion_scheduled_for))
+            .is_some()
+    );
+
+    let _other_account = opened.replace_connection();
+    opened.update_view(|view, cx| view.sync_connection_presence(cx));
+
+    assert_eq!(
+        opened.read_view(|view| view
+            .selected_summary()
+            .and_then(|row| row.deletion_scheduled_for)),
+        None,
+        "the previous session's date is gone"
+    );
+}
+
+/// A scheduled delete the store answered without a date still says it was
+/// scheduled, and never that the secret is gone.
+#[gpui::test]
+fn a_scheduled_delete_without_a_date_toasts_a_scheduled_message(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(KEY_VALUE_SECRET);
+
+    opened.update_view(|view, cx| {
+        view.land_delete(
+            KEY_VALUE_SECRET,
+            DeleteKind::Scheduled { window_days: 7 },
+            Landing::Done(dbflux_core::SecretDeletion {
+                deletion_scheduled_for: None,
+            }),
+            cx,
+        )
+    });
+
+    let title = opened.last_toast_title().expect("a toast");
+    assert_eq!(
+        title,
+        dbflux_i18n::t!(
+            "document.secret_store.delete.done_scheduled_undated",
+            name = KEY_VALUE_SECRET
+        )
+    );
+    assert_ne!(
+        title,
+        dbflux_i18n::t!("document.secret_store.delete.done", name = KEY_VALUE_SECRET)
+    );
 }

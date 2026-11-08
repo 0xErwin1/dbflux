@@ -8,9 +8,13 @@
 //! both the listing row and the describe agree with it, or the user refreshes
 //! explicitly. One agreeing read is not enough: the other may still be the
 //! stale one, and a stale read must not re-enable what the write blocked.
+//! Each source counts by its latest observation, so a read that disagrees
+//! after an agreeing one takes the agreement back, and only a read issued
+//! after the write can have seen it: the selection's copy of a row and the
+//! rows a failed reload retained are observations of nothing.
 //! A confirmation also belongs to the connection session that made it; another
 //! session (a reconnect, another account) may hold a same-named secret in a
-//! different state.
+//! different state, so the summaries conformed to it go with it.
 //!
 //! Observed summaries are stored as observed; every guard and display reads
 //! the deletion through [`SecretView::deletion_of`], which applies the
@@ -39,8 +43,31 @@ pub(super) enum ConfirmedDeletion {
 pub(super) struct Confirmation {
     state: ConfirmedDeletion,
     session: Option<Arc<dyn Connection>>,
-    listing_agreed: bool,
-    describe_agreed: bool,
+    listing: Source,
+    describe: Source,
+}
+
+/// What one kind of read last said about a confirmed secret.
+#[derive(Clone, Copy, Default)]
+struct Source {
+    /// The generation of the first request issued after the write; a read of
+    /// an earlier generation cannot have seen it.
+    floor: Option<u64>,
+
+    /// Whether the latest counted read agreed with the confirmed state.
+    agrees: bool,
+}
+
+impl Source {
+    fn issued(&mut self, generation: u64) {
+        self.floor.get_or_insert(generation);
+    }
+
+    fn observe(&mut self, generation: u64, agrees: bool) {
+        if self.floor.is_some_and(|floor| generation >= floor) {
+            self.agrees = agrees;
+        }
+    }
 }
 
 impl ConfirmedDeletion {
@@ -81,8 +108,8 @@ impl SecretView {
             Confirmation {
                 state,
                 session,
-                listing_agreed: false,
-                describe_agreed: false,
+                listing: Source::default(),
+                describe: Source::default(),
             },
         );
     }
@@ -92,9 +119,10 @@ impl SecretView {
         self.confirmed_deletions.clear();
     }
 
-    /// Drops the confirmations another connection session made. Returns
-    /// whether any went. Without a live connection nothing is dropped: a
-    /// disconnect is not another session until one returns.
+    /// Drops the confirmations another connection session made, and the row
+    /// and cached summary conformed to them. Returns whether any went.
+    /// Without a live connection nothing is dropped: a disconnect is not
+    /// another session until one returns.
     pub(in crate::secret_store) fn drop_confirmations_of_replaced_session(
         &mut self,
         cx: &gpui::Context<Self>,
@@ -103,44 +131,99 @@ impl SecretView {
             return false;
         };
 
-        let before = self.confirmed_deletions.len();
+        let replaced: Vec<String> = self
+            .confirmed_deletions
+            .iter()
+            .filter(|(_, confirmation)| {
+                !confirmation
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| Arc::ptr_eq(session, &live))
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
 
-        self.confirmed_deletions.retain(|_, confirmation| {
-            confirmation
-                .session
+        for name in &replaced {
+            self.confirmed_deletions.remove(name);
+
+            if self
+                .listing_row
                 .as_ref()
-                .is_some_and(|session| Arc::ptr_eq(session, &live))
-        });
+                .is_some_and(|row| &row.name == name)
+            {
+                self.listing_row = None;
+            }
 
-        self.confirmed_deletions.len() != before
+            if self
+                .summary_cache
+                .as_ref()
+                .is_some_and(|summary| &summary.name == name)
+            {
+                self.summary_cache = None;
+            }
+        }
+
+        !replaced.is_empty()
     }
 
-    /// Offers the listing's row of a secret to the override.
-    pub(in crate::secret_store) fn observe_listed(&mut self, summary: &SecretSummary) {
-        self.observe(summary, |confirmation| &mut confirmation.listing_agreed);
+    /// A listing request was issued: for a confirmation not yet followed by
+    /// one, it is the first that can have seen the write.
+    pub(in crate::secret_store) fn note_listing_issued(&mut self, generation: u64) {
+        for confirmation in self.confirmed_deletions.values_mut() {
+            confirmation.listing.issued(generation);
+        }
     }
 
-    /// Offers a describe of a secret to the override.
-    pub(in crate::secret_store) fn observe_described(&mut self, summary: &SecretSummary) {
-        self.observe(summary, |confirmation| &mut confirmation.describe_agreed);
+    /// A describe of `name` was issued.
+    pub(in crate::secret_store) fn note_describe_issued(&mut self, name: &str, generation: u64) {
+        if let Some(confirmation) = self.confirmed_deletions.get_mut(name) {
+            confirmation.describe.issued(generation);
+        }
     }
 
-    /// An observation that agrees counts for its own source only; the
-    /// override ends once both sources agreed.
+    /// Offers the listing's row of a secret, read by the listing request
+    /// `generation`, to the override.
+    pub(in crate::secret_store) fn observe_listed(
+        &mut self,
+        summary: &SecretSummary,
+        generation: u64,
+    ) {
+        self.observe(
+            summary,
+            |confirmation| &mut confirmation.listing,
+            generation,
+        );
+    }
+
+    /// Offers a describe of a secret, issued as `generation`, to the override.
+    pub(in crate::secret_store) fn observe_described(
+        &mut self,
+        summary: &SecretSummary,
+        generation: u64,
+    ) {
+        self.observe(
+            summary,
+            |confirmation| &mut confirmation.describe,
+            generation,
+        );
+    }
+
+    /// An observation replaces what its source said before; the override ends
+    /// once both sources agree.
     fn observe(
         &mut self,
         summary: &SecretSummary,
-        source: impl FnOnce(&mut Confirmation) -> &mut bool,
+        source: impl FnOnce(&mut Confirmation) -> &mut Source,
+        generation: u64,
     ) {
         let Some(confirmation) = self.confirmed_deletions.get_mut(&summary.name) else {
             return;
         };
 
-        if confirmation.state.agrees_with(summary) {
-            *source(confirmation) = true;
-        }
+        let agrees = confirmation.state.agrees_with(summary);
+        source(confirmation).observe(generation, agrees);
 
-        if confirmation.listing_agreed && confirmation.describe_agreed {
+        if confirmation.listing.agrees && confirmation.describe.agrees {
             self.confirmed_deletions.remove(&summary.name);
         }
     }
