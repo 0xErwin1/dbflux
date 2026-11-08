@@ -1,5 +1,6 @@
 use super::*;
 use dbflux_core::secrecy::{SecretSlice, SecretString};
+use dbflux_core::{SecretPayload, scrub_submitted_payload};
 
 fn config() -> AwsSecretsProfileConfig {
     AwsSecretsProfileConfig {
@@ -290,7 +291,7 @@ fn a_put_error_loses_the_text_value_it_submitted() {
         .with_detail(format!("submitted={value}")),
     );
 
-    let scrubbed = scrub_submitted_value(error, &text_payload(value));
+    let scrubbed = scrub_submitted_payload(error, &text_payload(value));
     let rendered = scrubbed.to_string();
     assert!(!rendered.contains(value), "{rendered}");
     assert!(rendered.contains("[redacted]"), "{rendered}");
@@ -323,10 +324,59 @@ fn a_put_error_loses_the_text_value_it_submitted() {
 fn a_put_error_loses_the_binary_value_it_submitted() {
     let error = DbError::PermissionDenied(FormattedError::new("Invalid parameter value topsecret"));
 
-    let scrubbed = scrub_submitted_value(error, &binary_payload(b"topsecret"));
+    let scrubbed = scrub_submitted_payload(error, &binary_payload(b"topsecret"));
     let rendered = scrubbed.to_string();
     assert!(!rendered.contains("topsecret"), "{rendered}");
     assert!(rendered.contains("[redacted]"), "{rendered}");
+}
+
+/// A provider that echoes the request body inside another JSON document
+/// writes the value escaped once per level of nesting; every level must go.
+#[test]
+fn a_put_error_loses_a_value_echoed_once_and_twice_json_escaped() {
+    let escape = |text: &str| {
+        text.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+    };
+    let value = "pa\"ss\\word\nline";
+    let once = escape(value);
+    let twice = escape(&once);
+    let thrice = escape(&twice);
+
+    for echoed in [&once, &twice, &thrice] {
+        let error = DbError::QueryFailed(
+            FormattedError::new(format!("rejected body {{\"Value\":\"{echoed}\"}}"))
+                .with_detail(format!("echo={echoed}")),
+        );
+
+        let rendered = scrub_submitted_payload(error, &text_payload(value)).to_string();
+
+        for form in [value, &once, &twice, &thrice] {
+            assert!(!rendered.contains(form), "{form}: {rendered}");
+        }
+        assert!(rendered.contains("[redacted]"), "{rendered}");
+    }
+}
+
+/// Short and Unicode escapes of a control character, and a mix of both in one
+/// echo, are the same value.
+#[test]
+fn a_put_error_loses_a_value_whose_control_characters_are_escaped_differently() {
+    let value = "a\u{8}b\u{c}c\nd";
+
+    for echoed in [
+        "a\\bb\\fc\\nd",
+        "a\\u0008b\\u000cc\\u000ad",
+        "a\\bb\\u000cc\\nd",
+        "a\\u0008b\\fc\\u000Ad",
+    ] {
+        let error = DbError::QueryFailed(FormattedError::new(format!("echo {echoed} end")));
+
+        let rendered = scrub_submitted_payload(error, &text_payload(value)).to_string();
+
+        assert_eq!(rendered, "echo [redacted] end", "{echoed}");
+    }
 }
 
 /// An empty value scrubs nothing: replacing an empty string would mangle
@@ -335,7 +385,7 @@ fn a_put_error_loses_the_binary_value_it_submitted() {
 fn an_empty_submitted_value_leaves_the_error_untouched() {
     let error = DbError::NotSupported("store stores values as text only".to_string());
 
-    let scrubbed = scrub_submitted_value(error, &text_payload(""));
+    let scrubbed = scrub_submitted_payload(error, &text_payload(""));
     match &scrubbed {
         DbError::NotSupported(message) => {
             assert_eq!(message, "store stores values as text only");
@@ -347,9 +397,22 @@ fn an_empty_submitted_value_leaves_the_error_untouched() {
 /// Errors that carry no message the value could hide in come back unchanged.
 #[test]
 fn errors_without_a_message_pass_through_the_scrub() {
-    let scrubbed = scrub_submitted_value(DbError::Timeout, &text_payload("hunter2"));
+    let scrubbed = scrub_submitted_payload(DbError::Timeout, &text_payload("hunter2"));
     assert!(matches!(scrubbed, DbError::Timeout));
 
-    let scrubbed = scrub_submitted_value(DbError::Cancelled, &text_payload("hunter2"));
+    let scrubbed = scrub_submitted_payload(DbError::Cancelled, &text_payload("hunter2"));
     assert!(matches!(scrubbed, DbError::Cancelled));
+}
+
+#[test]
+fn a_name_that_already_exists_is_a_constraint_violation_with_the_aws_message() {
+    for code in ["ResourceExistsException", "ParameterAlreadyExists"] {
+        match classify(code, "The name is taken", secret_target()) {
+            DbError::ConstraintViolation(formatted) => {
+                assert!(formatted.message.contains("The name is taken"), "{code}");
+                assert_eq!(formatted.code.as_deref(), Some(code));
+            }
+            other => panic!("{code}: expected a constraint violation, got {other:?}"),
+        }
+    }
 }

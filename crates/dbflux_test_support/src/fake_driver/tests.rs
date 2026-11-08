@@ -971,12 +971,1223 @@ fn a_second_pending_write_moves_the_pending_label() {
     assert_eq!(versions.len(), 5);
 }
 
+// --- Rolling back a version ---
+
+fn labels_of(versions: &[SecretVersionInfo]) -> Vec<(String, Vec<String>)> {
+    versions
+        .iter()
+        .map(|version| (version.id.clone(), version.labels.clone()))
+        .collect()
+}
+
 fn current_ids(versions: &[dbflux_core::SecretVersionInfo]) -> Vec<&str> {
     versions
         .iter()
         .filter(|version| version.is_current)
         .map(|version| version.id.as_str())
         .collect()
+}
+
+#[test]
+fn rolling_back_moves_current_to_the_chosen_version_and_previous_to_the_old_current() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let rollback = store
+        .roll_back(&SecretRollbackRequest::new(
+            "prod/api/credentials",
+            "v-oldest",
+        ))
+        .expect("v-oldest is an earlier version");
+
+    assert_eq!(rollback.current_version, "v-oldest");
+    assert_eq!(rollback.previous_version.as_deref(), Some("v-current"));
+
+    // Both labels moved and the label the old previous held is gone; no
+    // version was created.
+    let versions = store
+        .list_versions("prod/api/credentials")
+        .expect("history");
+    assert_eq!(
+        labels_of(&versions),
+        vec![
+            ("v-current".to_string(), vec!["AWSPREVIOUS".to_string()]),
+            ("v-previous".to_string(), Vec::new()),
+            ("v-oldest".to_string(), vec!["AWSCURRENT".to_string()]),
+        ]
+    );
+
+    let details = store.describe("prod/api/credentials").expect("describe");
+    assert_eq!(details.summary.version.as_deref(), Some("v-oldest"));
+    assert_eq!(details.version_count, Some(3));
+
+    // The current value is the rolled-back version's own, unchanged.
+    let current = store
+        .get_value("prod/api/credentials", None)
+        .expect("current value");
+    assert_eq!(current.version.as_deref(), Some("v-oldest"));
+    assert!(exposed_text(&current).contains("fake-oldest-90e1"));
+
+    let calls = driver.secret_store_calls();
+    assert_eq!(calls.mutation_attempts.len(), 1);
+    assert_eq!(calls.mutations.len(), 1);
+    assert!(
+        calls.put_attempts.is_empty(),
+        "a roll back is not a value write"
+    );
+}
+
+#[test]
+fn rolling_back_to_the_current_version_is_refused_and_changes_nothing() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let before = labels_of(
+        &store
+            .list_versions("prod/api/credentials")
+            .expect("history"),
+    );
+
+    let error = store
+        .roll_back(&SecretRollbackRequest::new(
+            "prod/api/credentials",
+            "v-current",
+        ))
+        .expect_err("the current version is not an earlier one");
+
+    assert!(error.to_string().contains("already the current"), "{error}");
+
+    let versions = store
+        .list_versions("prod/api/credentials")
+        .expect("history");
+    assert_eq!(
+        labels_of(&versions)[0],
+        ("v-current".to_string(), vec!["AWSCURRENT".to_string()])
+    );
+    assert_eq!(labels_of(&versions), before);
+
+    let calls = driver.secret_store_calls();
+    assert_eq!(calls.mutation_attempts.len(), 1);
+    assert!(
+        calls.mutations.is_empty(),
+        "a refused roll back is not accepted"
+    );
+}
+
+#[test]
+fn rolling_back_to_an_unknown_version_or_secret_is_not_found() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    for request in [
+        SecretRollbackRequest::new("prod/api/credentials", "v-missing"),
+        SecretRollbackRequest::new("prod/missing", "v-oldest"),
+    ] {
+        let error = store.roll_back(&request).expect_err("nothing to move to");
+        assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+    }
+}
+
+#[test]
+fn a_managed_secret_and_a_store_without_labels_refuse_a_roll_back() {
+    let (driver, connection) = connected();
+
+    let error = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("store")
+        .roll_back(&SecretRollbackRequest::new("prod/db/master", "v-current"))
+        .expect_err("a managed secret is read only");
+    assert!(matches!(error, DbError::PermissionDenied(_)), "{error}");
+
+    let error = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("store")
+        .roll_back(&SecretRollbackRequest::new("/app/prod/db/host", "2"))
+        .expect_err("a numbered store has no labels to move");
+    assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+#[test]
+fn the_write_error_knob_fails_a_roll_back_without_moving_labels() {
+    let driver = FakeDriver::new(DbKind::AwsSecrets)
+        .with_secret_write_error("prod/api/credentials", "roll back denied by the fixture");
+    let profile = ConnectionProfile::new_with_driver(
+        "fake-aws-secrets",
+        DbKind::AwsSecrets,
+        "builtin:fake-aws-secrets",
+        DbConfig::default_aws_secrets(),
+    );
+    let connection = driver.connect(&profile).expect("connect");
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("store");
+
+    let error = store
+        .roll_back(&SecretRollbackRequest::new(
+            "prod/api/credentials",
+            "v-oldest",
+        ))
+        .expect_err("the knob denies the roll back");
+    assert!(matches!(error, DbError::PermissionDenied(_)), "{error}");
+
+    let details = store.describe("prod/api/credentials").expect("describe");
+    assert_eq!(details.summary.version.as_deref(), Some("v-current"));
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+// --- Deleting and restoring ---
+
+#[test]
+fn a_scheduled_deletion_marks_the_secret_and_hides_its_value_until_restored() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let deletion = store
+        .delete_secret(&SecretDeleteRequest::scheduled(
+            "prod/notify/webhook-token",
+            14,
+        ))
+        .expect("a plain secret can be scheduled for deletion");
+
+    let scheduled_for = deletion
+        .deletion_scheduled_for
+        .expect("a scheduled deletion reports when it takes effect");
+    let details = store
+        .describe("prod/notify/webhook-token")
+        .expect("describe");
+    assert_eq!(details.summary.deletion_scheduled_for, Some(scheduled_for));
+    assert!(details.deleted_at.is_some());
+    assert!(details.summary.is_pending_deletion());
+    assert_eq!(
+        (scheduled_for - details.deleted_at.expect("requested at")).num_days(),
+        14
+    );
+
+    // The service refuses the value of a secret pending deletion.
+    assert!(store.get_value("prod/notify/webhook-token", None).is_err());
+
+    // It still lists, flagged, like `ListSecrets` with planned deletions.
+    let listed = store
+        .list(&SecretListRequest::default())
+        .expect("list")
+        .entries
+        .into_iter()
+        .chain(
+            store
+                .list(&SecretListRequest {
+                    page_token: Some("4".to_string()),
+                    ..SecretListRequest::default()
+                })
+                .expect("second page")
+                .entries,
+        )
+        .find(|entry| entry.name == "prod/notify/webhook-token")
+        .expect("still listed");
+    assert!(listed.is_pending_deletion());
+
+    store
+        .restore_secret("prod/notify/webhook-token")
+        .expect("a scheduled deletion can be restored");
+
+    let details = store
+        .describe("prod/notify/webhook-token")
+        .expect("describe");
+    assert!(!details.summary.is_pending_deletion());
+    assert!(details.deleted_at.is_none());
+    assert_eq!(
+        exposed_text(
+            &store
+                .get_value("prod/notify/webhook-token", None)
+                .expect("readable again")
+        ),
+        FAKE_SECRET_PLAINTEXT
+    );
+
+    let calls = driver.secret_store_calls();
+    assert_eq!(calls.mutation_attempts.len(), 2);
+    assert_eq!(calls.mutations.len(), 2);
+}
+
+#[test]
+fn deleting_twice_restoring_a_live_secret_and_managed_secrets_are_refused() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let error = store
+        .delete_secret(&SecretDeleteRequest::scheduled(
+            "prod/deploy/legacy-token",
+            7,
+        ))
+        .expect_err("already scheduled for deletion");
+    assert!(error.to_string().contains("already scheduled"), "{error}");
+
+    let error = store
+        .restore_secret("prod/notify/webhook-token")
+        .expect_err("nothing to restore");
+    assert!(error.to_string().contains("not scheduled"), "{error}");
+
+    for error in [
+        store
+            .delete_secret(&SecretDeleteRequest::scheduled("prod/db/master", 7))
+            .expect_err("managed"),
+        store.restore_secret("prod/db/master").expect_err("managed"),
+    ] {
+        assert!(matches!(error, DbError::PermissionDenied(_)), "{error}");
+    }
+
+    let error = store
+        .delete_secret(&SecretDeleteRequest::scheduled("prod/missing", 7))
+        .expect_err("missing");
+    assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+#[test]
+fn the_fixture_secret_pending_deletion_restores_and_becomes_readable() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    assert!(store.get_value("prod/deploy/legacy-token", None).is_err());
+    store
+        .restore_secret("prod/deploy/legacy-token")
+        .expect("restore");
+
+    assert_eq!(
+        exposed_text(
+            &store
+                .get_value("prod/deploy/legacy-token", None)
+                .expect("readable")
+        ),
+        "legacy-token-value"
+    );
+}
+
+#[test]
+fn a_parameter_deletion_needs_its_name_and_removes_it_for_good() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    let error = store
+        .delete_secret(&SecretDeleteRequest::irreversible(
+            "/app/prod/db/port",
+            "/app/prod/db/por",
+        ))
+        .expect_err("the confirmation must be the exact name");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    assert!(store.describe("/app/prod/db/port").is_ok());
+    assert!(driver.secret_store_calls().mutations.is_empty());
+
+    let deletion = store
+        .delete_secret(&SecretDeleteRequest::irreversible(
+            "/app/prod/db/port",
+            "/app/prod/db/port",
+        ))
+        .expect("a confirmed deletion goes through");
+    assert!(deletion.deletion_scheduled_for.is_none());
+
+    let error = store.describe("/app/prod/db/port").expect_err("deleted");
+    assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+    assert!(store.get_value("/app/prod/db/port", None).is_err());
+    let names: Vec<String> = store
+        .list(&SecretListRequest {
+            path: Some("/app/prod/db/".to_string()),
+            ..SecretListRequest::default()
+        })
+        .expect("list")
+        .entries
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect();
+    assert!(
+        !names.contains(&"/app/prod/db/port".to_string()),
+        "{names:?}"
+    );
+
+    // A second deletion finds nothing, with the service's own answer.
+    let error = store
+        .delete_secret(&SecretDeleteRequest::irreversible(
+            "/app/prod/db/port",
+            "/app/prod/db/port",
+        ))
+        .expect_err("already deleted");
+    assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+
+    let calls = driver.secret_store_calls();
+    assert_eq!(calls.mutations.len(), 1);
+}
+
+#[test]
+fn each_store_refuses_the_deletion_it_does_not_offer() {
+    let (driver, connection) = connected();
+
+    let error = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("store")
+        .delete_secret(&SecretDeleteRequest::scheduled("/app/prod/db/host", 30))
+        .expect_err("a parameter has no recovery window");
+    assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+
+    let error = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("store")
+        .delete_secret(&SecretDeleteRequest::irreversible(
+            "prod/notify/webhook-token",
+            "prod/notify/webhook-token",
+        ))
+        .expect_err("a secret is never deleted without recovery");
+    assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+
+    let error = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("store")
+        .restore_secret("/app/prod/db/host")
+        .expect_err("a parameter cannot be restored");
+    assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+    assert!(
+        connection
+            .secret_store(FAKE_SECRETS_STORE_ID)
+            .expect("store")
+            .describe("prod/notify/webhook-token")
+            .is_ok()
+    );
+}
+
+// --- Rotation ---
+
+const FAKE_LAMBDA: &str = "arn:aws:lambda:eu-west-1:441012345678:function:rotate-credentials";
+
+#[test]
+fn rotating_now_creates_a_version_that_becomes_current_and_stamps_the_rotation() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let started = store
+        .rotate_now("prod/api/credentials")
+        .expect("rotation is enabled on this secret");
+
+    let version = started.version.expect("the rotation creates a version");
+    let versions = store
+        .list_versions("prod/api/credentials")
+        .expect("history");
+    assert_eq!(
+        labels_of(&versions),
+        vec![
+            (version.clone(), vec!["AWSCURRENT".to_string()]),
+            ("v-current".to_string(), vec!["AWSPREVIOUS".to_string()]),
+            ("v-previous".to_string(), Vec::new()),
+            ("v-oldest".to_string(), Vec::new()),
+        ],
+        "the new version replaced AWSCURRENT, and no label is left on AWSPENDING"
+    );
+
+    let details = store.describe("prod/api/credentials").expect("describe");
+    assert_eq!(details.summary.version.as_deref(), Some(version.as_str()));
+    assert_eq!(details.version_count, Some(4));
+    let rotation = details.summary.rotation.expect("rotation state");
+    assert!(rotation.enabled);
+    assert_eq!(rotation.schedule.as_deref(), Some("rate(30 days)"));
+    let last = rotation.last_rotated.expect("stamped");
+    let next = rotation.next_rotation.expect("rescheduled");
+    assert_eq!((next - last).num_days(), 30);
+    assert!(last > chrono::Utc::now() - chrono::Duration::days(3650));
+
+    assert!(store.get_value("prod/api/credentials", None).is_ok());
+    assert_eq!(driver.secret_store_calls().mutations.len(), 1);
+}
+
+#[test]
+fn rotating_now_is_refused_unless_rotation_is_enabled_and_changes_nothing() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let error = store
+        .rotate_now("prod/notify/webhook-token")
+        .expect_err("rotation was never configured");
+    assert!(error.to_string().contains("not enabled"), "{error}");
+
+    let error = store
+        .rotate_now("prod/db/master")
+        .expect_err("a managed secret is read only");
+    assert!(matches!(error, DbError::PermissionDenied(_)), "{error}");
+
+    let error = store.rotate_now("prod/missing").expect_err("missing");
+    assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+
+    assert_eq!(
+        store
+            .list_versions("prod/notify/webhook-token")
+            .expect("history")
+            .len(),
+        1
+    );
+    assert!(driver.secret_store_calls().mutations.is_empty());
+
+    let error = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("store")
+        .rotate_now("/app/prod/db/host")
+        .expect_err("a parameter does not rotate");
+    assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+}
+
+#[test]
+fn editing_rotation_turns_it_off_and_on_without_rotating() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    store
+        .update_rotation(&SecretRotationUpdate::disable("prod/api/credentials"))
+        .expect("disable");
+    let rotation = store
+        .describe("prod/api/credentials")
+        .expect("describe")
+        .summary
+        .rotation
+        .expect("rotation state");
+    assert!(!rotation.enabled);
+    assert!(rotation.next_rotation.is_none(), "nothing is scheduled");
+
+    // Off, so rotating now is refused rather than switching it back on.
+    assert!(store.rotate_now("prod/api/credentials").is_err());
+
+    store
+        .update_rotation(
+            &SecretRotationUpdate::enable("prod/api/credentials", "rate(7 days)")
+                .with_window("2h")
+                .with_function(FAKE_LAMBDA),
+        )
+        .expect("enable with new settings");
+    let rotation = store
+        .describe("prod/api/credentials")
+        .expect("describe")
+        .summary
+        .rotation
+        .expect("rotation state");
+    assert!(rotation.enabled);
+    assert_eq!(rotation.schedule.as_deref(), Some("rate(7 days)"));
+    assert_eq!(rotation.window.as_deref(), Some("2h"));
+    assert_eq!(rotation.function.as_deref(), Some(FAKE_LAMBDA));
+    assert!(rotation.next_rotation.is_some());
+
+    // Editing the configuration rotates nothing: still the original three
+    // versions.
+    assert_eq!(
+        store
+            .list_versions("prod/api/credentials")
+            .expect("history")
+            .len(),
+        3
+    );
+    assert_eq!(driver.secret_store_calls().mutations.len(), 2);
+}
+
+#[test]
+fn enabling_rotation_on_a_secret_without_a_function_needs_one() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let error = store
+        .update_rotation(&SecretRotationUpdate::enable(
+            "prod/notify/webhook-token",
+            "rate(30 days)",
+        ))
+        .expect_err("no rotation function is configured");
+    assert!(error.to_string().contains("function"), "{error}");
+    assert!(driver.secret_store_calls().mutations.is_empty());
+
+    store
+        .update_rotation(
+            &SecretRotationUpdate::enable("prod/notify/webhook-token", "rate(30 days)")
+                .with_function(FAKE_LAMBDA),
+        )
+        .expect("a function makes it valid");
+    let rotation = store
+        .describe("prod/notify/webhook-token")
+        .expect("describe")
+        .summary
+        .rotation
+        .expect("rotation state");
+    assert!(rotation.enabled);
+    assert!(store.rotate_now("prod/notify/webhook-token").is_ok());
+}
+
+#[test]
+fn an_invalid_rotation_edit_and_a_pointless_disable_are_refused() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let error = store
+        .update_rotation(&SecretRotationUpdate::enable(
+            "prod/api/credentials",
+            "every month",
+        ))
+        .expect_err("a schedule the service rejects");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+
+    let error = store
+        .update_rotation(&SecretRotationUpdate::disable("prod/notify/webhook-token"))
+        .expect_err("rotation is not on");
+    assert!(error.to_string().contains("not enabled"), "{error}");
+
+    let error = store
+        .update_rotation(&SecretRotationUpdate::disable("prod/db/master"))
+        .expect_err("managed");
+    assert!(matches!(error, DbError::PermissionDenied(_)), "{error}");
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+#[test]
+fn a_cron_schedule_is_rescheduled_a_day_out_and_an_hourly_one_by_its_hours() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    for (schedule, hours) in [("cron(0 16 1 * ? *)", 24), ("rate(6 hours)", 6)] {
+        store
+            .update_rotation(&SecretRotationUpdate::enable(
+                "prod/api/credentials",
+                schedule,
+            ))
+            .expect("enable");
+        let rotation = store
+            .describe("prod/api/credentials")
+            .expect("describe")
+            .summary
+            .rotation
+            .expect("rotation");
+        assert_eq!(
+            rotation.window.as_deref(),
+            Some("4h"),
+            "an update that names no window keeps the one the secret has"
+        );
+        let next = rotation.next_rotation.expect("scheduled");
+
+        let started = store.rotate_now("prod/api/credentials").expect("rotate");
+        assert!(started.version.is_some());
+        let rotation = store
+            .describe("prod/api/credentials")
+            .expect("describe")
+            .summary
+            .rotation
+            .expect("rotation");
+        let last = rotation.last_rotated.expect("stamped");
+        assert_eq!(
+            (rotation.next_rotation.expect("next") - last).num_hours(),
+            hours
+        );
+        assert_eq!((next - last).num_hours(), hours, "{schedule}");
+    }
+}
+
+// --- Tags and description ---
+
+fn tag_pairs(details: &SecretDetails) -> Vec<(String, String)> {
+    details
+        .tags
+        .iter()
+        .map(|tag| (tag.key.clone(), tag.value.clone()))
+        .collect()
+}
+
+fn pair(key: &str, value: &str) -> (String, String) {
+    (key.to_string(), value.to_string())
+}
+
+#[test]
+fn a_tag_edit_overwrites_adds_and_removes_and_touches_no_version() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    store
+        .update_tags(
+            &SecretTagsUpdate::new("prod/api/credentials")
+                .set("env", "staging")
+                .set("owner", "platform")
+                .remove("team")
+                .remove("never-there"),
+        )
+        .expect("a valid tag edit");
+
+    let details = store.describe("prod/api/credentials").expect("describe");
+    assert_eq!(
+        tag_pairs(&details),
+        vec![pair("env", "staging"), pair("owner", "platform")]
+    );
+    assert_eq!(details.version_count, Some(3));
+    assert_eq!(details.summary.version.as_deref(), Some("v-current"));
+    assert_eq!(
+        store
+            .list_versions("prod/api/credentials")
+            .expect("history")
+            .len(),
+        3
+    );
+    assert_eq!(driver.secret_store_calls().mutations.len(), 1);
+}
+
+#[test]
+fn a_tag_edit_on_a_parameter_works_the_same_way() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    store
+        .update_tags(
+            &SecretTagsUpdate::new("/app/prod/db/host")
+                .set("env", "prod")
+                .remove("app"),
+        )
+        .expect("a valid tag edit");
+
+    let details = store.describe("/app/prod/db/host").expect("describe");
+    assert_eq!(tag_pairs(&details), vec![pair("env", "prod")]);
+    assert_eq!(details.summary.version.as_deref(), Some("3"));
+}
+
+#[test]
+fn a_tag_edit_the_service_would_reject_changes_nothing() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+    let before = tag_pairs(&store.describe("prod/api/credentials").expect("describe"));
+
+    let error = store
+        .update_tags(&SecretTagsUpdate::new("prod/api/credentials").set("aws:env", "x"))
+        .expect_err("a reserved key");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+
+    // Fifty tags in total is the ceiling; the secret already has two.
+    let mut many = SecretTagsUpdate::new("prod/api/credentials");
+    for index in 0..49 {
+        many = many.set(format!("key-{index}"), "v");
+    }
+    let error = store.update_tags(&many).expect_err("too many tags overall");
+    assert!(error.to_string().contains("50"), "{error}");
+
+    for error in [
+        store
+            .update_tags(&SecretTagsUpdate::new("prod/db/master").set("a", "b"))
+            .expect_err("managed"),
+        store
+            .update_tags(&SecretTagsUpdate::new("prod/deploy/legacy-token").set("a", "b"))
+            .expect_err("pending deletion"),
+    ] {
+        assert!(
+            matches!(
+                error,
+                DbError::PermissionDenied(_) | DbError::QueryFailed(_)
+            ),
+            "{error}"
+        );
+    }
+    let error = store
+        .update_tags(&SecretTagsUpdate::new("prod/missing").set("a", "b"))
+        .expect_err("missing");
+    assert!(matches!(error, DbError::ObjectNotFound(_)), "{error}");
+
+    assert_eq!(
+        tag_pairs(&store.describe("prod/api/credentials").expect("describe")),
+        before
+    );
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+#[test]
+fn a_secret_description_changes_alone_and_clearing_it_empties_it() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let change = store
+        .update_description(&SecretDescriptionUpdate::new(
+            "prod/api/credentials",
+            "Payments API credentials, rotated monthly",
+        ))
+        .expect("a description edit");
+
+    assert!(change.version.is_none(), "no version is written");
+    let details = store.describe("prod/api/credentials").expect("describe");
+    assert_eq!(
+        details.summary.description.as_deref(),
+        Some("Payments API credentials, rotated monthly")
+    );
+    assert_eq!(details.version_count, Some(3));
+    assert_eq!(details.summary.version.as_deref(), Some("v-current"));
+    assert_eq!(
+        exposed_text(
+            &store
+                .get_value("prod/api/credentials", None)
+                .expect("value")
+        ),
+        format!(r#"{{"username":"api-user","password":"{FAKE_SECRET_PASSWORD}","port":5432}}"#)
+    );
+
+    store
+        .update_description(&SecretDescriptionUpdate::new("prod/api/credentials", ""))
+        .expect("clearing");
+    assert!(
+        store
+            .describe("prod/api/credentials")
+            .expect("describe")
+            .summary
+            .description
+            .is_none()
+    );
+
+    // A description is listed too.
+    assert_eq!(driver.secret_store_calls().mutations.len(), 2);
+
+    let error = store
+        .update_description(&SecretDescriptionUpdate::new(
+            "prod/api/credentials",
+            "d".repeat(2049),
+        ))
+        .expect_err("longer than the service takes");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+}
+
+#[test]
+fn a_parameter_description_is_a_value_preserving_write_that_creates_a_version() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+    let before = exposed_text(&store.get_value("/app/prod/db/host", None).expect("value"));
+
+    let change = store
+        .update_description(&SecretDescriptionUpdate::new(
+            "/app/prod/db/host",
+            "Primary database host",
+        ))
+        .expect("a value-preserving write");
+
+    assert_eq!(change.version.as_deref(), Some("4"));
+    let details = store.describe("/app/prod/db/host").expect("describe");
+    assert_eq!(
+        details.summary.description.as_deref(),
+        Some("Primary database host")
+    );
+    assert_eq!(details.summary.version.as_deref(), Some("4"));
+    assert_eq!(details.summary.value_type.as_deref(), Some("String"));
+    assert_eq!(details.data_type.as_deref(), Some("text"));
+
+    let current = store.get_value("/app/prod/db/host", None).expect("value");
+    assert_eq!(current.version.as_deref(), Some("4"));
+    assert_eq!(exposed_text(&current), before, "the value is untouched");
+
+    let versions = store.list_versions("/app/prod/db/host").expect("history");
+    assert_eq!(versions.len(), 4);
+    assert_eq!(versions[0].id, "4");
+    assert_eq!(
+        versions[0].modified_by.as_deref(),
+        Some("arn:fake:user/editor")
+    );
+
+    let calls = driver.secret_store_calls();
+    assert_eq!(calls.mutations.len(), 1);
+    assert!(
+        calls.put_attempts.is_empty(),
+        "it is not a caller-supplied value write"
+    );
+}
+
+#[test]
+fn a_parameter_description_fails_closed_when_the_value_cannot_be_read() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    let error = store
+        .update_description(&SecretDescriptionUpdate::new(
+            "/app/prod/db/password",
+            "Database password",
+        ))
+        .expect_err("a SecureString the caller may not decrypt cannot be re-sent");
+
+    assert!(matches!(error, DbError::PermissionDenied(_)), "{error}");
+    let details = store.describe("/app/prod/db/password").expect("describe");
+    assert!(details.summary.description.is_none());
+    assert_eq!(details.summary.version.as_deref(), Some("3"));
+    assert!(driver.secret_store_calls().mutations.is_empty());
+
+    let error = store
+        .update_description(&SecretDescriptionUpdate::new(
+            "/app/prod/db/host",
+            "d".repeat(1025),
+        ))
+        .expect_err("longer than the parameter store takes");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+}
+
+#[test]
+fn a_parameter_description_cannot_be_cleared() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    let error = store
+        .update_description(&SecretDescriptionUpdate::new("/app/prod/db/host", ""))
+        .expect_err("a rewrite cannot clear a description");
+
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+// --- Creating ---
+
+#[test]
+fn a_created_secret_is_listed_described_and_readable_with_one_current_version() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let created = store
+        .create_secret(
+            &SecretCreateRequest::text("prod/billing/api-key", "created-value-1")
+                .with_description("Billing API key")
+                .with_encryption_key("alias/billing")
+                .with_tag("team", "billing")
+                .with_tag("env", "prod"),
+        )
+        .expect("a new name is created");
+
+    let version = created.version.expect("the creation reports its version");
+    assert!(created.resource_id.is_some());
+
+    let listed = store
+        .list(&SecretListRequest {
+            name_filter: Some("prod/billing".to_string()),
+            ..SecretListRequest::default()
+        })
+        .expect("list");
+    assert_eq!(listed.entries.len(), 1);
+    assert_eq!(listed.entries[0].name, "prod/billing/api-key");
+
+    let details = store.describe("prod/billing/api-key").expect("describe");
+    assert_eq!(
+        details.summary.description.as_deref(),
+        Some("Billing API key")
+    );
+    assert_eq!(details.encryption_key.as_deref(), Some("alias/billing"));
+    assert_eq!(
+        tag_pairs(&details),
+        vec![pair("team", "billing"), pair("env", "prod")]
+    );
+    assert_eq!(details.version_count, Some(1));
+    assert_eq!(details.summary.version.as_deref(), Some(version.as_str()));
+    assert!(details.created.is_some());
+    assert_eq!(
+        labels_of(
+            &store
+                .list_versions("prod/billing/api-key")
+                .expect("history")
+        ),
+        vec![(version.clone(), vec!["AWSCURRENT".to_string()])]
+    );
+
+    let value = store
+        .get_value("prod/billing/api-key", None)
+        .expect("value");
+    assert_eq!(value.version.as_deref(), Some(version.as_str()));
+    assert_eq!(exposed_text(&value), "created-value-1");
+
+    let calls = driver.secret_store_calls();
+    assert_eq!(calls.mutations.len(), 1);
+    assert!(calls.put_attempts.is_empty());
+    let rendered = format!("{:?}", calls.mutations);
+    assert!(!rendered.contains("created-value-1"), "{rendered}");
+}
+
+#[test]
+fn a_secret_created_without_a_key_uses_the_default_key() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    store
+        .create_secret(&SecretCreateRequest::text("prod/plain", "created-value-2"))
+        .expect("created");
+
+    assert_eq!(
+        store
+            .describe("prod/plain")
+            .expect("describe")
+            .encryption_key
+            .as_deref(),
+        Some("aws/secretsmanager")
+    );
+}
+
+#[test]
+fn creating_never_overwrites_an_existing_name() {
+    let (driver, connection) = connected();
+
+    for (store_id, name) in [
+        (FAKE_SECRETS_STORE_ID, "prod/api/credentials"),
+        (FAKE_PARAMETER_STORE_ID, "/app/prod/db/host"),
+    ] {
+        let store = connection.secret_store(store_id).expect("store");
+        let before = store.describe(name).expect("describe");
+        let before_value = exposed_text(&store.get_value(name, None).expect("value"));
+
+        let error = store
+            .create_secret(&SecretCreateRequest::text(name, "created-value-3"))
+            .expect_err("the name exists");
+
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+        assert!(error.to_string().contains("already exists"), "{error}");
+        assert!(!error.to_string().contains("created-value-3"), "{error}");
+        assert_eq!(
+            store.describe(name).expect("describe").summary.version,
+            before.summary.version
+        );
+        assert_eq!(
+            exposed_text(&store.get_value(name, None).expect("value")),
+            before_value
+        );
+    }
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+#[test]
+fn a_secrets_manager_create_refuses_a_name_a_type_and_a_tier_it_does_not_have() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let error = store
+        .create_secret(&SecretCreateRequest::text("bad name", "created-value-4"))
+        .expect_err("a space is not a secret name character");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+
+    for request in [
+        SecretCreateRequest::text("prod/typed", "created-value-4").with_value_type("String"),
+        SecretCreateRequest::text("prod/tiered", "created-value-4").with_tier("Advanced"),
+    ] {
+        let error = store.create_secret(&request).expect_err("no type or tier");
+        assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+    }
+
+    let error = store
+        .create_secret(&SecretCreateRequest::text("prod/api", ""))
+        .expect_err("no value");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+    assert!(store.describe("prod/typed").is_err());
+}
+
+#[test]
+fn a_created_parameter_has_a_type_a_tier_a_version_and_appears_in_its_path() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    let created = store
+        .create_secret(
+            &SecretCreateRequest::text("/app/prod/db/replica", "created-value-5")
+                .with_value_type("SecureString")
+                .with_tier("Advanced")
+                .with_encryption_key("alias/app-prod")
+                .with_description("Replica password")
+                .with_tag("app", "shop"),
+        )
+        .expect("created");
+
+    assert_eq!(created.version.as_deref(), Some("1"));
+    let details = store.describe("/app/prod/db/replica").expect("describe");
+    assert_eq!(details.summary.value_type.as_deref(), Some("SecureString"));
+    assert_eq!(details.summary.tier.as_deref(), Some("Advanced"));
+    assert_eq!(
+        details.summary.description.as_deref(),
+        Some("Replica password")
+    );
+    assert_eq!(details.encryption_key.as_deref(), Some("alias/app-prod"));
+    assert_eq!(details.data_type.as_deref(), Some("text"));
+    assert_eq!(tag_pairs(&details), vec![pair("app", "shop")]);
+    assert_eq!(details.summary.version.as_deref(), Some("1"));
+
+    let mut names: Vec<String> = Vec::new();
+    let mut token = None;
+    loop {
+        let page = store
+            .list(&SecretListRequest {
+                path: Some("/app/prod/db/".to_string()),
+                recursive: true,
+                page_token: token,
+                ..SecretListRequest::default()
+            })
+            .expect("list");
+        names.extend(page.entries.into_iter().map(|entry| entry.name));
+        token = page.next_page_token;
+        if token.is_none() {
+            break;
+        }
+    }
+    assert!(
+        names.contains(&"/app/prod/db/replica".to_string()),
+        "{names:?}"
+    );
+
+    assert_eq!(
+        exposed_text(
+            &store
+                .get_value("/app/prod/db/replica", None)
+                .expect("value")
+        ),
+        "created-value-5"
+    );
+    assert_eq!(driver.secret_store_calls().mutations.len(), 1);
+}
+
+#[test]
+fn a_parameter_created_with_defaults_is_a_standard_string() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    store
+        .create_secret(&SecretCreateRequest::text(
+            "/app/prod/plain",
+            "created-value-6",
+        ))
+        .expect("created");
+
+    let details = store.describe("/app/prod/plain").expect("describe");
+    assert_eq!(details.summary.value_type.as_deref(), Some("String"));
+    assert_eq!(details.summary.tier.as_deref(), Some("Standard"));
+    assert!(details.encryption_key.is_none());
+}
+
+#[test]
+fn a_parameter_create_refuses_what_the_service_would() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    for request in [
+        SecretCreateRequest::text("/app/x", "created-value-7").with_value_type("Binary"),
+        SecretCreateRequest::text("/app/x", "created-value-7").with_tier("Platinum"),
+        SecretCreateRequest::text("/app/x", "created-value-7").with_encryption_key("alias/k"),
+        SecretCreateRequest::text("/app/has space", "created-value-7"),
+        SecretCreateRequest::text("/aws/reserved", "created-value-7"),
+        SecretCreateRequest::text("ssm-prefixed", "created-value-7"),
+    ] {
+        let error = store.create_secret(&request).expect_err("refused");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+        assert!(!error.to_string().contains("created-value-7"), "{error}");
+    }
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+    assert!(store.describe("/app/x").is_err());
+}
+
+#[test]
+fn the_write_error_knob_fails_a_create_without_creating_anything() {
+    let driver = FakeDriver::new(DbKind::AwsSecrets)
+        .with_secret_write_error("prod/denied", "create denied by the fixture");
+    let profile = ConnectionProfile::new_with_driver(
+        "fake-aws-secrets",
+        DbKind::AwsSecrets,
+        "builtin:fake-aws-secrets",
+        DbConfig::default_aws_secrets(),
+    );
+    let connection = driver.connect(&profile).expect("connect");
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("store");
+
+    let error = store
+        .create_secret(&SecretCreateRequest::text("prod/denied", "created-value-8"))
+        .expect_err("the knob denies the create");
+
+    assert!(matches!(error, DbError::PermissionDenied(_)), "{error}");
+    assert!(store.describe("prod/denied").is_err());
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+#[test]
+fn rolling_back_onto_a_pending_version_is_refused_and_moves_no_label() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+    store
+        .put_value(
+            &SecretPutRequest::text("prod/api/credentials", "pending-probe")
+                .with_stage(SecretVersionStage::Pending),
+        )
+        .expect("a staged write");
+    let before = labels_of(
+        &store
+            .list_versions("prod/api/credentials")
+            .expect("history"),
+    );
+    let pending = before
+        .iter()
+        .find(|(_, labels)| labels.iter().any(|label| label == "AWSPENDING"))
+        .map(|(id, _)| id.clone())
+        .expect("a pending version exists");
+
+    let error = store
+        .roll_back(&SecretRollbackRequest::new("prod/api/credentials", pending))
+        .expect_err("an unfinished rotation is not a roll back target");
+
+    assert!(error.to_string().contains("AWSPENDING"), "{error}");
+    assert_eq!(
+        labels_of(
+            &store
+                .list_versions("prod/api/credentials")
+                .expect("history")
+        ),
+        before
+    );
+    assert!(driver.secret_store_calls().mutations.is_empty());
 }
 
 #[test]
@@ -1026,4 +2237,228 @@ fn the_history_marks_exactly_one_current_version_across_writes() {
         current_ids(&parameters.list_versions(parameter).unwrap()),
         ["4"]
     );
+}
+
+// --- Review follow-ups: pending rotations, descriptions, names ---
+
+#[test]
+fn rotating_is_refused_while_another_version_is_pending_and_changes_nothing() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+    let mut pending = SecretPutRequest::text("prod/api/credentials", "staged value");
+    pending.stage = Some(SecretVersionStage::Pending);
+    store.put_value(&pending).expect("a staged write");
+    let before = labels_of(
+        &store
+            .list_versions("prod/api/credentials")
+            .expect("history"),
+    );
+    let mutations = driver.secret_store_calls().mutations.len();
+
+    let error = store
+        .rotate_now("prod/api/credentials")
+        .expect_err("a rotation is already unfinished");
+
+    assert!(error.to_string().contains("in progress"), "{error}");
+    assert_eq!(
+        labels_of(
+            &store
+                .list_versions("prod/api/credentials")
+                .expect("history")
+        ),
+        before
+    );
+    assert_eq!(driver.secret_store_calls().mutations.len(), mutations);
+}
+
+#[test]
+fn turning_rotation_off_reports_the_version_an_unfinished_rotation_left() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+    let mut pending = SecretPutRequest::text("prod/api/credentials", "staged value");
+    pending.stage = Some(SecretVersionStage::Pending);
+    let staged = store
+        .put_value(&pending)
+        .expect("a staged write")
+        .version
+        .expect("version");
+
+    let change = store
+        .update_rotation(&SecretRotationUpdate::disable("prod/api/credentials"))
+        .expect("disable");
+    assert_eq!(change.unfinished_version.as_deref(), Some(staged.as_str()));
+
+    let change = store
+        .update_rotation(
+            &SecretRotationUpdate::enable("prod/api/credentials", "rate(30 days)")
+                .with_function(FAKE_LAMBDA),
+        )
+        .expect("enable");
+    assert_eq!(change.unfinished_version, None, "turning it on leaves none");
+
+    let (_driver, connection) = connected();
+    let clean = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists")
+        .update_rotation(&SecretRotationUpdate::disable("prod/api/credentials"))
+        .expect("disable");
+    assert_eq!(clean.unfinished_version, None);
+}
+
+#[test]
+fn a_rotation_whose_next_date_overflows_is_refused_and_changes_nothing() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+    let before = store
+        .describe("prod/api/credentials")
+        .expect("describe")
+        .summary
+        .rotation;
+
+    let error = store
+        .update_rotation(&SecretRotationUpdate::enable(
+            "prod/api/credentials",
+            "rate(100000000 days)",
+        ))
+        .expect_err("the next date does not exist");
+
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    assert_eq!(
+        store
+            .describe("prod/api/credentials")
+            .expect("describe")
+            .summary
+            .rotation,
+        before
+    );
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+#[test]
+fn a_flat_description_edit_stamps_the_change_time() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+    let before = store
+        .describe("prod/api/credentials")
+        .expect("describe")
+        .summary
+        .last_changed;
+
+    store
+        .update_description(&SecretDescriptionUpdate::new(
+            "prod/api/credentials",
+            "A new description",
+        ))
+        .expect("edit");
+
+    let after = store
+        .describe("prod/api/credentials")
+        .expect("describe")
+        .summary
+        .last_changed;
+    assert!(after > before, "{after:?} should be later than {before:?}");
+}
+
+#[test]
+fn a_parameter_name_of_only_slashes_or_with_levels_and_no_leading_slash_is_refused() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    for name in ["/", "app/prod/token"] {
+        let error = store
+            .create_secret(&SecretCreateRequest::text(name, "created-value-9"))
+            .expect_err("refused");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    }
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+#[test]
+fn an_unprefixed_parameter_is_listed_at_the_root_directly_and_recursively() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+    store
+        .create_secret(&SecretCreateRequest::text("plain", "created-value-10"))
+        .expect("a flat name is valid");
+
+    for recursive in [false, true] {
+        let listed = store
+            .list(&SecretListRequest {
+                path: Some("/".to_string()),
+                recursive,
+                name_filter: Some("plain".to_string()),
+                ..SecretListRequest::default()
+            })
+            .expect("list");
+
+        assert!(
+            listed.entries.iter().any(|entry| entry.name == "plain"),
+            "recursive={recursive}: {:?}",
+            listed.entries
+        );
+    }
+    assert!(store.describe("plain").is_ok());
+}
+
+#[test]
+fn intelligent_tiering_resolves_to_the_tier_the_value_needs() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    store
+        .create_secret(
+            &SecretCreateRequest::text("/app/small", "small").with_tier("Intelligent-Tiering"),
+        )
+        .expect("created");
+    store
+        .create_secret(
+            &SecretCreateRequest::text("/app/large", "l".repeat(4097))
+                .with_tier("Intelligent-Tiering"),
+        )
+        .expect("created");
+
+    let tier_of = |name: &str| store.describe(name).expect("describe").summary.tier;
+    assert_eq!(tier_of("/app/small").as_deref(), Some("Standard"));
+    assert_eq!(tier_of("/app/large").as_deref(), Some("Advanced"));
+}
+
+#[test]
+fn a_standard_tier_value_over_4096_bytes_is_refused() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    store
+        .create_secret(&SecretCreateRequest::text("/app/fits", "v".repeat(4096)))
+        .expect("4096 bytes fit");
+    let mutations = driver.secret_store_calls().mutations.len();
+    let error = store
+        .create_secret(&SecretCreateRequest::text("/app/over", "v".repeat(4097)))
+        .expect_err("one byte over");
+
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    assert!(store.describe("/app/over").is_err());
+    assert_eq!(driver.secret_store_calls().mutations.len(), mutations);
+
+    store
+        .create_secret(
+            &SecretCreateRequest::text("/app/advanced", "v".repeat(4097)).with_tier("Advanced"),
+        )
+        .expect("the advanced tier holds more");
 }
