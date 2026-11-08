@@ -15,7 +15,7 @@ use dbflux_core::{
     Connection, DbError, SecretDetails, SecretListPage, SecretListRequest, SecretStoreCapabilities,
     SecretValue, SecretVersionInfo,
 };
-use dbflux_ui_base::user_error::{report_error, report_error_async};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
 use gpui::Context;
 use std::sync::Arc;
 use std::time::Instant;
@@ -271,9 +271,11 @@ impl SecretStoreDocument {
         self.versions_session = None;
 
         let Some(connection) = self.connection(cx) else {
-            self.versions = VersionsState::Failed(dbflux_i18n::t!(
-                "document.secret_store.error.connection_unavailable"
-            ));
+            let message = dbflux_i18n::t!("document.secret_store.error.connection_unavailable");
+
+            // First catch site: no request goes out, so nothing else reports.
+            report_error(UserFacingError::new(ErrorKind::User, message.clone()), cx);
+            self.versions = VersionsState::Failed(message);
             return;
         };
 
@@ -388,6 +390,12 @@ impl SecretStoreDocument {
     /// so a rotation that lands later turns a once-current value into an
     /// older one.
     pub(crate) fn shown_older_version(&self) -> Option<&str> {
+        // Only a value that loaded is an older value; a failed or pending
+        // retrieval has nothing to caption.
+        if !matches!(self.value, ValueState::Loaded(_)) {
+            return None;
+        }
+
         let shown = self.value_version.as_deref()?;
         let current = self.current_version_id()?;
 
@@ -435,7 +443,7 @@ impl SecretStoreDocument {
     /// Whether Back to current may run: a historical value is shown and no
     /// retrieval is in flight.
     pub fn can_return_to_current(&self) -> bool {
-        self.shown_older_version().is_some() && !matches!(self.value, ValueState::Loading)
+        self.shown_older_version().is_some()
     }
 
     /// Replaces a historical value with the current one.

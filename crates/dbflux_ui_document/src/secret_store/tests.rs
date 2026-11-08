@@ -4173,14 +4173,19 @@ fn the_edit_value_command_reports_a_missing_connection(cx: &mut TestAppContext) 
     assert!(opened.command(Command::EditValue));
 
     assert!(!opened.read(|doc| doc.is_editing_value()));
+    // The editor's report notifies the app state, which makes the history
+    // retry find the missing connection and report it too: two entries, both
+    // the missing-connection message.
     let reported = opened.reported_errors();
-    assert_eq!(reported.len(), 1, "{reported:?}");
-    assert!(
-        reported[0].1.contains(&dbflux_i18n::t!(
-            "document.secret_store.error.connection_unavailable"
-        )),
-        "{reported:?}"
-    );
+    assert_eq!(reported.len(), 2, "{reported:?}");
+    for (_, summary) in &reported {
+        assert!(
+            summary.contains(&dbflux_i18n::t!(
+                "document.secret_store.error.connection_unavailable"
+            )),
+            "{reported:?}"
+        );
+    }
 }
 
 /// The button, the row menu and the pane action open the editor through
@@ -4203,14 +4208,19 @@ fn start_value_edit_reports_a_missing_connection(cx: &mut TestAppContext) {
     opened.start_edit();
 
     assert!(!opened.read(|doc| doc.is_editing_value()));
+    // The editor's report notifies the app state, which makes the history
+    // retry find the missing connection and report it too: two entries, both
+    // the missing-connection message.
     let reported = opened.reported_errors();
-    assert_eq!(reported.len(), 1, "{reported:?}");
-    assert!(
-        reported[0].1.contains(&dbflux_i18n::t!(
-            "document.secret_store.error.connection_unavailable"
-        )),
-        "{reported:?}"
-    );
+    assert_eq!(reported.len(), 2, "{reported:?}");
+    for (_, summary) in &reported {
+        assert!(
+            summary.contains(&dbflux_i18n::t!(
+                "document.secret_store.error.connection_unavailable"
+            )),
+            "{reported:?}"
+        );
+    }
 }
 
 // -- Version history ---------------------------------------------------------
@@ -5349,4 +5359,55 @@ fn back_to_current_stays_a_pane_action_while_the_history_loads_or_fails(cx: &mut
         let action = opened.pane_action("secret-version-current");
         assert!(action.enabled, "a historical value is shown");
     }
+}
+
+/// The history retry that finds no connection says so through the error
+/// seam, once: later state changes with the connection still gone stay quiet.
+#[gpui::test]
+fn a_history_retry_without_a_connection_is_reported_once(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    assert!(opened.reported_errors().is_empty());
+
+    let profile_id = opened.read(|doc| doc.profile_id);
+    let app_state = opened.app_state.clone();
+    opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id));
+    });
+    opened.announce_state_change();
+    opened.announce_state_change();
+
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].1.contains(&dbflux_i18n::t!(
+            "document.secret_store.error.connection_unavailable"
+        )),
+        "{errors:?}"
+    );
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+}
+
+/// A historical retrieval that fails shows its error and neither the
+/// older-value banner nor Back to current.
+#[gpui::test]
+fn a_failed_historical_retrieval_shows_no_older_value_banner(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| {
+        doc.value_version = Some("v-previous".to_string());
+        doc.value = ValueState::Failed(ValueFailure {
+            message: "retrieval refused".to_string(),
+            correlation_id: Uuid::now_v7(),
+            decrypt_denied: false,
+        });
+        cx.notify();
+    });
+
+    let text = opened.rendered_text();
+    assert!(text.contains("retrieval refused"), "{text}");
+    assert!(!text.contains("Showing version"), "{text}");
+    assert!(!text.contains("Back to current"), "{text}");
+    assert!(!opened.read(|doc| doc.can_return_to_current()));
+    assert!(!opened.pane_action("secret-version-current").enabled);
 }
