@@ -50,8 +50,8 @@ mod operations;
 mod scrub;
 
 pub use operations::{
-    delete_secret, restore_secret, roll_back_secret, rotate_secret_now, update_secret_description,
-    update_secret_rotation, update_secret_tags,
+    create_secret, delete_secret, restore_secret, roll_back_secret, rotate_secret_now,
+    update_secret_description, update_secret_rotation, update_secret_tags,
 };
 use scrub::scrub_submitted_value;
 
@@ -102,6 +102,8 @@ pub enum SecretOperation {
     /// Changing the description
     /// (`SecretStoreSource::update_description`).
     EditDescription,
+    /// Creating a secret (`SecretStoreSource::create_secret`).
+    Create,
 }
 
 /// The three audit actions of one operation: the store accepted it, a gate
@@ -301,6 +303,23 @@ impl SecretOperation {
                              event could not be recorded ({error}). Do not repeat the edit to \
                              repair the audit trail: a store that rewrites the value to change \
                              the description would create another version.",
+            },
+            Self::Create => OperationSpec {
+                classification: ExecutionClassification::Write,
+                actions: OperationActions {
+                    done: "secret_created",
+                    refused: "secret_create_refused",
+                    failed: "secret_create_failed",
+                },
+                required: write.union(SecretStoreCapabilities::CREATE),
+                verb: "create",
+                subject: "creation of \"{name}\"",
+                done_summary: "Created {name} in {store}",
+                refused_summary: "Refused to create {name} in {store}",
+                failed_summary: "Could not create {name} in {store}",
+                audit_lost: "The creation of \"{name}\" landed in {store}, but its audit event \
+                             could not be recorded ({error}). The secret exists; do not retry the \
+                             creation to repair the audit trail, because the name is taken now.",
             },
         }
     }

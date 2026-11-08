@@ -8,9 +8,11 @@
 //! value (`SecretCreateRequest`) holds it as a `secrecy` type, so `Debug`
 //! never renders it.
 
+use secrecy::{ExposeSecret, SecretSlice, SecretString};
+
 use crate::DbError;
 
-use super::SecretTag;
+use super::{SecretPayload, SecretTag};
 
 /// A request to make an earlier version of a secret the current one.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -529,4 +531,132 @@ pub struct SecretDescriptionChange {
     /// description only by writing the value again, and `None` for one that
     /// changes it alone.
     pub version: Option<String>,
+}
+
+/// A new secret to create. The value travels as a `secrecy` type, so it is
+/// redacted from `Debug` output.
+///
+/// The type, tier and key are the store's own names, as `SecretSummary`
+/// reports them: a store refuses the fields it has no use for instead of
+/// ignoring them, and fills in its own default for the ones left out.
+#[derive(Debug, Clone)]
+pub struct SecretCreateRequest {
+    /// Full name of the secret, including any path.
+    pub name: String,
+
+    /// The initial value. Creating takes text.
+    pub payload: SecretPayload,
+
+    pub description: Option<String>,
+
+    /// The value type, for a store with `TYPED_VALUES` (for example
+    /// `SecureString`). `None` takes the store's default.
+    pub value_type: Option<String>,
+
+    /// The store's tier, for a store that has them. `None` takes the
+    /// store's default.
+    pub tier: Option<String>,
+
+    /// The encryption key to use, as the store names it. `None` takes the
+    /// store's default key.
+    pub encryption_key: Option<String>,
+
+    pub tags: Vec<SecretTag>,
+}
+
+impl SecretCreateRequest {
+    pub fn text(name: impl Into<String>, text: impl Into<String>) -> Self {
+        Self::new(name, SecretPayload::Text(SecretString::from(text.into())))
+    }
+
+    /// A binary payload, which `validate` refuses: creating takes text.
+    pub fn binary(name: impl Into<String>, bytes: Vec<u8>) -> Self {
+        Self::new(name, SecretPayload::Binary(SecretSlice::from(bytes)))
+    }
+
+    fn new(name: impl Into<String>, payload: SecretPayload) -> Self {
+        Self {
+            name: name.into(),
+            payload,
+            description: None,
+            value_type: None,
+            tier: None,
+            encryption_key: None,
+            tags: Vec::new(),
+        }
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_value_type(mut self, value_type: impl Into<String>) -> Self {
+        self.value_type = Some(value_type.into());
+        self
+    }
+
+    pub fn with_tier(mut self, tier: impl Into<String>) -> Self {
+        self.tier = Some(tier.into());
+        self
+    }
+
+    pub fn with_encryption_key(mut self, key: impl Into<String>) -> Self {
+        self.encryption_key = Some(key.into());
+        self
+    }
+
+    pub fn with_tag(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.tags.push(SecretTag::new(key, value));
+        self
+    }
+
+    /// Refuses what no store accepts, before any call: a blank name, a
+    /// binary or empty value, and tags outside the services' limits or more
+    /// than [`MAX_TAGS`]. What only one store accepts (names, types, tiers)
+    /// is that store's to check.
+    pub fn validate(&self) -> Result<(), DbError> {
+        let refuse = |reason: String| {
+            DbError::constraint_violation(format!("\"{}\" was not created: {reason}", self.name))
+        };
+
+        if self.name.trim().is_empty() {
+            return Err(refuse("it needs a name.".to_string()));
+        }
+
+        match &self.payload {
+            SecretPayload::Text(text) if text.expose_secret().is_empty() => {
+                return Err(refuse("it needs a value.".to_string()));
+            }
+            SecretPayload::Text(_) => {}
+            SecretPayload::Binary(_) => {
+                return Err(refuse("a new secret takes a text value.".to_string()));
+            }
+        }
+
+        if self.tags.len() > MAX_TAGS {
+            return Err(refuse(format!("a secret carries at most {MAX_TAGS} tags.")));
+        }
+        let mut seen: Vec<&str> = Vec::with_capacity(self.tags.len());
+        for tag in &self.tags {
+            validate_tag(&tag.key, &tag.value).map_err(refuse)?;
+
+            if seen.contains(&tag.key.as_str()) {
+                return Err(refuse(format!("the tag key \"{}\" is set twice.", tag.key)));
+            }
+            seen.push(&tag.key);
+        }
+
+        Ok(())
+    }
+}
+
+/// What creating a secret reports.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecretCreated {
+    /// The version the creation made, when the store reports it.
+    pub version: Option<String>,
+
+    /// Provider-wide identifier of the new secret, when the store reports it.
+    pub resource_id: Option<String>,
 }

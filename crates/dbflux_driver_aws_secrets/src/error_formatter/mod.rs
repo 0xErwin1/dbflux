@@ -86,6 +86,9 @@ const NOT_FOUND_CODES: &[&str] = &[
     "InvalidResourceId",
 ];
 
+/// Codes for a name that is already taken, which creating never overwrites.
+const EXISTS_CODES: &[&str] = &["ResourceExistsException", "ParameterAlreadyExists"];
+
 const RETRIABLE_CODES: &[&str] = &[
     "ThrottlingException",
     "Throttling",
@@ -354,6 +357,10 @@ pub(crate) fn classify_operation_error(formatted: FormattedError) -> DbError {
 
     if has_code(code, NOT_FOUND_CODES) {
         return DbError::ObjectNotFound(formatted);
+    }
+
+    if has_code(code, EXISTS_CODES) {
+        return DbError::ConstraintViolation(formatted);
     }
 
     DbError::QueryFailed(formatted)

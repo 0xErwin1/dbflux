@@ -14,9 +14,9 @@ use aws_sdk_ssm::types::{ParameterType, Tag as ParameterTag};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     Connection, ConnectionProfile, DEFAULT_RECOVERY_WINDOW_DAYS, DbConfig, DbDriver, DbError,
-    DbKind, SecretDeleteRequest, SecretDescriptionUpdate, SecretListRequest, SecretPayload,
-    SecretPutRequest, SecretRollbackRequest, SecretRotationUpdate, SecretStoreCapabilities,
-    SecretStoreSource, SecretTagsUpdate, SecretValue, SecretVersionStage,
+    DbKind, SecretCreateRequest, SecretDeleteRequest, SecretDescriptionUpdate, SecretListRequest,
+    SecretPayload, SecretPutRequest, SecretRollbackRequest, SecretRotationUpdate,
+    SecretStoreCapabilities, SecretStoreSource, SecretTagsUpdate, SecretValue, SecretVersionStage,
 };
 use dbflux_driver_aws_secrets::{AwsSecretsDriver, PARAMETER_STORE_ID, SECRETS_MANAGER_ID};
 use dbflux_test_support::containers;
@@ -229,6 +229,9 @@ fn connection_exposes_secrets_manager_then_parameter_store() -> Result<(), DbErr
                 | SecretStoreCapabilities::SOFT_DELETE
                 | SecretStoreCapabilities::WRITE
                 | SecretStoreCapabilities::DELETE
+                | SecretStoreCapabilities::TAGS
+                | SecretStoreCapabilities::DESCRIPTION
+                | SecretStoreCapabilities::CREATE
         ));
         assert_eq!(descriptors[1].id, PARAMETER_STORE_ID);
         assert_eq!(descriptors[1].label, "Parameter Store");
@@ -238,6 +241,9 @@ fn connection_exposes_secrets_manager_then_parameter_store() -> Result<(), DbErr
                 | SecretStoreCapabilities::TYPED_VALUES
                 | SecretStoreCapabilities::WRITE
                 | SecretStoreCapabilities::DELETE
+                | SecretStoreCapabilities::TAGS
+                | SecretStoreCapabilities::DESCRIPTION
+                | SecretStoreCapabilities::CREATE
         ));
 
         connection.ping()
@@ -1237,6 +1243,187 @@ fn parameter_store_update_description_refuses_without_a_reported_tier_and_writes
             .update_description(&SecretDescriptionUpdate::new("/app/described", ""))
             .expect_err("a description is not cleared by a rewrite");
         assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn secrets_manager_create_makes_a_secret_with_description_tags_and_a_current_version()
+-> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let connection = connect(&endpoint)?;
+        let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
+
+        let created = secrets.create_secret(
+            &SecretCreateRequest::text("created/api-key", "created-value")
+                .with_description("Billing API key")
+                .with_tag("team", "billing")
+                .with_tag("env", "prod"),
+        )?;
+
+        let version = created.version.expect("the creation reports its version");
+        assert!(
+            created
+                .resource_id
+                .as_deref()
+                .is_some_and(|arn| arn.starts_with("arn:aws:secretsmanager:"))
+        );
+
+        let details = secrets.describe("created/api-key")?;
+        assert_eq!(
+            details.summary.description.as_deref(),
+            Some("Billing API key")
+        );
+        assert_eq!(
+            tag_pairs(&details),
+            vec![pair("env", "prod"), pair("team", "billing")]
+        );
+        assert_eq!(details.summary.version.as_deref(), Some(version.as_str()));
+        assert_eq!(details.version_count, Some(1));
+        assert!(details.encryption_key.is_some());
+
+        let value = secrets.get_value("created/api-key", None)?;
+        assert_eq!(value.version.as_deref(), Some(version.as_str()));
+        assert_eq!(text(&value), "created-value");
+
+        let listed = secrets.list(&SecretListRequest {
+            name_filter: Some("created/".to_string()),
+            ..SecretListRequest::default()
+        })?;
+        assert_eq!(names(&listed), ["created/api-key"]);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn secrets_manager_create_never_overwrites_and_refuses_what_it_cannot_make() -> Result<(), DbError>
+{
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        seeder.secret_string("taken", "original-value");
+
+        let connection = connect(&endpoint)?;
+        let secrets = store(connection.as_ref(), SECRETS_MANAGER_ID);
+
+        let error = secrets
+            .create_secret(&SecretCreateRequest::text("taken", "replacement-value"))
+            .expect_err("the name is taken");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+        assert!(!error.to_string().contains("replacement-value"), "{error}");
+        assert_eq!(text(&secrets.get_value("taken", None)?), "original-value");
+        assert_eq!(secrets.list_versions("taken")?.len(), 1);
+
+        for request in [
+            SecretCreateRequest::text("bad name", "created-value"),
+            SecretCreateRequest::text("typed", "created-value").with_value_type("String"),
+            SecretCreateRequest::text("empty", ""),
+        ] {
+            assert!(secrets.create_secret(&request).is_err());
+        }
+        assert!(matches!(
+            secrets.describe("typed"),
+            Err(DbError::ObjectNotFound(_))
+        ));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn parameter_store_create_makes_a_typed_parameter_with_tags() -> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let connection = connect(&endpoint)?;
+        let parameters = store(connection.as_ref(), PARAMETER_STORE_ID);
+
+        let created = parameters.create_secret(
+            &SecretCreateRequest::text("/app/created/hosts", "a,b")
+                .with_value_type("StringList")
+                .with_tier("Standard")
+                .with_description("Replica hosts")
+                .with_tag("app", "shop"),
+        )?;
+
+        assert_eq!(created.version.as_deref(), Some("1"));
+        let details = parameters.describe("/app/created/hosts")?;
+        assert_eq!(details.summary.value_type.as_deref(), Some("StringList"));
+        assert_eq!(details.summary.tier.as_deref(), Some("Standard"));
+        assert_eq!(
+            details.summary.description.as_deref(),
+            Some("Replica hosts")
+        );
+        assert_eq!(tag_pairs(&details), vec![pair("app", "shop")]);
+        assert_eq!(details.summary.version.as_deref(), Some("1"));
+        assert_eq!(
+            text(&parameters.get_value("/app/created/hosts", None)?),
+            "a,b"
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn parameter_store_create_makes_a_secure_string_and_never_overwrites() -> Result<(), DbError> {
+    containers::with_localstack_secrets_endpoint(|endpoint| {
+        let seeder = Seeder::new(&endpoint);
+        seeder.parameter(
+            "/app/created/taken",
+            "original-value",
+            ParameterType::String,
+        );
+
+        let connection = connect(&endpoint)?;
+        let parameters = store(connection.as_ref(), PARAMETER_STORE_ID);
+
+        parameters.create_secret(
+            &SecretCreateRequest::text("/app/created/vault", "vault-value")
+                .with_value_type("SecureString"),
+        )?;
+        let details = parameters.describe("/app/created/vault")?;
+        assert_eq!(details.summary.value_type.as_deref(), Some("SecureString"));
+        assert_eq!(
+            text(&parameters.get_value("/app/created/vault", None)?),
+            "vault-value"
+        );
+
+        let error = parameters
+            .create_secret(&SecretCreateRequest::text(
+                "/app/created/taken",
+                "replacement-value",
+            ))
+            .expect_err("the name is taken");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+        assert!(!error.to_string().contains("replacement-value"), "{error}");
+        assert_eq!(
+            text(&parameters.get_value("/app/created/taken", None)?),
+            "original-value"
+        );
+        assert_eq!(
+            parameters
+                .describe("/app/created/taken")?
+                .summary
+                .version
+                .as_deref(),
+            Some("1")
+        );
+
+        for request in [
+            SecretCreateRequest::text("/aws/reserved", "created-value"),
+            SecretCreateRequest::text("/app/created/plain", "v").with_encryption_key("alias/k"),
+            SecretCreateRequest::text("/app/created/typed", "v").with_value_type("Binary"),
+        ] {
+            assert!(parameters.create_secret(&request).is_err());
+        }
+        assert!(matches!(
+            parameters.describe("/app/created/typed"),
+            Err(DbError::ObjectNotFound(_))
+        ));
 
         Ok(())
     })

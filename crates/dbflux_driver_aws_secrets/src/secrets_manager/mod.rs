@@ -14,6 +14,7 @@ use dbflux_core::{
     SecretRotationUpdate, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
     SecretSummary, SecretTag, SecretTagsUpdate, SecretValue, SecretVersionInfo, SecretVersionStage,
 };
+use dbflux_core::{SecretCreateRequest, SecretCreated};
 
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
 use crate::error_formatter::{
@@ -143,7 +144,8 @@ impl SecretsManagerStore {
                     | SecretStoreCapabilities::WRITE
                     | SecretStoreCapabilities::DELETE
                     | SecretStoreCapabilities::TAGS
-                    | SecretStoreCapabilities::DESCRIPTION,
+                    | SecretStoreCapabilities::DESCRIPTION
+                    | SecretStoreCapabilities::CREATE,
             ),
         }
     }
@@ -616,6 +618,52 @@ impl SecretStoreSource for SecretsManagerStore {
         Ok(())
     }
 
+    /// One `CreateSecret` call with the name, the text value, the
+    /// description, the KMS key and the tags. It never overwrites: Secrets
+    /// Manager refuses a name that exists with `ResourceExistsException`,
+    /// which is mapped to a constraint violation. A secret created without a
+    /// key uses the account's `aws/secretsmanager` key. The service may echo
+    /// the value in its own message, so a failure is scrubbed of it.
+    fn create_secret(&self, request: &SecretCreateRequest) -> Result<SecretCreated, DbError> {
+        self.descriptor.ensure_can(
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::CREATE,
+            "create",
+            &request.name,
+        )?;
+        validate_create(request)?;
+
+        let PutPayload::Text(text) = put_payload(&request.payload) else {
+            return Err(DbError::constraint_violation(format!(
+                "\"{}\" was not created: a new secret takes a text value.",
+                request.name
+            )));
+        };
+
+        let tags = (!request.tags.is_empty()).then(|| sdk_tags(&request.tags));
+        let output = runtime()
+            .block_on(
+                self.client
+                    .create_secret()
+                    .name(&request.name)
+                    .secret_string(text)
+                    .set_description(request.description.clone())
+                    .set_kms_key_id(request.encryption_key.clone())
+                    .set_tags(tags)
+                    .send(),
+            )
+            .map_err(|error| {
+                scrub_submitted_value(
+                    self.operation_error(&error, Some(&request.name)),
+                    &request.payload,
+                )
+            })?;
+
+        Ok(SecretCreated {
+            version: output.version_id().map(ToString::to_string),
+            resource_id: output.arn().map(ToString::to_string),
+        })
+    }
+
     /// `TagResource` for the tags to set (it overwrites a key that exists)
     /// and `UntagResource` for the keys to remove. Neither touches the value
     /// or any version. A secret another service owns is refused. The two
@@ -736,6 +784,46 @@ pub(crate) fn deletion_window(request: &SecretDeleteRequest) -> Result<i64, DbEr
              without recovery."
         ))),
     }
+}
+
+/// Refuses a secret name the service would reject: 1 to 512 letters,
+/// digits and `/ _ + = . @ -`.
+pub(crate) fn validate_secret_name(name: &str) -> Result<(), DbError> {
+    let length = name.chars().count();
+
+    if length == 0
+        || length > 512
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/_+=.@-".contains(c))
+    {
+        return Err(DbError::constraint_violation(format!(
+            "\"{name}\" is not a valid secret name: 1 to 512 letters, digits and / _ + = . @ -"
+        )));
+    }
+
+    Ok(())
+}
+
+/// Refuses a create the service would reject, before any call, with
+/// messages that name the secret and never the value: an invalid name or
+/// tags, a type or a tier (a Secrets Manager secret has neither), and a
+/// description past the limit.
+pub(crate) fn validate_create(request: &SecretCreateRequest) -> Result<(), DbError> {
+    request.validate()?;
+    validate_secret_name(&request.name)?;
+
+    if request.value_type.is_some() || request.tier.is_some() {
+        return Err(DbError::NotSupported(format!(
+            "Secrets Manager secrets have no value type or tier; refused to create \"{}\".",
+            request.name
+        )));
+    }
+    if let Some(description) = &request.description {
+        ensure_description_fits(description, &request.name)?;
+    }
+
+    Ok(())
 }
 
 /// The tags of a request as the Secrets Manager SDK takes them. An empty
@@ -1063,9 +1151,7 @@ pub(crate) fn rotation_schedule(rules: &RotationRulesType) -> Option<String> {
 /// one page: it receives the token to ask with (`None` for the first page)
 /// and answers with that page's entries and the next token, or `None` when
 /// the listing ended.
-pub(crate) fn list_versions_on_pages<F>(
-    fetch_page: F,
-) -> Result<Vec<SecretVersionInfo>, DbError>
+pub(crate) fn list_versions_on_pages<F>(fetch_page: F) -> Result<Vec<SecretVersionInfo>, DbError>
 where
     F: FnMut(Option<String>) -> Result<(Vec<SecretVersionsListEntry>, Option<String>), DbError>,
 {

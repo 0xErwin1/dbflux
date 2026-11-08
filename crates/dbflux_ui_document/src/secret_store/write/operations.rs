@@ -9,7 +9,7 @@ use dbflux_core::{
     SecretStoreCapabilities, SecretTagsUpdate,
 };
 
-use dbflux_core::DbError;
+use dbflux_core::{DbError, SecretCreateRequest, SecretCreated};
 
 use super::{Attempt, SecretOperation, SecretWriteFailure, WriteContext, govern};
 
@@ -342,6 +342,81 @@ pub fn update_secret_description(
                     fields.insert(
                         "version".to_string(),
                         serde_json::Value::String(version.clone()),
+                    );
+                }
+                fields
+            }),
+        },
+    )
+}
+
+/// Creates a secret through the governed path: classification `Write`,
+/// capabilities `WRITE` and `CREATE`. It never overwrites: the store refuses
+/// a name that exists, and the failure says so. The initial value is
+/// scrubbed from any failure that echoes it, in every form a value may be
+/// echoed in, exactly like a value put; the audit event records the type,
+/// tier, key and tag keys, and never the value.
+///
+/// # Errors
+///
+/// A [`SecretWriteFailure`]: a refusal before any store call (policy,
+/// capability, or a request no store accepts), the store's failure
+/// (including a name that is taken) scrubbed of the value, or the audit
+/// failure after a creation that landed.
+#[allow(clippy::result_large_err)] // `DbError` is the crate's error type
+pub fn create_secret(
+    context: &WriteContext<'_>,
+    request: &SecretCreateRequest,
+) -> Result<SecretCreated, SecretWriteFailure> {
+    let mut details = serde_json::Map::new();
+    for (key, value) in [
+        ("value_type", &request.value_type),
+        ("tier", &request.tier),
+        ("encryption_key", &request.encryption_key),
+    ] {
+        if let Some(value) = value {
+            details.insert(key.to_string(), serde_json::Value::String(value.clone()));
+        }
+    }
+    details.insert(
+        "has_description".to_string(),
+        serde_json::Value::Bool(request.description.is_some()),
+    );
+    details.insert(
+        "tag_keys".to_string(),
+        serde_json::Value::from(
+            request
+                .tags
+                .iter()
+                .map(|tag| tag.key.clone())
+                .collect::<Vec<_>>(),
+        ),
+    );
+
+    govern(
+        context,
+        Attempt {
+            operation: SecretOperation::Create,
+            name: &request.name,
+            invalid: request
+                .validate()
+                .err()
+                .map(|error| ("invalid_request", error)),
+            submitted: Some(&request.payload),
+            details,
+            call: Box::new(|store| store.create_secret(request)),
+            landed: Box::new(|created: &SecretCreated| {
+                let mut fields = serde_json::Map::new();
+                if let Some(version) = &created.version {
+                    fields.insert(
+                        "version".to_string(),
+                        serde_json::Value::String(version.clone()),
+                    );
+                }
+                if let Some(resource_id) = &created.resource_id {
+                    fields.insert(
+                        "resource_id".to_string(),
+                        serde_json::Value::String(resource_id.clone()),
                     );
                 }
                 fields

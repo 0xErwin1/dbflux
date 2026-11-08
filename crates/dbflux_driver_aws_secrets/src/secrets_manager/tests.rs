@@ -572,3 +572,56 @@ fn a_description_longer_than_two_thousand_forty_eight_characters_is_refused() {
     assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
     assert!(error.to_string().contains("prod/api"), "{error}");
 }
+
+#[test]
+fn a_secret_name_is_one_to_512_allowed_characters() {
+    for valid in [
+        "a",
+        "prod/api/credentials",
+        "a_b+c=d.e@f-g",
+        &"n".repeat(512),
+    ] {
+        validate_secret_name(valid).unwrap_or_else(|error| panic!("{valid}: {error}"));
+    }
+
+    for invalid in [
+        "",
+        "has space",
+        "über",
+        "semi;colon",
+        "star*",
+        &"n".repeat(513),
+    ] {
+        let error = validate_secret_name(invalid).expect_err("an invalid name is refused");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    }
+}
+
+#[test]
+fn a_secrets_manager_create_takes_no_type_or_tier_and_a_bounded_description() {
+    let plain = SecretCreateRequest::text("prod/api", "create-value-probe")
+        .with_description("Payments")
+        .with_encryption_key("alias/payments")
+        .with_tag("env", "prod");
+    validate_create(&plain).expect("a valid create");
+
+    for request in [
+        SecretCreateRequest::text("prod/api", "create-value-probe").with_value_type("String"),
+        SecretCreateRequest::text("prod/api", "create-value-probe").with_tier("Standard"),
+    ] {
+        let error = validate_create(&request).expect_err("no type or tier");
+        assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+        assert!(!error.to_string().contains("create-value-probe"), "{error}");
+    }
+
+    let long = SecretCreateRequest::text("prod/api", "create-value-probe")
+        .with_description("d".repeat(2049));
+    assert!(matches!(
+        validate_create(&long),
+        Err(DbError::ConstraintViolation(_))
+    ));
+
+    let nameless = SecretCreateRequest::text("bad name", "create-value-probe");
+    let error = validate_create(&nameless).expect_err("a bad name");
+    assert!(!error.to_string().contains("create-value-probe"), "{error}");
+}

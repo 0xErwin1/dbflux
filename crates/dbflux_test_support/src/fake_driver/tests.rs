@@ -1800,3 +1800,278 @@ fn a_parameter_description_cannot_be_cleared() {
     assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
     assert!(driver.secret_store_calls().mutations.is_empty());
 }
+
+// --- Creating ---
+
+#[test]
+fn a_created_secret_is_listed_described_and_readable_with_one_current_version() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let created = store
+        .create_secret(
+            &SecretCreateRequest::text("prod/billing/api-key", "created-value-1")
+                .with_description("Billing API key")
+                .with_encryption_key("alias/billing")
+                .with_tag("team", "billing")
+                .with_tag("env", "prod"),
+        )
+        .expect("a new name is created");
+
+    let version = created.version.expect("the creation reports its version");
+    assert!(created.resource_id.is_some());
+
+    let listed = store
+        .list(&SecretListRequest {
+            name_filter: Some("prod/billing".to_string()),
+            ..SecretListRequest::default()
+        })
+        .expect("list");
+    assert_eq!(listed.entries.len(), 1);
+    assert_eq!(listed.entries[0].name, "prod/billing/api-key");
+
+    let details = store.describe("prod/billing/api-key").expect("describe");
+    assert_eq!(
+        details.summary.description.as_deref(),
+        Some("Billing API key")
+    );
+    assert_eq!(details.encryption_key.as_deref(), Some("alias/billing"));
+    assert_eq!(
+        tag_pairs(&details),
+        vec![pair("team", "billing"), pair("env", "prod")]
+    );
+    assert_eq!(details.version_count, Some(1));
+    assert_eq!(details.summary.version.as_deref(), Some(version.as_str()));
+    assert!(details.created.is_some());
+    assert_eq!(
+        labels_of(
+            &store
+                .list_versions("prod/billing/api-key")
+                .expect("history")
+        ),
+        vec![(version.clone(), vec!["AWSCURRENT".to_string()])]
+    );
+
+    let value = store
+        .get_value("prod/billing/api-key", None)
+        .expect("value");
+    assert_eq!(value.version.as_deref(), Some(version.as_str()));
+    assert_eq!(exposed_text(&value), "created-value-1");
+
+    let calls = driver.secret_store_calls();
+    assert_eq!(calls.mutations.len(), 1);
+    assert!(calls.put_attempts.is_empty());
+    let rendered = format!("{:?}", calls.mutations);
+    assert!(!rendered.contains("created-value-1"), "{rendered}");
+}
+
+#[test]
+fn a_secret_created_without_a_key_uses_the_default_key() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    store
+        .create_secret(&SecretCreateRequest::text("prod/plain", "created-value-2"))
+        .expect("created");
+
+    assert_eq!(
+        store
+            .describe("prod/plain")
+            .expect("describe")
+            .encryption_key
+            .as_deref(),
+        Some("aws/secretsmanager")
+    );
+}
+
+#[test]
+fn creating_never_overwrites_an_existing_name() {
+    let (driver, connection) = connected();
+
+    for (store_id, name) in [
+        (FAKE_SECRETS_STORE_ID, "prod/api/credentials"),
+        (FAKE_PARAMETER_STORE_ID, "/app/prod/db/host"),
+    ] {
+        let store = connection.secret_store(store_id).expect("store");
+        let before = store.describe(name).expect("describe");
+
+        let error = store
+            .create_secret(&SecretCreateRequest::text(name, "created-value-3"))
+            .expect_err("the name exists");
+
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+        assert!(error.to_string().contains("already exists"), "{error}");
+        assert!(!error.to_string().contains("created-value-3"), "{error}");
+        assert_eq!(
+            store.describe(name).expect("describe").summary.version,
+            before.summary.version
+        );
+    }
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}
+
+#[test]
+fn a_secrets_manager_create_refuses_a_name_a_type_and_a_tier_it_does_not_have() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("the fake store exists");
+
+    let error = store
+        .create_secret(&SecretCreateRequest::text("bad name", "created-value-4"))
+        .expect_err("a space is not a secret name character");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+
+    for request in [
+        SecretCreateRequest::text("prod/typed", "created-value-4").with_value_type("String"),
+        SecretCreateRequest::text("prod/tiered", "created-value-4").with_tier("Advanced"),
+    ] {
+        let error = store.create_secret(&request).expect_err("no type or tier");
+        assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+    }
+
+    let error = store
+        .create_secret(&SecretCreateRequest::text("prod/api", ""))
+        .expect_err("no value");
+    assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+    assert!(store.describe("prod/typed").is_err());
+}
+
+#[test]
+fn a_created_parameter_has_a_type_a_tier_a_version_and_appears_in_its_path() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    let created = store
+        .create_secret(
+            &SecretCreateRequest::text("/app/prod/db/replica", "created-value-5")
+                .with_value_type("SecureString")
+                .with_tier("Advanced")
+                .with_encryption_key("alias/app-prod")
+                .with_description("Replica password")
+                .with_tag("app", "shop"),
+        )
+        .expect("created");
+
+    assert_eq!(created.version.as_deref(), Some("1"));
+    let details = store.describe("/app/prod/db/replica").expect("describe");
+    assert_eq!(details.summary.value_type.as_deref(), Some("SecureString"));
+    assert_eq!(details.summary.tier.as_deref(), Some("Advanced"));
+    assert_eq!(
+        details.summary.description.as_deref(),
+        Some("Replica password")
+    );
+    assert_eq!(details.encryption_key.as_deref(), Some("alias/app-prod"));
+    assert_eq!(details.data_type.as_deref(), Some("text"));
+    assert_eq!(tag_pairs(&details), vec![pair("app", "shop")]);
+    assert_eq!(details.summary.version.as_deref(), Some("1"));
+
+    let mut names: Vec<String> = Vec::new();
+    let mut token = None;
+    loop {
+        let page = store
+            .list(&SecretListRequest {
+                path: Some("/app/prod/db/".to_string()),
+                recursive: true,
+                page_token: token,
+                ..SecretListRequest::default()
+            })
+            .expect("list");
+        names.extend(page.entries.into_iter().map(|entry| entry.name));
+        token = page.next_page_token;
+        if token.is_none() {
+            break;
+        }
+    }
+    assert!(
+        names.contains(&"/app/prod/db/replica".to_string()),
+        "{names:?}"
+    );
+
+    assert_eq!(
+        exposed_text(
+            &store
+                .get_value("/app/prod/db/replica", None)
+                .expect("value")
+        ),
+        "created-value-5"
+    );
+    assert_eq!(driver.secret_store_calls().mutations.len(), 1);
+}
+
+#[test]
+fn a_parameter_created_with_defaults_is_a_standard_string() {
+    let (_driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    store
+        .create_secret(&SecretCreateRequest::text(
+            "/app/prod/plain",
+            "created-value-6",
+        ))
+        .expect("created");
+
+    let details = store.describe("/app/prod/plain").expect("describe");
+    assert_eq!(details.summary.value_type.as_deref(), Some("String"));
+    assert_eq!(details.summary.tier.as_deref(), Some("Standard"));
+    assert!(details.encryption_key.is_none());
+}
+
+#[test]
+fn a_parameter_create_refuses_what_the_service_would() {
+    let (driver, connection) = connected();
+    let store = connection
+        .secret_store(FAKE_PARAMETER_STORE_ID)
+        .expect("the fake parameter store exists");
+
+    for request in [
+        SecretCreateRequest::text("/app/x", "created-value-7").with_value_type("Binary"),
+        SecretCreateRequest::text("/app/x", "created-value-7").with_tier("Platinum"),
+        SecretCreateRequest::text("/app/x", "created-value-7").with_encryption_key("alias/k"),
+        SecretCreateRequest::text("/app/has space", "created-value-7"),
+        SecretCreateRequest::text("/aws/reserved", "created-value-7"),
+        SecretCreateRequest::text("ssm-prefixed", "created-value-7"),
+    ] {
+        let error = store.create_secret(&request).expect_err("refused");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+        assert!(!error.to_string().contains("created-value-7"), "{error}");
+    }
+
+    assert!(driver.secret_store_calls().mutations.is_empty());
+    assert!(store.describe("/app/x").is_err());
+}
+
+#[test]
+fn the_write_error_knob_fails_a_create_without_creating_anything() {
+    let driver = FakeDriver::new(DbKind::AwsSecrets)
+        .with_secret_write_error("prod/denied", "create denied by the fixture");
+    let profile = ConnectionProfile::new_with_driver(
+        "fake-aws-secrets",
+        DbKind::AwsSecrets,
+        "builtin:fake-aws-secrets",
+        DbConfig::default_aws_secrets(),
+    );
+    let connection = driver.connect(&profile).expect("connect");
+    let store = connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("store");
+
+    let error = store
+        .create_secret(&SecretCreateRequest::text("prod/denied", "created-value-8"))
+        .expect_err("the knob denies the create");
+
+    assert!(matches!(error, DbError::PermissionDenied(_)), "{error}");
+    assert!(store.describe("prod/denied").is_err());
+    assert!(driver.secret_store_calls().mutations.is_empty());
+}

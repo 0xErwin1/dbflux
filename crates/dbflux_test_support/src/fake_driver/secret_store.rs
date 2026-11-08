@@ -37,6 +37,7 @@ pub enum FakeSecretMutation {
     UpdateRotation(SecretRotationUpdate),
     UpdateTags(SecretTagsUpdate),
     UpdateDescription(SecretDescriptionUpdate),
+    Create(SecretCreateRequest),
 }
 
 /// Id of the fake flat store, shaped like AWS Secrets Manager.
@@ -699,6 +700,211 @@ impl SecretStoreSource for FakeSecretStore {
         self.accept_mutation(mutation);
         Ok(SecretDescriptionChange { version })
     }
+    /// Creates a secret the way the service does, and never overwrites:
+    /// a name that exists is refused as a constraint violation. A flat store
+    /// makes the value the single `AWSCURRENT` version, with the account
+    /// default key when none is named. A hierarchical store makes it
+    /// version 1 of a typed parameter, with the standard tier and the `text`
+    /// data type by default. Each store refuses the names and settings the
+    /// real one does.
+    fn create_secret(&self, request: &SecretCreateRequest) -> Result<SecretCreated, DbError> {
+        let mutation = FakeSecretMutation::Create(request.clone());
+        self.begin_mutation(
+            mutation.clone(),
+            &request.name,
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::CREATE,
+            "create",
+        )?;
+        request.validate()?;
+
+        let created = if self.hierarchical() {
+            self.create_parameter(request)?
+        } else {
+            self.create_flat_secret(request)?
+        };
+
+        self.accept_mutation(mutation);
+        Ok(created)
+    }
+}
+
+impl FakeSecretStore {
+    /// Adds a new entry, refusing a name that is taken.
+    fn insert_new(&self, secret: FakeSecret) -> Result<(), DbError> {
+        let mut stored = rwlock_write(&self.secrets);
+        let name = secret.details.summary.name.clone();
+
+        if stored
+            .iter()
+            .any(|existing| existing.details.summary.name == name)
+        {
+            return Err(DbError::constraint_violation(format!(
+                "{} {name} already exists",
+                self.noun()
+            )));
+        }
+
+        stored.push(secret);
+        Ok(())
+    }
+
+    fn create_flat_secret(&self, request: &SecretCreateRequest) -> Result<SecretCreated, DbError> {
+        let name = &request.name;
+
+        if name.chars().count() > 512
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "/_+=.@-".contains(c))
+        {
+            return Err(DbError::constraint_violation(format!(
+                "\"{name}\" is not a valid secret name: 1 to 512 letters, digits and / _ + = . @ -"
+            )));
+        }
+        if request.value_type.is_some() || request.tier.is_some() {
+            return Err(DbError::NotSupported(
+                "Secrets Manager secrets have no value type or tier".to_string(),
+            ));
+        }
+        if request
+            .description
+            .as_deref()
+            .is_some_and(|text| text.chars().count() > 2048)
+        {
+            return Err(DbError::constraint_violation(format!(
+                "The description of {name} is longer than 2048 characters"
+            )));
+        }
+
+        let version = self.next_written_version();
+        let resource_id = format!("arn:fake:secret:{name}");
+        let history = vec![written_version(&version, vec!["AWSCURRENT".to_string()])];
+        let secret = FakeSecret {
+            details: SecretDetails {
+                summary: SecretSummary {
+                    description: request.description.clone(),
+                    version: Some(version.clone()),
+                    last_changed: fake_now(),
+                    ..SecretSummary::new(name)
+                },
+                resource_id: Some(resource_id.clone()),
+                encryption_key: Some(
+                    request
+                        .encryption_key
+                        .clone()
+                        .unwrap_or_else(|| "aws/secretsmanager".to_string()),
+                ),
+                created: fake_now(),
+                version_count: Some(1),
+                version_labels: distinct_labels(&history),
+                tags: request.tags.clone(),
+                ..SecretDetails::default()
+            },
+            versions: vec![(
+                version.clone(),
+                FakeSecretPayload::for_write(&request.payload),
+            )],
+            history,
+            read_failure: None,
+        };
+        self.insert_new(secret)?;
+
+        Ok(SecretCreated {
+            version: Some(version),
+            resource_id: Some(resource_id),
+        })
+    }
+
+    fn create_parameter(&self, request: &SecretCreateRequest) -> Result<SecretCreated, DbError> {
+        let name = &request.name;
+        let reserved = name.trim_start_matches('/').to_ascii_lowercase();
+
+        if name.chars().count() > 2048
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_.-/".contains(c))
+            || reserved.starts_with("aws")
+            || reserved.starts_with("ssm")
+        {
+            return Err(DbError::constraint_violation(format!(
+                "\"{name}\" is not a valid parameter name: letters, digits and _ . - /, \
+                 not starting with aws or ssm"
+            )));
+        }
+
+        let value_type = request
+            .value_type
+            .clone()
+            .unwrap_or_else(|| "String".to_string());
+        if !["String", "StringList", "SecureString"].contains(&value_type.as_str()) {
+            return Err(DbError::constraint_violation(format!(
+                "\"{value_type}\" is not a parameter type"
+            )));
+        }
+        let tier = request
+            .tier
+            .clone()
+            .unwrap_or_else(|| "Standard".to_string());
+        if !["Standard", "Advanced", "Intelligent-Tiering"].contains(&tier.as_str()) {
+            return Err(DbError::constraint_violation(format!(
+                "\"{tier}\" is not a parameter tier"
+            )));
+        }
+        if request.encryption_key.is_some() && value_type != "SecureString" {
+            return Err(DbError::constraint_violation(
+                "Only a SecureString parameter takes an encryption key".to_string(),
+            ));
+        }
+        if request
+            .description
+            .as_deref()
+            .is_some_and(|text| text.chars().count() > 1024)
+        {
+            return Err(DbError::constraint_violation(format!(
+                "The description of {name} is longer than 1024 characters"
+            )));
+        }
+
+        let encryption_key = (value_type == "SecureString").then(|| {
+            request
+                .encryption_key
+                .clone()
+                .unwrap_or_else(|| "alias/aws/ssm".to_string())
+        });
+        let version = "1".to_string();
+        let secret = FakeSecret {
+            details: SecretDetails {
+                summary: SecretSummary {
+                    description: request.description.clone(),
+                    value_type: Some(value_type),
+                    tier: Some(tier),
+                    version: Some(version.clone()),
+                    last_changed: fake_now(),
+                    ..SecretSummary::new(name)
+                },
+                resource_id: Some(format!("arn:fake:secret:{name}")),
+                encryption_key,
+                data_type: Some("text".to_string()),
+                last_changed_by: Some(FAKE_WRITER.to_string()),
+                tags: request.tags.clone(),
+                ..SecretDetails::default()
+            },
+            versions: vec![(
+                version.clone(),
+                FakeSecretPayload::for_write(&request.payload),
+            )],
+            history: vec![SecretVersionInfo {
+                modified_by: Some(FAKE_WRITER.to_string()),
+                ..written_version(&version, Vec::new())
+            }],
+            read_failure: None,
+        };
+        self.insert_new(secret)?;
+
+        Ok(SecretCreated {
+            version: Some(version),
+            resource_id: None,
+        })
+    }
 }
 
 /// The hierarchical store's description change: the next numbered version
@@ -1175,7 +1381,8 @@ pub(super) fn fake_secret_stores(state: &Arc<FakeDriverState>) -> Vec<FakeSecret
                     | SecretStoreCapabilities::WRITE
                     | SecretStoreCapabilities::DELETE
                     | SecretStoreCapabilities::TAGS
-                    | SecretStoreCapabilities::DESCRIPTION,
+                    | SecretStoreCapabilities::DESCRIPTION
+                    | SecretStoreCapabilities::CREATE,
             ),
             secrets: RwLock::new(fake_flat_secrets().into_iter().map(label_current).collect()),
             default_page_size: 4,
@@ -1192,7 +1399,8 @@ pub(super) fn fake_secret_stores(state: &Arc<FakeDriverState>) -> Vec<FakeSecret
                     | SecretStoreCapabilities::WRITE
                     | SecretStoreCapabilities::DELETE
                     | SecretStoreCapabilities::TAGS
-                    | SecretStoreCapabilities::DESCRIPTION,
+                    | SecretStoreCapabilities::DESCRIPTION
+                    | SecretStoreCapabilities::CREATE,
             ),
             secrets: RwLock::new(fake_parameters()),
             default_page_size: 2,

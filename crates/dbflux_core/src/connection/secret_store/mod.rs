@@ -27,10 +27,10 @@ mod operations;
 
 pub use operations::{
     DEFAULT_RECOVERY_WINDOW_DAYS, MAX_RECOVERY_WINDOW_DAYS, MAX_TAGS, MIN_RECOVERY_WINDOW_DAYS,
-    SecretDeleteRequest, SecretDeletion, SecretDescriptionChange, SecretDescriptionUpdate,
-    SecretRollback, SecretRollbackRequest, SecretRotationStart, SecretRotationUpdate,
-    SecretTagsUpdate, validate_rotation_function, validate_rotation_schedule,
-    validate_rotation_window, validate_tag,
+    SecretCreateRequest, SecretCreated, SecretDeleteRequest, SecretDeletion,
+    SecretDescriptionChange, SecretDescriptionUpdate, SecretRollback, SecretRollbackRequest,
+    SecretRotationStart, SecretRotationUpdate, SecretTagsUpdate, validate_rotation_function,
+    validate_rotation_schedule, validate_rotation_window, validate_tag,
 };
 
 bitflags! {
@@ -77,6 +77,10 @@ bitflags! {
         /// The description can be changed through
         /// `SecretStoreSource::update_description`.
         const DESCRIPTION = 1 << 9;
+
+        /// New secrets can be created through
+        /// `SecretStoreSource::create_secret`.
+        const CREATE = 1 << 10;
     }
 }
 
@@ -610,6 +614,18 @@ pub trait SecretStoreSource: Send + Sync {
     /// advertising `ROTATION` and `WRITE` implement it; the default refuses.
     fn update_rotation(&self, update: &SecretRotationUpdate) -> Result<(), DbError> {
         refuse_unimplemented(self.descriptor(), "editing rotation", &update.name)
+    }
+
+    /// Creates the secret `request.name` with `request`'s value and
+    /// settings, and returns what the store reports about it. It never
+    /// overwrites: a name that already exists is refused (a constraint
+    /// violation), so creating cannot replace a secret's value. Like
+    /// `put_value`, it never logs, formats or stores the value outside the
+    /// `secrecy` types it travels in, and a failure carries the store's
+    /// reason only. Stores advertising `CREATE` and `WRITE` implement it; the
+    /// default refuses.
+    fn create_secret(&self, request: &SecretCreateRequest) -> Result<SecretCreated, DbError> {
+        refuse_unimplemented(self.descriptor(), "creating secrets", &request.name)
     }
 
     /// Adds, changes and removes tags without touching the value or any

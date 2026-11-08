@@ -12,6 +12,7 @@ use dbflux_core::{
     SecretPutRequest, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
     SecretSummary, SecretTag, SecretTagsUpdate, SecretValue, SecretVersionInfo, SecretVersionStage,
 };
+use dbflux_core::{SecretCreateRequest, SecretCreated};
 
 use crate::driver::{AwsSecretsProfileConfig, runtime, smithy_datetime_to_chrono};
 use crate::error_formatter::{
@@ -47,7 +48,8 @@ impl ParameterStore {
                     | SecretStoreCapabilities::WRITE
                     | SecretStoreCapabilities::DELETE
                     | SecretStoreCapabilities::TAGS
-                    | SecretStoreCapabilities::DESCRIPTION,
+                    | SecretStoreCapabilities::DESCRIPTION
+                    | SecretStoreCapabilities::CREATE,
             ),
         }
     }
@@ -347,6 +349,58 @@ impl SecretStoreSource for ParameterStore {
         Ok(SecretDeletion::default())
     }
 
+    /// One `PutParameter` call without `Overwrite`: Parameter Store refuses
+    /// a name that exists with `ParameterAlreadyExists`, which is mapped to
+    /// a constraint violation, so creating cannot replace a value. The type
+    /// defaults to `String`; the tier is left to the service's own default
+    /// unless one is given; a `SecureString` may name its KMS key and
+    /// otherwise uses the account's default key. The tags travel in the same
+    /// call, which is the only moment `PutParameter` accepts them. The
+    /// service may echo the value in its own message, so a failure is
+    /// scrubbed of it.
+    fn create_secret(&self, request: &SecretCreateRequest) -> Result<SecretCreated, DbError> {
+        self.descriptor.ensure_can(
+            SecretStoreCapabilities::WRITE | SecretStoreCapabilities::CREATE,
+            "create",
+            &request.name,
+        )?;
+        let plan = plan_create(request)?;
+
+        let SecretPayload::Text(text) = &request.payload else {
+            return Err(DbError::constraint_violation(format!(
+                "\"{}\" was not created: a new parameter takes a text value.",
+                request.name
+            )));
+        };
+
+        let tags = (!plan.tags.is_empty()).then_some(plan.tags);
+        let output = runtime()
+            .block_on(
+                self.client
+                    .put_parameter()
+                    .name(&request.name)
+                    .value(text.expose_secret())
+                    .overwrite(false)
+                    .r#type(plan.parameter_type)
+                    .set_tier(plan.tier)
+                    .set_key_id(plan.key_id)
+                    .set_description(plan.description)
+                    .set_tags(tags)
+                    .send(),
+            )
+            .map_err(|error| {
+                scrub_submitted_value(
+                    self.operation_error(&error, Some(&request.name)),
+                    &request.payload,
+                )
+            })?;
+
+        Ok(SecretCreated {
+            version: Some(output.version().to_string()),
+            resource_id: None,
+        })
+    }
+
     /// `AddTagsToResource` for the tags to set (it overwrites a key that
     /// exists) and `RemoveTagsFromResource` for the keys to remove. Neither
     /// touches the value or any version. The calls are separate, so a
@@ -487,6 +541,110 @@ impl SecretStoreSource for ParameterStore {
             version: Some(output.version().to_string()),
         })
     }
+}
+
+/// What a parameter create sends, decided from the request alone.
+#[derive(Debug)]
+pub(crate) struct CreateParameterPlan {
+    pub parameter_type: ParameterType,
+
+    /// `None` leaves the tier to the service's own default.
+    pub tier: Option<ParameterTier>,
+
+    /// The KMS key of a `SecureString`; `None` uses the account default.
+    pub key_id: Option<String>,
+
+    pub description: Option<String>,
+    pub tags: Vec<aws_sdk_ssm::types::Tag>,
+}
+
+/// Most levels a hierarchical parameter name has.
+const MAX_PARAMETER_LEVELS: usize = 15;
+
+/// Decides a parameter create, refusing before any call what the service
+/// would reject, with messages that name the parameter and never the value:
+/// an invalid name (letters, digits and `_ . - /`, at most 2048 characters
+/// and 15 levels, no empty level, not starting with `aws` or `ssm`), a type
+/// or tier the service does not have, a key on a parameter that is not a
+/// `SecureString`, a description past the limit, and invalid tags.
+pub(crate) fn plan_create(request: &SecretCreateRequest) -> Result<CreateParameterPlan, DbError> {
+    request.validate()?;
+
+    let name = &request.name;
+    let refuse = |reason: String| {
+        DbError::constraint_violation(format!("\"{name}\" was not created: {reason}"))
+    };
+
+    let unprefixed = name.strip_prefix('/').unwrap_or(name);
+    let lowered = unprefixed.to_ascii_lowercase();
+    let levels: Vec<&str> = unprefixed.split('/').collect();
+
+    if name.chars().count() > 2048
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_.-/".contains(c))
+        || levels.iter().any(|level| level.is_empty())
+    {
+        return Err(refuse(
+            "a parameter name is letters, digits and _ . - / (up to 2048 characters, with no \
+             empty level)."
+                .to_string(),
+        ));
+    }
+    if lowered.starts_with("aws") || lowered.starts_with("ssm") {
+        return Err(refuse(
+            "a parameter name cannot start with aws or ssm.".to_string(),
+        ));
+    }
+    if levels.len() > MAX_PARAMETER_LEVELS {
+        return Err(refuse(format!(
+            "a parameter name has at most {MAX_PARAMETER_LEVELS} levels."
+        )));
+    }
+
+    let parameter_type = match request.value_type.as_deref() {
+        None | Some("String") => ParameterType::String,
+        Some("StringList") => ParameterType::StringList,
+        Some("SecureString") => ParameterType::SecureString,
+        Some(other) => {
+            return Err(refuse(format!(
+                "\"{other}\" is not a parameter type (String, StringList or SecureString)."
+            )));
+        }
+    };
+
+    let tier = match request.tier.as_deref() {
+        None => None,
+        Some("Standard") => Some(ParameterTier::Standard),
+        Some("Advanced") => Some(ParameterTier::Advanced),
+        Some("Intelligent-Tiering") => Some(ParameterTier::IntelligentTiering),
+        Some(other) => {
+            return Err(refuse(format!(
+                "\"{other}\" is not a parameter tier (Standard, Advanced or Intelligent-Tiering)."
+            )));
+        }
+    };
+
+    if request.encryption_key.is_some() && parameter_type != ParameterType::SecureString {
+        return Err(refuse(
+            "only a SecureString parameter takes an encryption key.".to_string(),
+        ));
+    }
+    if let Some(description) = &request.description
+        && description.chars().count() > MAX_DESCRIPTION_CHARACTERS
+    {
+        return Err(refuse(format!(
+            "the description is longer than {MAX_DESCRIPTION_CHARACTERS} characters."
+        )));
+    }
+
+    Ok(CreateParameterPlan {
+        parameter_type,
+        tier,
+        key_id: request.encryption_key.clone(),
+        description: request.description.clone(),
+        tags: ssm_tags(&request.tags)?,
+    })
 }
 
 /// Most characters a parameter description holds.

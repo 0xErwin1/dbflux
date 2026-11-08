@@ -353,3 +353,16 @@ fn errors_without_a_message_pass_through_the_scrub() {
     let scrubbed = scrub_submitted_value(DbError::Cancelled, &text_payload("hunter2"));
     assert!(matches!(scrubbed, DbError::Cancelled));
 }
+
+#[test]
+fn a_name_that_already_exists_is_a_constraint_violation_with_the_aws_message() {
+    for code in ["ResourceExistsException", "ParameterAlreadyExists"] {
+        match classify(code, "The name is taken", secret_target()) {
+            DbError::ConstraintViolation(formatted) => {
+                assert!(formatted.message.contains("The name is taken"), "{code}");
+                assert_eq!(formatted.code.as_deref(), Some(code));
+            }
+            other => panic!("{code}: expected a constraint violation, got {other:?}"),
+        }
+    }
+}

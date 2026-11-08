@@ -94,12 +94,13 @@ pub use connection::root_section::{
 };
 pub use connection::secret_store::{
     DEFAULT_RECOVERY_WINDOW_DAYS, MAX_RECOVERY_WINDOW_DAYS, MAX_TAGS, MIN_RECOVERY_WINDOW_DAYS,
-    SecretDeleteRequest, SecretDeletion, SecretDescriptionChange, SecretDescriptionUpdate,
-    SecretDetails, SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest,
-    SecretRollback, SecretRollbackRequest, SecretRotation, SecretRotationStart,
-    SecretRotationUpdate, SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource,
-    SecretSummary, SecretTag, SecretTagsUpdate, SecretValue, SecretVersionInfo, SecretVersionStage,
-    validate_rotation_function, validate_rotation_schedule, validate_rotation_window, validate_tag,
+    SecretCreateRequest, SecretCreated, SecretDeleteRequest, SecretDeletion,
+    SecretDescriptionChange, SecretDescriptionUpdate, SecretDetails, SecretListPage,
+    SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
+    SecretRotation, SecretRotationStart, SecretRotationUpdate, SecretStoreCapabilities,
+    SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag, SecretTagsUpdate,
+    SecretValue, SecretVersionInfo, SecretVersionStage, validate_rotation_function,
+    validate_rotation_schedule, validate_rotation_window, validate_tag,
 };
 
 pub use connection::dump_analysis::{

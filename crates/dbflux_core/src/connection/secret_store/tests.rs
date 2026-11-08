@@ -655,3 +655,83 @@ fn the_defaults_refuse_tags_and_description_instead_of_succeeding_silently() {
         .expect_err("an unimplemented description edit must refuse");
     assert!(put_refusal_message(error).contains("prod/api/credentials"));
 }
+
+// --- Creating ---
+
+#[test]
+fn a_create_request_needs_a_name_a_text_value_and_valid_tags() {
+    SecretCreateRequest::text("prod/api/credentials", "create-value")
+        .validate()
+        .expect("a bare create");
+
+    SecretCreateRequest::text("/app/prod/db/host", "create-value")
+        .with_description("Primary host")
+        .with_value_type("SecureString")
+        .with_tier("Advanced")
+        .with_encryption_key("alias/app-prod")
+        .with_tag("env", "prod")
+        .with_tag("owner", "")
+        .validate()
+        .expect("a complete create");
+
+    for request in [
+        SecretCreateRequest::text("", "create-value"),
+        SecretCreateRequest::text("   ", "create-value"),
+        SecretCreateRequest::text("prod/api", ""),
+        SecretCreateRequest::binary("prod/api", vec![1, 2, 3]),
+        SecretCreateRequest::text("prod/api", "v").with_tag("aws:env", "x"),
+        SecretCreateRequest::text("prod/api", "v")
+            .with_tag("env", "a")
+            .with_tag("env", "b"),
+        SecretCreateRequest::text("prod/api", "v").with_tag("", "x"),
+    ] {
+        let error = request
+            .validate()
+            .expect_err("an invalid request is refused");
+        assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
+    }
+}
+
+#[test]
+fn a_create_request_cannot_carry_more_than_fifty_tags() {
+    let mut request = SecretCreateRequest::text("prod/api", "create-value");
+    for index in 0..50 {
+        request = request.with_tag(format!("key-{index}"), "v");
+    }
+    request.validate().expect("fifty fit");
+
+    let error = request
+        .with_tag("one-too-many", "v")
+        .validate()
+        .expect_err("fifty-one do not");
+    assert!(error.to_string().contains("50"), "{error}");
+}
+
+#[test]
+fn a_create_request_never_renders_its_value() {
+    let request = SecretCreateRequest::text("prod/api/credentials", "create-value-probe")
+        .with_description("Payments")
+        .with_tag("env", "prod");
+    let binary = SecretCreateRequest::binary("prod/tls/key", b"create-value-probe".to_vec());
+
+    for rendered in [format!("{request:?}"), format!("{binary:?}")] {
+        assert!(!rendered.contains("create-value-probe"), "{rendered}");
+    }
+    assert!(format!("{request:?}").contains("prod/api/credentials"));
+}
+
+#[test]
+fn the_default_create_secret_refuses_instead_of_succeeding_silently() {
+    let store = DefaultOnlyStore(descriptor_with(
+        SecretStoreCapabilities::WRITE | SecretStoreCapabilities::CREATE,
+    ));
+
+    let error = store
+        .create_secret(&SecretCreateRequest::text("prod/api/new", "create-value"))
+        .expect_err("an unimplemented create must refuse");
+
+    let message = put_refusal_message(error);
+    assert!(message.contains("test-store"), "{message}");
+    assert!(message.contains("prod/api/new"), "{message}");
+    assert!(!message.contains("create-value"), "{message}");
+}

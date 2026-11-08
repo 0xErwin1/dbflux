@@ -19,11 +19,12 @@ use super::super::write::*;
 use dbflux_core::observability::{EventCategory, EventRecord, EventSink, EventSinkError};
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
-    DbError, MutationPolicy, ReadOnlyReason, SecretDeleteRequest, SecretDeletion,
-    SecretDescriptionChange, SecretDescriptionUpdate, SecretDetails, SecretListPage,
-    SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
-    SecretRotationStart, SecretRotationUpdate, SecretStoreCapabilities, SecretStoreDescriptor,
-    SecretStoreSource, SecretTagsUpdate, SecretValue, SecretVersionStage,
+    DbError, MutationPolicy, ReadOnlyReason, SecretCreateRequest, SecretCreated,
+    SecretDeleteRequest, SecretDeletion, SecretDescriptionChange, SecretDescriptionUpdate,
+    SecretDetails, SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest,
+    SecretRollback, SecretRollbackRequest, SecretRotationStart, SecretRotationUpdate,
+    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretTagsUpdate,
+    SecretValue, SecretVersionStage,
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -948,6 +949,13 @@ impl SecretStoreSource for OperationStore {
     fn update_tags(&self, _update: &SecretTagsUpdate) -> Result<(), DbError> {
         self.answer()
     }
+    fn create_secret(&self, _request: &SecretCreateRequest) -> Result<SecretCreated, DbError> {
+        self.answer()?;
+        Ok(SecretCreated {
+            version: Some("v-created".to_string()),
+            resource_id: Some("arn:probe:secret:created".to_string()),
+        })
+    }
     fn update_description(
         &self,
         _update: &SecretDescriptionUpdate,
@@ -1048,6 +1056,21 @@ fn operation_cases() -> Vec<OperationCase> {
             values: Vec::new(),
         },
         OperationCase {
+            label: "create",
+            operation: SecretOperation::Create,
+            name: "prod/billing/api-key",
+            run: Box::new(|context| {
+                create_secret(
+                    context,
+                    &SecretCreateRequest::text("prod/billing/api-key", "create-value-probe")
+                        .with_description("Billing")
+                        .with_tag("env", "prod"),
+                )
+                .map(|_| ())
+            }),
+            values: vec!["create-value-probe"],
+        },
+        OperationCase {
             label: "restore",
             operation: SecretOperation::Restore,
             name: "prod/api/credentials",
@@ -1106,6 +1129,11 @@ fn every_operation_pins_its_classification_and_capabilities() {
             SecretOperation::Restore,
             dbflux_core::ExecutionClassification::Write,
             write | SecretStoreCapabilities::SOFT_DELETE,
+        ),
+        (
+            SecretOperation::Create,
+            dbflux_core::ExecutionClassification::Write,
+            write | SecretStoreCapabilities::CREATE,
         ),
         (
             SecretOperation::EditTags,
@@ -1637,4 +1665,122 @@ fn a_description_edit_never_records_its_text_and_names_a_version_it_created() {
     )
     .expect("cleared");
     assert_eq!(details_of(&sink.events()[0])["cleared"], true);
+}
+
+#[test]
+fn a_create_the_service_would_reject_refuses_before_any_call_and_names_no_value() {
+    for request in [
+        SecretCreateRequest::text("", "create-value-probe"),
+        SecretCreateRequest::text("prod/billing/api-key", ""),
+        SecretCreateRequest::binary("prod/billing/api-key", b"create-value-probe".to_vec()),
+        SecretCreateRequest::text("prod/billing/api-key", "create-value-probe")
+            .with_tag("aws:env", "x"),
+        SecretCreateRequest::text("prod/billing/api-key", "create-value-probe")
+            .with_tag("env", "a")
+            .with_tag("env", "b"),
+    ] {
+        let store = OperationStore::new(SecretOperation::Create.required_capabilities());
+        let sink = Sink::default();
+
+        let failure = create_secret(
+            &context(&store, &sink, MutationPolicy::Allowed, None),
+            &request,
+        )
+        .expect_err("an invalid create refuses");
+
+        assert_eq!(failure.kind, SecretWriteFailureKind::Refused, "{request:?}");
+        assert!(
+            matches!(failure.error, DbError::ConstraintViolation(_)),
+            "{failure:?}"
+        );
+        assert_eq!(store.calls(), 0, "{request:?}");
+        let events = sink.events();
+        assert_eq!(details_of(&events[0])["reason"], "invalid_request");
+        assert!(!format!("{events:?}").contains("create-value-probe"));
+        assert!(!failure.to_string().contains("create-value-probe"));
+    }
+}
+
+#[test]
+fn a_create_failure_that_echoes_the_value_is_scrubbed_in_every_form() {
+    let value = "create\"value\\probe\nline";
+    let escaped = json_escaped(value);
+
+    for echoed in [value.to_string(), escaped.clone()] {
+        let store = OperationStore::new(SecretOperation::Create.required_capabilities())
+            .failing(move || DbError::query_failed(format!("service rejected {echoed}")));
+        let sink = Sink::default();
+
+        let failure = create_secret(
+            &context(&store, &sink, MutationPolicy::Allowed, None),
+            &SecretCreateRequest::text("prod/billing/api-key", value),
+        )
+        .expect_err("the store failed");
+
+        assert_eq!(failure.kind, SecretWriteFailureKind::StoreFailed);
+        let message = failure.to_string();
+        assert!(!message.contains(value), "{message}");
+        assert!(!message.contains(&escaped), "{message}");
+        assert!(message.contains("[redacted]"), "{message}");
+        let events = sink.events();
+        assert_eq!(events.len(), 1);
+        let recorded = events[0].error_message.as_deref().unwrap_or_default();
+        assert!(!recorded.contains(value), "{recorded}");
+        assert!(!recorded.contains(&escaped), "{recorded}");
+    }
+}
+
+#[test]
+fn a_taken_name_is_a_store_failure_audited_once_and_never_an_overwrite() {
+    let store = OperationStore::new(SecretOperation::Create.required_capabilities())
+        .failing(|| DbError::constraint_violation("Secret prod/billing/api-key already exists"));
+    let sink = Sink::default();
+
+    let failure = create_secret(
+        &context(&store, &sink, MutationPolicy::Allowed, None),
+        &SecretCreateRequest::text("prod/billing/api-key", "create-value-probe"),
+    )
+    .expect_err("the name is taken");
+
+    assert_eq!(failure.kind, SecretWriteFailureKind::StoreFailed);
+    assert!(failure.to_string().contains("already exists"), "{failure}");
+    assert_eq!(store.calls(), 1);
+    let events = sink.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].action, SecretOperation::Create.actions().failed);
+    assert!(failure.correlation_id.is_some());
+}
+
+#[test]
+fn a_create_records_the_settings_and_tag_keys_and_never_the_value_or_tag_values() {
+    let store = OperationStore::new(SecretOperation::Create.required_capabilities());
+    let sink = Sink::default();
+
+    create_secret(
+        &context(&store, &sink, MutationPolicy::Allowed, None),
+        &SecretCreateRequest::text("/app/prod/db/replica", "create-value-probe")
+            .with_value_type("SecureString")
+            .with_tier("Advanced")
+            .with_encryption_key("alias/app-prod")
+            .with_description("description-probe-text")
+            .with_tag("env", "tag-value-probe"),
+    )
+    .expect("created");
+
+    let events = sink.events();
+    let details = details_of(&events[0]);
+    assert_eq!(details["value_type"], "SecureString");
+    assert_eq!(details["tier"], "Advanced");
+    assert_eq!(details["encryption_key"], "alias/app-prod");
+    assert_eq!(details["has_description"], true);
+    assert_eq!(details["tag_keys"], serde_json::json!(["env"]));
+    assert_eq!(details["version"], "v-created");
+    let rendered = format!("{events:?}");
+    for leaked in [
+        "create-value-probe",
+        "tag-value-probe",
+        "description-probe-text",
+    ] {
+        assert!(!rendered.contains(leaked), "{leaked}");
+    }
 }

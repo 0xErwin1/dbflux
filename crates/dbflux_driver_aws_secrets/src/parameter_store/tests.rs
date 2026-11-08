@@ -1,15 +1,16 @@
 use aws_sdk_ssm::config::{BehaviorVersion, Builder as ConfigBuilder, Credentials, Region};
 use aws_sdk_ssm::types::{ParameterMetadata, ParameterType};
 use dbflux_core::{
-    DbError, SecretDeleteRequest, SecretPutRequest, SecretStoreCapabilities, SecretStoreSource,
-    SecretVersionStage,
+    DbError, SecretCreateRequest, SecretDeleteRequest, SecretPutRequest, SecretStoreCapabilities,
+    SecretStoreSource, SecretVersionStage,
 };
 
 use super::hierarchy::{group_level, normalize_path, path_filter_value};
 use super::{
     ParameterStore, confirmed_deletion_name, ensure_unchanged_while_reading, ensure_written_after,
-    existing_key_id, find_parameter_on_pages, list_versions_on_pages, overwrite_type, page_versions,
-    plan_description_write, put_parameter_call, put_text, sort_newest_first, ssm_tags,
+    existing_key_id, find_parameter_on_pages, list_versions_on_pages, overwrite_type,
+    page_versions, plan_create, plan_description_write, put_parameter_call, put_text,
+    sort_newest_first, ssm_tags,
 };
 use crate::driver::AwsSecretsProfileConfig;
 
@@ -686,4 +687,82 @@ fn a_parameter_description_cannot_be_cleared_through_a_rewrite() {
 
     assert!(matches!(error, DbError::ConstraintViolation(_)), "{error}");
     assert!(error.to_string().contains("/app/prod/db/host"), "{error}");
+}
+
+#[test]
+fn a_parameter_create_defaults_to_a_string_and_takes_the_services_own_tier() {
+    let plan = plan_create(&SecretCreateRequest::text(
+        "/app/prod/db/host",
+        "create-value-probe",
+    ))
+    .expect("a bare create");
+
+    assert_eq!(plan.parameter_type, ParameterType::String);
+    assert!(plan.tier.is_none(), "the service default applies");
+    assert!(plan.key_id.is_none());
+    assert!(plan.description.is_none());
+}
+
+#[test]
+fn a_parameter_create_carries_its_type_tier_key_description_and_tags() {
+    let request = SecretCreateRequest::text("/app/prod/db/password", "create-value-probe")
+        .with_value_type("SecureString")
+        .with_tier("Intelligent-Tiering")
+        .with_encryption_key("alias/app-prod")
+        .with_description("Database password")
+        .with_tag("app", "shop");
+
+    let plan = plan_create(&request).expect("a complete create");
+
+    assert_eq!(plan.parameter_type, ParameterType::SecureString);
+    assert_eq!(
+        plan.tier,
+        Some(aws_sdk_ssm::types::ParameterTier::IntelligentTiering)
+    );
+    assert_eq!(plan.key_id.as_deref(), Some("alias/app-prod"));
+    assert_eq!(plan.description.as_deref(), Some("Database password"));
+    assert_eq!(plan.tags.len(), 1);
+
+    for (value_type, expected) in [
+        ("String", ParameterType::String),
+        ("StringList", ParameterType::StringList),
+    ] {
+        let plan =
+            plan_create(&SecretCreateRequest::text("/app/list", "a,b").with_value_type(value_type))
+                .expect("a type");
+        assert_eq!(plan.parameter_type, expected);
+    }
+}
+
+#[test]
+fn a_parameter_create_refuses_what_the_service_would_before_any_call() {
+    for request in [
+        SecretCreateRequest::text("/app/x", "create-value-probe").with_value_type("Binary"),
+        SecretCreateRequest::text("/app/x", "create-value-probe").with_tier("Platinum"),
+        SecretCreateRequest::text("/app/x", "create-value-probe").with_encryption_key("alias/k"),
+        SecretCreateRequest::text("/app/has space", "create-value-probe"),
+        SecretCreateRequest::text("/aws/reserved", "create-value-probe"),
+        SecretCreateRequest::text("AWS-prefixed", "create-value-probe"),
+        SecretCreateRequest::text("/ssm/reserved", "create-value-probe"),
+        SecretCreateRequest::text("/app/x", "create-value-probe")
+            .with_description("d".repeat(1025)),
+        SecretCreateRequest::text(
+            format!("/{}", vec!["a"; 16].join("/")),
+            "create-value-probe",
+        ),
+    ] {
+        let error = plan_create(&request).expect_err("refused");
+
+        assert!(
+            matches!(error, DbError::ConstraintViolation(_)),
+            "{request:?}: {error}"
+        );
+        assert!(!error.to_string().contains("create-value-probe"), "{error}");
+    }
+
+    plan_create(&SecretCreateRequest::text(
+        format!("/{}", vec!["a"; 15].join("/")),
+        "create-value-probe",
+    ))
+    .expect("fifteen levels are the maximum");
 }
