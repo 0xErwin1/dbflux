@@ -23,7 +23,10 @@ mod rotation;
 mod tags;
 
 use super::editor::write_failure_to_user_facing;
-use super::write::{SecretWriteFailure, SecretWriteFailureKind, WriteContext};
+use super::write::{
+    SecretOperation, SecretWriteFailure, SecretWriteFailureKind, WriteContext, WriteTarget,
+    store_unavailable_failure,
+};
 use super::{DetailsState, SecretRowKey, SecretStoreDocument};
 use dbflux_audit::AuditService;
 use dbflux_components::controls::Button;
@@ -79,6 +82,7 @@ pub(super) struct WriteSession {
     driver_id: String,
     audit: AuditService,
     store_id: String,
+    store_label: String,
     profile_id: Uuid,
 }
 
@@ -206,6 +210,7 @@ impl SecretStoreDocument {
             driver_id: connected.connection.metadata().id.clone(),
             audit: self.app_state.read(cx).audit_service().clone(),
             store_id: self.store.id.clone(),
+            store_label: self.store.label.clone(),
             profile_id: self.profile_id,
         };
 
@@ -214,9 +219,13 @@ impl SecretStoreDocument {
 
     /// Runs one governed write on the background executor — the seam is
     /// synchronous — and lands its answer on the foreground through `land`.
+    /// `operation` and `name` say what the write is, for the audit row of a
+    /// write whose connection turns out to have no such store.
     pub(super) fn run_governed_write<T: Send + 'static>(
         &mut self,
         session: WriteSession,
+        operation: SecretOperation,
+        name: String,
         work: impl FnOnce(&WriteContext<'_>) -> Landing<T> + Send + 'static,
         land: impl FnOnce(&mut Self, Landing<T>, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
@@ -228,7 +237,8 @@ impl SecretStoreDocument {
         // The write may rewrite what the editor holds (a description change
         // on a store that rewrites the value), so an editor that holds
         // nothing unsaved closes now, and none opens while this is in flight.
-        if !self.has_unsaved_value_edits(cx) {
+        // A tag write never touches the value: its editor stays.
+        if operation.may_rewrite_value() && !self.has_unsaved_value_edits(cx) {
             self.value_edit = None;
         }
         cx.notify();
@@ -241,6 +251,7 @@ impl SecretStoreDocument {
                 driver_id,
                 audit,
                 store_id,
+                store_label,
                 profile_id,
             } = session;
 
@@ -253,17 +264,21 @@ impl SecretStoreDocument {
                     read_only_reason,
                     audit: &audit,
                 }),
-                None => Landing::Rejected(SecretWriteFailure {
-                    error: DbError::NotSupported(dbflux_i18n::t!(
+                None => Landing::Rejected(store_unavailable_failure(
+                    &audit,
+                    operation,
+                    &WriteTarget {
+                        profile_id,
+                        driver_id: driver_id.as_str(),
+                        store_id: store_id.as_str(),
+                        store_label: store_label.as_str(),
+                        name: name.as_str(),
+                    },
+                    DbError::NotSupported(dbflux_i18n::t!(
                         "document.secret_store.error.store_unavailable",
                         store = store_id
                     )),
-                    correlation_id: None,
-                    // The connection has no such store: a lost connection,
-                    // not a gate's decision.
-                    kind: SecretWriteFailureKind::StoreFailed,
-                    audit_unrecorded: false,
-                }),
+                )),
             }
         });
 
@@ -331,9 +346,9 @@ impl SecretStoreDocument {
     /// After a reconnect that kept the region, the selection still describes
     /// the previous session: read it again without waiting for the user.
     pub(super) fn adopt_details_session(&mut self, cx: &mut Context<Self>) {
-        let stale = self.details_session.is_some()
-            && self.connection(cx).is_some()
-            && !self.details_session_is_live(cx);
+        // Details first requested with no connection leave no session at
+        // all, which is as stale as one from a replaced connection.
+        let stale = self.connection(cx).is_some() && !self.details_session_is_live(cx);
 
         // The history follows the connection on its own
         // (`adopt_connection_session`); only the details and the row are left.
@@ -348,7 +363,7 @@ impl SecretStoreDocument {
 
     /// An editor save is in flight, and an action write would race it.
     fn editor_save_blocks_writes(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.is_saving_value_edit() {
+        if !self.editor_save_in_flight {
             return false;
         }
 
@@ -366,18 +381,6 @@ impl SecretStoreDocument {
         cx: &mut Context<Self>,
     ) {
         let user_error = write_failure_to_user_facing(failure);
-
-        // A store failure with no correlation id and no recorded event never
-        // reached the seam (the connection has no such store), so no audit row
-        // exists to point at: the standard reporter records the attempt and
-        // gives the toast a row to open.
-        if failure.kind == SecretWriteFailureKind::StoreFailed
-            && failure.correlation_id.is_none()
-            && !failure.audit_unrecorded
-        {
-            report_error(user_error, cx);
-            return;
-        }
 
         self.report_seam_write_failure(user_error, cx);
     }

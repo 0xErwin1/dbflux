@@ -8,6 +8,7 @@
 use super::{
     DialogShell, FooterSpec, Landing, WriteDialog, WriteEffect, dialog_footer, dialog_modal,
 };
+use crate::secret_store::SecretOperation;
 use crate::secret_store::details::short_version_id;
 use crate::secret_store::write::roll_back_secret;
 use crate::secret_store::{SecretRowKey, SecretStoreDocument, VersionsState};
@@ -75,14 +76,24 @@ impl SecretStoreDocument {
         }
     }
 
-    /// The index of the most recent earlier version, which `b` rolls back
-    /// to. The history lists newest first.
+    /// The index of the most recent version created before the current one,
+    /// which `b` rolls back to. The history lists newest first, so the
+    /// versions after the current one are the older ones and the first that
+    /// can be rolled back to is the most recent of them. The current version
+    /// is not always the first row (after a roll back it is an older one), so
+    /// a newer version is never "previous". The order decides, not the dates:
+    /// a version with no creation date keeps its place.
     pub(in crate::secret_store) fn previous_version_index(&self) -> Option<usize> {
         let VersionsState::Loaded(versions) = &self.versions else {
             return None;
         };
 
-        (0..versions.len()).find(|index| self.version_to_roll_back(*index).is_some())
+        let first_older = versions
+            .iter()
+            .position(|version| self.is_current_version(&version.id))
+            .map_or(0, |current| current + 1);
+
+        (first_older..versions.len()).find(|index| self.version_to_roll_back(*index).is_some())
     }
 
     fn has_pending_earlier_version(&self) -> bool {
@@ -214,6 +225,8 @@ impl SecretStoreDocument {
 
         self.run_governed_write(
             session,
+            SecretOperation::RollBack,
+            name.clone(),
             move |context| Landing::of(roll_back_secret(context, &request)),
             move |doc, landing, cx| doc.land_roll_back(&name, &version_id, landing, cx),
             cx,

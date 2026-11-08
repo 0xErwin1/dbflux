@@ -94,7 +94,7 @@ pub use connection::root_section::{
 };
 pub use connection::secret_store::{
     DEFAULT_RECOVERY_WINDOW_DAYS, MAX_RECOVERY_WINDOW_DAYS, MAX_TAGS, MIN_RECOVERY_WINDOW_DAYS,
-    SecretCreateRequest, SecretCreated, SecretDeleteRequest, SecretDeletion,
+    SecretCreateChoices, SecretCreateRequest, SecretCreated, SecretDeleteRequest, SecretDeletion,
     SecretDescriptionChange, SecretDescriptionUpdate, SecretDetails, SecretListPage,
     SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
     SecretRotation, SecretRotationChange, SecretRotationStart, SecretRotationUpdate,

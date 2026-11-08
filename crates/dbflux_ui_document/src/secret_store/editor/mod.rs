@@ -73,7 +73,10 @@ pub(crate) mod json_layout;
 mod line_diff;
 mod view;
 
-use super::write::{SecretWriteFailure, SecretWriteFailureKind, put_secret_value};
+use super::write::{
+    SecretOperation, SecretWriteFailure, SecretWriteFailureKind, WriteTarget, put_secret_value,
+    store_unavailable_failure,
+};
 use super::{DetailsState, SecretRowKey, SecretStoreDocument, ValueState};
 use crate::object_text::db_error_to_user_facing;
 use crate::types::DocumentState;
@@ -531,6 +534,16 @@ impl SecretStoreDocument {
             return;
         }
 
+        // A save out of an editor that is gone still answers: a second one
+        // would let the first answer release the guard under it.
+        if self.editor_save_in_flight {
+            self.report_write_warning(
+                dbflux_i18n::t!("document.secret_store.write.in_progress"),
+                cx,
+            );
+            return;
+        }
+
         if self.write_in_flight {
             self.report_write_warning(
                 dbflux_i18n::t!("document.secret_store.write.in_progress"),
@@ -613,6 +626,7 @@ impl SecretStoreDocument {
 
         let audit = self.app_state.read(cx).audit_service().clone();
         let store_id = self.store.id.clone();
+        let store_label = self.store.label.clone();
         let profile_id = self.profile_id;
         let generation = self.value_write_generation;
         let entity = cx.entity().clone();
@@ -621,6 +635,7 @@ impl SecretStoreDocument {
         if let Some(edit) = &mut self.value_edit {
             edit.saving = true;
         }
+        self.editor_save_in_flight = true;
         cx.notify();
 
         let task = cx.background_executor().spawn(async move {
@@ -634,17 +649,21 @@ impl SecretStoreDocument {
                     &audit,
                     &request,
                 ),
-                None => Err(SecretWriteFailure {
-                    error: DbError::NotSupported(dbflux_i18n::t!(
+                None => Err(store_unavailable_failure(
+                    &audit,
+                    SecretOperation::PutValue,
+                    &WriteTarget {
+                        profile_id,
+                        driver_id: driver_id.as_str(),
+                        store_id: store_id.as_str(),
+                        store_label: store_label.as_str(),
+                        name: request.name.as_str(),
+                    },
+                    DbError::NotSupported(dbflux_i18n::t!(
                         "document.secret_store.error.store_unavailable",
                         store = store_id
                     )),
-                    correlation_id: None,
-                    // The connection has no such store — a lost connection,
-                    // not a gate's decision.
-                    kind: SecretWriteFailureKind::StoreFailed,
-                    audit_unrecorded: false,
-                }),
+                )),
             }
         });
 
@@ -653,6 +672,7 @@ impl SecretStoreDocument {
 
             cx.update(|cx| {
                 entity.update(cx, |doc, cx| {
+                    doc.editor_save_in_flight = false;
                     doc.apply_value_write(generation, &name, result, cx);
                 });
             });

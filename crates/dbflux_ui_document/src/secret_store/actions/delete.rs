@@ -15,6 +15,7 @@
 use super::{
     DialogShell, FooterSpec, Landing, WriteDialog, WriteEffect, dialog_footer, dialog_modal,
 };
+use crate::secret_store::SecretOperation;
 use crate::secret_store::render::format_time;
 use crate::secret_store::write::{delete_secret, restore_secret};
 use crate::secret_store::{SecretRowKey, SecretStoreDocument};
@@ -192,6 +193,11 @@ impl SecretStoreDocument {
 
         self.run_governed_write(
             session,
+            match kind {
+                DeleteKind::Scheduled { .. } => SecretOperation::DeleteScheduled,
+                DeleteKind::Irreversible => SecretOperation::DeleteIrreversible,
+            },
+            name.clone(),
             move |context| Landing::of(delete_secret(context, &request)),
             move |doc, landing, cx| doc.land_delete(&name, kind, landing, cx),
             cx,
@@ -284,6 +290,8 @@ impl SecretStoreDocument {
 
         self.run_governed_write(
             session,
+            SecretOperation::Restore,
+            name.clone(),
             move |context| Landing::of(restore_secret(context, &request_name)),
             move |doc, landing, cx| doc.land_restore(&name, landing, cx),
             cx,
