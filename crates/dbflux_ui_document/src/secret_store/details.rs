@@ -657,9 +657,11 @@ impl SecretStoreDocument {
             BannerVariant::Info,
             dbflux_i18n::t!("document.secret_store.versions.shown", version = version),
         )
-        .with_body(dbflux_i18n::t!(
-            "document.secret_store.versions.not_current"
-        ))
+        .with_body(if self.current_version_id().is_some() {
+            dbflux_i18n::t!("document.secret_store.versions.not_current")
+        } else {
+            dbflux_i18n::t!("document.secret_store.versions.current_unknown")
+        })
         .with_actions(back)
     }
 

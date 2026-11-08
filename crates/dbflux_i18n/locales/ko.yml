@@ -3547,6 +3547,7 @@ document:
       back_to_current: "현재 버전으로 돌아가기"
       shown: "%{version} 버전 표시 중"
       not_current: "현재 버전이 아닙니다. 가져오기는 감사되며 값은 기록되지 않습니다."
+      current_unknown: "현재 버전을 지금은 알 수 없습니다. 가져오기는 감사되며 값은 기록되지 않습니다."
     tags:
       title: "태그"
       none: "태그 없음"
@@ -3628,7 +3629,7 @@ document:
       find: "찾기"
       modified: "수정됨"
       footer:
-        summary: "UTF-8 · %{size} · 버전 %{version}"
+        version: "버전 %{version}"
         summary_unversioned: "UTF-8 · %{size}"
         changed_one: "1줄 변경됨"
         changed_other: "%{count}줄 변경됨"

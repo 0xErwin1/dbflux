@@ -21,6 +21,7 @@ mod render;
 mod value;
 mod write;
 
+use data::HistoryLoad;
 pub use listing::{PathMode, SecretListing};
 pub use region::RegionListState;
 pub use value::{
@@ -44,6 +45,7 @@ use dbflux_core::{
 };
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -165,6 +167,8 @@ pub struct SecretStoreDocument {
     region: Option<String>,
     /// The regions the connection offers.
     regions: RegionListState,
+    /// What the footer measured of itself, to decide which key hints fit.
+    footer_fit: std::rc::Rc<render::FooterFit>,
     /// Bumped by every region discovery, so a result that a newer discovery or
     /// a replaced connection made stale is dropped instead of shown.
     regions_generation: u64,
@@ -291,7 +295,7 @@ impl SecretStoreDocument {
         subscriptions.push(
             cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
                 this.adopt_connection_region(cx);
-                this.adopt_connection_session(cx);
+                this.adopt_connection_session(HistoryLoad::Automatic, cx);
             }),
         );
 
@@ -333,6 +337,7 @@ impl SecretStoreDocument {
             value_edit: None,
             value_write_generation: 0,
             last_call: None,
+            footer_fit: Default::default(),
             region_switchable,
             region,
             regions: RegionListState::Idle,
@@ -834,11 +839,21 @@ impl SecretStoreDocument {
 
     /// Copies the selected secret's provider-wide identifier (an ARN).
     pub fn copy_resource_id(&mut self, cx: &mut Context<Self>) {
-        let DetailsState::Loaded(details) = &self.details else {
-            return;
+        let resource_id = match &self.details {
+            DetailsState::Loaded(details) => details.resource_id.clone(),
+            _ => None,
         };
 
-        let Some(resource_id) = details.resource_id.clone() else {
+        let Some(resource_id) = resource_id else {
+            // The shortcut is advertised in the footer, so a press that
+            // cannot copy says why, in the words the menu entry uses.
+            if matches!(self.selected, Some(SecretRowKey::Secret(_))) {
+                report_error(
+                    UserFacingError::new(ErrorKind::User, self.resource_id_unavailable_reason())
+                        .with_severity(dbflux_core::observability::EventSeverity::Warn),
+                    cx,
+                );
+            }
             return;
         };
 
@@ -1137,7 +1152,9 @@ impl SecretStoreDocument {
                     },
                 )
                 .icon(AppIcon::Globe)
-                .enabled(matches!(self.regions, RegionListState::Loaded(_))),
+                .enabled(
+                    matches!(&self.regions, RegionListState::Loaded(regions) if !regions.is_empty()),
+                ),
             );
         }
 

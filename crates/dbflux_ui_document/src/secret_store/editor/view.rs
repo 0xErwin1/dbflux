@@ -224,10 +224,13 @@ impl SecretStoreDocument {
             .unwrap_or_default();
         // The text viewport inside the row area: lower than the top when the
         // Find panel is open. Rows are placed and clipped against it.
-        let viewport_top = state
-            .text_bounds()
-            .map_or(px(0.0), |bounds| bounds.origin.y - rows_origin.get())
-            .max(px(0.0));
+        // `text_bounds()` already includes the scroll offset, so the origin
+        // comes from the unscrolled input bounds. Before the first layout
+        // there are none: the text starts at the textarea's top padding.
+        let viewport_top = match state.text_bounds() {
+            Some(_) => (state.input_bounds().origin.y - rows_origin.get()).max(px(0.0)),
+            None => gpui_component::Size::default().input_py(),
+        };
         let viewport_height = match state.input_bounds().size.height {
             height if height > px(0.0) => height,
             _ => line_height * VIEWER_VISIBLE_LINES,
@@ -404,17 +407,10 @@ impl SecretStoreDocument {
             ValueState::Loaded(value) => value.version.clone(),
             _ => None,
         };
-        let summary = match version {
-            Some(version) => dbflux_i18n::t!(
-                "document.secret_store.edit.footer.summary",
-                size = size,
-                version = version
-            ),
-            None => dbflux_i18n::t!(
-                "document.secret_store.edit.footer.summary_unversioned",
-                size = size
-            ),
-        };
+        let summary = dbflux_i18n::t!(
+            "document.secret_store.edit.footer.summary_unversioned",
+            size = size
+        );
 
         let changed = changes.changed();
         let changed_label = match changed {
@@ -435,30 +431,75 @@ impl SecretStoreDocument {
             column = (caret.character + 1).to_string()
         );
 
+        // The footer is two groups that wrap as wholes, so a wrapped line
+        // breaks between groups. Inside a group each item after the first
+        // carries its own separator, so no line starts with a bare "·".
+        let group = |id: &'static str| {
+            div()
+                .id(id)
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(DocumentMetrics::GAP)
+                .whitespace_nowrap()
+        };
+        let has_changes = changed_label.is_some();
+
         div()
             .id("secret-value-editor-footer")
             .flex()
             .flex_wrap()
             .items_center()
-            .gap(DocumentMetrics::GAP)
+            .gap_x(DocumentMetrics::GAP)
             .text_size(DocumentMetrics::TABLE_META_FONT)
             .text_color(muted)
             .child(
-                div()
-                    .id("secret-value-editor-footer-summary")
-                    .child(summary),
+                group("secret-value-editor-footer-details")
+                    .child(
+                        div()
+                            .id("secret-value-editor-footer-summary")
+                            .child(summary),
+                    )
+                    .when_some(version, |details, version| {
+                        let short = if version.parse::<u64>().is_ok() {
+                            crate::secret_store::render::version_label(Some(&version))
+                        } else {
+                            crate::secret_store::details::short_version_id(&version)
+                        };
+                        let label = dbflux_i18n::t!(
+                            "document.secret_store.edit.footer.version",
+                            version = short
+                        );
+
+                        details.child(
+                            div()
+                                .id("secret-value-editor-footer-version")
+                                .role(gpui::accesskit::Role::Label)
+                                .aria_label(version.clone())
+                                .tooltip(move |window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(version.clone())
+                                        .build(window, cx)
+                                })
+                                .child(format!("· {label}")),
+                        )
+                    }),
             )
-            .when_some(changed_label, |footer, label| {
-                footer
-                    .child("·")
-                    .child(div().id("secret-value-editor-footer-changes").child(label))
-            })
             .child(div().flex_1())
             .child(
-                div()
-                    .id("secret-value-editor-footer-caret")
-                    .font_family(family)
-                    .child(caret_label),
+                group("secret-value-editor-footer-position")
+                    .when_some(changed_label, |position, label| {
+                        position.child(div().id("secret-value-editor-footer-changes").child(label))
+                    })
+                    .child(
+                        div()
+                            .id("secret-value-editor-footer-caret")
+                            .font_family(family)
+                            .child(if has_changes {
+                                format!("· {caret_label}")
+                            } else {
+                                caret_label
+                            }),
+                    ),
             )
     }
 }

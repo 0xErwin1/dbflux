@@ -3547,6 +3547,7 @@ document:
       back_to_current: "Voltar para a atual"
       shown: "Exibindo a versão %{version}"
       not_current: "Não é a versão atual. A recuperação é auditada, o valor não."
+      current_unknown: "A versão atual não é conhecida no momento. A recuperação é auditada, o valor não."
     tags:
       title: "Tags"
       none: "Sem tags"
@@ -3628,7 +3629,7 @@ document:
       find: "Localizar"
       modified: "modificado"
       footer:
-        summary: "UTF-8 · %{size} · versão %{version}"
+        version: "versão %{version}"
         summary_unversioned: "UTF-8 · %{size}"
         changed_one: "1 linha alterada"
         changed_other: "%{count} linhas alteradas"

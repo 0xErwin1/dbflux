@@ -3547,6 +3547,7 @@ document:
       back_to_current: "Back to current"
       shown: "Showing version %{version}"
       not_current: "This is not the current version. The retrieval is audited, the value is not."
+      current_unknown: "The current version is not known right now. The retrieval is audited, the value is not."
     tags:
       title: "Tags"
       none: "No tags"
@@ -3628,7 +3629,7 @@ document:
       find: "Find"
       modified: "modified"
       footer:
-        summary: "UTF-8 · %{size} · version %{version}"
+        version: "version %{version}"
         summary_unversioned: "UTF-8 · %{size}"
         changed_one: "1 line changed"
         changed_other: "%{count} lines changed"

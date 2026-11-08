@@ -905,9 +905,21 @@ fn the_footer_counts_paths_and_parameters_and_names_the_keys(cx: &mut TestAppCon
 /// and the short change time.
 #[gpui::test]
 fn the_secrets_footer_and_rows_follow_the_design(cx: &mut TestAppContext) {
+    use dbflux_core::chrono::{Datelike as _, Local, TimeZone as _, Utc};
+
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     let count = opened.read(|doc| doc.listing().entries.len());
-    let text = opened.rendered_text();
+
+    // The row drops the year in the current year, so the expected text must
+    // use the year the render saw: render again if New Year fell in between.
+    let (text, year) = loop {
+        let before = Local::now().year();
+        let text = opened.rendered_text();
+
+        if Local::now().year() == before {
+            break (text, before);
+        }
+    };
 
     assert!(text.contains(&loaded_label(count)), "{text}");
     assert!(text.contains("Every 30 days"), "{text}");
@@ -920,13 +932,12 @@ fn the_secrets_footer_and_rows_follow_the_design(cx: &mut TestAppContext) {
 
     // The fixture's change time, in local time and under the current-year
     // rule, in the row of its own secret.
-    use dbflux_core::chrono::{Datelike as _, Local, TimeZone as _, Utc};
     let changed = Utc
         .with_ymd_and_hms(2026, 9, 20, 3, 0, 0)
         .single()
         .expect("fixture time");
     let local = changed.with_timezone(&Local);
-    let expected = if local.year() == Local::now().year() {
+    let expected = if local.year() == year {
         local.format("%b %-d, %H:%M").to_string()
     } else {
         local.format("%b %-d, %Y, %H:%M").to_string()
@@ -1249,14 +1260,171 @@ fn a_long_profile_name_never_pushes_the_region_out(cx: &mut TestAppContext) {
     }
 
     resize(&mut opened, minimum);
+    let identity = edges(&mut opened, "secret-identity");
     assert!(
-        edges(&mut opened, "secret-identity").2 < wide_identity,
+        identity.2 < wide_identity,
         "the identity gives way at the minimum width"
+    );
+    assert!(
+        identity.2 > 20.0, // guardrail-allow: test threshold, not spacing
+        "the identity keeps its icon and a few characters: {}",
+        identity.2
+    );
+    let refresh = edges(&mut opened, "secret-refresh");
+    assert!(
+        refresh.1 <= minimum + 0.5,
+        "Refresh stays inside the document"
     );
     assert!(
         opened.rendered_text().contains(name),
         "the full name stays reachable: {}",
         opened.rendered_text()
+    );
+}
+
+/// Hovers the element `id` and returns the text of the tooltip it draws.
+fn hover_tooltip(opened: &mut Opened<'_>, id: &str) -> String {
+    use dbflux_ui_base::keyboard_coverage::FrameCapture;
+
+    let bounds = opened.element_bounds(id);
+    let capture = FrameCapture::observe(opened.window);
+
+    opened
+        .window
+        .simulate_mouse_move(bounds.center(), None, gpui::Modifiers::default());
+    opened.window.run_until_parked();
+    opened
+        .window
+        .simulate_mouse_move(bounds.center(), None, gpui::Modifiers::default());
+    opened
+        .window
+        .executor()
+        .advance_clock(std::time::Duration::from_millis(600));
+    opened.window.run_until_parked();
+
+    let frame = capture.frame(opened.window);
+
+    frame
+        .nodes()
+        .find(|(_, node)| node.id() == "tooltip-popup")
+        .map(|(_, node)| node.content_text().to_string())
+        .unwrap_or_else(|| panic!("hovering `{id}` draws a tooltip"))
+}
+
+/// Pointer users read what the clipped identity and the clipped footer
+/// summary hide from the tooltip, not only from the accessible name.
+#[gpui::test]
+fn clipped_identity_and_footer_summary_show_their_full_text_on_hover(cx: &mut TestAppContext) {
+    let name = "production-payments-eu-west-primary-account-cluster-01";
+    let mut opened = open_named_region_store(
+        cx,
+        name,
+        FAKE_PARAMETER_STORE_ID,
+        Some("/app/prod/"),
+        &[OTHER_REGION, CURRENT_REGION],
+        None,
+    );
+
+    resize(&mut opened, 1500.0);
+    let wide_identity = edges(&mut opened, "secret-identity").2;
+    let wide_summary = edges(&mut opened, "secret-footer-summary").2;
+
+    let minimum = minimum_document_width(&mut opened);
+    resize(&mut opened, minimum);
+    assert!(edges(&mut opened, "secret-identity").2 < wide_identity);
+    let summary_width = edges(&mut opened, "secret-footer-summary").2;
+    assert!(summary_width < wide_summary);
+    assert!(
+        summary_width > 20.0, // guardrail-allow: test threshold, not spacing
+        "the summary keeps its icon and a few characters: {summary_width}"
+    );
+
+    let identity = hover_tooltip(&mut opened, "secret-identity");
+    assert!(identity.contains(name), "{identity}");
+    assert!(identity.contains("Parameter Store"), "{identity}");
+
+    let summary = opened.read(|doc| doc.loaded_summary());
+    assert_eq!(hover_tooltip(&mut opened, "secret-footer-summary"), summary);
+}
+
+/// Refresh with unsaved edits starts neither the region discovery nor the
+/// listing.
+#[gpui::test]
+fn refresh_under_unsaved_edits_starts_nothing(cx: &mut TestAppContext) {
+    let mut opened = open_region_doc(
+        cx,
+        &[OTHER_REGION, CURRENT_REGION],
+        Some("AccessDenied".to_string()),
+    );
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+
+    let regions_before = opened.driver.available_regions_calls();
+    let lists_before = opened.driver.secret_store_calls().list_requests.len();
+
+    opened.update(|doc, cx| doc.refresh(cx));
+    opened.window.run_until_parked();
+
+    assert_eq!(opened.driver.available_regions_calls(), regions_before);
+    assert_eq!(
+        opened.driver.secret_store_calls().list_requests.len(),
+        lists_before
+    );
+    assert!(opened.read(|doc| doc.is_editing_value()));
+}
+
+/// A loaded but empty region list leaves nothing to pick, so the region
+/// action stays disabled.
+#[gpui::test]
+fn the_region_action_needs_at_least_one_region(cx: &mut TestAppContext) {
+    let mut empty = open_with_regions(cx, &[]);
+    assert!(matches!(
+        empty.read(|doc| doc.regions().clone()),
+        RegionListState::Loaded(_)
+    ));
+    assert!(!empty.pane_action("secret-region").enabled);
+
+    let mut listed = open_with_regions(cx, &[OTHER_REGION, CURRENT_REGION]);
+    assert!(listed.pane_action("secret-region").enabled);
+}
+
+/// The footer's Copy ARN shortcut says why it cannot copy while the details
+/// load or after they failed, and still copies once they are there.
+#[gpui::test]
+fn copy_arn_says_why_it_is_unavailable(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.select(HISTORY_PARAMETER);
+
+    let message = |opened: &mut Opened<'_>| {
+        opened.command(Command::ResultsCopyCell);
+        let reported = opened.reported_errors();
+        reported
+            .first()
+            .map(|(_, summary)| summary.clone())
+            .unwrap_or_default()
+    };
+
+    opened.update(|doc, cx| {
+        doc.details = DetailsState::Loading;
+        cx.notify();
+    });
+    assert_eq!(
+        message(&mut opened),
+        dbflux_i18n::t!("document.secret_store.context_menu.arn_loading")
+    );
+
+    opened.update(|doc, cx| {
+        doc.details = DetailsState::Failed("describe refused".to_string());
+        cx.notify();
+    });
+    assert_eq!(
+        message(&mut opened),
+        dbflux_i18n::t!(
+            "document.secret_store.context_menu.arn_failed",
+            error = "describe refused"
+        )
     );
 }
 
@@ -1294,7 +1462,7 @@ fn the_rotation_chip_stays_in_its_cell(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_footer_summary_truncates_and_the_hints_keep_their_space(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
-    let hint = "secret-footer-hint-filter";
+    let hint = "secret-footer-hint-open";
 
     resize(&mut opened, 1500.0);
     let wide_hint = edges(&mut opened, hint).2;
@@ -1331,6 +1499,177 @@ fn the_footer_summary_truncates_and_the_hints_keep_their_space(cx: &mut TestAppC
         opened.rendered_text().contains("loaded under /app/prod/"),
         "the full summary stays reachable"
     );
+}
+
+/// At the minimum width every footer element, the summary and each key hint
+/// that is drawn, ends inside the listing, and a hint is never cut: the ones
+/// that do not fit are dropped, lowest priority first.
+#[gpui::test]
+fn the_footer_stays_inside_the_listing_at_the_minimum_width(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+    let names = ["open", "up", "retrieve", "copy_arn", "filter"];
+    let paths = |opened: &mut Opened<'_>| opened.rendered_paths();
+
+    resize(&mut opened, 1500.0);
+    let natural: Vec<f32> = names
+        .iter()
+        .map(|name| edges(&mut opened, &format!("secret-footer-hint-{name}")).2)
+        .collect();
+
+    let minimum = minimum_document_width(&mut opened);
+    let mut width = 1500.0;
+    while width >= minimum {
+        resize(&mut opened, width);
+        let listing = edges(&mut opened, "secret-listing").1;
+        let drawn = paths(&mut opened);
+        let present = |name: &str| {
+            let id = format!("secret-footer-hint-{name}");
+            drawn.iter().any(|path| path.ends_with(&id))
+        };
+
+        // Dropped lowest priority first: filter, then copy ARN, then up.
+        assert!(
+            present("filter") <= present("copy_arn"),
+            "filter outlived copy ARN at {width}"
+        );
+        assert!(
+            present("copy_arn") <= present("up"),
+            "copy ARN outlived up at {width}"
+        );
+
+        for (name, natural) in names.iter().zip(&natural) {
+            if !present(name) {
+                continue;
+            }
+
+            let hint = edges(&mut opened, &format!("secret-footer-hint-{name}"));
+            assert_eq!(hint.2, *natural, "{name} is cut at {width}");
+            assert!(
+                hint.1 <= listing + 0.5,
+                "{name} overflows at {width}: {} > {listing}",
+                hint.1
+            );
+        }
+
+        let summary = edges(&mut opened, "secret-footer-summary");
+        assert!(summary.1 <= listing + 0.5, "summary overflows at {width}");
+        width -= 25.0;
+    }
+
+    assert!(
+        !paths(&mut opened)
+            .iter()
+            .any(|path| path.ends_with("secret-footer-hint-filter")),
+        "the lowest-priority hint is dropped at the minimum width"
+    );
+
+    for kept in ["open", "retrieve"] {
+        let id = format!("secret-footer-hint-{kept}");
+        assert!(
+            paths(&mut opened).iter().any(|path| path.ends_with(&id)),
+            "{kept} is always drawn"
+        );
+    }
+
+    resize(&mut opened, 1500.0);
+    for name in names {
+        let id = format!("secret-footer-hint-{name}");
+        assert!(
+            paths(&mut opened).iter().any(|path| path.ends_with(&id)),
+            "{name} returns when the room does"
+        );
+    }
+}
+
+/// A write landing after the connection is gone lists the history
+/// automatically: a loss the editor already reported is not reported again.
+#[gpui::test]
+fn a_post_save_history_reload_does_not_report_a_known_loss_again(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+    let generation = opened.read(|doc| doc.value_write_generation);
+
+    let profile_id = opened.read(|doc| doc.profile_id);
+    let app_state = opened.app_state.clone();
+    opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id));
+    });
+    opened.update(|doc, _| doc.missing_connection_reported = true);
+
+    let written = SecretValue {
+        version: Some("v-written".to_string()),
+        payload: dbflux_core::SecretPayload::Text(EDITED_VALUE.into()),
+    };
+    opened.update(|doc, cx| doc.apply_value_write(generation, PLAINTEXT_SECRET, Ok(written), cx));
+
+    assert!(
+        opened.reported_errors().is_empty(),
+        "{:?}",
+        opened.reported_errors()
+    );
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+}
+
+/// With the current version unknown, the shown version is named and can go
+/// back, but the pane does not claim it is not the current one.
+#[gpui::test]
+fn an_unknown_current_version_is_not_called_older(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| doc.activate_version(1, cx));
+    opened.strip_reported_versions();
+    let profile_id = opened.read(|doc| doc.profile_id);
+    let app_state = opened.app_state.clone();
+    opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id));
+    });
+    opened.announce_state_change();
+
+    let text = opened.rendered_text();
+    assert!(text.contains("Showing version"), "{text}");
+    assert!(text.contains("Back to current"), "{text}");
+    assert!(!text.contains("not the current version"), "{text}");
+}
+
+/// A region list that loaded empty offers nothing to pick: the configured
+/// region stays visible as a plain chip.
+#[gpui::test]
+fn an_empty_region_list_keeps_the_configured_region_chip(cx: &mut TestAppContext) {
+    let mut opened = open_with_regions(cx, &[]);
+    let paths = opened.rendered_paths();
+
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with("secret-region-plain")),
+        "{paths:?}"
+    );
+    assert!(opened.rendered_text().contains(CURRENT_REGION));
+}
+
+/// Hint widths cached under one typography are forgotten when it changes, so
+/// a hint dropped at a large font is measured again at a smaller one.
+#[test]
+fn footer_hint_widths_are_remeasured_when_the_typography_changes() {
+    use super::render::FooterFit;
+
+    let fit = FooterFit::default();
+    fit.track_typography(gpui::px(48.0));
+    fit.remember_hint("filter", gpui::px(120.0));
+    assert_eq!(fit.hint_width("filter"), Some(gpui::px(120.0)));
+
+    fit.track_typography(gpui::px(48.0));
+    assert_eq!(
+        fit.hint_width("filter"),
+        Some(gpui::px(120.0)),
+        "unchanged typography keeps the measurements"
+    );
+
+    fit.track_typography(gpui::px(36.0));
+    assert_eq!(fit.hint_width("filter"), None);
 }
 
 /// Refresh asks for the regions again after a failed discovery, and a
@@ -5267,7 +5606,10 @@ mod editor_chrome {
         let footer = opened.footer_text();
         assert!(footer.contains("UTF-8"), "{footer}");
         assert!(footer.contains("7 B"), "bytes Save would write: {footer}");
-        assert!(footer.contains(&version), "{footer}");
+        assert!(
+            footer.contains(&crate::secret_store::details::short_version_id(&version)),
+            "{footer}"
+        );
         assert!(footer.contains("2 lines changed"), "{footer}");
         assert!(
             footer.contains("Ln 1, Col 1") || footer.contains("Ln 2, Col"),
@@ -6735,28 +7077,89 @@ fn a_history_retry_without_a_connection_is_reported_once(cx: &mut TestAppContext
     assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
 }
 
-/// A historical retrieval that fails shows its error and neither the
-/// older-value banner nor Back to current.
+/// A historical retrieval that fails replaces the loaded historical value
+/// with its error: neither the older-value banner nor Back to current stays.
 #[gpui::test]
 fn a_failed_historical_retrieval_shows_no_older_value_banner(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.select(KEY_VALUE_SECRET);
-    opened.update(|doc, cx| {
-        doc.value_version = Some("v-previous".to_string());
-        doc.value = ValueState::Failed(ValueFailure {
-            message: "retrieval refused".to_string(),
-            correlation_id: Uuid::now_v7(),
-            decrypt_denied: false,
-        });
-        cx.notify();
-    });
+    opened.update(|doc, cx| doc.activate_version(1, cx));
 
+    assert_eq!(opened.shown_password().as_deref(), Some(PREVIOUS_PASSWORD));
     let text = opened.rendered_text();
-    assert!(text.contains("retrieval refused"), "{text}");
+    assert!(text.contains("Showing version"), "{text}");
+    assert!(opened.read(|doc| doc.can_return_to_current()));
+
+    // The fake store has no such version, so the retrieval fails.
+    opened.update(|doc, cx| doc.retrieve_version(Some("v-vanished".to_string()), cx));
+
+    assert_eq!(opened.shown_password(), None);
+    assert!(opened.read(|doc| matches!(doc.value(), ValueState::Failed(_))));
+    let text = opened.rendered_text();
+    assert!(text.contains("no version v-vanished"), "{text}");
     assert!(!text.contains("Showing version"), "{text}");
     assert!(!text.contains("Back to current"), "{text}");
     assert!(!opened.read(|doc| doc.can_return_to_current()));
     assert!(!opened.pane_action("secret-version-current").enabled);
+}
+
+/// A connection replaced while an older version is shown leaves the current
+/// version unknown; the older value still names its version and can go back.
+#[gpui::test]
+fn an_older_value_keeps_its_banner_when_the_current_version_is_unknown(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| doc.activate_version(1, cx));
+    opened.strip_reported_versions();
+
+    let profile_id = opened.read(|doc| doc.profile_id);
+    let app_state = opened.app_state.clone();
+    opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id));
+    });
+    opened.announce_state_change();
+
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+    assert_eq!(
+        opened.read(|doc| doc.current_version_id().map(str::to_string)),
+        None
+    );
+    assert_eq!(opened.shown_password().as_deref(), Some(PREVIOUS_PASSWORD));
+    assert_eq!(
+        opened.read(|doc| doc.shown_older_version().map(str::to_string)),
+        Some("v-previous".to_string())
+    );
+    assert!(opened.read(|doc| doc.can_return_to_current()));
+
+    let text = opened.rendered_text();
+    assert!(text.contains("Showing version"), "{text}");
+    assert!(text.contains("v-previous"), "{text}");
+    assert!(text.contains("Back to current"), "{text}");
+}
+
+/// The automatic reload a connection change triggers stays quiet about a
+/// loss the editor already reported; a listing the user asks for reports it.
+#[gpui::test]
+fn an_explicit_history_retry_reports_a_missing_connection_again(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+
+    let profile_id = opened.read(|doc| doc.profile_id);
+    let app_state = opened.app_state.clone();
+    opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id));
+    });
+    opened.start_edit();
+    assert_eq!(opened.reported_errors().len(), 1);
+
+    opened.announce_state_change();
+    assert_eq!(opened.reported_errors().len(), 1, "automatic reload");
+
+    opened.update(|doc, cx| doc.load_versions(PLAINTEXT_SECRET.to_string(), cx));
+    let reported = opened.reported_errors();
+    assert_eq!(reported.len(), 2, "{reported:?}");
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
 }
 
 // -- Value editor: JSON key/value secrets -----------------------------------
@@ -7167,6 +7570,56 @@ mod editor_review {
         }
     }
 
+    const UUID_VERSION: &str = "2f004766-3e70-4b10-ad74-b8419267a117";
+
+    /// A UUID version reads short in the footer, every item shares one row,
+    /// no line starts with a separator, and the full id is the tooltip.
+    #[gpui::test]
+    fn the_footer_shortens_a_uuid_version_and_stays_on_one_row(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        opened.select(PLAINTEXT_SECRET);
+        opened.show_value("a\nb");
+        opened.update(|doc, _cx| {
+            if let ValueState::Loaded(value) = &mut doc.value {
+                value.version = Some(UUID_VERSION.to_string());
+            }
+        });
+        opened.start_edit();
+        opened.set_editor_text("a\nchanged");
+
+        let footer = opened.footer_text();
+        assert!(footer.contains("2f004766…"), "{footer}");
+        assert!(!footer.contains(UUID_VERSION), "{footer}");
+
+        let tops: Vec<f32> = [
+            "secret-value-editor-footer-summary",
+            "secret-value-editor-footer-version",
+        ]
+        .iter()
+        .map(|id| f32::from(opened.element_bounds(id).origin.y))
+        .collect();
+        assert!(
+            (tops[0] - tops[1]).abs() < 1.5, // guardrail-allow: test tolerance, not spacing
+            "the summary and the version share one row: {tops:?}"
+        );
+
+        // No wrapped line starts with a separator: the first item of each
+        // group is drawn without one.
+        let summary = opened
+            .element_text_and_top("secret-value-editor-footer-summary")
+            .0;
+        let position = opened
+            .element_text_and_top("secret-value-editor-footer-position")
+            .0;
+        assert!(!summary.trim_start().starts_with('·'), "{summary}");
+        assert!(!position.trim_start().starts_with('·'), "{position}");
+
+        assert_eq!(
+            hover_tooltip(&mut opened, "secret-value-editor-footer-version"),
+            UUID_VERSION
+        );
+    }
+
     /// The Formatted hint describes what Save does for both stored layouts.
     #[gpui::test]
     fn the_formatted_hint_describes_both_layouts(cx: &mut TestAppContext) {
@@ -7215,6 +7668,122 @@ mod editor_review {
         open_find(&mut opened);
         opened.rendered_paths();
         aligned(&mut opened, "find open");
+    }
+
+    /// The first frame, before the textarea reports any bounds, puts gutter
+    /// row 0 where the textarea's padded text will start.
+    #[gpui::test]
+    fn the_first_frame_gutter_starts_at_the_padded_text_origin(cx: &mut TestAppContext) {
+        #[derive(Default)]
+        struct GutterRowTops(std::sync::Mutex<Vec<gpui::Pixels>>);
+
+        impl gpui::FrameObserver for GutterRowTops {
+            fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
+                let top = frame
+                    .nodes()
+                    .find(|(_, node)| node.path().ends_with("secret-value-editor-line-0-number"))
+                    .map(|(_, node)| node.bounds().origin.y);
+
+                if let Some(top) = top {
+                    self.0
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push(top);
+                }
+            }
+        }
+
+        let mut opened = open_hosted(cx);
+        opened.select(PLAINTEXT_SECRET);
+        opened.show_value("a\nb");
+
+        let tops = std::sync::Arc::new(GutterRowTops::default());
+        opened
+            .window
+            .update(|window, _| window.observe_frames(&tops));
+
+        let doc = opened.doc.clone();
+        opened
+            .window
+            .update(|window, cx| doc.update(cx, |doc, cx| doc.start_value_edit(window, cx)));
+        opened.window.run_until_parked();
+        opened.rendered_paths();
+
+        let tops = tops
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let (first, settled) = (tops[0], *tops.last().expect("frames drawn"));
+
+        assert!(
+            (first - settled).abs() < gpui::px(0.5), // guardrail-allow: test tolerance, not spacing
+            "first frame {first:?} vs settled {settled:?}: {tops:?}"
+        );
+
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let glyph = opened
+            .window
+            .update(|_, cx| editor.read(cx).range_to_bounds(&(0..1)))
+            .expect("text laid out")
+            .origin
+            .y;
+        assert!(
+            (first - glyph).abs() < gpui::px(1.5), // guardrail-allow: test tolerance, not spacing
+            "first frame {first:?} vs the first glyph {glyph:?}"
+        );
+    }
+
+    /// Scrolling a long value keeps gutter row N beside text line N, with
+    /// the Find panel closed and open.
+    #[gpui::test]
+    fn the_gutter_follows_the_text_while_scrolled(cx: &mut TestAppContext) {
+        let lines: Vec<String> = (0..80).map(|i| format!("l{i}")).collect();
+        let text = lines.join("\n");
+        let mut opened = open_hosted(cx);
+        start(&mut opened, &text, &text);
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+
+        let scroll_and_check = |opened: &mut Opened<'_>, stage: &str| {
+            let line_height = opened
+                .window
+                .update(|_, cx| editor.read(cx).line_height())
+                .expect("text laid out");
+            opened.window.update(|_, cx| {
+                editor.update(cx, |state, cx| {
+                    state.set_scroll_offset(gpui::point(gpui::px(0.), -line_height * 10.0), cx)
+                });
+            });
+            opened.window.run_until_parked();
+            opened.rendered_paths();
+            opened.rendered_paths();
+
+            for line in [11usize, 13] {
+                let offset = lines[..line]
+                    .iter()
+                    .map(|text| text.len() + 1)
+                    .sum::<usize>();
+                let glyph = opened
+                    .window
+                    .update(|_, cx| editor.read(cx).range_to_bounds(&(offset..offset + 1)))
+                    .expect("text laid out")
+                    .origin
+                    .y;
+                let gutter = opened
+                    .element_bounds(&format!("secret-value-editor-line-{line}-number"))
+                    .origin
+                    .y;
+                assert!(
+                    (gutter - glyph).abs() < gpui::px(1.5), // guardrail-allow: test tolerance, not spacing
+                    "{stage}, line {line}: gutter {gutter:?} vs text {glyph:?}"
+                );
+            }
+        };
+
+        opened.rendered_paths();
+        scroll_and_check(&mut opened, "closed");
+        open_find(&mut opened);
+        scroll_and_check(&mut opened, "find open");
     }
 }
 
