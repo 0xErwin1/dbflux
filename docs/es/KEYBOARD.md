@@ -423,6 +423,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `r`                                           | Renombrar / editar                         |
 | `e` | Editar el valor del secreto seleccionado en el documento de AWS Secrets: recupera antes el valor si no está cargado (la recuperación se audita) y luego abre el editor; solo cuando se puede editar (texto sin formato, no gestionado por otro servicio, sin eliminación programada, en un almacén que acepta escrituras) |
 | `b` | Revertir el secreto seleccionado a su versión anterior más reciente en el documento de AWS Secrets (pregunta antes; solo en un almacén con etiquetas de etapa, para un secreto que no gestiona otro servicio ni tiene la eliminación programada) |
+| `m` → Abrir en una pestaña | Abre el secreto seleccionado del documento de AWS Secrets en su propia pestaña (también con el botón de expandir del panel de detalles y la opción Abrir en una pestaña del menú de la fila). En esa pestaña, `e`, `b`, `x` y `F5` actúan sobre su único secreto como en el listado. Una pestaña cuya región difiere de la de la conexión, o cuyo secreto fue eliminado, no lee ni escribe nada y explica por qué |
 | `o`                                           | Añadir fila                                |
 | `y`                                           | Copiar fila                                |
 | `i`                                           | Alternar la vista de registro (una fila)   |
