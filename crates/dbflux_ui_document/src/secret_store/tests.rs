@@ -7968,6 +7968,22 @@ mod details_design {
         assert_eq!(kind_chip("YWJjZA=="), "text · 1 line");
     }
 
+    /// A line whose value is only `=` characters is an assignment when other
+    /// lines are assignments too; the base64 reading holds only for a value
+    /// that is one bare token.
+    #[test]
+    fn a_padding_only_line_among_assignments_keeps_the_value_a_dotenv() {
+        assert_eq!(kind_chip("A=1\nPAD=="), "dotenv · 2 lines");
+        assert_eq!(kind_chip("PAD==\nA=1"), "dotenv · 2 lines");
+        assert_eq!(kind_chip("# padding\nA=1\nPAD=\n"), "dotenv · 3 lines");
+        assert_eq!(kind_chip("YWJj=="), "text · 1 line");
+        assert_eq!(
+            kind_chip("# a comment\nYWJj=="),
+            "dotenv · 2 lines",
+            "a comment line makes it more than one bare token"
+        );
+    }
+
     fn node_bounds(opened: &mut Opened<'_>, id: &str) -> Option<gpui::Bounds<gpui::Pixels>> {
         let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
         let frame = capture.frame(opened.window);
