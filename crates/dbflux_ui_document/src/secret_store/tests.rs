@@ -7,6 +7,7 @@ use super::listing::{
     AUTO_CONTINUE_ENTRY_LIMIT, LARGEST_PAGE_ENTRIES, SecretListing, child_path_label,
     keeps_loading, parent_path, path_segments,
 };
+use super::render::loaded_label;
 use super::value::{
     MASK, RetrievalTarget, RetrievedValue, ValueContent, ValueFailure, encode_base64,
     value_retrieval_event,
@@ -16,8 +17,8 @@ use super::write::{
     SECRET_VALUE_WRITTEN_ACTION, SecretWriteFailure, put_secret_value,
 };
 use super::{
-    DetailsState, PathMode, SecretRowKey, SecretStoreDocument, VALUE_RETRIEVE_FAILED_ACTION,
-    VALUE_RETRIEVED_ACTION, ValueState, ValueView,
+    DetailsState, PathMode, SecretRowKey, SecretStoreDocument, StoreCall,
+    VALUE_RETRIEVE_FAILED_ACTION, VALUE_RETRIEVED_ACTION, ValueState, ValueView, VersionsState,
 };
 use crate::keyboard_test_support::{connected_app_state, init_keyboard_runtime};
 use dbflux_app::keymap::Command;
@@ -25,8 +26,9 @@ use dbflux_core::observability::{EventCategory, EventRecord, EventSink, EventSin
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
     Connection, DbError, DbKind, FormattedError, MutationPolicy, ReadOnlyReason, SecretDetails,
-    SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest, SecretStoreCapabilities,
-    SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretValue, SecretVersionStage,
+    SecretListPage, SecretListRequest, SecretPayload, SecretPutRequest, SecretRotation,
+    SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretValue,
+    SecretVersionStage,
 };
 use dbflux_test_support::fake_driver::{
     FAKE_KMS_DENIED_MESSAGE, FAKE_PARAMETER_STORE_ID, FAKE_SECRET_BINARY, FAKE_SECRET_PASSWORD,
@@ -62,9 +64,17 @@ struct Opened<'a> {
 }
 
 fn open<'a>(cx: &'a mut TestAppContext, store_id: &str, path: Option<&str>) -> Opened<'a> {
+    open_with(cx, FakeDriver::new(DbKind::AwsSecrets), store_id, path)
+}
+
+fn open_with<'a>(
+    cx: &'a mut TestAppContext,
+    driver: FakeDriver,
+    store_id: &str,
+    path: Option<&str>,
+) -> Opened<'a> {
     init_keyboard_runtime(cx);
 
-    let driver = FakeDriver::new(DbKind::AwsSecrets);
     let (app_state, profile_id) = connected_app_state(cx, &driver, "prod-aws");
 
     // `report_error` reaches the error seam through the `AppStateGlobal`
@@ -771,6 +781,598 @@ fn the_loaded_count_agrees_with_its_number() {
     assert_eq!(super::render::loaded_label(0), "0 secrets loaded");
 }
 
+fn rotation(enabled: bool, schedule: Option<&str>) -> SecretRotation {
+    SecretRotation {
+        enabled,
+        schedule: schedule.map(str::to_string),
+        window: None,
+        function: None,
+        last_rotated: None,
+        next_rotation: None,
+    }
+}
+
+/// The rotation column is a chip: success-toned with the schedule in words
+/// while rotation is on, a short form for a cron schedule, neutral "Off"
+/// otherwise.
+#[test]
+fn the_rotation_chip_reads_the_schedule_and_the_tone() {
+    use super::list::rotation_chip;
+    use dbflux_components::primitives::BadgeTone;
+
+    let chip = rotation_chip(Some(&rotation(true, Some("rate(30 days)"))));
+    assert_eq!(
+        (chip.label.as_str(), chip.tone),
+        ("Every 30 days", BadgeTone::Success)
+    );
+
+    let chip = rotation_chip(Some(&rotation(true, Some("cron(0 4 ? * SUN *)"))));
+    assert_eq!(
+        (chip.label.as_str(), chip.tone),
+        ("On a schedule", BadgeTone::Success)
+    );
+
+    let chip = rotation_chip(Some(&rotation(true, None)));
+    assert_eq!(
+        (chip.label.as_str(), chip.tone),
+        ("Enabled", BadgeTone::Success)
+    );
+
+    for off in [Some(rotation(false, Some("rate(30 days)"))), None] {
+        let chip = rotation_chip(off.as_ref());
+        assert_eq!(
+            (chip.label.as_str(), chip.tone),
+            ("Off", BadgeTone::Neutral)
+        );
+    }
+}
+
+/// "Oct 1, 03:12" in the current year; the year joins it otherwise.
+#[test]
+fn the_short_time_drops_the_year_only_in_the_current_year() {
+    use super::list::short_time_label;
+    use dbflux_core::chrono::{Local, TimeZone as _};
+
+    let time = Local
+        .with_ymd_and_hms(2026, 10, 1, 3, 12, 0)
+        .single()
+        .expect("a local time");
+
+    assert_eq!(short_time_label(time, 2026), "Oct 1, 03:12");
+    assert_eq!(short_time_label(time, 2027), "Oct 1, 2026, 03:12");
+}
+
+/// A hierarchical store counts paths and parameters under the listed path; a
+/// flat listing has no paths; any other store counts secrets.
+#[test]
+fn the_loaded_summary_names_what_the_store_holds() {
+    use super::list::loaded_summary;
+
+    let summary = |hierarchical, mode, path: Option<&str>, paths, entries| {
+        loaded_summary(hierarchical, mode, path, paths, entries)
+    };
+
+    assert_eq!(
+        summary(true, PathMode::Tree, Some("/app/prod/shop/"), 2, 7),
+        "2 paths · 7 parameters loaded under /app/prod/shop/"
+    );
+    assert_eq!(
+        summary(true, PathMode::Tree, None, 1, 1),
+        "1 path · 1 parameter loaded under /"
+    );
+    assert_eq!(
+        summary(true, PathMode::Flat, Some("/app/"), 3, 5),
+        "5 parameters under /app/"
+    );
+    assert_eq!(
+        summary(false, PathMode::Tree, None, 0, 5),
+        "5 secrets loaded"
+    );
+}
+
+/// The footer of a Parameter Store level shows the counts the listing holds,
+/// and its key hints name what each key does: Ctrl+C copies the ARN.
+#[gpui::test]
+fn the_footer_counts_paths_and_parameters_and_names_the_keys(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+
+    let (paths, parameters) =
+        opened.read(|doc| (doc.listing().child_paths.len(), doc.listing().entries.len()));
+    assert!(
+        paths > 0 && parameters > 0,
+        "the level holds paths and parameters"
+    );
+
+    let text = opened.rendered_text();
+    let expected = format!(
+        "{paths} path{} · {parameters} parameter{} loaded under /app/prod/",
+        if paths == 1 { "" } else { "s" },
+        if parameters == 1 { "" } else { "s" }
+    );
+    assert!(text.contains(&expected), "{expected}: {text}");
+    assert!(!text.contains("secrets loaded"), "{text}");
+    assert!(text.contains("copy ARN"), "{text}");
+    assert!(!text.contains("copy ID"), "{text}");
+    assert!(text.contains("up"), "{text}");
+
+    let status = opened
+        .window
+        .update(|_, cx| opened.doc.read(cx).loaded_summary());
+    assert_eq!(status, expected);
+}
+
+/// A flat store keeps counting secrets, and its rows show the rotation chips
+/// and the short change time.
+#[gpui::test]
+fn the_secrets_footer_and_rows_follow_the_design(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    let count = opened.read(|doc| doc.listing().entries.len());
+    let text = opened.rendered_text();
+
+    assert!(text.contains(&loaded_label(count)), "{text}");
+    assert!(text.contains("Every 30 days"), "{text}");
+    assert!(text.contains("Off"), "{text}");
+    assert!(text.contains("copy ARN"), "{text}");
+    assert!(
+        !text.contains("2026-09-20"),
+        "the long form is gone: {text}"
+    );
+
+    // The fixture's change time, in local time and under the current-year
+    // rule, in the row of its own secret.
+    use dbflux_core::chrono::{Datelike as _, Local, TimeZone as _, Utc};
+    let changed = Utc
+        .with_ymd_and_hms(2026, 9, 20, 3, 0, 0)
+        .single()
+        .expect("fixture time");
+    let local = changed.with_timezone(&Local);
+    let expected = if local.year() == Local::now().year() {
+        local.format("%b %-d, %H:%M").to_string()
+    } else {
+        local.format("%b %-d, %Y, %H:%M").to_string()
+    };
+    assert!(
+        text.lines()
+            .any(|line| line.contains("prod/api/credentials") && line.contains(&expected)),
+        "{expected} in the row of prod/api/credentials: {text}"
+    );
+}
+
+/// The breadcrumb keeps its natural width when the document narrows: the
+/// search field gives way first, so the path never reads "aws-pr…".
+#[gpui::test]
+fn the_breadcrumb_keeps_its_width_while_the_search_narrows(cx: &mut TestAppContext) {
+    use dbflux_ui_base::keyboard_coverage::FrameCapture;
+
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+
+    let widths = |opened: &mut Opened<'_>| -> (f32, f32) {
+        let capture = FrameCapture::observe(opened.window);
+        let frame = capture.frame(opened.window);
+        let width_of = |id: &str| {
+            frame
+                .nodes()
+                .find(|(_, node)| node.id() == id)
+                .map(|(_, node)| f32::from(node.bounds().size.width))
+                .unwrap_or_else(|| panic!("no element {id}"))
+        };
+
+        (width_of("secret-identity"), width_of("secret-search"))
+    };
+
+    opened
+        .window
+        .simulate_resize(gpui::size(gpui::px(1500.0), gpui::px(800.0)));
+    opened.window.run_until_parked();
+    let (wide_breadcrumb, wide_search) = widths(&mut opened);
+
+    opened
+        .window
+        .simulate_resize(gpui::size(gpui::px(1100.0), gpui::px(800.0)));
+    opened.window.run_until_parked();
+    let (narrow_breadcrumb, narrow_search) = widths(&mut opened);
+
+    assert!(
+        narrow_search < wide_search,
+        "the search narrows: {wide_search} -> {narrow_search}"
+    );
+    assert_eq!(
+        wide_breadcrumb, narrow_breadcrumb,
+        "the breadcrumb does not narrow"
+    );
+}
+
+/// Down to the document's minimum width (listing minimum plus details
+/// minimum) Refresh stays on screen and keeps its width, as do the region
+/// chip and the store identity. The search narrows first, to its minimum;
+/// only then does the path give way.
+#[gpui::test]
+fn the_header_narrows_search_first_then_path_and_keeps_refresh(cx: &mut TestAppContext) {
+    use dbflux_components::tokens::SecretStoreMetrics;
+    use dbflux_ui_base::keyboard_coverage::FrameCapture;
+
+    let mut opened = open_region_store(
+        cx,
+        FAKE_PARAMETER_STORE_ID,
+        Some("/app/prod/"),
+        &[OTHER_REGION, CURRENT_REGION],
+        None,
+    );
+
+    // (width, right edge) of refresh, region, path and search.
+    let measure = |opened: &mut Opened<'_>, width: f32| -> Vec<(f32, f32)> {
+        opened
+            .window
+            .simulate_resize(gpui::size(gpui::px(width), gpui::px(800.0)));
+        opened.window.run_until_parked();
+
+        let capture = FrameCapture::observe(opened.window);
+        let frame = capture.frame(opened.window);
+
+        [
+            "secret-refresh",
+            "secret-region",
+            "secret-path",
+            "secret-search",
+        ]
+        .iter()
+        .map(|id| {
+            let suffix = format!(".{id}");
+            let bounds = frame
+                .nodes()
+                .filter(|(_, node)| node.path().ends_with(&suffix))
+                .min_by_key(|(_, node)| node.path().len())
+                .map(|(_, node)| node.bounds())
+                .unwrap_or_else(|| panic!("no element {id} at {width}"));
+
+            (
+                f32::from(bounds.size.width),
+                f32::from(bounds.origin.x + bounds.size.width),
+            )
+        })
+        .collect()
+    };
+
+    let rem = opened.window.update(|window, _| window.rem_size());
+    let minimum = f32::from(SecretStoreMetrics::LISTING_MIN_WIDTH.to_pixels(rem))
+        + f32::from(SecretStoreMetrics::DETAILS_MIN_WIDTH);
+    let search_minimum = f32::from(SecretStoreMetrics::SEARCH_MIN_WIDTH.to_pixels(rem));
+
+    let wide = measure(&mut opened, 1500.0);
+    let mut previous_path = wide[2].0;
+    let mut path_shrunk_above_search_minimum = false;
+    let mut width = 1500.0;
+
+    while width >= minimum {
+        let sizes = measure(&mut opened, width);
+
+        assert!(
+            sizes[0].1 <= width + 0.5,
+            "Refresh is pushed out of view at {width}: right edge {}",
+            sizes[0].1
+        );
+        assert_eq!(sizes[0].0, wide[0].0, "Refresh keeps its width at {width}");
+        assert_eq!(
+            sizes[1].0, wide[1].0,
+            "the region keeps its width at {width}"
+        );
+
+        if sizes[2].0 < previous_path - 0.5 && sizes[3].0 > search_minimum + 1.0 {
+            path_shrunk_above_search_minimum = true;
+        }
+        previous_path = sizes[2].0;
+        width -= 50.0;
+    }
+
+    assert!(
+        !path_shrunk_above_search_minimum,
+        "the path narrowed while the search was still above its minimum"
+    );
+
+    let narrowest = measure(&mut opened, minimum);
+    assert!(
+        narrowest[2].0 < wide[2].0,
+        "the path gives way at the minimum width: {} -> {}",
+        wide[2].0,
+        narrowest[2].0
+    );
+    assert!(
+        narrowest[3].0 <= search_minimum + 1.0,
+        "the search reached its minimum: {}",
+        narrowest[3].0
+    );
+}
+
+/// The status bar counts what the footer counts, not secrets on a
+/// hierarchical store.
+#[gpui::test]
+fn the_status_bar_uses_the_footer_counts(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+    let expected = opened.read(|doc| doc.loaded_summary());
+    assert!(expected.contains("loaded under /app/prod/"), "{expected}");
+
+    let segments: Vec<String> = opened.window.update(|_, cx| {
+        opened
+            .doc
+            .read(cx)
+            .status_segments(cx)
+            .into_iter()
+            .map(|segment| segment.text.to_string())
+            .collect()
+    });
+
+    assert!(segments.contains(&expected), "{segments:?}");
+    assert!(
+        !segments.iter().any(|text| text.contains("secrets loaded")),
+        "{segments:?}"
+    );
+}
+
+#[test]
+fn a_numeric_version_reads_with_a_v_and_an_opaque_one_is_kept() {
+    use super::render::version_label;
+
+    assert_eq!(version_label(Some("3")), "v3");
+    assert_eq!(version_label(Some("11")), "v11");
+    assert_eq!(
+        version_label(Some("a1b2c3d4-0000-4000-8000-000000000000")),
+        "a1b2c3d4-0000-4000-8000-000000000000"
+    );
+    assert_eq!(version_label(None), "—");
+}
+
+/// The status bar names the listed entries as the footer does: parameters on
+/// a hierarchical store, secrets otherwise.
+#[test]
+fn the_list_timing_uses_the_footer_noun() {
+    use super::render::call_timing_label;
+    use super::{CallTiming, StoreCall};
+
+    let timing = |count, hierarchical| {
+        call_timing_label(CallTiming {
+            call: StoreCall::List {
+                count,
+                hierarchical,
+            },
+            millis: 13,
+        })
+    };
+
+    assert_eq!(timing(4, true), "List · 4 parameters · 13 ms");
+    assert_eq!(timing(1, true), "List · 1 parameter · 13 ms");
+    assert_eq!(timing(4, false), "List · 4 secrets · 13 ms");
+    assert_eq!(timing(1, false), "List · 1 secret · 13 ms");
+}
+
+/// The listing records which noun its call used.
+#[gpui::test]
+fn the_recorded_list_call_follows_the_store_kind(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+    let call = opened.read(|doc| doc.last_call().map(|timing| timing.call));
+    assert!(
+        matches!(
+            call,
+            Some(StoreCall::List {
+                hierarchical: true,
+                ..
+            })
+        ),
+        "{call:?}"
+    );
+    drop(opened);
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    let call = opened.read(|doc| doc.last_call().map(|timing| timing.call));
+    assert!(
+        matches!(
+            call,
+            Some(StoreCall::List {
+                hierarchical: false,
+                ..
+            })
+        ),
+        "{call:?}"
+    );
+}
+
+/// Window-relative (left, right, width) of the outermost element named `id`.
+fn edges(opened: &mut Opened<'_>, id: &str) -> (f32, f32, f32) {
+    use dbflux_ui_base::keyboard_coverage::FrameCapture;
+
+    let capture = FrameCapture::observe(opened.window);
+    let frame = capture.frame(opened.window);
+    let suffix = format!(".{id}");
+    let bounds = frame
+        .nodes()
+        .filter(|(_, node)| node.path().ends_with(&suffix))
+        .min_by_key(|(_, node)| node.path().len())
+        .map(|(_, node)| node.bounds())
+        .unwrap_or_else(|| panic!("no element {id}"));
+
+    let left = f32::from(bounds.origin.x);
+    let width = f32::from(bounds.size.width);
+    (left, left + width, width)
+}
+
+fn resize(opened: &mut Opened<'_>, width: f32) {
+    opened
+        .window
+        .simulate_resize(gpui::size(gpui::px(width), gpui::px(800.0)));
+    opened.window.run_until_parked();
+}
+
+fn minimum_document_width(opened: &mut Opened<'_>) -> f32 {
+    use dbflux_components::tokens::SecretStoreMetrics;
+
+    let rem = opened.window.update(|window, _| window.rem_size());
+    f32::from(SecretStoreMetrics::LISTING_MIN_WIDTH.to_pixels(rem))
+        + f32::from(SecretStoreMetrics::DETAILS_MIN_WIDTH)
+}
+
+/// With a long profile name in a narrow document the identity segment gives
+/// way (its full text stays reachable), and the region chip stays inside the
+/// header at its natural width.
+#[gpui::test]
+fn a_long_profile_name_never_pushes_the_region_out(cx: &mut TestAppContext) {
+    let name = "production-payments-eu-west-primary-account-cluster-01";
+    let mut opened = open_named_region_store(
+        cx,
+        name,
+        FAKE_PARAMETER_STORE_ID,
+        Some("/app/prod/"),
+        &[OTHER_REGION, CURRENT_REGION],
+        None,
+    );
+
+    resize(&mut opened, 1500.0);
+    let wide_region = edges(&mut opened, "secret-region").2;
+    let wide_identity = edges(&mut opened, "secret-identity").2;
+
+    let minimum = minimum_document_width(&mut opened);
+    let mut width = 1500.0;
+    while width >= minimum {
+        resize(&mut opened, width);
+        let region = edges(&mut opened, "secret-region");
+        let refresh = edges(&mut opened, "secret-refresh");
+
+        assert_eq!(
+            region.2, wide_region,
+            "the region keeps its width at {width}"
+        );
+        assert!(
+            region.1 <= refresh.0 + 0.5,
+            "the region runs into Refresh at {width}: {} > {}",
+            region.1,
+            refresh.0
+        );
+        width -= 50.0;
+    }
+
+    resize(&mut opened, minimum);
+    assert!(
+        edges(&mut opened, "secret-identity").2 < wide_identity,
+        "the identity gives way at the minimum width"
+    );
+    assert!(
+        opened.rendered_text().contains(name),
+        "the full name stays reachable: {}",
+        opened.rendered_text()
+    );
+}
+
+/// The rotation chip stays inside its column while the listing narrows, so it
+/// never reaches Last changed.
+#[gpui::test]
+fn the_rotation_chip_stays_in_its_cell(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    let chip = "secret-rotation-chip-prod/api/credentials";
+    let cell = "secret-rotation-cell-prod/api/credentials";
+
+    let minimum = minimum_document_width(&mut opened);
+    let mut width = 1500.0;
+    let mut clipped = false;
+    while width >= minimum {
+        resize(&mut opened, width);
+        let chip_edges = edges(&mut opened, chip);
+        let cell_edges = edges(&mut opened, cell);
+
+        assert!(
+            chip_edges.1 <= cell_edges.1 + 0.5,
+            "the chip runs past its cell at {width}: {} > {}",
+            chip_edges.1,
+            cell_edges.1
+        );
+        clipped |= cell_edges.2 < 60.0;
+        width -= 50.0;
+    }
+
+    assert!(clipped, "the listing narrows enough to squeeze the cell");
+}
+
+/// The footer summary truncates while the key hints keep their width and
+/// stay inside the listing.
+#[gpui::test]
+fn the_footer_summary_truncates_and_the_hints_keep_their_space(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
+    let hint = "secret-footer-hint-filter";
+
+    resize(&mut opened, 1500.0);
+    let wide_hint = edges(&mut opened, hint).2;
+    let wide_summary = edges(&mut opened, "secret-footer-summary").2;
+
+    let minimum = minimum_document_width(&mut opened);
+    let mut width = 1500.0;
+    while width >= minimum {
+        resize(&mut opened, width);
+        let hint_edges = edges(&mut opened, hint);
+        let summary = edges(&mut opened, "secret-footer-summary");
+
+        assert_eq!(
+            hint_edges.2, wide_hint,
+            "the hint keeps its width at {width}"
+        );
+        assert!(
+            summary.1 <= edges(&mut opened, "secret-footer-hint-open").0 + 0.5,
+            "the summary runs into the hints at {width}"
+        );
+        assert!(
+            hint_edges.1 <= width,
+            "the hints leave the window at {width}"
+        );
+        width -= 50.0;
+    }
+
+    resize(&mut opened, minimum);
+    assert!(
+        edges(&mut opened, "secret-footer-summary").2 < wide_summary,
+        "the summary gives way at the minimum width"
+    );
+    assert!(
+        opened.rendered_text().contains("loaded under /app/prod/"),
+        "the full summary stays reachable"
+    );
+}
+
+/// Refresh asks for the regions again after a failed discovery, and a
+/// successful answer brings the picker back.
+#[gpui::test]
+fn refresh_retries_a_failed_region_discovery(cx: &mut TestAppContext) {
+    let mut opened = open_region_doc(
+        cx,
+        &[OTHER_REGION, CURRENT_REGION],
+        Some("AccessDenied".to_string()),
+    );
+    assert!(matches!(
+        opened.read(|doc| doc.regions().clone()),
+        RegionListState::Failed(_)
+    ));
+    assert_eq!(opened.driver.available_regions_calls(), 1);
+
+    opened.driver.set_region_list_error(None);
+    opened.update(|doc, cx| doc.refresh(cx));
+    opened.window.run_until_parked();
+
+    assert_eq!(opened.driver.available_regions_calls(), 2);
+    assert!(matches!(
+        opened.read(|doc| doc.regions().clone()),
+        RegionListState::Loaded(_)
+    ));
+
+    use dbflux_ui_base::keyboard_coverage::{FrameCapture, clickable_elements};
+    let capture = FrameCapture::observe(opened.window);
+    let frame = capture.frame(opened.window);
+    assert!(
+        clickable_elements(&frame)
+            .into_iter()
+            .any(|element| element.path.ends_with("secret-region.dropdown-trigger")),
+        "the picker is interactive again"
+    );
+
+    // A refresh with a loaded list does not ask again.
+    opened.update(|doc, cx| doc.refresh(cx));
+    assert_eq!(opened.driver.available_regions_calls(), 2);
+}
+
 #[gpui::test]
 fn the_reveal_all_button_names_what_it_will_do(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
@@ -1412,10 +2014,10 @@ fn the_stored_json_layout_is_preserved(cx: &mut TestAppContext) {
     opened.start_edit();
     assert_eq!(
         opened.editor_text(),
-        compact,
-        "the editor opens with the stored text"
+        "[\n  \"token-a\",\n  \"token-b\"\n]",
+        "Formatted opens the stored text indented"
     );
-    opened.set_editor_text(compact_edited);
+    opened.set_editor_text("[\n  \"token-a\",\n  \"token-c\"\n]");
     opened.save_edit();
     assert_eq!(
         opened.written_values(),
@@ -2052,6 +2654,7 @@ const OTHER_REGION: &str = "eu-west-1";
 fn connected_aws_app_state(
     cx: &mut TestAppContext,
     driver: &FakeDriver,
+    name: &str,
 ) -> (Entity<AppStateEntity>, Uuid) {
     let profile_id = Uuid::new_v4();
 
@@ -2065,7 +2668,7 @@ fn connected_aws_app_state(
     });
 
     let profile = dbflux_core::ConnectionProfile::new(
-        "prod-aws",
+        name,
         dbflux_core::DbConfig::AwsSecrets {
             region: CURRENT_REGION.to_string(),
             profile: None,
@@ -2116,11 +2719,32 @@ fn open_region_doc<'a>(
     regions: &[&str],
     list_error: Option<String>,
 ) -> Opened<'a> {
+    open_region_store(cx, FAKE_SECRETS_STORE_ID, None, regions, list_error)
+}
+
+fn open_region_store<'a>(
+    cx: &'a mut TestAppContext,
+    store_id: &str,
+    path: Option<&str>,
+    regions: &[&str],
+    list_error: Option<String>,
+) -> Opened<'a> {
+    open_named_region_store(cx, "prod-aws", store_id, path, regions, list_error)
+}
+
+fn open_named_region_store<'a>(
+    cx: &'a mut TestAppContext,
+    profile_name: &str,
+    store_id: &str,
+    path: Option<&str>,
+    regions: &[&str],
+    list_error: Option<String>,
+) -> Opened<'a> {
     init_keyboard_runtime(cx);
 
     let driver = FakeDriver::new(DbKind::AwsSecrets).with_region_switch(regions);
     driver.set_region_list_error(list_error);
-    let (app_state, profile_id) = connected_aws_app_state(cx, &driver);
+    let (app_state, profile_id) = connected_aws_app_state(cx, &driver, profile_name);
 
     // `report_error` reaches the error seam through the `AppStateGlobal`
     // registration; without it a reported failure is invisible to these
@@ -2132,10 +2756,11 @@ fn open_region_doc<'a>(
     });
 
     let state = app_state.clone();
-    let store_id = FAKE_SECRETS_STORE_ID.to_string();
+    let store_id = store_id.to_string();
+    let path = path.map(str::to_string);
 
     let (doc, window) = cx.add_window_view(move |window, cx| {
-        SecretStoreDocument::new(profile_id, store_id, None, state, window, cx)
+        SecretStoreDocument::new(profile_id, store_id, path, state, window, cx)
     });
     window.run_until_parked();
 
@@ -2190,44 +2815,50 @@ fn the_region_control_offers_the_regions_the_connection_lists(cx: &mut TestAppCo
     assert!(text.contains(CURRENT_REGION), "{text}");
 }
 
-/// A failed region listing is reported through the error seam, shown with a
-/// retry and never as an empty picker; the region itself stays visible as a
-/// breadcrumb while the picker cannot be offered. Retrying asks the
-/// connection again.
+/// A store that cannot list its regions (no EC2 behind it, or an IAM user
+/// without `ec2:DescribeRegions`) is not an error the user caused: no toast,
+/// no error text in the header, no retry. The region the connection is
+/// configured with stays visible as a plain chip, without a dropdown.
 #[gpui::test]
-fn a_failed_region_list_is_reported_and_retriable(cx: &mut TestAppContext) {
+fn a_failed_region_list_falls_back_to_the_configured_region_quietly(cx: &mut TestAppContext) {
     let message = "AccessDenied: not authorized to perform ec2:DescribeRegions";
     let mut opened = open_region_doc(cx, &[CURRENT_REGION], Some(message.to_string()));
 
     assert!(matches!(
         opened.read(|doc| doc.regions().clone()),
-        RegionListState::Failed(text) if text.contains(message)
+        RegionListState::Failed(_)
     ));
+    assert_eq!(opened.driver.available_regions_calls(), 1);
 
     let text = opened.rendered_text();
-    assert!(text.contains(message), "{text}");
+    assert!(!text.contains(message), "{text}");
     assert!(
-        text.contains(&dbflux_i18n::t!("document.secret_store.region.retry")),
+        !text.contains(&dbflux_i18n::t!("document.secret_store.region.retry")),
         "{text}"
     );
+    assert!(!text.contains("Retry"), "{text}");
     assert!(
         text.contains(CURRENT_REGION),
-        "the region stays visible while the picker cannot be offered: {text}"
+        "the configured region stays visible: {text}"
     );
 
     let reported = opened
         .window
         .update(|_, cx| opened.app_state.read(cx).unread_error_count);
-    assert_eq!(reported, 1, "the failed listing must reach the error seam");
+    assert_eq!(reported, 0, "a missing region list is not a user error");
+    assert!(opened.reported_errors().is_empty());
 
-    opened.driver.set_region_list_error(None);
-    opened.update(|doc, cx| doc.load_regions(cx));
-
-    assert_eq!(opened.driver.available_regions_calls(), 2);
-    assert!(matches!(
-        opened.read(|doc| doc.regions().clone()),
-        RegionListState::Loaded(_)
-    ));
+    use dbflux_ui_base::keyboard_coverage::{FrameCapture, clickable_elements};
+    let capture = FrameCapture::observe(opened.window);
+    let frame = capture.frame(opened.window);
+    let paths: Vec<String> = clickable_elements(&frame)
+        .into_iter()
+        .map(|element| element.path)
+        .collect();
+    assert!(
+        !paths.iter().any(|path| path.contains("secret-region")),
+        "no picker and no retry without a region list: {paths:?}"
+    );
 }
 
 /// A successful switch reconnects the profile under the chosen region,
@@ -2486,12 +3117,11 @@ fn the_secret_store_document_is_covered(cx: &mut TestAppContext) {
     );
 }
 
-/// The region picker and the retry of a failed region listing are only
-/// rendered by a region-capable driver, so covering them needs documents of
-/// their own: the surface above renders a driver without `REGION_SWITCH` and
-/// says nothing about either control.
+/// The region picker is only rendered by a region-capable driver, so covering
+/// it needs a document of its own: the surface above renders a driver without
+/// `REGION_SWITCH` and says nothing about it.
 #[gpui::test]
-fn the_region_controls_are_covered(cx: &mut TestAppContext) {
+fn the_region_picker_is_covered(cx: &mut TestAppContext) {
     use crate::keyboard_coverage::SECRET_STORE;
     use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture, clickable_elements};
 
@@ -2528,24 +3158,14 @@ fn the_region_controls_are_covered(cx: &mut TestAppContext) {
             .any(|path| path.ends_with("secret-region.dropdown-trigger")),
         "the picker renders for a region-capable driver: {paths:?}"
     );
-    drop(switchable);
 
-    let mut failing = open_region_doc(cx, &[CURRENT_REGION], Some("AccessDenied".to_string()));
-    let paths = checked_paths(&mut failing);
-    assert!(
-        paths
-            .iter()
-            .any(|path| path.ends_with("secret-region-retry")),
-        "a failed region listing renders its retry: {paths:?}"
-    );
-
-    // Both controls are pane actions too: the entries above validate that the
-    // registry's Menu paths name real entries.
-    let action_ids: Vec<String> = failing.window.update(|_, cx| {
-        failing
+    // The picker is also a pane action: the entry above validates that the
+    // registry's Menu path names a real entry.
+    let action_ids: Vec<String> = switchable.window.update(|_, cx| {
+        switchable
             .doc
             .read(cx)
-            .pane_actions(&failing.doc)
+            .pane_actions(&switchable.doc)
             .into_iter()
             .map(|action| action.id.to_string())
             .collect()
@@ -2553,10 +3173,6 @@ fn the_region_controls_are_covered(cx: &mut TestAppContext) {
     assert!(
         action_ids.iter().any(|id| id == "secret-region"),
         "the picker has a pane action: {action_ids:?}"
-    );
-    assert!(
-        action_ids.iter().any(|id| id == "secret-region-retry"),
-        "the retry has a pane action: {action_ids:?}"
     );
 }
 
@@ -4065,6 +4681,736 @@ fn a_failing_write_returns_the_correlation_id_its_audit_event_recorded() {
     );
 }
 
+// -- Value editor: line numbers and Formatted / Raw -------------------------
+
+mod editor_layout {
+    use super::*;
+    use crate::secret_store::editor::EditMode;
+    use crate::secret_store::editor::json_layout::{minify, pretty};
+
+    /// Nested, so it opens as plaintext (not key/value), with a string that
+    /// holds repeated spaces and escaped quotes, and a number a parse and
+    /// re-serialize would normalize.
+    const COMPACT: &str = r#"{"db":{"host":"h","note":"a  b \"q\" 77b1-secret"},"n":[1,2.50]}"#;
+
+    const FORMATTED: &str = "{\n  \"db\": {\n    \"host\": \"h\",\n    \"note\": \"a  b \\\"q\\\" 77b1-secret\"\n  },\n  \"n\": [\n    1,\n    2.50\n  ]\n}";
+
+    const COMPACT_EDITED: &str =
+        r#"{"db":{"host":"h2","note":"a  b \"q\" 77b1-secret"},"n":[1,2.50]}"#;
+
+    impl Opened<'_> {
+        fn edit_mode(&mut self) -> Option<EditMode> {
+            self.read(|doc| doc.edit_mode())
+        }
+
+        fn set_mode(&mut self, mode: EditMode) {
+            let doc = self.doc.clone();
+            self.window
+                .update(|window, cx| doc.update(cx, |doc, cx| doc.set_edit_mode(mode, window, cx)));
+            self.window.run_until_parked();
+        }
+
+        /// The gutter line elements the frame drew.
+        fn gutter_lines(&mut self) -> usize {
+            self.rendered_paths()
+                .iter()
+                .filter(|path| {
+                    path.rsplit_once("secret-value-editor-line-")
+                        .is_some_and(|(_, index)| {
+                            !index.is_empty() && index.chars().all(|ch| ch.is_ascii_digit())
+                        })
+                })
+                .count()
+        }
+
+        /// The bounds of the element whose path ends with `suffix`.
+        pub(super) fn element_bounds(&mut self, suffix: &str) -> gpui::Bounds<gpui::Pixels> {
+            let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
+            let frame = capture.frame(self.window);
+
+            frame
+                .nodes()
+                .find(|(_, node)| node.path().ends_with(suffix))
+                .map(|(_, node)| node.bounds())
+                .expect("the element is rendered")
+        }
+
+        pub(super) fn dirty(&mut self) -> bool {
+            let doc = self.doc.clone();
+            self.window
+                .update(|_, cx| doc.read(cx).has_unsaved_value_edits(cx))
+        }
+
+        fn has_path(&mut self, suffix: &str) -> bool {
+            self.rendered_paths()
+                .iter()
+                .any(|path| path.ends_with(suffix))
+        }
+
+        fn edit_json(&mut self, stored: &str) {
+            self.select(PLAINTEXT_SECRET);
+            self.show_value(stored);
+            self.start_edit();
+        }
+    }
+
+    #[test]
+    fn pretty_and_minify_change_only_insignificant_whitespace() {
+        assert_eq!(pretty(COMPACT), FORMATTED);
+        assert_eq!(minify(FORMATTED), COMPACT);
+        assert_eq!(minify(&pretty(COMPACT)), COMPACT);
+        assert_eq!(pretty("{}"), "{}");
+        assert_eq!(
+            pretty(r#"{"a":[],"b":{}}"#),
+            "{\n  \"a\": [],\n  \"b\": {}\n}"
+        );
+        assert_eq!(pretty("42"), "42");
+        assert_eq!(minify(" [ 1 , 2 ] "), "[1,2]");
+    }
+
+    #[gpui::test]
+    fn the_gutter_has_one_number_per_line_and_follows_the_edit(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(PLAINTEXT_SECRET);
+        opened.show_value("a\nb\nc");
+        opened.start_edit();
+        assert_eq!(opened.gutter_lines(), 3);
+
+        opened.set_editor_text("a\nb\nc\nd\ne");
+        assert_eq!(opened.gutter_lines(), 5);
+
+        opened.set_editor_text("only");
+        assert_eq!(opened.gutter_lines(), 1);
+    }
+
+    #[gpui::test]
+    fn the_gutter_scrolls_with_the_editor(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(PLAINTEXT_SECRET);
+        let text = (0..40)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        opened.show_value(&text);
+        opened.start_edit();
+        assert!(
+            opened.gutter_lines() < 40,
+            "only the visible rows are drawn"
+        );
+
+        let first = opened.element_bounds("secret-value-editor-line-3").origin.y;
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        opened.window.update(|_, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_scroll_offset(gpui::point(gpui::px(0.), gpui::px(-60.)), cx)
+            });
+        });
+        opened.window.run_until_parked();
+
+        let scrolled = opened.element_bounds("secret-value-editor-line-3").origin.y;
+        assert!(scrolled < first, "{first:?} then {scrolled:?}");
+    }
+
+    #[gpui::test]
+    fn the_toggle_is_offered_for_stored_json_only(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json("host = db.internal\nport = 5432");
+        assert_eq!(opened.edit_mode(), None, "plaintext has no mode");
+        assert!(!opened.has_path("segmented-secret-editor-mode"));
+        assert!(!opened.read(|doc| doc.can_toggle_edit_mode()));
+
+        let mut json = open(cx, FAKE_SECRETS_STORE_ID, None);
+        json.edit_json(COMPACT);
+        assert_eq!(json.edit_mode(), Some(EditMode::Formatted));
+        assert!(json.read(|doc| doc.can_toggle_edit_mode()));
+        assert!(json.has_path("segmented-secret-editor-mode-formatted"));
+        assert!(json.has_path("segmented-secret-editor-mode-raw"));
+    }
+
+    #[gpui::test]
+    fn a_json_value_opens_formatted_and_switches_losslessly(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+        assert_eq!(opened.editor_text(), FORMATTED);
+        assert_eq!(opened.gutter_lines(), FORMATTED.lines().count());
+
+        opened.set_mode(EditMode::Raw);
+        assert_eq!(opened.editor_text(), COMPACT, "Raw shows the stored text");
+        assert_eq!(opened.gutter_lines(), 1);
+
+        opened.set_mode(EditMode::Formatted);
+        assert_eq!(opened.editor_text(), FORMATTED);
+        assert!(!opened.dirty());
+    }
+
+    #[gpui::test]
+    fn switching_with_an_edit_carries_the_edit_when_it_parses(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+        opened.set_editor_text(&FORMATTED.replace("\"h\"", "\"h2\""));
+
+        opened.set_mode(EditMode::Raw);
+        assert_eq!(opened.editor_text(), COMPACT_EDITED);
+
+        opened.set_mode(EditMode::Formatted);
+        assert_eq!(opened.editor_text(), pretty(COMPACT_EDITED));
+
+        // Text that does not parse is kept as typed.
+        opened.set_editor_text("{\"db\": oops");
+        opened.set_mode(EditMode::Raw);
+        assert_eq!(opened.editor_text(), "{\"db\": oops");
+    }
+
+    #[gpui::test]
+    fn formatted_save_of_compact_json_writes_compact(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+        opened.set_editor_text(&FORMATTED.replace("\"h\"", "\"h2\""));
+
+        opened.save_edit();
+
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), COMPACT_EDITED.to_string())]
+        );
+    }
+
+    #[gpui::test]
+    fn formatted_save_of_multiline_json_writes_the_text_as_edited(cx: &mut TestAppContext) {
+        let stored = "{\n    \"db\": {\n        \"host\": \"h\"\n    }\n}";
+        let edited = "{\n    \"db\": {\n        \"host\": \"h2\"\n    }\n}";
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(stored);
+        assert_eq!(opened.editor_text(), stored, "its own layout is kept");
+
+        opened.set_editor_text(edited);
+        opened.save_edit();
+
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), edited.to_string())]
+        );
+    }
+
+    #[gpui::test]
+    fn raw_save_writes_the_text_verbatim(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+        opened.set_mode(EditMode::Raw);
+        let spaced = r#"{ "db": { "host": "h3" } }"#;
+        opened.set_editor_text(spaced);
+
+        opened.save_edit();
+
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), spaced.to_string())]
+        );
+    }
+
+    #[gpui::test]
+    fn an_unchanged_save_is_a_no_op_in_either_mode(cx: &mut TestAppContext) {
+        for stored in [COMPACT, r#"{"db": {"host": "h"}}"#, "{\n    \"a\": [1]\n}"] {
+            let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+            opened.edit_json(stored);
+            let events = opened.audit_records().len();
+
+            opened.save_edit();
+            opened.set_mode(EditMode::Raw);
+            assert_eq!(opened.editor_text(), stored);
+            opened.save_edit();
+            opened.set_mode(EditMode::Formatted);
+            opened.save_edit();
+
+            assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+            assert_eq!(opened.audit_records().len(), events);
+            assert!(opened.reported_errors().is_empty());
+            assert!(!opened.dirty());
+        }
+    }
+
+    #[gpui::test]
+    fn invalid_json_blocks_save_in_both_modes(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+
+        opened.set_editor_text("{\"db\": oops");
+        opened.save_edit();
+        opened.set_mode(EditMode::Raw);
+        opened.set_editor_text("{\"db\": oops");
+        opened.save_edit();
+
+        assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+        let errors = opened.reported_errors();
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors.iter().all(|(_, summary)| summary.contains("JSON")));
+    }
+
+    #[gpui::test]
+    fn the_value_reaches_no_accessibility_node_in_either_mode(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+
+        for mode in [EditMode::Formatted, EditMode::Raw] {
+            opened.set_mode(mode);
+            let text = opened.accessibility_update_text();
+            let paths = opened.rendered_paths();
+            assert!(!text.contains("77b1-secret"), "{mode:?}: {text}");
+            assert!(!text.contains("host"), "{mode:?}: {text}");
+            assert!(!paths.iter().any(|path| path.contains("77b1")));
+            assert!(
+                paths
+                    .iter()
+                    .any(|path| path.ends_with("secret-value-editor-gutter")),
+                "{mode:?}: the gutter is drawn"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn the_gutter_is_hidden_from_assistive_technology(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
+        let frame = capture.frame(opened.window);
+        let exposed = frame
+            .nodes()
+            .filter(|(_, node)| node.path().contains("secret-value-editor-line-"))
+            .filter(|(_, node)| frame.accessibility_node(node).is_some())
+            .count();
+
+        assert_eq!(exposed, 0, "no gutter line has an accessibility node");
+    }
+
+    #[gpui::test]
+    fn the_mode_has_a_keyboard_path(cx: &mut TestAppContext) {
+        use crate::keyboard_coverage::SECRET_STORE;
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_json(COMPACT);
+        opened.set_editor_text(&FORMATTED.replace("\"h\"", "\"h2\""));
+
+        let entries: Vec<String> = opened.window.update(|_, cx| {
+            opened
+                .doc
+                .read(cx)
+                .pane_actions(&opened.doc)
+                .into_iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+        assert!(entries.iter().any(|id| id == "secret-editor-mode"));
+
+        let capture = FrameCapture::observe(opened.window);
+        let checked = Coverage::new(SECRET_STORE)
+            .with_menu_entries(entries)
+            .assert_covered(&capture.frame(opened.window));
+        assert!(
+            checked
+                .iter()
+                .any(|id| id == "segmented-secret-editor-mode-raw"),
+            "{checked:?}"
+        );
+
+        assert!(opened.command(Command::CycleResultView));
+        assert_eq!(opened.edit_mode(), Some(EditMode::Raw));
+        assert!(opened.command(Command::CycleResultView));
+        assert_eq!(opened.edit_mode(), Some(EditMode::Formatted));
+    }
+}
+
+// -- Value editor: artboard 06 chrome ---------------------------------------
+
+mod editor_chrome {
+    use super::*;
+    use crate::secret_store::editor::EditMode;
+
+    const THREE: &str = "alpha-77b1\nbeta-77b1\ngamma-77b1";
+
+    impl Opened<'_> {
+        fn edit_text(&mut self, stored: &str, edited: &str) {
+            // Focus events reach listeners only while the window is active.
+            self.window.update(|window, _| window.activate_window());
+            self.window.run_until_parked();
+            self.rendered_paths();
+            self.select(PLAINTEXT_SECRET);
+            self.show_value(stored);
+            self.start_edit();
+            self.set_editor_text(edited);
+        }
+
+        fn rect(&mut self, suffix: &str) -> gpui::Bounds<gpui::Pixels> {
+            let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
+            let frame = capture.frame(self.window);
+
+            frame
+                .nodes()
+                .find(|(_, node)| node.path().ends_with(suffix))
+                .map(|(_, node)| node.bounds())
+                .unwrap_or_else(|| panic!("{suffix} is rendered"))
+        }
+
+        fn exists(&mut self, suffix: &str) -> bool {
+            self.rendered_paths()
+                .iter()
+                .any(|path| path.ends_with(suffix))
+        }
+
+        pub(super) fn footer_text(&mut self) -> String {
+            let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
+            let frame = capture.frame(self.window);
+
+            frame
+                .nodes()
+                .filter(|(_, node)| node.path().contains("secret-value-editor-footer"))
+                .map(|(_, node)| node.content_text())
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+    }
+
+    #[gpui::test]
+    fn gutter_numbers_are_right_aligned(cx: &mut TestAppContext) {
+        let text = (0..12)
+            .map(|i| format!("l{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(&text, &text);
+
+        let one = opened.rect("secret-value-editor-line-0-number");
+        let ten = opened.rect("secret-value-editor-line-9-number");
+
+        assert!(
+            (one.right() - ten.right()).abs() < gpui::px(0.5),
+            "{one:?} vs {ten:?}"
+        );
+        assert!(ten.size.width > one.size.width);
+    }
+
+    #[gpui::test]
+    fn changed_lines_get_a_marker_and_unchanged_ones_do_not(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, THREE);
+        assert!(
+            !opened.exists("-marker"),
+            "an untouched value has no marker"
+        );
+
+        opened.set_editor_text("alpha-77b1\nbeta-CHANGED\ngamma-77b1");
+        assert!(opened.exists("secret-value-editor-line-1-marker"));
+        assert!(!opened.exists("secret-value-editor-line-0-marker"));
+        assert!(!opened.exists("secret-value-editor-line-2-marker"));
+
+        // An inserted line is the only one marked, not every line after it.
+        opened.set_editor_text("alpha-77b1\nNEW\nbeta-77b1\ngamma-77b1");
+        assert!(opened.exists("secret-value-editor-line-1-marker"));
+        assert!(!opened.exists("secret-value-editor-line-2-marker"));
+        assert!(!opened.exists("secret-value-editor-line-3-marker"));
+    }
+
+    #[gpui::test]
+    fn the_modified_chip_follows_the_edit(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, THREE);
+        assert!(!opened.exists("secret-value-editor-modified"));
+
+        opened.set_editor_text("alpha-77b1\nbeta-77b1");
+        assert!(opened.exists("secret-value-editor-modified"));
+        assert!(opened.rendered_text().contains("modified"));
+    }
+
+    #[gpui::test]
+    fn the_header_row_holds_the_toggle_discard_and_save(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(r#"{"a":{"b":1}}"#, r#"{"a":{"b":2}}"#);
+
+        let editor = opened.rect("secret-value-editor");
+        let toggle = opened.rect("segmented-secret-editor-mode");
+        let discard = opened.rect("secret-value-editor-discard");
+        let save = opened.rect("secret-value-editor-save");
+
+        for control in [toggle, discard, save] {
+            assert!(
+                control.bottom() <= editor.top(),
+                "{control:?} above {editor:?}"
+            );
+        }
+        // The details pane is narrower than the artboard's tab, so the
+        // controls wrap, but Discard and Save stay together, in that order,
+        // and never above the toggle.
+        assert!((discard.center().y - save.center().y).abs() < gpui::px(4.)); // guardrail-allow: test tolerance, not spacing
+        assert!(discard.right() <= save.left());
+        assert!(toggle.top() <= discard.top());
+    }
+
+    #[gpui::test]
+    fn save_shows_the_keycap_of_a_bound_chord_only(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, "x");
+
+        let context = opened.read(|doc| doc.active_context());
+        let bound =
+            dbflux_ui_base::effective_keymap().shortcut_for_command(context, Command::SaveQuery);
+        let bound = bound.expect("Save is bound where the editor dispatches it");
+
+        assert!(
+            opened
+                .rendered_text()
+                .to_lowercase()
+                .contains(&bound.to_lowercase()),
+            "{bound}"
+        );
+        assert!(opened.command(Command::SaveQuery), "the chord runs Save");
+    }
+
+    /// Ctrl S has to resolve to Save in the context the document reports
+    /// while its editor holds the keyboard; in the Results context it is
+    /// unbound, which is why Save never answered the chord before.
+    #[gpui::test]
+    fn ctrl_s_resolves_to_save_in_the_editor_context(cx: &mut TestAppContext) {
+        use dbflux_app::keymap::{ContextId, KeyChord, Modifiers};
+
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, "changed");
+
+        let keymap = dbflux_ui_base::effective_keymap();
+        let context = opened.read(|doc| doc.active_context());
+        assert_eq!(context, ContextId::TextInput);
+
+        let save = KeyChord::new("s", Modifiers::primary());
+        assert_eq!(keymap.resolve(context, &save), Some(Command::SaveQuery));
+        assert_eq!(
+            keymap.resolve(ContextId::Results, &save),
+            None,
+            "the bug: Results never bound Save"
+        );
+
+        // The command the chord resolves to saves.
+        assert!(opened.command(Command::SaveQuery));
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), "changed".to_string())]
+        );
+    }
+
+    /// While the editor holds the keyboard its text keys are text: bare
+    /// letters resolve to no command, so `e`, `j` and `k` insert, and Escape
+    /// still leaves the editor.
+    #[gpui::test]
+    fn editor_keys_stay_text_and_escape_leaves(cx: &mut TestAppContext) {
+        use dbflux_app::keymap::{KeyChord, Modifiers};
+
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text("", "");
+        let keymap = dbflux_ui_base::effective_keymap();
+        let context = opened.read(|doc| doc.active_context());
+
+        for key in ["e", "j", "k"] {
+            assert_eq!(
+                keymap.resolve(context, &KeyChord::new(key, Modifiers::none())),
+                None,
+                "{key} must not be a command while editing"
+            );
+        }
+        assert_eq!(
+            keymap.resolve(context, &KeyChord::new("escape", Modifiers::none())),
+            Some(Command::Cancel)
+        );
+
+        opened.window.simulate_input("ejk");
+        opened.window.run_until_parked();
+        assert_eq!(opened.editor_text(), "ejk");
+        assert!(opened.read(|doc| doc.is_editing_value()));
+
+        assert!(opened.command(Command::Cancel), "Escape leaves the editor");
+        opened.rendered_paths();
+        let context = opened.read(|doc| doc.active_context());
+        assert_eq!(context, dbflux_app::keymap::ContextId::Results);
+        assert!(
+            opened.read(|doc| doc.is_editing_value()),
+            "leaving is not discarding"
+        );
+    }
+
+    #[gpui::test]
+    fn the_footer_reports_the_edit_without_its_text(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.select(PLAINTEXT_SECRET);
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        let version = opened
+            .read(|doc| match &doc.value {
+                ValueState::Loaded(value) => value.version.clone(),
+                _ => None,
+            })
+            .expect("the fixture reports a version");
+        opened.start_edit();
+        opened.set_editor_text("abc\ndef");
+
+        let footer = opened.footer_text();
+        assert!(footer.contains("UTF-8"), "{footer}");
+        assert!(footer.contains("7 B"), "bytes Save would write: {footer}");
+        assert!(footer.contains(&version), "{footer}");
+        assert!(footer.contains("2 lines changed"), "{footer}");
+        assert!(
+            footer.contains("Ln 1, Col 1") || footer.contains("Ln 2, Col"),
+            "{footer}"
+        );
+        assert!(
+            !footer.contains("abc") && !footer.contains("def"),
+            "{footer}"
+        );
+
+        opened.set_editor_text("abc\ndef");
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        opened.window.update(|window, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_cursor_position(lsp_types::Position::new(1, 2), window, cx)
+            });
+        });
+        opened.window.run_until_parked();
+        assert!(opened.footer_text().contains("Ln 2, Col 3"));
+    }
+
+    /// Find opens the component's panel over the text and leaves the value
+    /// out of the accessibility tree and the rendered frame.
+    #[gpui::test]
+    fn find_opens_the_panel_without_exposing_the_value(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, THREE);
+        let before = opened.rendered_paths().len();
+
+        let doc = opened.doc.clone();
+        opened
+            .window
+            .update(|window, cx| doc.update(cx, |doc, cx| doc.find_in_value(window, cx)));
+        opened.window.run_until_parked();
+
+        let after = opened.rendered_paths();
+        assert!(after.len() > before, "the find panel was drawn");
+        let text = opened.accessibility_update_text();
+        assert!(!text.contains("alpha-77b1"), "{text}");
+        assert!(opened.exists("secret-value-editor-find"));
+    }
+
+    /// Focus decides the context, not a flag a keystroke sets: after Escape
+    /// leaves the editor, a click back into it restores the editor's chords
+    /// with no key in between.
+    #[gpui::test]
+    fn clicking_back_into_the_editor_restores_ctrl_s(cx: &mut TestAppContext) {
+        use dbflux_app::keymap::{ContextId, KeyChord, Modifiers};
+
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, "changed");
+        opened.rendered_paths();
+        assert!(opened.command(Command::Cancel));
+        // Focus events are delivered with the frame, as in the running app.
+        opened.rendered_paths();
+        assert_eq!(
+            opened.read(|doc| doc.active_context()),
+            ContextId::Results,
+            "Escape left the editor"
+        );
+
+        // A focus change that edits nothing: the textarea has no state
+        // change to announce, so only focus can say the editor is back.
+        let state = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        opened.window.update(|window, cx| {
+            let handle = gpui::Focusable::focus_handle(state.read(cx), cx);
+            window.focus(&handle, cx);
+        });
+        opened.window.run_until_parked();
+        opened.rendered_paths();
+        assert_eq!(
+            opened.read(|doc| doc.active_context()),
+            dbflux_app::keymap::ContextId::TextInput,
+            "focus alone restores the editor's context"
+        );
+
+        assert!(opened.command(Command::Cancel));
+        opened.rendered_paths();
+        let editor = opened.rect("secret-value-editor");
+        opened
+            .window
+            .simulate_click(editor.center(), gpui::Modifiers::default());
+        opened.window.run_until_parked();
+
+        let context = opened.read(|doc| doc.active_context());
+        assert_eq!(context, ContextId::TextInput);
+        let save = KeyChord::new("s", Modifiers::primary());
+        let command = dbflux_ui_base::effective_keymap().resolve(context, &save);
+        assert_eq!(command, Some(Command::SaveQuery));
+        assert!(opened.command(Command::SaveQuery));
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), "changed".to_string())]
+        );
+    }
+
+    /// `Col` counts characters, not bytes or UTF-16 units: `ñ` is two bytes
+    /// and an emoji is two UTF-16 units and four bytes, each one column.
+    #[gpui::test]
+    fn the_caret_column_counts_characters(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text("x", "ñ😀x");
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        opened.window.update(|window, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_cursor_position(lsp_types::Position::new(0, 2), window, cx)
+            });
+        });
+        opened.window.run_until_parked();
+
+        let footer = opened.footer_text();
+        assert!(footer.contains("Ln 1, Col 3"), "{footer}");
+    }
+
+    #[gpui::test]
+    fn the_footer_counts_a_single_changed_line_in_the_singular(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, "alpha-77b1\nbeta-X\ngamma-77b1");
+        assert!(opened.footer_text().contains("1 line changed"));
+    }
+
+    #[gpui::test]
+    fn chrome_exposes_no_value_to_the_accessibility_tree(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(
+            r#"{"a":{"k":"alpha-77b1"}}"#,
+            r#"{"a":{"k":"alpha-77b1"},"b":"beta-77b1"}"#,
+        );
+
+        for mode in [EditMode::Formatted, EditMode::Raw] {
+            let doc = opened.doc.clone();
+            opened
+                .window
+                .update(|window, cx| doc.update(cx, |doc, cx| doc.set_edit_mode(mode, window, cx)));
+            opened.window.run_until_parked();
+
+            let text = opened.accessibility_update_text();
+            assert!(
+                !text.contains("alpha-77b1") && !text.contains("beta-77b1"),
+                "{text}"
+            );
+            assert!(text.contains("modified"), "the chip is announced: {text}");
+            assert!(text.contains("UTF-8"), "the footer is announced: {text}");
+
+            let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
+            let frame = capture.frame(opened.window);
+            // `aria_hidden` on the gutter removes its whole subtree (numbers
+            // and markers) from the accessibility tree.
+            let gutter_hidden = frame
+                .nodes()
+                .filter(|(_, node)| node.path().ends_with("secret-value-editor-gutter"))
+                .filter_map(|(_, node)| frame.accessibility_node(node))
+                .any(|accessible| accessible.is_hidden());
+            assert!(gutter_hidden, "gutter and markers stay out of the tree");
+        }
+    }
+}
+
 // -- The `e` chord ------------------------------------------------------------
 
 /// `e` is the keyboard path of Edit value: with a plaintext value loaded it
@@ -4165,6 +5511,8 @@ fn the_edit_value_command_reports_a_missing_connection(cx: &mut TestAppContext) 
     assert!(opened.command(Command::EditValue));
 
     assert!(!opened.read(|doc| doc.is_editing_value()));
+    // The editor found the loss first; the history retry it triggers stays
+    // quiet, so the loss is reported once.
     let reported = opened.reported_errors();
     assert_eq!(reported.len(), 1, "{reported:?}");
     assert!(
@@ -4195,6 +5543,8 @@ fn start_value_edit_reports_a_missing_connection(cx: &mut TestAppContext) {
     opened.start_edit();
 
     assert!(!opened.read(|doc| doc.is_editing_value()));
+    // The editor found the loss first; the history retry it triggers stays
+    // quiet, so the loss is reported once.
     let reported = opened.reported_errors();
     assert_eq!(reported.len(), 1, "{reported:?}");
     assert!(
@@ -4203,4 +5553,1652 @@ fn start_value_edit_reports_a_missing_connection(cx: &mut TestAppContext) {
         )),
         "{reported:?}"
     );
+}
+
+// -- Version history ---------------------------------------------------------
+
+const PREVIOUS_PASSWORD: &str = "fake-previous-2b8d";
+const OLDEST_PASSWORD: &str = "fake-oldest-90e1";
+const HISTORY_PARAMETER: &str = "/app/prod/db/host";
+
+impl Opened<'_> {
+    /// Runs the pane action `id` the way the actions menu does.
+    fn run_pane_action(&mut self, id: &str) {
+        let doc = self.doc.clone();
+        let action = self
+            .window
+            .update(|_, cx| doc.read(cx).pane_actions(&doc))
+            .into_iter()
+            .find(|action| action.id.as_ref() == id)
+            .unwrap_or_else(|| panic!("`{id}` is a pane action"));
+
+        assert!(action.enabled, "`{id}` is enabled");
+
+        match action.run {
+            crate::pane::PaneActionRun::Callback(run) => {
+                self.window.update(|window, cx| run(window, cx));
+            }
+            crate::pane::PaneActionRun::Command(_) => panic!("`{id}` is a callback"),
+        }
+        self.window.run_until_parked();
+    }
+
+    fn version_ids(&mut self) -> Vec<String> {
+        self.read(|doc| match doc.versions() {
+            VersionsState::Loaded(versions) => {
+                versions.iter().map(|version| version.id.clone()).collect()
+            }
+            other => panic!("versions not loaded: {other:?}"),
+        })
+    }
+
+    fn shown_password(&mut self) -> Option<String> {
+        self.read(|doc| match doc.value() {
+            ValueState::Loaded(value) => value
+                .fields()
+                .iter()
+                .find(|(key, _)| *key == Some("password"))
+                .map(|(_, field)| field.expose_secret().to_string()),
+            _ => None,
+        })
+    }
+}
+
+impl Opened<'_> {
+    /// The text and top edge of the drawn element `element_id`.
+    fn element_text_and_top(&mut self, element_id: &str) -> (String, f32) {
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
+        let frame = capture.frame(self.window);
+
+        frame
+            .nodes()
+            .find(|(_, node)| node.id() == element_id)
+            .map(|(_, node)| {
+                (
+                    node.content_text().to_string(),
+                    f32::from(node.bounds().origin.y),
+                )
+            })
+            .unwrap_or_else(|| panic!("`{element_id}` is drawn"))
+    }
+
+    /// The text of the version rows, top to bottom, asserting that they are
+    /// drawn in index order.
+    fn version_rows(&mut self, count: usize) -> Vec<String> {
+        let rows: Vec<(String, f32)> = (0..count)
+            .map(|index| self.element_text_and_top(&format!("secret-version-row-{index}")))
+            .collect();
+
+        assert!(
+            rows.windows(2).all(|pair| pair[0].1 < pair[1].1),
+            "rows are drawn top to bottom in index order: {rows:?}"
+        );
+        rows.into_iter().map(|(text, _)| text).collect()
+    }
+}
+
+/// The Versions section lists what the store reported, newest first, with the
+/// id truncated, the labels as chips and "no labels" for a version without.
+#[gpui::test]
+fn the_versions_section_lists_the_versions_newest_first_with_labels(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+
+    assert_eq!(
+        opened.version_ids(),
+        vec!["v-current", "v-previous", "v-oldest"]
+    );
+    assert_eq!(
+        opened.driver.secret_store_calls().version_listings,
+        vec![(
+            FAKE_SECRETS_STORE_ID.to_string(),
+            KEY_VALUE_SECRET.to_string()
+        )]
+    );
+
+    let rows = opened.version_rows(3);
+    for (row, expected) in rows.iter().zip([
+        ["v-curren…", "AWSCURRENT"],
+        ["v-previo…", "AWSPREVIOUS"],
+        ["v-oldest", "no labels"],
+    ]) {
+        for text in expected {
+            assert!(row.contains(text), "`{text}` is in its row: {row}");
+        }
+    }
+    assert!(!rows[2].contains("AWS"), "{}", rows[2]);
+
+    let text = opened.rendered_text();
+    for expected in ["VERSIONS", "3 versions", "Staging labels", "Created"] {
+        assert!(text.contains(expected), "`{expected}` is drawn: {text}");
+    }
+
+    let paths = opened.rendered_paths();
+    for id in [
+        "secret-versions",
+        "secret-version-row-0",
+        "secret-version-row-1",
+        "secret-version-row-2",
+    ] {
+        assert!(
+            paths.iter().any(|path| path.ends_with(id)),
+            "`{id}` is drawn: {paths:?}"
+        );
+    }
+    assert!(
+        !text.contains(PREVIOUS_PASSWORD) && !text.contains(FAKE_SECRET_PASSWORD),
+        "a history row holds no value"
+    );
+}
+
+/// A store without staging labels draws its history as `vN`, the principal
+/// and the date, and no label column.
+#[gpui::test]
+fn the_history_section_lists_the_version_the_author_and_the_date(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.select(HISTORY_PARAMETER);
+
+    assert_eq!(opened.version_ids(), vec!["3", "2", "1"]);
+
+    let rows = opened.version_rows(3);
+    let date = |month: u32| {
+        super::render::format_time(
+            dbflux_core::chrono::TimeZone::with_ymd_and_hms(
+                &dbflux_core::chrono::Utc,
+                2026,
+                month,
+                1,
+                10,
+                0,
+                0,
+            )
+            .single()
+            .expect("a valid date"),
+        )
+    };
+    for (row, expected) in rows.iter().zip([
+        ["v3", "arn:fake:user/deployer", date(9).as_str()],
+        ["v2", "arn:fake:user/ana", date(8).as_str()],
+        ["v1", "arn:fake:user/deployer", date(7).as_str()],
+    ]) {
+        for text in expected {
+            assert!(row.contains(text), "`{text}` is in its row: {row}");
+        }
+    }
+
+    let text = opened.rendered_text();
+    for expected in ["HISTORY", "3 versions"] {
+        assert!(text.contains(expected), "`{expected}` is drawn: {text}");
+    }
+    assert!(
+        !text.contains("Staging labels") && !text.contains("no labels"),
+        "a store without labels has no label column: {text}"
+    );
+}
+
+/// A store that does not advertise VERSIONS shows no section and is never
+/// asked for a history.
+#[gpui::test]
+fn a_store_without_versions_shows_no_section(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.update(|doc, _cx| {
+        doc.store = SecretStoreDescriptor::new(
+            FAKE_SECRETS_STORE_ID,
+            "Secrets Manager",
+            SecretStoreCapabilities::empty(),
+        );
+    });
+    opened.select(KEY_VALUE_SECRET);
+
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::NotSupported)));
+    assert!(
+        opened
+            .driver
+            .secret_store_calls()
+            .version_listings
+            .is_empty()
+    );
+    assert!(
+        !opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.contains("secret-version")),
+        "no versions section is drawn"
+    );
+    assert!(
+        !opened
+            .pane_action_ids()
+            .iter()
+            .any(|id| id.starts_with("secret-version")),
+        "no versions entry is offered"
+    );
+}
+
+/// Activating a version that is not the current one reads exactly that
+/// version through the retrieval path, audits it like any retrieval, names
+/// the version in the value section and keeps the value out of every
+/// observable surface.
+#[gpui::test]
+fn activating_an_older_version_retrieves_exactly_that_version(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+
+    opened.update(|doc, cx| doc.activate_version(1, cx));
+
+    assert_eq!(
+        opened.driver.secret_store_calls().value_version_requests,
+        vec![(
+            FAKE_SECRETS_STORE_ID.to_string(),
+            KEY_VALUE_SECRET.to_string(),
+            Some("v-previous".to_string())
+        )]
+    );
+    assert_eq!(
+        opened.read(|doc| doc.value_version().map(str::to_string)),
+        Some("v-previous".to_string())
+    );
+    assert_eq!(opened.shown_password().as_deref(), Some(PREVIOUS_PASSWORD));
+
+    let events = opened.audit_events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(events[0].contains(VALUE_RETRIEVED_ACTION), "{}", events[0]);
+    assert!(events[0].contains("v-previous"), "{}", events[0]);
+    assert!(!events[0].contains(PREVIOUS_PASSWORD), "{}", events[0]);
+    assert!(!events[0].contains("api-user"), "{}", events[0]);
+
+    let text = opened.rendered_text();
+    assert!(text.contains("Showing version v-previous"), "{text}");
+    assert!(text.contains("Back to current"), "{text}");
+    assert!(
+        opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.ends_with("secret-version-back-to-current"))
+    );
+}
+
+/// The current version's row names its own id, because the current version
+/// can rotate between the listing and the click. Once the pane learns of the
+/// rotation, the old payload on screen is an older value: it shows its
+/// version and the way back, and Back to current reads the new current one.
+#[gpui::test]
+fn activating_the_current_version_retrieves_the_current_value(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    opened.rotate_current(KEY_VALUE_SECRET, "rotated after the history loaded");
+
+    opened.update(|doc, cx| doc.activate_version(0, cx));
+
+    assert_eq!(
+        opened.driver.secret_store_calls().value_version_requests,
+        vec![(
+            FAKE_SECRETS_STORE_ID.to_string(),
+            KEY_VALUE_SECRET.to_string(),
+            Some("v-current".to_string())
+        )]
+    );
+    assert_eq!(
+        opened.shown_password().as_deref(),
+        Some(FAKE_SECRET_PASSWORD),
+        "the selected row's payload, not the rotated one"
+    );
+    assert_eq!(
+        opened.read(|doc| doc.value_version().map(str::to_string)),
+        Some("v-current".to_string()),
+        "the retrieved version id is kept"
+    );
+    assert!(
+        !opened.rendered_text().contains("Back to current"),
+        "as far as the pane knows the row is still current"
+    );
+
+    opened.update(|doc, cx| {
+        doc.describe(KEY_VALUE_SECRET.to_string(), cx);
+        doc.load_versions(KEY_VALUE_SECRET.to_string(), cx);
+    });
+
+    let text = opened.rendered_text();
+    assert!(text.contains("Showing version v-current"), "{text}");
+    assert!(text.contains("Back to current"), "{text}");
+    assert!(opened.read(|doc| doc.can_return_to_current()));
+    assert_eq!(
+        opened.shown_password().as_deref(),
+        Some(FAKE_SECRET_PASSWORD)
+    );
+
+    opened.update(|doc, cx| doc.back_to_current_version(cx));
+    assert!(opened.read(|doc| doc.value_version().is_none()));
+    assert!(!opened.rendered_text().contains("Back to current"));
+}
+
+/// Without a rotation, the current version's row shows no older-value banner.
+#[gpui::test]
+fn the_current_row_shows_no_older_value_banner(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+
+    opened.update(|doc, cx| doc.activate_version(0, cx));
+
+    let text = opened.rendered_text();
+    assert!(!text.contains("Showing version"), "{text}");
+    assert!(!text.contains("Back to current"), "{text}");
+    assert!(!opened.read(|doc| doc.can_return_to_current()));
+}
+
+/// A describe that lands late with another version id neither moves the
+/// highlight nor drops the banner of the version that was retrieved.
+#[gpui::test]
+fn a_late_describe_does_not_change_the_version_shown(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| doc.activate_version(1, cx));
+
+    let mut details = opened.read(|doc| match doc.details() {
+        DetailsState::Loaded(details) => (**details).clone(),
+        other => panic!("{other:?}"),
+    });
+    details.summary.version = Some("v-oldest".to_string());
+    let generation = opened.read(|doc| doc.details_generation);
+    opened.update(|doc, cx| doc.apply_details(generation, KEY_VALUE_SECRET, Ok(details), 0, cx));
+
+    assert_eq!(
+        opened.read(|doc| doc.value_version().map(str::to_string)),
+        Some("v-previous".to_string())
+    );
+    let text = opened.rendered_text();
+    assert!(text.contains("Showing version v-previous"), "{text}");
+    assert_eq!(opened.shown_password().as_deref(), Some(PREVIOUS_PASSWORD));
+}
+
+/// Only the store's own markers name the current version: with neither a
+/// described version nor a flagged history row there is none, whatever the
+/// listing or the first row says.
+#[gpui::test]
+fn the_current_version_is_never_guessed(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+
+    opened.update(|doc, _cx| {
+        doc.details = DetailsState::Loading;
+        for entry in &mut doc.listing.entries {
+            entry.version = Some("listing-version".to_string());
+        }
+        if let VersionsState::Loaded(versions) = &mut doc.versions {
+            for version in versions.iter_mut() {
+                version.is_current = false;
+            }
+        }
+    });
+
+    assert_eq!(
+        opened.read(|doc| doc.current_version_id().map(str::to_string)),
+        None
+    );
+}
+
+/// Back to current is one action: it retrieves the current value, drops the
+/// version banner and audits the retrieval.
+#[gpui::test]
+fn back_to_current_returns_to_the_current_value_in_one_action(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| doc.activate_version(2, cx));
+    assert_eq!(opened.shown_password().as_deref(), Some(OLDEST_PASSWORD));
+
+    opened.update(|doc, cx| doc.back_to_current_version(cx));
+
+    assert_eq!(
+        opened.shown_password().as_deref(),
+        Some(FAKE_SECRET_PASSWORD)
+    );
+    assert_eq!(
+        opened.read(|doc| doc.value_version().map(str::to_string)),
+        None
+    );
+    let text = opened.rendered_text();
+    assert!(!text.contains("Back to current"), "{text}");
+    assert!(!text.contains("Showing version"), "{text}");
+
+    let requests = opened.driver.secret_store_calls().value_version_requests;
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_eq!(requests[1].2, None);
+    assert_eq!(opened.audit_events().len(), 2);
+}
+
+/// A history that lands for a secret the user already left, or from a load a
+/// newer one replaced, never renders.
+#[gpui::test]
+fn a_stale_versions_response_does_not_render(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.select(KEY_VALUE_SECRET);
+    let stale_generation = opened.read(|doc| doc.versions_generation);
+    opened.select(PLAINTEXT_SECRET);
+
+    let foreign = vec![dbflux_core::SecretVersionInfo {
+        id: "stale-version-id".to_string(),
+        ..Default::default()
+    }];
+
+    opened.update(|doc, cx| {
+        doc.apply_versions(stale_generation, KEY_VALUE_SECRET, Ok(foreign.clone()), cx);
+    });
+    let current_generation = opened.read(|doc| doc.versions_generation);
+    opened.update(|doc, cx| {
+        doc.apply_versions(
+            current_generation,
+            KEY_VALUE_SECRET,
+            Ok(foreign.clone()),
+            cx,
+        );
+    });
+    opened.update(|doc, cx| {
+        doc.apply_versions(
+            stale_generation,
+            PLAINTEXT_SECRET,
+            Err(DbError::query_failed("stale failure")),
+            cx,
+        );
+    });
+
+    // The load the selection actually started is the one that shows.
+    assert_eq!(opened.version_ids(), vec!["v-current"]);
+
+    let text = opened.rendered_text();
+    assert!(!text.contains("stale-ve"), "{text}");
+    assert!(!text.contains("stale failure"), "{text}");
+    assert!(opened.read(|doc| !matches!(doc.versions(), VersionsState::Failed(_))));
+
+    // Selection change and refresh both drop the history and invalidate its
+    // load.
+    opened.select(KEY_VALUE_SECRET);
+    let before = opened.read(|doc| doc.versions_generation);
+    opened.update(|doc, cx| doc.refresh(cx));
+    assert_ne!(opened.read(|doc| doc.versions_generation), before);
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Idle)));
+}
+
+/// A refused history says why and leaves the value section alone: no value,
+/// and the secret still retrieves.
+#[gpui::test]
+fn a_failed_history_shows_the_reason_and_no_value(cx: &mut TestAppContext) {
+    let driver = FakeDriver::new(DbKind::AwsSecrets).with_secret_versions_error(
+        KEY_VALUE_SECRET,
+        "not authorized to perform ListSecretVersionIds",
+    );
+    let mut opened = open_with(cx, driver, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+    let text = opened.rendered_text();
+    assert!(text.contains("The versions could not be loaded"), "{text}");
+    assert!(
+        text.contains("not authorized to perform ListSecretVersionIds"),
+        "{text}"
+    );
+    assert!(!text.contains(FAKE_SECRET_PASSWORD), "{text}");
+    assert!(opened.read(|doc| matches!(doc.value(), ValueState::NotLoaded)));
+    assert!(opened.read(|doc| matches!(doc.details(), DetailsState::Loaded(_))));
+
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    assert_eq!(
+        opened.shown_password().as_deref(),
+        Some(FAKE_SECRET_PASSWORD)
+    );
+}
+
+/// A real click on a version row retrieves that version.
+#[gpui::test]
+fn clicking_a_version_row_retrieves_that_version(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+
+    opened.click_menu_item("secret-version-row-1");
+
+    assert_eq!(
+        opened.driver.secret_store_calls().value_version_requests,
+        vec![(
+            FAKE_SECRETS_STORE_ID.to_string(),
+            KEY_VALUE_SECRET.to_string(),
+            Some("v-previous".to_string())
+        )]
+    );
+
+    opened.click_menu_item("secret-version-back-to-current");
+    assert_eq!(
+        opened.shown_password().as_deref(),
+        Some(FAKE_SECRET_PASSWORD)
+    );
+}
+
+/// The keyboard reaches both controls through the pane actions.
+#[gpui::test]
+fn the_pane_actions_retrieve_a_version_and_go_back(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+
+    let ids = opened.pane_action_ids();
+    for expected in [
+        "secret-version-retrieve-0",
+        "secret-version-retrieve-1",
+        "secret-version-retrieve-2",
+        "secret-version-current",
+    ] {
+        assert!(ids.iter().any(|id| id == expected), "{expected}: {ids:?}");
+    }
+
+    let actions = opened
+        .window
+        .update(|_, cx| opened.doc.read(cx).pane_actions(&opened.doc));
+    let back = actions
+        .iter()
+        .find(|action| action.id.as_ref() == "secret-version-current")
+        .expect("listed");
+    assert!(!back.enabled, "nothing to go back from yet");
+
+    opened.run_pane_action("secret-version-retrieve-2");
+    assert_eq!(opened.shown_password().as_deref(), Some(OLDEST_PASSWORD));
+
+    opened.run_pane_action("secret-version-current");
+    assert_eq!(
+        opened.shown_password().as_deref(),
+        Some(FAKE_SECRET_PASSWORD)
+    );
+}
+
+/// Every control of the history has a keyboard path in the registry.
+#[gpui::test]
+fn the_version_controls_are_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::SECRET_STORE;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| doc.activate_version(1, cx));
+
+    let entries = opened.pane_action_ids();
+    let capture = FrameCapture::observe(opened.window);
+    let checked = Coverage::new(SECRET_STORE)
+        .with_menu_entries(entries)
+        .assert_covered(&capture.frame(opened.window));
+
+    for expected in ["secret-version-row-1", "secret-version-back-to-current"] {
+        assert!(
+            checked.iter().any(|id| id == expected),
+            "`{expected}` is checked: {checked:?}"
+        );
+    }
+}
+
+/// The accessibility tree and the rendered frame hold no value of any
+/// version, masked or revealed.
+#[gpui::test]
+fn version_values_never_reach_the_accessibility_tree(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+
+    for (index, shown) in [
+        (1, PREVIOUS_PASSWORD),
+        (2, OLDEST_PASSWORD),
+        (0, FAKE_SECRET_PASSWORD),
+    ] {
+        opened.update(|doc, cx| doc.activate_version(index, cx));
+        assert_eq!(
+            opened.shown_password().as_deref(),
+            Some(shown),
+            "the probe runs against a loaded value"
+        );
+        let masked = opened.accessibility_update_text();
+        assert!(opened.command(Command::ExpandCollapse));
+        let revealed = opened.accessibility_update_text();
+
+        for secret in [
+            FAKE_SECRET_PASSWORD,
+            PREVIOUS_PASSWORD,
+            OLDEST_PASSWORD,
+            "api-user",
+        ] {
+            assert!(
+                !masked.contains(secret),
+                "version {index}: masked holds {secret}"
+            );
+            assert!(
+                !revealed.contains(secret),
+                "version {index}: revealed holds {secret}"
+            );
+        }
+    }
+}
+
+// -- Version history review fixes ---------------------------------------------
+
+impl Opened<'_> {
+    fn live_connection(&mut self) -> Arc<dyn Connection> {
+        let app_state = self.app_state.clone();
+        let profile_id = self.read(|doc| doc.profile_id);
+        self.window.update(|_, cx| {
+            app_state
+                .read(cx)
+                .connections()
+                .get(&profile_id)
+                .expect("connected")
+                .connection
+                .clone()
+        })
+    }
+
+    /// Writes a new current version straight to the fake store, the way a
+    /// rotation or another client does, without telling the pane.
+    fn rotate_current(&mut self, name: &str, text: &str) {
+        let connection = self.live_connection();
+        connection
+            .secret_store(FAKE_SECRETS_STORE_ID)
+            .expect("store")
+            .put_value(&SecretPutRequest::text(name, text))
+            .expect("rotate");
+    }
+
+    /// Replaces the profile's live connection with a fresh session of the
+    /// same shape, and returns the driver behind it.
+    fn replace_connection(&mut self) -> FakeDriver {
+        let replacement_driver = FakeDriver::new(DbKind::AwsSecrets);
+        let profile = dbflux_core::ConnectionProfile::new(
+            "prod-aws",
+            dbflux_core::DbConfig::SQLite {
+                path: std::path::PathBuf::from(":memory:"),
+                connection_id: None,
+            },
+        );
+        let replacement = replacement_driver.connect_arc(&profile).expect("connect");
+        let app_state = self.app_state.clone();
+        let profile_id = self.read(|doc| doc.profile_id);
+
+        self.window.update(|_, cx| {
+            app_state.update(cx, |state, _| {
+                if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
+                    connected.connection = replacement.clone();
+                }
+            });
+        });
+
+        replacement_driver
+    }
+
+    fn announce_state_change(&mut self) {
+        let app_state = self.app_state.clone();
+        self.window
+            .update(|_, cx| app_state.update(cx, |_, cx| cx.emit(AppStateChanged)));
+        self.window.run_until_parked();
+    }
+
+    fn pane_action(&mut self, id: &str) -> crate::pane::PaneAction {
+        let doc = self.doc.clone();
+        self.window
+            .update(|_, cx| doc.read(cx).pane_actions(&doc))
+            .into_iter()
+            .find(|action| action.id.as_ref() == id)
+            .unwrap_or_else(|| panic!("`{id}` is a pane action"))
+    }
+
+    fn run_action(&mut self, action: crate::pane::PaneAction) {
+        match action.run {
+            crate::pane::PaneActionRun::Callback(run) => {
+                self.window.update(|window, cx| run(window, cx));
+            }
+            crate::pane::PaneActionRun::Command(_) => panic!("a callback action"),
+        }
+        self.window.run_until_parked();
+    }
+
+    fn strip_reported_versions(&mut self) {
+        self.update(|doc, cx| {
+            if let DetailsState::Loaded(details) = &mut doc.details {
+                details.summary.version = None;
+            }
+            for entry in &mut doc.listing.entries {
+                entry.version = None;
+            }
+            cx.notify();
+        });
+    }
+}
+
+/// Without a version in the describe or the listing, the current version is
+/// the one the history marks: the `AWSCURRENT` row on a store with labels
+/// even when a pending version heads the list, the highest number otherwise.
+#[gpui::test]
+fn the_current_version_falls_back_to_the_history(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    assert_eq!(
+        opened.read(|doc| doc.current_version_id().map(str::to_string)),
+        Some("v-current".to_string()),
+        "the describe's version wins when present"
+    );
+
+    let connection = opened.live_connection();
+    connection
+        .secret_store(FAKE_SECRETS_STORE_ID)
+        .expect("store")
+        .put_value(
+            &SecretPutRequest::text(KEY_VALUE_SECRET, "staged")
+                .with_stage(SecretVersionStage::Pending),
+        )
+        .expect("pending write");
+    opened.update(|doc, cx| doc.load_versions(KEY_VALUE_SECRET.to_string(), cx));
+    assert_eq!(opened.version_ids()[0], "v-written-1");
+    opened.strip_reported_versions();
+
+    assert_eq!(
+        opened.read(|doc| doc.current_version_id().map(str::to_string)),
+        Some("v-current".to_string())
+    );
+    assert!(opened.read(|doc| doc.is_current_version("v-current")));
+}
+
+#[gpui::test]
+fn the_current_parameter_version_falls_back_to_the_highest_number(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/db/"));
+    opened.select(HISTORY_PARAMETER);
+    opened.strip_reported_versions();
+
+    assert_eq!(
+        opened.read(|doc| doc.current_version_id().map(str::to_string)),
+        Some("3".to_string())
+    );
+}
+
+/// Selecting a version or going back to current while the editor holds
+/// unsaved text is refused with the unsaved-edits warning, and the editor
+/// keeps its text and no store call is made.
+#[gpui::test]
+fn version_transitions_are_refused_under_unsaved_edits(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+    let requests_before = opened
+        .driver
+        .secret_store_calls()
+        .value_version_requests
+        .len();
+
+    opened.update(|doc, cx| doc.activate_version(0, cx));
+    opened.update(|doc, cx| {
+        doc.value_version = Some("older".to_string());
+        doc.back_to_current_version(cx);
+    });
+
+    assert_eq!(opened.editor_text(), EDITED_VALUE);
+    assert!(opened.read(|doc| doc.is_editing_value()));
+    assert_eq!(
+        opened
+            .driver
+            .secret_store_calls()
+            .value_version_requests
+            .len(),
+        requests_before
+    );
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    for (_, summary) in &errors {
+        assert!(summary.contains("unsaved edits"), "{summary}");
+    }
+
+    opened.update(|doc, cx| doc.discard_value_edit(cx));
+    opened.update(|doc, cx| doc.activate_version(0, cx));
+    assert_eq!(
+        opened
+            .driver
+            .secret_store_calls()
+            .value_version_requests
+            .len(),
+        requests_before + 1,
+        "without edits the transition runs"
+    );
+}
+
+/// The history stays on screen while the describe is slow or has failed.
+#[gpui::test]
+fn the_versions_section_renders_without_the_describe(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+
+    for state in [
+        DetailsState::Loading,
+        DetailsState::Failed("describe refused".to_string()),
+    ] {
+        opened.update(|doc, cx| {
+            doc.details = state;
+            cx.notify();
+        });
+        let rows = opened.version_rows(3);
+        assert_eq!(rows.len(), 3);
+    }
+
+    opened.update(|doc, cx| {
+        doc.versions = VersionsState::Loading;
+        cx.notify();
+    });
+    assert!(opened.rendered_text().contains("describe refused"));
+    assert!(
+        opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.ends_with("secret-versions"))
+    );
+
+    opened.update(|doc, cx| {
+        doc.versions = VersionsState::Failed("history refused".to_string());
+        cx.notify();
+    });
+    assert!(opened.rendered_text().contains("history refused"));
+}
+
+/// While a historical retrieval is in flight, Back to current is not
+/// available, in the banner or the pane actions, and no value shows.
+#[gpui::test]
+fn back_to_current_is_unavailable_while_a_historical_retrieval_is_in_flight(
+    cx: &mut TestAppContext,
+) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| {
+        doc.value_version = Some("v-previous".to_string());
+        doc.value = ValueState::Loading;
+        cx.notify();
+    });
+
+    assert!(!opened.read(|doc| doc.can_return_to_current()));
+    assert!(!opened.pane_action("secret-version-current").enabled);
+    assert!(opened.shown_password().is_none());
+
+    opened.update(|doc, cx| doc.back_to_current_version(cx));
+    assert!(
+        opened
+            .driver
+            .secret_store_calls()
+            .value_version_requests
+            .is_empty()
+    );
+
+    opened.update(|doc, cx| {
+        doc.value = ValueState::NotLoaded;
+        cx.notify();
+    });
+    opened.update(|doc, cx| doc.activate_version(1, cx));
+    assert!(opened.read(|doc| doc.can_return_to_current()));
+    assert!(opened.pane_action("secret-version-current").enabled);
+}
+
+/// A replaced connection — even in the same region — invalidates the
+/// history: a response of the old session is dropped, the history is loaded
+/// again from the new session, also while unsaved edits block the listing
+/// refresh.
+#[gpui::test]
+fn a_replaced_connection_reloads_the_history(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+    let old_generation = opened.read(|doc| doc.versions_generation);
+
+    let replacement = opened.replace_connection();
+    opened.announce_state_change();
+
+    assert_eq!(
+        replacement.secret_store_calls().version_listings,
+        vec![(
+            FAKE_SECRETS_STORE_ID.to_string(),
+            PLAINTEXT_SECRET.to_string()
+        )]
+    );
+    assert!(
+        opened.read(|doc| doc.is_editing_value()),
+        "the edit is kept"
+    );
+
+    let foreign = vec![dbflux_core::SecretVersionInfo {
+        id: "old-session-version".to_string(),
+        ..Default::default()
+    }];
+    opened.update(|doc, cx| {
+        doc.apply_versions(old_generation, PLAINTEXT_SECRET, Ok(foreign), cx);
+    });
+    assert!(
+        !opened
+            .version_ids()
+            .contains(&"old-session-version".to_string())
+    );
+}
+
+/// A history listed from the old session is never retrieved against the new
+/// connection, even before the pane heard about the replacement.
+#[gpui::test]
+fn a_version_of_a_replaced_session_is_not_retrieved(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    let replacement = opened.replace_connection();
+
+    opened.update(|doc, cx| doc.activate_version(1, cx));
+
+    assert!(
+        replacement
+            .secret_store_calls()
+            .value_version_requests
+            .is_empty()
+    );
+    assert!(
+        opened
+            .driver
+            .secret_store_calls()
+            .value_version_requests
+            .is_empty()
+    );
+    assert_eq!(replacement.secret_store_calls().version_listings.len(), 1);
+    assert_eq!(opened.version_ids().len(), 3);
+}
+
+/// A landed save makes the saved text the current version: the pane stops
+/// showing a historical one, and the history is listed again with the new
+/// version; a listing still in flight is invalidated.
+#[gpui::test]
+fn a_save_reloads_the_history_and_clears_the_shown_version(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(PLAINTEXT_SECRET);
+    opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+    opened.update(|doc, _cx| doc.value_version = Some("older".to_string()));
+    opened.start_edit();
+    opened.set_editor_text(EDITED_VALUE);
+    let generation_before = opened.read(|doc| doc.versions_generation);
+
+    opened.save_edit();
+
+    assert_eq!(
+        opened.read(|doc| doc.value_version().map(str::to_string)),
+        None
+    );
+    assert_ne!(
+        opened.read(|doc| doc.versions_generation),
+        generation_before
+    );
+    assert_eq!(opened.version_ids()[0], "v-written-1");
+    assert_eq!(opened.driver.secret_store_calls().version_listings.len(), 2);
+
+    let foreign = vec![dbflux_core::SecretVersionInfo {
+        id: "in-flight-version".to_string(),
+        ..Default::default()
+    }];
+    opened.update(|doc, cx| {
+        doc.apply_versions(generation_before, PLAINTEXT_SECRET, Ok(foreign), cx);
+    });
+    assert_eq!(opened.version_ids()[0], "v-written-1");
+}
+
+/// A menu built before the history changed does not activate a row of the
+/// new history.
+#[gpui::test]
+fn a_stale_pane_action_does_not_activate_a_version(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    let action = opened.pane_action("secret-version-retrieve-2");
+
+    opened.select(PLAINTEXT_SECRET);
+    opened.select(KEY_VALUE_SECRET);
+    opened.run_action(action);
+
+    assert!(
+        opened
+            .driver
+            .secret_store_calls()
+            .value_version_requests
+            .is_empty()
+    );
+
+    let fresh = opened.pane_action("secret-version-retrieve-2");
+    opened.run_action(fresh);
+    assert_eq!(opened.shown_password().as_deref(), Some(OLDEST_PASSWORD));
+}
+
+/// A response of the old session that lands after the connection was
+/// replaced, with its generation still current because the pane has not
+/// heard of the replacement, is dropped and the history is listed again.
+#[gpui::test]
+fn a_history_response_of_a_replaced_session_is_dropped(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    let replacement = opened.replace_connection();
+    let generation = opened.read(|doc| doc.versions_generation);
+    let foreign = vec![dbflux_core::SecretVersionInfo {
+        id: "old-session-version".to_string(),
+        ..Default::default()
+    }];
+
+    opened.update(|doc, cx| doc.apply_versions(generation, KEY_VALUE_SECRET, Ok(foreign), cx));
+
+    assert!(
+        !opened
+            .version_ids()
+            .contains(&"old-session-version".to_string())
+    );
+    assert_eq!(replacement.secret_store_calls().version_listings.len(), 1);
+}
+
+/// A history failure is reported where it lands, after the checks that tell
+/// whether it still matters: the current request's failure is reported once,
+/// a superseded request's failure is not reported at all.
+#[gpui::test]
+fn a_history_failure_is_reported_only_when_it_applies(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    let stale = opened.read(|doc| doc.versions_generation).wrapping_sub(1);
+    let current = opened.read(|doc| doc.versions_generation);
+
+    opened.update(|doc, cx| {
+        doc.apply_versions(
+            stale,
+            KEY_VALUE_SECRET,
+            Err(DbError::query_failed("stale")),
+            cx,
+        );
+    });
+    assert!(opened.reported_errors().is_empty());
+
+    opened.update(|doc, cx| {
+        doc.apply_versions(
+            current,
+            KEY_VALUE_SECRET,
+            Err(DbError::query_failed("denied")),
+            cx,
+        );
+    });
+    assert_eq!(opened.reported_errors().len(), 1);
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+}
+
+/// The real load of a refused history reports it once, not twice.
+#[gpui::test]
+fn a_refused_history_is_reported_once(cx: &mut TestAppContext) {
+    let driver = FakeDriver::new(DbKind::AwsSecrets)
+        .with_secret_versions_error(KEY_VALUE_SECRET, "not authorized");
+    let mut opened = open_with(cx, driver, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+
+    assert_eq!(opened.reported_errors().len(), 1);
+}
+
+/// A connection that went away and came back (here with a new session)
+/// retries the selected secret's history instead of staying failed.
+#[gpui::test]
+fn the_history_is_retried_when_the_connection_returns(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    let profile_id = opened.read(|doc| doc.profile_id);
+    let app_state = opened.app_state.clone();
+    let removed = opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id))
+    });
+    opened.announce_state_change();
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+
+    let replacement_driver = FakeDriver::new(DbKind::AwsSecrets);
+    let mut connected = removed.expect("was connected");
+    connected.connection = replacement_driver
+        .connect_arc(&connected.profile)
+        .expect("connect");
+    opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| {
+            state.connections_mut().insert(profile_id, connected);
+        });
+    });
+    opened.announce_state_change();
+
+    assert_eq!(
+        replacement_driver
+            .secret_store_calls()
+            .version_listings
+            .len(),
+        1
+    );
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Loaded(_))));
+
+    opened.announce_state_change();
+    assert_eq!(
+        replacement_driver
+            .secret_store_calls()
+            .version_listings
+            .len(),
+        1,
+        "a live session is not reloaded"
+    );
+}
+
+/// Back to current stays in the pane actions whatever the history is doing,
+/// enabled by the same rule as the banner button.
+#[gpui::test]
+fn back_to_current_stays_a_pane_action_while_the_history_loads_or_fails(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| doc.activate_version(1, cx));
+
+    for state in [
+        VersionsState::Loading,
+        VersionsState::Failed("history refused".to_string()),
+    ] {
+        opened.update(|doc, _cx| doc.versions = state);
+        let action = opened.pane_action("secret-version-current");
+        assert!(action.enabled, "a historical value is shown");
+    }
+}
+
+/// The history retry that finds no connection says so through the error
+/// seam, once: later state changes with the connection still gone stay quiet.
+#[gpui::test]
+fn a_history_retry_without_a_connection_is_reported_once(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    assert!(opened.reported_errors().is_empty());
+
+    let profile_id = opened.read(|doc| doc.profile_id);
+    let app_state = opened.app_state.clone();
+    opened.window.update(|_, cx| {
+        app_state.update(cx, |state, _| state.connections_mut().remove(&profile_id));
+    });
+    opened.announce_state_change();
+    opened.announce_state_change();
+
+    let errors = opened.reported_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].1.contains(&dbflux_i18n::t!(
+            "document.secret_store.error.connection_unavailable"
+        )),
+        "{errors:?}"
+    );
+    assert!(opened.read(|doc| matches!(doc.versions(), VersionsState::Failed(_))));
+}
+
+/// A historical retrieval that fails shows its error and neither the
+/// older-value banner nor Back to current.
+#[gpui::test]
+fn a_failed_historical_retrieval_shows_no_older_value_banner(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.select(KEY_VALUE_SECRET);
+    opened.update(|doc, cx| {
+        doc.value_version = Some("v-previous".to_string());
+        doc.value = ValueState::Failed(ValueFailure {
+            message: "retrieval refused".to_string(),
+            correlation_id: Uuid::now_v7(),
+            decrypt_denied: false,
+        });
+        cx.notify();
+    });
+
+    let text = opened.rendered_text();
+    assert!(text.contains("retrieval refused"), "{text}");
+    assert!(!text.contains("Showing version"), "{text}");
+    assert!(!text.contains("Back to current"), "{text}");
+    assert!(!opened.read(|doc| doc.can_return_to_current()));
+    assert!(!opened.pane_action("secret-version-current").enabled);
+}
+
+// -- Value editor: JSON key/value secrets -----------------------------------
+
+mod editor_key_value {
+    use super::*;
+    use crate::secret_store::editor::EditMode;
+
+    const EDITED: &str = r#"{"username":"api-user2","password":"fake-password-7f3a","port":5432}"#;
+
+    fn opened_key_value<'a>(cx: &'a mut TestAppContext) -> Opened<'a> {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.window.update(|window, _| window.activate_window());
+        opened.window.run_until_parked();
+        opened.select(KEY_VALUE_SECRET);
+        opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+        opened
+    }
+
+    fn has_path(opened: &mut Opened<'_>, suffix: &str) -> bool {
+        opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.ends_with(suffix))
+    }
+
+    #[gpui::test]
+    fn edit_value_is_offered_for_a_key_value_secret(cx: &mut TestAppContext) {
+        let mut opened = opened_key_value(cx);
+        assert!(opened.read(|doc| doc.can_edit_value()));
+        assert!(has_path(&mut opened, "secret-value-edit"));
+
+        opened.update(|doc, cx| doc.set_value_view(ValueView::Plaintext, cx));
+        assert!(has_path(&mut opened, "secret-value-edit"));
+
+        opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
+        assert!(
+            opened
+                .rendered_text()
+                .contains(&dbflux_i18n::t!("document.secret_store.edit.open"))
+        );
+    }
+
+    #[gpui::test]
+    fn the_chord_and_the_pane_action_open_the_editor(cx: &mut TestAppContext) {
+        let mut opened = opened_key_value(cx);
+        let actions: Vec<String> = opened.window.update(|_, cx| {
+            opened
+                .doc
+                .read(cx)
+                .pane_actions(&opened.doc)
+                .into_iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+        assert!(actions.iter().any(|id| id == "secret-edit-value"));
+
+        assert!(opened.command(Command::EditValue));
+        assert!(opened.read(|doc| doc.is_editing_value()));
+    }
+
+    #[gpui::test]
+    fn the_editor_opens_formatted_on_the_stored_text(cx: &mut TestAppContext) {
+        let mut opened = opened_key_value(cx);
+        opened.start_edit();
+
+        assert_eq!(
+            opened.read(|doc| doc.edit_mode()),
+            Some(EditMode::Formatted)
+        );
+        let text = opened.editor_text();
+        assert!(text.contains("\"username\": \"api-user\""), "{text}");
+        assert!(text.contains('\n'), "indented for editing: {text}");
+    }
+
+    #[gpui::test]
+    fn an_edited_pair_saves_compact_and_the_pairs_show_the_new_value(cx: &mut TestAppContext) {
+        let mut opened = opened_key_value(cx);
+        opened.start_edit();
+        let formatted = opened.editor_text().replace("api-user", "api-user2");
+        opened.set_editor_text(&formatted);
+
+        opened.save_edit();
+
+        assert_eq!(
+            opened.written_values(),
+            vec![(KEY_VALUE_SECRET.to_string(), EDITED.to_string())]
+        );
+        opened.read(|doc| {
+            assert!(!doc.is_editing_value());
+            let ValueState::Loaded(value) = &doc.value else {
+                panic!("value not loaded");
+            };
+            assert_eq!(value.view, ValueView::KeyValue);
+            let usernames: Vec<String> = value
+                .fields()
+                .into_iter()
+                .filter(|(key, _)| *key == Some("username"))
+                .map(|(_, field)| field.expose_secret().to_string())
+                .collect();
+            assert_eq!(usernames, vec!["api-user2".to_string()]);
+            assert!(!value.is_revealed(0), "masked again");
+        });
+    }
+
+    #[gpui::test]
+    fn invalid_json_blocks_save(cx: &mut TestAppContext) {
+        let mut opened = opened_key_value(cx);
+        opened.start_edit();
+        opened.set_editor_text("{\"username\": oops");
+
+        opened.save_edit();
+
+        assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+        let errors = opened.reported_errors();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].1.contains("JSON"));
+    }
+
+    #[gpui::test]
+    fn binary_and_managed_values_stay_read_only(cx: &mut TestAppContext) {
+        for name in [BINARY_SECRET, MANAGED_SECRET] {
+            let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+            opened.select(name);
+            opened.update(|doc, cx| doc.retrieve_selected_value(cx));
+            assert!(
+                opened.read(|doc| matches!(doc.value, ValueState::Loaded(_))),
+                "{name} loaded"
+            );
+            assert!(!opened.read(|doc| doc.can_edit_value()), "{name}");
+            assert!(!has_path(&mut opened, "secret-value-edit"), "{name}");
+        }
+    }
+
+    #[gpui::test]
+    fn the_key_value_editor_reaches_no_accessibility_node(cx: &mut TestAppContext) {
+        let mut opened = opened_key_value(cx);
+        opened.start_edit();
+        for mode in [EditMode::Formatted, EditMode::Raw] {
+            let doc = opened.doc.clone();
+            opened
+                .window
+                .update(|window, cx| doc.update(cx, |doc, cx| doc.set_edit_mode(mode, window, cx)));
+            opened.window.run_until_parked();
+            let text = opened.accessibility_update_text();
+            assert!(!text.contains("fake-password-7f3a"), "{mode:?}: {text}");
+            assert!(!text.contains("api-user"), "{mode:?}: {text}");
+        }
+    }
+}
+
+// -- Value editor: review findings ------------------------------------------
+
+mod editor_review {
+    use super::*;
+    use crate::keyboard_test_support::host_document;
+    use crate::secret_store::editor::EditMode;
+    use dbflux_app::keymap::ContextId;
+
+    /// The document hosted the way the workspace hosts it: the key context
+    /// comes from the document and every keymap command is routed to it, so
+    /// a test presses real keys.
+    fn open_hosted<'a>(cx: &'a mut TestAppContext) -> Opened<'a> {
+        init_keyboard_runtime(cx);
+
+        let driver = FakeDriver::new(DbKind::AwsSecrets);
+        let (app_state, profile_id) = connected_app_state(cx, &driver, "prod-aws");
+        cx.update(|cx| {
+            cx.set_global(AppStateGlobal {
+                entity: app_state.clone(),
+            });
+        });
+
+        let state = app_state.clone();
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| {
+                    SecretStoreDocument::new(
+                        profile_id,
+                        FAKE_SECRETS_STORE_ID.to_string(),
+                        None,
+                        state,
+                        window,
+                        cx,
+                    )
+                })
+            },
+            |doc, _| doc.active_context(),
+            |doc, command, window, cx| doc.dispatch_command(command, window, cx),
+        );
+        let doc = window.update(|_, cx| host.read(cx).document.clone());
+        window.update(|window, _| window.activate_window());
+        window.run_until_parked();
+
+        Opened {
+            doc,
+            window,
+            driver,
+            app_state,
+        }
+    }
+
+    fn save_chord() -> &'static str {
+        if cfg!(target_os = "macos") {
+            "cmd-s"
+        } else {
+            "ctrl-s"
+        }
+    }
+
+    fn start(opened: &mut Opened<'_>, stored: &str, edited: &str) {
+        opened.select(PLAINTEXT_SECRET);
+        opened.show_value(stored);
+        opened.start_edit();
+        opened.set_editor_text(edited);
+        opened.rendered_paths();
+    }
+
+    fn exists(opened: &mut Opened<'_>, suffix: &str) -> bool {
+        opened
+            .rendered_paths()
+            .iter()
+            .any(|path| path.ends_with(suffix))
+    }
+
+    fn count_with(opened: &mut Opened<'_>, needle: &str) -> usize {
+        opened
+            .rendered_paths()
+            .iter()
+            .filter(|path| path.contains(needle))
+            .count()
+    }
+
+    fn open_find(opened: &mut Opened<'_>) {
+        let doc = opened.doc.clone();
+        opened
+            .window
+            .update(|window, cx| doc.update(cx, |doc, cx| doc.find_in_value(window, cx)));
+        opened.window.run_until_parked();
+        opened.rendered_paths();
+    }
+
+    /// The real chord, through the window's key dispatch to the focused
+    /// textarea, reaches the store.
+    #[gpui::test]
+    fn the_save_chord_typed_into_the_textarea_writes(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        start(&mut opened, "stored text", "typed text");
+
+        opened.window.simulate_keystrokes(save_chord());
+        opened.window.run_until_parked();
+
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), "typed text".to_string())]
+        );
+    }
+
+    /// Focus inside the Find input is still the editor: the context stays
+    /// the text input's and the chord still saves.
+    #[gpui::test]
+    fn the_save_chord_typed_into_find_still_writes(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        start(&mut opened, "stored text", "typed text");
+
+        open_find(&mut opened);
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let (textarea_focused, editor_contains_focus) = opened.window.update(|window, cx| {
+            let textarea = gpui::Focusable::focus_handle(editor.read(cx), cx);
+            (
+                textarea.is_focused(window),
+                textarea.contains_focused(window, cx),
+            )
+        });
+        let wrapper_has_focus =
+            opened.read(|doc| doc.value_edit.as_ref().is_some_and(|edit| edit.focused));
+        assert!(
+            !textarea_focused && !editor_contains_focus,
+            "focus left the textarea for the Find input"
+        );
+        assert!(wrapper_has_focus, "the editor still counts as focused");
+        assert_eq!(
+            opened.read(|doc| doc.active_context()),
+            ContextId::TextInput
+        );
+
+        opened.window.simulate_keystrokes(save_chord());
+        opened.window.run_until_parked();
+
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), "typed text".to_string())]
+        );
+    }
+
+    /// While the editor holds the keyboard, the search command opens the
+    /// value's Find, not the secret-name search.
+    #[gpui::test]
+    fn focus_search_in_the_editor_opens_the_value_find(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        start(&mut opened, "stored text", "typed text");
+        let before = opened.rendered_paths().len();
+
+        assert!(opened.command(Command::FocusSearch));
+        opened.rendered_paths();
+
+        assert!(
+            !opened.read(|doc| doc.focus_mode == crate::secret_store::SecretFocusMode::Search),
+            "the secret-name search did not take the key"
+        );
+        assert!(opened.rendered_paths().len() > before, "Find panel drawn");
+        assert_eq!(
+            opened.read(|doc| doc.active_context()),
+            ContextId::TextInput
+        );
+    }
+
+    /// Indentation Formatted added is not a saveable change: no chip, no
+    /// marker, no changed-line count, and Save stays off.
+    #[gpui::test]
+    fn formatted_only_whitespace_is_not_modified(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        opened.select(PLAINTEXT_SECRET);
+        opened.show_value("[1,2]");
+        opened.start_edit();
+        opened.set_editor_text("[ 1 , 2 ]");
+        opened.rendered_paths();
+
+        assert!(!exists(&mut opened, "secret-value-editor-modified"));
+        assert_eq!(count_with(&mut opened, "-marker"), 0);
+        assert!(!opened.dirty());
+
+        // In Raw mode the same text is a change.
+        let doc = opened.doc.clone();
+        opened.window.update(|window, cx| {
+            doc.update(cx, |doc, cx| doc.set_edit_mode(EditMode::Raw, window, cx))
+        });
+        opened.set_editor_text("[ 1 , 2 ]");
+        opened.rendered_paths();
+        assert!(exists(&mut opened, "secret-value-editor-modified"));
+    }
+
+    /// A long value draws a bounded number of gutter rows, however many
+    /// lines it has, and a change far below the viewport has no marker row.
+    #[gpui::test]
+    fn a_long_value_draws_only_the_visible_rows(cx: &mut TestAppContext) {
+        let lines: Vec<String> = (0..5000).map(|index| format!("line {index}")).collect();
+        let stored = lines.join("\n");
+        let mut edited = lines.clone();
+        edited[4000] = "changed".to_string();
+
+        let mut opened = open_hosted(cx);
+        start(&mut opened, &stored, &edited.join("\n"));
+
+        let rows = count_with(&mut opened, "secret-value-editor-line-");
+        assert!(rows > 0 && rows < 100, "{rows} gutter elements");
+        assert!(!exists(&mut opened, "secret-value-editor-line-4000-marker"));
+        assert!(exists(&mut opened, "secret-value-editor-line-0-number"));
+        assert!(
+            opened.footer_text().contains("1 line changed"),
+            "{}",
+            opened.footer_text()
+        );
+    }
+
+    /// The first frame, before the textarea has laid out, sizes gutter rows
+    /// with the height the textarea will use.
+    #[gpui::test]
+    fn the_fallback_line_height_is_the_textarea_line_height(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        start(&mut opened, "a\nb", "a\nb");
+
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+        let laid_out = opened
+            .window
+            .update(|_, cx| editor.read(cx).line_height())
+            .expect("the textarea has laid out");
+        let fallback = opened
+            .window
+            .update(|_, cx| crate::secret_store::editor::fallback_line_height(cx));
+
+        assert_eq!(fallback, laid_out);
+    }
+
+    /// The caret is where the test put it, in bytes, before the footer is
+    /// asked: a byte-offset footer would pass `ñ` and fail after the emoji.
+    #[gpui::test]
+    fn the_caret_is_verified_by_byte_offset(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        start(&mut opened, "x", "ñ😀x");
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+
+        for (character, bytes, column) in
+            [(1u32, 2usize, "Col 2"), (2, 6, "Col 3"), (3, 7, "Col 4")]
+        {
+            opened.window.update(|window, cx| {
+                editor.update(cx, |state, cx| {
+                    state.set_cursor_position(lsp_types::Position::new(0, character), window, cx)
+                });
+            });
+            opened.window.run_until_parked();
+            opened.rendered_paths();
+
+            let offset = opened.window.update(|_, cx| editor.read(cx).cursor());
+            assert_eq!(offset, bytes, "caret byte offset");
+            assert!(opened.footer_text().contains(column), "{column}");
+        }
+    }
+
+    /// The Formatted hint describes what Save does for both stored layouts.
+    #[gpui::test]
+    fn the_formatted_hint_describes_both_layouts(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        start(&mut opened, "[1,2]", "[1,3]");
+
+        let text = opened.rendered_text();
+        assert!(text.contains("on one line back on one line"), "{text}");
+        assert!(text.contains("several lines as it is here"), "{text}");
+    }
+
+    /// With the Find panel open and pushing the text down, gutter row N is
+    /// still beside text line N.
+    #[gpui::test]
+    fn the_gutter_follows_the_text_when_find_is_open(cx: &mut TestAppContext) {
+        let text = (0..30)
+            .map(|i| format!("l{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut opened = open_hosted(cx);
+        start(&mut opened, &text, &text);
+        let editor = opened.read(|doc| doc.value_edit.as_ref().expect("editor").editor.clone());
+
+        let aligned = |opened: &mut Opened<'_>, stage: &str| {
+            for line in [0usize, 5] {
+                let offset = (0..line).map(|i| format!("l{i}\n").len()).sum::<usize>();
+                let glyph = opened
+                    .window
+                    .update(|_, cx| editor.read(cx).range_to_bounds(&(offset..offset + 1)))
+                    .expect("text laid out")
+                    .origin
+                    .y;
+                let gutter = opened
+                    .element_bounds(&format!("secret-value-editor-line-{line}-number"))
+                    .origin
+                    .y;
+                assert!(
+                    (gutter - glyph).abs() < gpui::px(1.5), // guardrail-allow: test tolerance, not spacing
+                    "{stage}, line {line}: gutter {gutter:?} vs text {glyph:?}"
+                );
+            }
+        };
+
+        opened.rendered_paths();
+        aligned(&mut opened, "closed");
+        open_find(&mut opened);
+        opened.rendered_paths();
+        aligned(&mut opened, "find open");
+    }
 }

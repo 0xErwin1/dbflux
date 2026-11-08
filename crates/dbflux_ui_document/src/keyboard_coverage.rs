@@ -675,11 +675,6 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
         // suffix (`secret-region.dropdown-trigger`); the pane actions list an
         // entry that opens it.
         ("secret-region.*", KeyboardPath::Menu("secret-region")),
-        // The retry of a failed region listing, also in the pane actions.
-        (
-            "secret-region-retry",
-            KeyboardPath::Menu("secret-region-retry"),
-        ),
         (
             "secret-path-crumb-*",
             KeyboardPath::Command(Command::ColumnLeft),
@@ -724,9 +719,32 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
             "secret-value-editor-save",
             KeyboardPath::Menu("secret-editor-save"),
         ),
+        // The Formatted / Raw switch of a JSON value. The editor holds the
+        // keyboard like a text buffer, so no bare key is bound there; the
+        // pane action of the same name is its keyboard path.
+        (
+            "segmented-secret-editor-mode-*",
+            KeyboardPath::Menu("secret-editor-mode"),
+        ),
+        // Find opens the editor component's find panel; Ctrl+F does the same
+        // while the text has focus.
+        (
+            "secret-value-editor-find",
+            KeyboardPath::Menu("secret-editor-find"),
+        ),
         (
             "secret-value-editor-discard",
             KeyboardPath::Menu("secret-editor-discard"),
+        ),
+        // The version history: each row retrieves its version, and Back to
+        // current replaces a historical value; both are pane actions.
+        (
+            "secret-version-row-*",
+            KeyboardPath::Menu("secret-version-retrieve-*"),
+        ),
+        (
+            "secret-version-back-to-current",
+            KeyboardPath::Menu("secret-version-current"),
         ),
         (
             "secret-value-copy-*",

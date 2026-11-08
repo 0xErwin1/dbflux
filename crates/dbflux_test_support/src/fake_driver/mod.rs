@@ -105,6 +105,7 @@ struct FakeDriverState {
     delete_row_errors: RwLock<Vec<(dbflux_core::Value, String)>>,
     secret_store_calls: Mutex<FakeSecretStoreCalls>,
     secret_write_errors: RwLock<Vec<(String, String)>>,
+    secret_version_errors: RwLock<Vec<(String, String)>>,
     region_switch_enabled: AtomicBool,
     available_regions: RwLock<Vec<String>>,
     region_list_error: RwLock<Option<String>>,
@@ -249,6 +250,18 @@ impl FakeDriver {
         message: impl Into<String>,
     ) -> Self {
         rwlock_write(&self.state.secret_write_errors).push((name.into(), message.into()));
+        self
+    }
+
+    /// Fails `list_versions` for the secret `name`, the way a missing IAM
+    /// permission fails a history read. The secret's value reads are
+    /// unaffected.
+    pub fn with_secret_versions_error(
+        self,
+        name: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        rwlock_write(&self.state.secret_version_errors).push((name.into(), message.into()));
         self
     }
 

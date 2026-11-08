@@ -3427,7 +3427,6 @@ document:
     loading_more: "Loading the next page…"
     region:
       label: "Region"
-      retry: "Retry"
       switch_failed: "Could not switch to region %{region}: %{error}"
     columns:
       name: "Name"
@@ -3459,25 +3458,53 @@ document:
       loaded:
         one: "%{count} secret loaded"
         many: "%{count} secrets loaded"
+      paths:
+        one: "%{count} path"
+        many: "%{count} paths"
+      parameters:
+        one: "%{count} parameter"
+        many: "%{count} parameters"
+      tree_summary: "%{paths} · %{parameters} loaded under %{path}"
+      flat_summary: "%{parameters} under %{path}"
       hint:
         open: "open"
         retrieve: "retrieve value"
-        copy_id: "copy ID"
+        copy_arn: "copy ARN"
         filter: "filter"
         up: "up"
     status:
       list_timing:
         one: "List · %{count} secret · %{millis} ms"
         many: "List · %{count} secrets · %{millis} ms"
+      list_timing_parameters:
+        one: "List · %{count} parameter · %{millis} ms"
+        many: "List · %{count} parameters · %{millis} ms"
       describe_timing: "Describe · %{millis} ms"
       retrieve_timing: "Retrieve value · %{millis} ms"
       duration_tooltip: "Client-side duration of the last store call"
+    date:
+      short: "%{month} %{day}, %{time}"
+      short_with_year: "%{month} %{day}, %{year}, %{time}"
+      months:
+        jan: "Jan"
+        feb: "Feb"
+        mar: "Mar"
+        apr: "Apr"
+        may: "May"
+        jun: "Jun"
+        jul: "Jul"
+        aug: "Aug"
+        sep: "Sep"
+        oct: "Oct"
+        nov: "Nov"
+        dec: "Dec"
     rotation:
       off: "Off"
       enabled: "Enabled"
       disabled: "Disabled"
       every_days: "Every %{count} days"
       every_hours: "Every %{count} hours"
+      on_schedule: "On a schedule"
       schedule_with_window: "%{schedule} · window %{window} (%{expression})"
       title: "Rotation"
       status: "Status"
@@ -3501,7 +3528,24 @@ document:
       created: "Created"
       last_changed: "Last changed"
       last_retrieved: "Last retrieved"
-      versions: "Versions"
+    versions:
+      title: "Versions"
+      history_title: "History"
+      count:
+        one: "%{count} version"
+        many: "%{count} versions"
+      column:
+        version: "Version"
+        labels: "Staging labels"
+        created: "Created"
+      no_labels: "no labels"
+      history_version: "v%{id}"
+      loading: "Loading the versions…"
+      failed: "The versions could not be loaded"
+      retrieve: "Retrieve version %{version}"
+      back_to_current: "Back to current"
+      shown: "Showing version %{version}"
+      not_current: "This is not the current version. The retrieval is audited, the value is not."
     tags:
       title: "Tags"
       none: "No tags"
@@ -3566,6 +3610,19 @@ document:
       refused_managed: "The value of %{name} is managed by %{service}, so it cannot be edited."
       refused_deletion: "Deletion is scheduled for %{name}, so its value cannot be edited until it is restored."
       change_summary: "Unsaved value edits"
+      find: "Find"
+      modified: "modified"
+      footer:
+        summary: "UTF-8 · %{size} · version %{version}"
+        summary_unversioned: "UTF-8 · %{size}"
+        changed_one: "1 line changed"
+        changed_other: "%{count} lines changed"
+        caret: "Ln %{line}, Col %{column}"
+      hint_formatted: "Saving writes a new version and makes it current. Formatted saves a value stored on one line back on one line, and a value stored on several lines as it is here; Raw saves the text exactly as it is here."
+      mode:
+        formatted: "Formatted"
+        raw: "Raw"
+        toggle: "Switch between Formatted and Raw"
 document_tree:
   search_placeholder: Search…
   view:

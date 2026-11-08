@@ -5,13 +5,17 @@
 
 use super::listing::{LARGEST_PAGE_ENTRIES, PathMode, keeps_loading};
 use super::value::{RetrievalTarget, RetrievedValue, ValueFailure, value_retrieval_event};
-use super::{CallTiming, DetailsState, SecretRowKey, SecretStoreDocument, StoreCall, ValueState};
+use super::{
+    CallTiming, DetailsState, SecretRowKey, SecretStoreDocument, StoreCall, ValueState,
+    VersionsState,
+};
 use crate::object_text::db_error_to_user_facing;
 use dbflux_core::observability::EventSink as _;
 use dbflux_core::{
-    Connection, DbError, SecretDetails, SecretListPage, SecretListRequest, SecretValue,
+    Connection, DbError, SecretDetails, SecretListPage, SecretListRequest, SecretStoreCapabilities,
+    SecretValue, SecretVersionInfo,
 };
-use dbflux_ui_base::user_error::{report_error, report_error_async};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
 use gpui::Context;
 use std::sync::Arc;
 use std::time::Instant;
@@ -56,6 +60,7 @@ impl SecretStoreDocument {
         self.selected = None;
         self.details_generation = self.details_generation.wrapping_add(1);
         self.details = DetailsState::Idle;
+        self.reset_versions();
         self.clear_value();
         self.drop_context_menu();
 
@@ -79,7 +84,15 @@ impl SecretStoreDocument {
     }
 
     /// Refresh: lists the level again and drops the retrieved value.
+    ///
+    /// A region discovery that failed is asked again, so granting
+    /// `ec2:DescribeRegions` brings the picker back without reopening the
+    /// document.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.regions, super::RegionListState::Failed(_)) {
+            self.load_regions(cx);
+        }
+
         self.load_first_page(cx);
     }
 
@@ -140,7 +153,10 @@ impl SecretStoreDocument {
 
                 if applied {
                     self.last_call = Some(CallTiming {
-                        call: StoreCall::List { count },
+                        call: StoreCall::List {
+                            count,
+                            hierarchical: self.hierarchical(),
+                        },
                         millis,
                     });
                 }
@@ -241,11 +257,237 @@ impl SecretStoreDocument {
         cx.notify();
     }
 
+    /// Drops the history of the previous selection and invalidates any
+    /// listing still in flight for it.
+    pub(crate) fn reset_versions(&mut self) {
+        self.versions_generation = self.versions_generation.wrapping_add(1);
+        self.versions = VersionsState::Idle;
+        self.versions_session = None;
+        self.missing_connection_reported = false;
+    }
+
+    /// Lists the versions of `name` for the details pane, on the background
+    /// executor like [`Self::describe`]. A store without
+    /// `SecretStoreCapabilities::VERSIONS` is never asked. Never fetches a
+    /// value.
+    pub(crate) fn load_versions(&mut self, name: String, cx: &mut Context<Self>) {
+        self.versions_generation = self.versions_generation.wrapping_add(1);
+        let generation = self.versions_generation;
+
+        if !self.store.supports(SecretStoreCapabilities::VERSIONS) {
+            self.versions = VersionsState::NotSupported;
+            return;
+        }
+
+        self.versions = VersionsState::Loading;
+        self.versions_session = None;
+
+        let Some(connection) = self.connection(cx) else {
+            let message = dbflux_i18n::t!("document.secret_store.error.connection_unavailable");
+
+            // Only the first catch site reports: an editor path that found
+            // the same loss already did.
+            if !self.missing_connection_reported {
+                self.missing_connection_reported = true;
+                report_error(UserFacingError::new(ErrorKind::User, message.clone()), cx);
+            }
+            self.versions = VersionsState::Failed(message);
+            return;
+        };
+
+        self.missing_connection_reported = false;
+        self.versions_session = Some(connection.clone());
+
+        let store_id = self.store.id.clone();
+        let entity = cx.entity().clone();
+
+        let task = cx.background_executor().spawn({
+            let name = name.clone();
+            async move {
+                match connection.secret_store(&store_id) {
+                    Some(store) => store.list_versions(&name),
+                    None => Err(store_unavailable(&store_id)),
+                }
+            }
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                entity.update(cx, |doc, cx| {
+                    doc.apply_versions(generation, &name, result, cx)
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Lands a history. A response for another secret, or from a load that
+    /// a newer selection, refresh or connection replaced, is dropped; a
+    /// connection replaced since the load started drops it and lists again
+    /// from the new session.
+    pub(crate) fn apply_versions(
+        &mut self,
+        generation: u64,
+        name: &str,
+        result: Result<Vec<SecretVersionInfo>, DbError>,
+        cx: &mut Context<Self>,
+    ) {
+        let is_current = generation == self.versions_generation
+            && self.selected == Some(SecretRowKey::Secret(name.to_string()));
+
+        if !is_current {
+            return;
+        }
+
+        if !self.history_session_is_live(cx) {
+            self.load_versions(name.to_string(), cx);
+            cx.notify();
+            return;
+        }
+
+        self.versions = match result {
+            Ok(versions) => VersionsState::Loaded(versions),
+            Err(error) => {
+                // First catch site, and only for a failure that still
+                // applies: a superseded request fails silently above.
+                report_error(db_error_to_user_facing(&error), cx);
+                VersionsState::Failed(error.to_string())
+            }
+        };
+        cx.notify();
+    }
+
+    /// Whether the history was listed from the connection the profile
+    /// holds now. A connection replaced since — a reconnect, a region switch,
+    /// a credentials refresh — is another session, whose versions the
+    /// listed ids do not name.
+    pub(crate) fn history_session_is_live(&self, cx: &Context<Self>) -> bool {
+        match (&self.versions_session, self.connection(cx)) {
+            (Some(listed), Some(live)) => Arc::ptr_eq(listed, &live),
+            _ => false,
+        }
+    }
+
+    /// Lists the selected secret's history again when the connection it was
+    /// listed from is gone, or when a connection returned after the history
+    /// had none to be listed from. Independent of the unsaved-edit guard: the
+    /// history carries no edit, and stale ids must never be retrievable.
+    pub(crate) fn adopt_connection_session(&mut self, cx: &mut Context<Self>) {
+        let Some(SecretRowKey::Secret(name)) = self.selected.clone() else {
+            return;
+        };
+
+        if matches!(self.versions, VersionsState::NotSupported)
+            || self.history_session_is_live(cx)
+            || (self.versions_session.is_none() && self.connection(cx).is_none())
+        {
+            return;
+        }
+
+        self.load_versions(name, cx);
+        cx.notify();
+    }
+
+    /// The version the store serves as the selected secret's current value:
+    /// the describe's, else the one the history marks current. Nothing is
+    /// inferred: without either, no version is known to be current.
+    pub(crate) fn current_version_id(&self) -> Option<&str> {
+        let described = match &self.details {
+            DetailsState::Loaded(details) => details.summary.version.as_deref(),
+            _ => None,
+        };
+
+        described.or_else(|| self.history_current_version())
+    }
+
+    /// The retrieved version id when the store's latest information says it
+    /// is no longer (or never was) the current one, evaluated on every call
+    /// so a rotation that lands later turns a once-current value into an
+    /// older one.
+    pub(crate) fn shown_older_version(&self) -> Option<&str> {
+        // Only a value that loaded is an older value; a failed or pending
+        // retrieval has nothing to caption.
+        if !matches!(self.value, ValueState::Loaded(_)) {
+            return None;
+        }
+
+        let shown = self.value_version.as_deref()?;
+        let current = self.current_version_id()?;
+
+        (shown != current).then_some(shown)
+    }
+
+    fn history_current_version(&self) -> Option<&str> {
+        let VersionsState::Loaded(versions) = &self.versions else {
+            return None;
+        };
+
+        versions
+            .iter()
+            .find(|version| version.is_current)
+            .map(|version| version.id.as_str())
+    }
+
+    pub(crate) fn is_current_version(&self, version: &str) -> bool {
+        self.current_version_id() == Some(version)
+    }
+
+    /// Retrieves the value of the version at `index` of the history, through
+    /// the same audited retrieval Retrieve value uses. The request always
+    /// names the row's id, the current version's row included: the current
+    /// version can rotate between the listing and the click.
+    pub fn activate_version(&mut self, index: usize, cx: &mut Context<Self>) {
+        let VersionsState::Loaded(versions) = &self.versions else {
+            return;
+        };
+
+        let Some(id) = versions.get(index).map(|version| version.id.clone()) else {
+            return;
+        };
+
+        // The ids belong to the session that listed them; against another
+        // connection they could name a different version or none.
+        if !self.history_session_is_live(cx) {
+            self.adopt_connection_session(cx);
+            return;
+        }
+
+        self.retrieve_version(Some(id), cx);
+    }
+
+    /// Whether Back to current may run: a historical value is shown and no
+    /// retrieval is in flight.
+    pub fn can_return_to_current(&self) -> bool {
+        self.shown_older_version().is_some()
+    }
+
+    /// Replaces a historical value with the current one.
+    pub fn back_to_current_version(&mut self, cx: &mut Context<Self>) {
+        if self.can_return_to_current() {
+            self.retrieve_version(None, cx);
+        }
+    }
+
     /// Retrieve value: fetches the selected secret's current value. Every
     /// retrieval, successful or not, records one audit event without the
     /// value. Refused for a secret whose deletion is pending.
     pub fn retrieve_selected_value(&mut self, cx: &mut Context<Self>) {
+        self.retrieve_version(None, cx);
+    }
+
+    /// Retrieves `version` of the selected secret, the current value when
+    /// `None`. One path for both, so every retrieval is audited the same way.
+    /// The retrieved id is kept; whether it reads as an older value is decided
+    /// against the latest current-version information when it is drawn.
+    pub(crate) fn retrieve_version(&mut self, version: Option<String>, cx: &mut Context<Self>) {
         if !self.can_retrieve_value() {
+            return;
+        }
+
+        // Retrieving replaces the value section and drops the open editor.
+        if self.block_unsaved_value_edits(cx) {
             return;
         }
 
@@ -254,6 +496,7 @@ impl SecretStoreDocument {
         };
 
         self.clear_value();
+        self.value_version = version.clone();
         let generation = self.value_generation;
         self.value = ValueState::Loading;
         cx.notify();
@@ -262,6 +505,7 @@ impl SecretStoreDocument {
             self.apply_value(
                 generation,
                 &name,
+                version.as_deref(),
                 Err(DbError::connection_failed(dbflux_i18n::t!(
                     "document.secret_store.error.connection_unavailable"
                 ))),
@@ -276,10 +520,11 @@ impl SecretStoreDocument {
 
         let task = cx.background_executor().spawn({
             let name = name.clone();
+            let version = version.clone();
             async move {
                 let started = Instant::now();
                 let result = match connection.secret_store(&store_id) {
-                    Some(store) => store.get_value(&name, None),
+                    Some(store) => store.get_value(&name, version.as_deref()),
                     None => Err(store_unavailable(&store_id)),
                 };
 
@@ -292,7 +537,7 @@ impl SecretStoreDocument {
 
             cx.update(|cx| {
                 entity.update(cx, |doc, cx| {
-                    doc.apply_value(generation, &name, result, millis, cx)
+                    doc.apply_value(generation, &name, version.as_deref(), result, millis, cx)
                 });
             });
         })
@@ -306,6 +551,7 @@ impl SecretStoreDocument {
         &mut self,
         generation: u64,
         name: &str,
+        requested_version: Option<&str>,
         result: Result<SecretValue, DbError>,
         millis: u128,
         cx: &mut Context<Self>,
@@ -345,7 +591,10 @@ impl SecretStoreDocument {
                     decrypt_denied: matches!(error, DbError::PermissionDenied(_)),
                 };
 
-                self.record_audit(value_retrieval_event(&target, None, Some(&failure)), cx);
+                self.record_audit(
+                    value_retrieval_event(&target, requested_version, Some(&failure)),
+                    cx,
+                );
                 report_error(user_error, cx);
 
                 if is_current {

@@ -13,6 +13,7 @@ mod context_menu;
 mod data;
 mod details;
 mod editor;
+mod list;
 mod listing;
 mod pane;
 mod region;
@@ -41,11 +42,12 @@ use dbflux_components::controls::{Dropdown, DropdownSelectionChanged, InputEvent
 use dbflux_core::secrecy::ExposeSecret;
 use dbflux_core::{
     Connection, DriverCapabilities, RefreshPolicy, SecretDetails, SecretStoreCapabilities,
-    SecretStoreDescriptor, SecretSummary,
+    SecretStoreDescriptor, SecretSummary, SecretVersionInfo,
 };
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::AppStateEntity;
 use gpui::*;
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// Which part of the document owns keyboard input.
@@ -75,10 +77,27 @@ pub enum DetailsState {
     Failed(String),
 }
 
+/// The version history of the selected secret, loaded apart from its
+/// describe so a slow or refused history never hides the details.
+#[derive(Clone, Debug, Default)]
+pub enum VersionsState {
+    #[default]
+    Idle,
+    Loading,
+    Loaded(Vec<SecretVersionInfo>),
+    Failed(String),
+    /// The store does not advertise `SecretStoreCapabilities::VERSIONS`.
+    NotSupported,
+}
+
 /// The last store call and how long it took, for the status bar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoreCall {
-    List { count: usize },
+    /// `hierarchical` picks the noun the status bar uses for the entries.
+    List {
+        count: usize,
+        hierarchical: bool,
+    },
     Describe,
     Retrieve,
 }
@@ -109,6 +128,19 @@ pub struct SecretStoreDocument {
     selected: Option<SecretRowKey>,
     details: DetailsState,
     details_generation: u64,
+    versions: VersionsState,
+    versions_generation: u64,
+    /// The connection the history was listed from, so ids of a replaced
+    /// session are never retrieved against the new one.
+    versions_session: Option<Arc<dyn Connection>>,
+    /// Some path of this document already reported the missing connection
+    /// for the current selection, so the next one to find the same loss
+    /// stays quiet. Cleared when a connection is found again or the
+    /// selection is reset.
+    missing_connection_reported: bool,
+    /// The version whose value the value section shows or is retrieving,
+    /// `None` for the current value.
+    value_version: Option<String>,
     value: ValueState,
     value_generation: u64,
     /// One read-only, secret-marked input per drawn value field, built on
@@ -259,6 +291,7 @@ impl SecretStoreDocument {
         subscriptions.push(
             cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
                 this.adopt_connection_region(cx);
+                this.adopt_connection_session(cx);
             }),
         );
 
@@ -284,6 +317,11 @@ impl SecretStoreDocument {
             selected: None,
             details: DetailsState::Idle,
             details_generation: 0,
+            versions: VersionsState::Idle,
+            versions_generation: 0,
+            versions_session: None,
+            missing_connection_reported: false,
+            value_version: None,
             value: ValueState::NotLoaded,
             value_generation: 0,
             value_inputs: Vec::new(),
@@ -372,6 +410,15 @@ impl SecretStoreDocument {
         &self.details
     }
 
+    pub fn versions(&self) -> &VersionsState {
+        &self.versions
+    }
+
+    /// The version the value section shows, `None` for the current value.
+    pub fn value_version(&self) -> Option<&str> {
+        self.value_version.as_deref()
+    }
+
     pub fn value(&self) -> &ValueState {
         &self.value
     }
@@ -425,7 +472,9 @@ impl SecretStoreDocument {
             return ContextId::ContextMenu;
         }
 
-        if self.focus_mode == SecretFocusMode::Search {
+        if self.focus_mode == SecretFocusMode::Search
+            || self.value_edit.as_ref().is_some_and(|edit| edit.focused)
+        {
             return ContextId::TextInput;
         }
 
@@ -440,6 +489,18 @@ impl SecretStoreDocument {
 
     fn hierarchical(&self) -> bool {
         self.store.supports(SecretStoreCapabilities::HIERARCHICAL)
+    }
+
+    /// What the footer says about the loaded rows: the footer and the status
+    /// bar draw the same counts from here.
+    pub(crate) fn loaded_summary(&self) -> String {
+        list::loaded_summary(
+            self.hierarchical(),
+            self.path_mode,
+            self.path.as_deref(),
+            self.listing.child_paths.len(),
+            self.listing.entries.len(),
+        )
     }
 
     /// The selected secret's listing row, when a secret is selected.
@@ -509,11 +570,13 @@ impl SecretStoreDocument {
         self.clear_value();
         self.details_generation = self.details_generation.wrapping_add(1);
         self.details = DetailsState::Idle;
+        self.reset_versions();
 
         if let SecretRowKey::Secret(name) = &row {
             let name = name.clone();
             self.selected = Some(row);
-            self.describe(name, cx);
+            self.describe(name.clone(), cx);
+            self.load_versions(name, cx);
         } else {
             self.selected = Some(row);
         }
@@ -631,6 +694,7 @@ impl SecretStoreDocument {
         self.value_generation = self.value_generation.wrapping_add(1);
         self.value_write_generation = self.value_write_generation.wrapping_add(1);
         self.value = ValueState::NotLoaded;
+        self.value_version = None;
         self.value_edit = None;
         self.value_inputs.clear();
         self.value_input_masks.clear();
@@ -917,6 +981,86 @@ impl SecretStoreDocument {
             );
         }
 
+        // Each version of the history is a clickable row, and Back to current
+        // a button of the value section: both reachable from the menu.
+        if let VersionsState::Loaded(versions) = &self.versions {
+            for (index, version) in versions.iter().enumerate() {
+                let target = target.clone();
+                let history_generation = self.versions_generation;
+                actions.push(
+                    PaneAction::callback(
+                        format!("secret-version-retrieve-{index}"),
+                        dbflux_i18n::t!(
+                            "document.secret_store.versions.retrieve",
+                            version = details::short_version_id(&version.id)
+                        ),
+                        move |_window, cx| {
+                            if let Some(doc) = target.upgrade() {
+                                doc.update(cx, |doc, cx| {
+                                    // The menu was built over another history.
+                                    if doc.versions_generation == history_generation {
+                                        doc.activate_version(index, cx);
+                                    }
+                                });
+                            }
+                        },
+                    )
+                    .icon(AppIcon::History)
+                    .enabled(self.can_retrieve_value()),
+                );
+            }
+        }
+
+        // Registered whatever the history is doing: the banner's button is
+        // drawn from the value, not from the history, so it needs its
+        // keyboard path even while the history loads or fails.
+        if self.store.supports(SecretStoreCapabilities::VERSIONS) {
+            actions.push(
+                callback_action(
+                    &target,
+                    "secret-version-current",
+                    "document.secret_store.versions.back_to_current",
+                    Self::back_to_current_version,
+                )
+                .icon(AppIcon::RotateCcw)
+                .enabled(self.can_return_to_current()),
+            );
+        }
+
+        // The Formatted / Raw switch is a clickable control of the editor, so
+        // the pane actions are its keyboard path too.
+        if self.can_toggle_edit_mode() {
+            let target = target.clone();
+            actions.push(
+                crate::pane::PaneAction::callback(
+                    "secret-editor-mode",
+                    dbflux_i18n::t!("document.secret_store.edit.mode.toggle"),
+                    move |window, cx| {
+                        if let Some(doc) = target.upgrade() {
+                            doc.update(cx, |doc, cx| doc.cycle_edit_mode(window, cx));
+                        }
+                    },
+                )
+                .enabled(self.can_toggle_edit_mode()),
+            );
+        }
+
+        if self.is_editing_value() {
+            let target = target.clone();
+            actions.push(
+                crate::pane::PaneAction::callback(
+                    "secret-editor-find",
+                    dbflux_i18n::t!("document.secret_store.edit.find"),
+                    move |window, cx| {
+                        if let Some(doc) = target.upgrade() {
+                            doc.update(cx, |doc, cx| doc.find_in_value(window, cx));
+                        }
+                    },
+                )
+                .icon(AppIcon::Search),
+            );
+        }
+
         // Edit value opens the editor of a plaintext value; the action needs
         // the window the editor's state is built with.
         if self.can_edit_value() {
@@ -937,31 +1081,21 @@ impl SecretStoreDocument {
             actions.push(edit_value);
         }
 
-        // The region picker and the retry of a failed listing are clickable
-        // toolbar controls, so the pane actions are their keyboard path too.
-        if self.region_switchable {
-            if let Some(dropdown) = self.region_dropdown.clone() {
-                actions.push(
-                    PaneAction::callback(
-                        "secret-region",
-                        dbflux_i18n::t!("document.secret_store.region.label"),
-                        move |window, cx| {
-                            dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
-                        },
-                    )
-                    .icon(AppIcon::Globe)
-                    .enabled(matches!(self.regions, RegionListState::Loaded(_))),
-                );
-            }
+        // The region picker is a clickable toolbar control, so the pane
+        // actions are its keyboard path too.
+        if self.region_switchable
+            && let Some(dropdown) = self.region_dropdown.clone()
+        {
             actions.push(
-                callback_action(
-                    &target,
-                    "secret-region-retry",
-                    "document.secret_store.region.retry",
-                    Self::load_regions,
+                PaneAction::callback(
+                    "secret-region",
+                    dbflux_i18n::t!("document.secret_store.region.label"),
+                    move |window, cx| {
+                        dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+                    },
                 )
-                .icon(AppIcon::RefreshCcw)
-                .enabled(matches!(self.regions, RegionListState::Failed(_))),
+                .icon(AppIcon::Globe)
+                .enabled(matches!(self.regions, RegionListState::Loaded(_))),
             );
         }
 
@@ -988,6 +1122,9 @@ impl SecretStoreDocument {
             Command::Execute => self.activate_selected(cx),
             Command::ToggleValuePanel => self.retrieve_selected_value(cx),
             Command::SaveQuery if self.value_edit.is_some() => self.save_value_edit(cx),
+            Command::CycleResultView if self.value_edit.is_some() => {
+                self.cycle_edit_mode(window, cx)
+            }
             Command::ExpandCollapse => self.toggle_reveal_all(cx),
             Command::ResultsCopyCell => self.copy_resource_id(cx),
             Command::ResultsCopyRow => self.copy_full_value(cx),
@@ -999,6 +1136,9 @@ impl SecretStoreDocument {
                 self.start_value_edit(window, cx);
             }
             Command::RefreshSchema => self.refresh(cx),
+            Command::FocusSearch if self.value_edit.as_ref().is_some_and(|edit| edit.focused) => {
+                self.find_in_value(window, cx)
+            }
             Command::FocusSearch | Command::FocusToolbar => self.focus_search(window, cx),
             Command::Cancel => {
                 self.focus_mode = SecretFocusMode::Table;

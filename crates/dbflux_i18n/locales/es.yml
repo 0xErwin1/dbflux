@@ -3427,7 +3427,6 @@ document:
     loading_more: "Cargando la página siguiente…"
     region:
       label: "Región"
-      retry: "Reintentar"
       switch_failed: "No se pudo cambiar a la región %{region}: %{error}"
     columns:
       name: "Nombre"
@@ -3459,25 +3458,53 @@ document:
       loaded:
         one: "%{count} secreto cargado"
         many: "%{count} secretos cargados"
+      paths:
+        one: "%{count} ruta"
+        many: "%{count} rutas"
+      parameters:
+        one: "%{count} parámetro"
+        many: "%{count} parámetros"
+      tree_summary: "%{paths} · %{parameters} cargados en %{path}"
+      flat_summary: "%{parameters} en %{path}"
       hint:
         open: "abrir"
         retrieve: "obtener valor"
-        copy_id: "copiar ID"
+        copy_arn: "copiar ARN"
         filter: "filtrar"
         up: "subir"
     status:
       list_timing:
         one: "Listado · %{count} secreto · %{millis} ms"
         many: "Listado · %{count} secretos · %{millis} ms"
+      list_timing_parameters:
+        one: "Listado · %{count} parámetro · %{millis} ms"
+        many: "Listado · %{count} parámetros · %{millis} ms"
       describe_timing: "Descripción · %{millis} ms"
       retrieve_timing: "Obtener valor · %{millis} ms"
       duration_tooltip: "Duración en el cliente de la última llamada al almacén"
+    date:
+      short: "%{day} %{month}, %{time}"
+      short_with_year: "%{day} %{month} %{year}, %{time}"
+      months:
+        jan: "ene"
+        feb: "feb"
+        mar: "mar"
+        apr: "abr"
+        may: "may"
+        jun: "jun"
+        jul: "jul"
+        aug: "ago"
+        sep: "sep"
+        oct: "oct"
+        nov: "nov"
+        dec: "dic"
     rotation:
       off: "Desactivada"
       enabled: "Activada"
       disabled: "Desactivada"
       every_days: "Cada %{count} días"
       every_hours: "Cada %{count} horas"
+      on_schedule: "Según horario"
       schedule_with_window: "%{schedule} · ventana %{window} (%{expression})"
       title: "Rotación"
       status: "Estado"
@@ -3501,7 +3528,24 @@ document:
       created: "Creado"
       last_changed: "Último cambio"
       last_retrieved: "Última obtención"
-      versions: "Versiones"
+    versions:
+      title: "Versiones"
+      history_title: "Historial"
+      count:
+        one: "%{count} versión"
+        many: "%{count} versiones"
+      column:
+        version: "Versión"
+        labels: "Etiquetas de etapa"
+        created: "Creada"
+      no_labels: "sin etiquetas"
+      history_version: "v%{id}"
+      loading: "Cargando las versiones…"
+      failed: "No se pudieron cargar las versiones"
+      retrieve: "Obtener la versión %{version}"
+      back_to_current: "Volver a la actual"
+      shown: "Mostrando la versión %{version}"
+      not_current: "No es la versión actual. La obtención se audita, el valor no."
     tags:
       title: "Etiquetas"
       none: "Sin etiquetas"
@@ -3566,6 +3610,19 @@ document:
       refused_managed: "El valor de %{name} lo gestiona %{service}, por lo que no se puede editar."
       refused_deletion: "Hay una eliminación programada para %{name}, así que su valor no se puede editar hasta que se restaure."
       change_summary: "Cambios de valor sin guardar"
+      find: "Buscar"
+      modified: "modificado"
+      footer:
+        summary: "UTF-8 · %{size} · versión %{version}"
+        summary_unversioned: "UTF-8 · %{size}"
+        changed_one: "1 línea modificada"
+        changed_other: "%{count} líneas modificadas"
+        caret: "Ln %{line}, Col %{column}"
+      hint_formatted: "Guardar escribe una versión nueva y la hace la actual. Formateado guarda de nuevo en una sola línea un valor almacenado en una línea, y un valor almacenado en varias líneas tal como está aquí; Sin formato guarda el texto exactamente como está aquí."
+      mode:
+        formatted: "Formateado"
+        raw: "Sin formato"
+        toggle: "Alternar entre Formateado y Sin formato"
 document_tree:
   search_placeholder: Buscar…
   view:

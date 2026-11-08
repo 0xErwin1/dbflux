@@ -808,3 +808,34 @@ fn a_description_write_error_is_scrubbed_in_the_code_and_location_fields_too() {
     assert!(!rendered.contains("word"), "{rendered}");
     assert!(!rendered.contains("pa\\\"ss"), "{rendered}");
 }
+
+#[test]
+fn the_highest_version_number_is_marked_current_whatever_the_page_order() {
+    let versions = versions_from_history(&[
+        history_entry(2, &[], Some(2_000), None),
+        history_entry(10, &[], Some(3_000), None),
+        history_entry(9, &[], Some(1_000), None),
+    ]);
+
+    let flags: Vec<(&str, bool)> = versions
+        .iter()
+        .map(|version| (version.id.as_str(), version.is_current))
+        .collect();
+    assert_eq!(flags, [("10", true), ("9", false), ("2", false)]);
+}
+
+#[test]
+fn a_paged_history_marks_one_current_version_across_pages() {
+    let first = versions_from_history(&[history_entry(1, &[], Some(1_000), None)]);
+    let second = versions_from_history(&[history_entry(2, &[], Some(2_000), None)]);
+    let mut pages = vec![(first, Some("next".to_string())), (second, None)].into_iter();
+
+    let versions = list_versions_on_pages(|_| Ok(pages.next().expect("a page"))).unwrap();
+
+    let current: Vec<&str> = versions
+        .iter()
+        .filter(|version| version.is_current)
+        .map(|version| version.id.as_str())
+        .collect();
+    assert_eq!(current, ["2"]);
+}

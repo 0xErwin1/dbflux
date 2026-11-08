@@ -710,3 +710,19 @@ fn rolling_back_onto_a_pending_rotation_version_is_refused() {
     assert!(error.to_string().contains("rotation"), "{error}");
     plan_rollback(&versions, "prod/api", "v-old").expect("an ordinary version still rolls back");
 }
+
+#[test]
+fn the_version_holding_the_current_stage_is_marked_current() {
+    let versions = versions_from_entries(&[
+        version_entry("v-pending", &["AWSPENDING"], Some(4_000)),
+        version_entry("v-current", &["AWSCURRENT"], Some(3_000)),
+        version_entry("v-old", &[], Some(1_000)),
+    ]);
+
+    let current: Vec<&str> = versions
+        .iter()
+        .filter(|version| version.is_current)
+        .map(|version| version.id.as_str())
+        .collect();
+    assert_eq!(current, ["v-current"]);
+}
