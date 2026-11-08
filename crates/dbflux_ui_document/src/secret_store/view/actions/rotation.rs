@@ -305,15 +305,11 @@ impl SecretView {
         // A newer rotation of the same secret takes over: the older schedule
         // stops at its next tick, and the latest one still ends with its own
         // final read. Another secret's rotation leaves it alone.
-        let key = (self.store.id.clone(), name.clone());
-        let generation = {
-            let counter = self
-                .rotation_follow_up_generations
-                .entry(key.clone())
-                .or_default();
-            *counter = counter.wrapping_add(1);
-            *counter
-        };
+        self.rotation_follow_up_counter = self.rotation_follow_up_counter.wrapping_add(1);
+        let generation = self.rotation_follow_up_counter;
+        let key = name.clone();
+        self.rotation_follow_up_generations
+            .insert(key.clone(), generation);
 
         cx.spawn(async move |_this, cx| {
             for seconds in ROTATION_FOLLOW_UP_SECONDS {
@@ -332,6 +328,16 @@ impl SecretView {
                     break;
                 }
             }
+
+            // Only the schedule that still owns the entry forgets it; a
+            // newer rotation of the same secret keeps its own.
+            cx.update(|cx| {
+                entity.update(cx, |view, _| {
+                    if view.rotation_follow_up_generations.get(&key) == Some(&generation) {
+                        view.rotation_follow_up_generations.remove(&key);
+                    }
+                })
+            });
         })
         .detach();
     }

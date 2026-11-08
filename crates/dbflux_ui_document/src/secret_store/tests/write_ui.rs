@@ -3976,6 +3976,44 @@ fn a_rotation_follow_up_survives_the_rotation_of_another_secret(cx: &mut TestApp
     assert_eq!(reads, 3, "the first secret's own schedule still runs");
 }
 
+/// A finished follow-up forgets its entry, and an older schedule finishing
+/// does not drop the entry of a newer rotation of the same secret.
+#[gpui::test]
+fn a_finished_rotation_follow_up_is_forgotten(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let stands = || super::super::SecretWriteFailure {
+        error: dbflux_core::DbError::query_failed("audit event lost"),
+        correlation_id: None,
+        kind: super::super::SecretWriteFailureKind::AuditLost,
+        audit_unrecorded: false,
+    };
+    let rotate = |opened: &mut Opened<'_>| {
+        opened.update_view(|view, cx| {
+            view.land_rotate_now(
+                KEY_VALUE_SECRET,
+                super::super::view::Landing::Stands(stands()),
+                cx,
+            )
+        });
+    };
+
+    rotate(&mut opened);
+    cx_advance(&mut opened, 5);
+    rotate(&mut opened);
+    assert_eq!(
+        opened.read_view(|view| view.rotation_follow_up_generations.len()),
+        1
+    );
+
+    // The first schedule ends while the second is still running.
+    cx_advance(&mut opened, 31);
+    assert!(
+        opened.read_view(|view| view.rotation_follow_up_generations.is_empty()),
+        "the finished schedules left no entry"
+    );
+}
+
 /// A store that declares tiers but no value types shows no type group and
 /// sends no value type.
 #[gpui::test]

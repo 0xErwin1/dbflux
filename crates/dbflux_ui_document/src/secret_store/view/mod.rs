@@ -157,10 +157,13 @@ pub struct SecretView {
     /// refresh or a reselection clears while the save is still out, so an
     /// action write waits for the answer whatever became of the editor.
     pub(super) editor_save_in_flight: bool,
-    /// Bumped by every started rotation follow-up of a secret (keyed by store
-    /// and name); an older schedule of the same secret stops at its next tick,
+    /// Holds the generation of the latest rotation follow-up of a secret (keyed
+    /// by name; the store is constant within a view); an older schedule of the same secret stops at its next tick,
     /// so overlapping rotations of one secret share the latest one.
-    rotation_follow_up_generations: HashMap<(String, String), u64>,
+    pub(super) rotation_follow_up_generations: HashMap<String, u64>,
+    /// Source of the generations above; never reused, so a finished
+    /// schedule can tell whether the entry is still its own.
+    rotation_follow_up_counter: u64,
     /// A rotation cancelled before it finished, shown in the Rotation
     /// section while its secret stays shown.
     pub(super) rotation_notice: Option<RotationNotice>,
@@ -217,6 +220,7 @@ impl SecretView {
             write_in_flight: false,
             editor_save_in_flight: false,
             rotation_follow_up_generations: HashMap::new(),
+            rotation_follow_up_counter: 0,
             rotation_notice: None,
             edit_after_retrieve: false,
             host_context: ContextId::Results,
