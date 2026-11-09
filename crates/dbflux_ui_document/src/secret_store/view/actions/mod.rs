@@ -434,21 +434,19 @@ impl SecretView {
     ) {
         // The other views learn what was written to `name`, which the
         // selection may no longer be.
-        self.announce_change(
-            name,
-            if effect == WriteEffect::Removed {
-                SecretChangeKind::Removed
-            } else {
-                SecretChangeKind::Changed
-            },
-            cx,
-        );
+        self.announce_change(name, self.change_kind_of(name, effect), cx);
 
         if effect == WriteEffect::Removed {
             self.forget_removed_secret(name, cx);
         } else if self.is_for(name) {
             if effect == WriteEffect::Versions {
-                self.clear_value();
+                // A deletion or a restore keeps a draft (read-only while the
+                // secret is pending); the value it was opened from goes.
+                if self.has_unsaved_value_edits(cx) && self.has_confirmed_deletion_state(name) {
+                    self.follow_external_change(cx);
+                } else {
+                    self.clear_value();
+                }
             }
 
             self.describe(name.to_string(), cx);

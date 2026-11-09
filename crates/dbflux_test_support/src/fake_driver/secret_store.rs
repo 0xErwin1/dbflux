@@ -319,6 +319,15 @@ impl SecretStoreSource for FakeSecretStore {
             return Err(DbError::permission_denied(message));
         }
 
+        // The real service refuses the history of a secret scheduled for
+        // deletion, with the nested text every call on one carries.
+        let found = self.find(name)?;
+        if found.details.summary.deletion_scheduled_for.is_some() {
+            return Err(DbError::query_failed(
+                "InvalidRequestException: You can't perform this operation on the secret because it was marked for deletion.",
+            ));
+        }
+
         // Like the real store, a version holding the pending stage says so.
         self.find(name).map(|secret| {
             secret

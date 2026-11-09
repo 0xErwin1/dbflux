@@ -3428,6 +3428,9 @@ document:
       body: "%{name} is no longer in the store. Nothing is read or written from this tab. Close it, and open the secret again if it is recreated."
       draft_title: "Deleted — your unsaved text is kept"
       draft_body: "%{name} was deleted, so nothing can be saved. The text below is read-only; copy what you need, then discard it."
+    scheduled:
+      draft_title: "Deletion scheduled — your unsaved text is kept"
+      draft_body: "%{name} is scheduled for deletion, so nothing can be saved. The text below is read-only. Restore the secret to edit it again, or discard the text."
     region_mismatch:
       title: "This connection is on another region"
       body: "%{name} belongs to %{region}, and the connection is on %{live}. Nothing is read or written from this tab until the connection is back on %{region}."

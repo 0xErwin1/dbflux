@@ -116,9 +116,10 @@ impl SecretView {
 
         let unchanged = !edit.is_changed(cx);
         let saving = edit.saving;
+        let locked = self.draft_is_locked();
         let toggle = self
             .edit_mode()
-            .map(|mode| self.render_edit_mode_toggle(mode, saving || edit.removed, cx));
+            .map(|mode| self.render_edit_mode_toggle(mode, saving || locked, cx));
         let save_shortcut = dbflux_ui_base::effective_keymap()
             .shortcut_for_command(self.host_context, Command::SaveQuery);
 
@@ -128,7 +129,7 @@ impl SecretView {
         )
         .primary()
         .tab_stop(false)
-        .disabled(unchanged || saving || edit.removed)
+        .disabled(unchanged || saving || locked)
         .on_click(cx.listener(|this, _, _, cx| this.save_value_edit(cx)));
 
         if let Some(shortcut) = save_shortcut {
@@ -237,7 +238,7 @@ impl SecretView {
             .bg(background)
             .child(
                 edit.vim
-                    .editor(saving || edit.removed)
+                    .editor(saving || self.draft_is_locked())
                     .redacted(true)
                     .appearance(false)
                     .w_full()
@@ -399,7 +400,9 @@ impl SecretView {
             return div().flex_1().into_any_element();
         };
 
+        let name_for_notice = name.to_string();
         let removed = edit.removed;
+        let scheduled = !removed && self.deletion_pending();
         let editor = edit.editor.clone();
         let text = editor.read(cx).value().to_string();
         let line_count = text.split('\n').count();
@@ -474,6 +477,7 @@ impl SecretView {
                     )),
                 )
             }))
+            .children(scheduled.then(|| self.render_draft_scheduled_notice(&name_for_notice, cx)))
             .child(
                 div()
                     .flex_1()
@@ -615,4 +619,36 @@ fn footer_version_with_labels(version: String, labels: Option<String>) -> Statef
         })
         .whitespace_nowrap()
         .child(text)
+}
+
+impl SecretView {
+    /// The notice over a read-only draft whose secret is scheduled for
+    /// deletion, with Restore: the draft becomes editable again once it is.
+    fn render_draft_scheduled_notice(&self, name: &str, cx: &mut Context<Self>) -> Stateful<Div> {
+        let restore = self.supports_restore().then(|| {
+            Button::new(
+                "secret-restore",
+                dbflux_i18n::t!("document.secret_store.restore.button"),
+            )
+            .primary()
+            .icon(AppIcon::RotateCcw)
+            .tab_stop(false)
+            .disabled(!self.can_restore_selected())
+            .on_click(cx.listener(|this, _, _, cx| this.restore_selected(cx)))
+        });
+        let mut banner = BannerBlock::new(
+            BannerVariant::Warning,
+            dbflux_i18n::t!("document.secret.scheduled.draft_title"),
+        )
+        .with_body(dbflux_i18n::t!(
+            "document.secret.scheduled.draft_body",
+            name = name
+        ));
+
+        if let Some(restore) = restore {
+            banner = banner.with_actions(restore);
+        }
+
+        div().id("secret-document-deletion-scheduled").child(banner)
+    }
 }

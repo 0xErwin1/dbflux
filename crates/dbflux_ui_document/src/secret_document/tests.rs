@@ -2148,3 +2148,178 @@ mod review_round_focus {
         }
     }
 }
+
+mod scheduled_deletion {
+    use super::*;
+    use dbflux_core::SecretDeleteRequest;
+
+    fn dirty_tab_and_pane<'a>(cx: &'a mut TestAppContext) -> (Opened<'a>, Pair) {
+        let mut opened = open_document_with(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION), true);
+        let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+        opened.window.simulate_keystrokes("ctrl-a");
+        opened.window.simulate_input("{\"draft\": 1}");
+        opened.window.run_until_parked();
+        (opened, pair)
+    }
+
+    /// Sends a 7-day scheduled delete to the store and lands it in the pane,
+    /// as the confirmed dialog does.
+    fn schedule_from_the_pane(opened: &mut Opened<'_>, pair: &Pair) {
+        let connection = opened.pane_view(pair, |view, cx| view.connection(cx).expect("connected"));
+        let store = connection
+            .secret_store(FAKE_SECRETS_STORE_ID)
+            .expect("the store");
+        let deletion = store
+            .delete_secret(&SecretDeleteRequest::Scheduled {
+                name: KEY_VALUE_SECRET.to_string(),
+                recovery_window_days: 7,
+            })
+            .expect("scheduled");
+        opened.pane_view(pair, |view, cx| {
+            view.land_scheduled_delete_for_test(KEY_VALUE_SECRET, deletion, cx)
+        });
+    }
+
+    fn history_listings(opened: &mut Opened<'_>) -> usize {
+        opened.driver.secret_store_calls().version_listings.len()
+    }
+
+    /// A scheduled deletion under a dirty draft keeps the draft: read-only
+    /// under the deletion notice, Save refused, Discard drops it.
+    #[gpui::test]
+    fn a_scheduled_deletion_keeps_the_draft_read_only(cx: &mut TestAppContext) {
+        let (mut opened, pair) = dirty_tab_and_pane(cx);
+
+        schedule_from_the_pane(&mut opened, &pair);
+        // The failure a follower used to record announces an app-state change.
+        let state = opened.app_state.clone();
+        opened
+            .window
+            .update(|_, cx| state.update(cx, |_, cx| cx.emit(AppStateChanged)));
+        opened.window.run_until_parked();
+
+        assert!(
+            opened.read_view(|view| view.is_editing_value()),
+            "the draft is kept"
+        );
+        assert!(opened.is_drawn("secret-value-editor"), "and shown");
+        assert!(
+            opened.is_drawn("secret-document-deletion-scheduled"),
+            "under the notice"
+        );
+
+        let puts = opened.driver.secret_store_calls().put_attempts.len();
+        opened.command(Command::SaveQuery);
+        assert_eq!(opened.driver.secret_store_calls().put_attempts.len(), puts);
+        assert!(
+            opened
+                .error_summaries()
+                .iter()
+                .any(|summary| summary.contains("Deletion is scheduled")),
+            "Save says why it is refused: {:?}",
+            opened.error_summaries()
+        );
+
+        opened.click("secret-value-editor-discard");
+        assert!(!opened.read_view(|view| view.is_editing_value()));
+    }
+
+    /// The tab that issued the delete keeps its own draft too, and the
+    /// editor is drawn read-only (the frame is the evidence, not view state).
+    #[gpui::test]
+    fn the_writing_tab_keeps_its_own_draft_under_the_deletion_notice(cx: &mut TestAppContext) {
+        let (mut opened, pair) = dirty_tab_and_pane(cx);
+        let connection =
+            opened.pane_view(&pair, |view, cx| view.connection(cx).expect("connected"));
+        let deletion = connection
+            .secret_store(FAKE_SECRETS_STORE_ID)
+            .expect("the store")
+            .delete_secret(&SecretDeleteRequest::Scheduled {
+                name: KEY_VALUE_SECRET.to_string(),
+                recovery_window_days: 7,
+            })
+            .expect("scheduled");
+        let doc = opened.doc.clone();
+        opened.window.update(|_, cx| {
+            let view = doc.read(cx).view().clone();
+            view.update(cx, |view, cx| {
+                view.land_scheduled_delete_for_test(KEY_VALUE_SECRET, deletion, cx)
+            });
+        });
+        opened.window.run_until_parked();
+
+        assert!(opened.is_drawn("secret-value-editor"), "the draft is drawn");
+        assert!(opened.is_drawn("secret-document-deletion-scheduled"));
+        assert!(opened.is_drawn("secret-restore"), "with Restore");
+        assert!(opened.read_view(|view| view.draft_is_locked()));
+    }
+
+    /// After Restore the draft is editable again, intact, and Save writes
+    /// through the gates.
+    #[gpui::test]
+    fn a_restore_unlocks_the_draft_and_save_works(cx: &mut TestAppContext) {
+        let (mut opened, pair) = dirty_tab_and_pane(cx);
+        let typed = opened.editor_text_for_draft();
+        schedule_from_the_pane(&mut opened, &pair);
+        opened.pane_view(&pair, |view, cx| view.restore_selected(cx));
+        opened.window.run_until_parked();
+
+        assert!(!opened.is_drawn("secret-document-deletion-scheduled"));
+        assert_eq!(opened.editor_text_for_draft(), typed, "the draft is intact");
+
+        opened.click("secret-value-editor-save");
+        assert_eq!(opened.driver.secret_store_calls().put_requests.len(), 1);
+    }
+
+    /// Nothing reads from the secret after the notification of its scheduled
+    /// deletion, and nothing is reported.
+    #[gpui::test]
+    fn followers_do_not_read_a_secret_pending_deletion(cx: &mut TestAppContext) {
+        let (mut opened, pair) = dirty_tab_and_pane(cx);
+        let before = history_listings(&mut opened);
+        let values = opened.driver.secret_store_calls().value_requests.len();
+
+        schedule_from_the_pane(&mut opened, &pair);
+
+        assert_eq!(
+            history_listings(&mut opened),
+            before,
+            "no history call after the delete"
+        );
+        assert_eq!(
+            opened.driver.secret_store_calls().value_requests.len(),
+            values
+        );
+        assert_eq!(opened.unread_errors(), 0, "{:?}", opened.error_summaries());
+        assert_eq!(opened.toasts(), 1, "only the delete's own toast");
+    }
+
+    /// A follower whose history read fails records it inline: no toast, no
+    /// error badge.
+    #[gpui::test]
+    fn a_failing_follower_history_never_toasts(cx: &mut TestAppContext) {
+        let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+        opened
+            .driver
+            .set_secret_versions_error(KEY_VALUE_SECRET, "denied");
+        let toasts = opened.toasts();
+
+        opened.announce(SecretChangeKind::Changed, KEY_VALUE_SECRET);
+
+        assert_eq!(opened.toasts(), toasts, "recorded inline, not toasted");
+        assert!(opened.read_view(|view| matches!(
+            view.versions(),
+            crate::secret_store::VersionsState::Failed(_)
+        )));
+    }
+
+    impl Opened<'_> {
+        fn editor_text_for_draft(&mut self) -> Option<String> {
+            let doc = self.doc.clone();
+            self.window.update(|_, cx| {
+                let view = doc.read(cx).view().clone();
+                view.read(cx).editor_text_for_test(cx)
+            })
+        }
+    }
+}

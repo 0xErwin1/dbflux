@@ -12,6 +12,13 @@ pub(crate) enum SecretChangeKind {
     Created,
     /// A write or a follow-up read changed what the store holds for it.
     Changed,
+    /// Its deletion was scheduled and confirmed by the store. Followers must
+    /// not read from it until it is restored: the service refuses.
+    Scheduled {
+        date: Option<dbflux_core::chrono::DateTime<dbflux_core::chrono::Utc>>,
+    },
+    /// A scheduled deletion was cancelled and confirmed by the store.
+    Restored,
     Removed,
 }
 

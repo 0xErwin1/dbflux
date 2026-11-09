@@ -266,6 +266,12 @@ impl FakeDriver {
         self
     }
 
+    /// [`Self::with_secret_versions_error`] for a driver that is already
+    /// connected.
+    pub fn set_secret_versions_error(&self, name: impl Into<String>, message: impl Into<String>) {
+        rwlock_write(&self.state.secret_version_errors).push((name.into(), message.into()));
+    }
+
     pub fn set_query_outcome(&self, sql: impl Into<String>, outcome: FakeQueryOutcome) {
         rwlock_write(&self.state.query_outcomes).insert(sql.into(), outcome);
     }

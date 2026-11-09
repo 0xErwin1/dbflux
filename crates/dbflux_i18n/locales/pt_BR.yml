@@ -3428,6 +3428,9 @@ document:
       body: "%{name} não está mais no armazenamento. Esta aba não lê nem grava nada. Feche-a e abra o segredo novamente se ele for recriado."
       draft_title: "Excluído — seu texto não salvo foi mantido"
       draft_body: "%{name} foi excluído, então nada pode ser salvo. O texto abaixo é somente leitura; copie o que precisar e depois descarte-o."
+    scheduled:
+      draft_title: "Exclusão agendada — seu texto não salvo foi mantido"
+      draft_body: "%{name} está com a exclusão agendada, então nada pode ser salvo. O texto abaixo é somente leitura. Restaure o segredo para editá-lo de novo, ou descarte o texto."
     region_mismatch:
       title: "Esta conexão está em outra região"
       body: "%{name} pertence a %{region} e a conexão está em %{live}. Esta aba não lê nem grava nada até a conexão voltar para %{region}."

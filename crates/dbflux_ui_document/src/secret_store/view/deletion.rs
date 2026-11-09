@@ -114,6 +114,41 @@ impl SecretView {
         );
     }
 
+    /// Whether a confirmed write of `name` is on record.
+    pub(in crate::secret_store) fn has_confirmed_deletion_state(&self, name: &str) -> bool {
+        self.confirmed_deletions.contains_key(name)
+    }
+
+    /// The kind of write `effect` was, as followers are told: a confirmed
+    /// scheduled deletion or restore says so, anything else is a plain change.
+    pub(in crate::secret_store) fn change_kind_of(
+        &self,
+        name: &str,
+        effect: super::WriteEffect,
+    ) -> crate::secret_store::changes::SecretChangeKind {
+        use crate::secret_store::changes::SecretChangeKind;
+
+        if effect == super::WriteEffect::Removed {
+            return SecretChangeKind::Removed;
+        }
+
+        if effect == super::WriteEffect::Versions {
+            match self
+                .confirmed_deletions
+                .get(name)
+                .map(|confirmation| confirmation.state)
+            {
+                Some(ConfirmedDeletion::Scheduled { date }) => {
+                    return SecretChangeKind::Scheduled { date };
+                }
+                Some(ConfirmedDeletion::Restored) => return SecretChangeKind::Restored,
+                None => {}
+            }
+        }
+
+        SecretChangeKind::Changed
+    }
+
     /// An explicit refresh asks the store again and believes its answer.
     pub(in crate::secret_store) fn clear_confirmed_deletions(&mut self) {
         self.confirmed_deletions.clear();

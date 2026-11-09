@@ -3428,6 +3428,9 @@ document:
       body: "%{name} ya no está en el almacén. Esta pestaña no lee ni escribe nada. Ciérrala y abre el secreto de nuevo si se vuelve a crear."
       draft_title: "Eliminado: se conserva tu texto sin guardar"
       draft_body: "%{name} fue eliminado, así que no se puede guardar nada. El texto de abajo es de solo lectura; copia lo que necesites y luego descártalo."
+    scheduled:
+      draft_title: "Eliminación programada: se conserva tu texto sin guardar"
+      draft_body: "%{name} tiene la eliminación programada, así que no se puede guardar nada. El texto de abajo es de solo lectura. Restaura el secreto para editarlo de nuevo, o descarta el texto."
     region_mismatch:
       title: "Esta conexión está en otra región"
       body: "%{name} pertenece a %{region} y la conexión está en %{live}. Esta pestaña no lee ni escribe nada hasta que la conexión vuelva a %{region}."

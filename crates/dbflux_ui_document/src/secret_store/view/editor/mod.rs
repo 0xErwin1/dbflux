@@ -256,6 +256,14 @@ impl SecretView {
             .map(|edit| edit.mode)
     }
 
+    /// Whether the open draft is read-only: its secret is deleted, or its
+    /// deletion is scheduled. A restore lifts it with the draft intact.
+    pub(crate) fn draft_is_locked(&self) -> bool {
+        self.value_edit
+            .as_ref()
+            .is_some_and(|edit| edit.removed || self.deletion_pending())
+    }
+
     /// Whether the open editor offers the Formatted / Raw toggle.
     pub(crate) fn can_toggle_edit_mode(&self) -> bool {
         self.edit_mode().is_some() && !self.is_saving_value_edit()
@@ -509,6 +517,29 @@ impl SecretView {
     /// retrieved is stale, so it goes back to "Value not loaded" and reads
     /// again on demand, through the audited path. An editor holding unsaved
     /// text keeps it and says the secret changed; a clean one closes.
+    /// Follows a write of another view by its kind. A scheduled deletion is
+    /// taken as confirmed first, so nothing below asks the store for what it
+    /// refuses on a secret pending deletion; a draft stays, read-only, until
+    /// the secret is restored or the draft is discarded.
+    pub(crate) fn follow_external_write(
+        &mut self,
+        name: &str,
+        kind: super::super::changes::SecretChangeKind,
+        cx: &mut Context<Self>,
+    ) {
+        use super::super::changes::SecretChangeKind;
+
+        match kind {
+            SecretChangeKind::Scheduled { date } => self.confirm_deletion_scheduled(name, date, cx),
+            SecretChangeKind::Restored => self.confirm_restored(name, cx),
+            _ => {}
+        }
+
+        self.follow_external_change(cx);
+        self.describe(name.to_string(), cx);
+        self.load_versions(name.to_string(), cx);
+    }
+
     pub(crate) fn follow_external_change(&mut self, cx: &mut Context<Self>) {
         if self.has_unsaved_value_edits(cx) {
             if let Some(edit) = &mut self.value_edit {

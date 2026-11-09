@@ -326,6 +326,23 @@ impl SecretView {
             .collect()
     }
 
+    /// Lands a scheduled delete of `name` the way the delete dialog does,
+    /// after the test sent it to the store itself.
+    #[cfg(test)]
+    pub(crate) fn land_scheduled_delete_for_test(
+        &mut self,
+        name: &str,
+        deletion: dbflux_core::SecretDeletion,
+        cx: &mut Context<Self>,
+    ) {
+        self.land_delete(
+            name,
+            actions::DeleteKind::Scheduled { window_days: 7 },
+            actions::Landing::Done(deletion),
+            cx,
+        );
+    }
+
     /// Puts the details in the loading state with nothing known of the
     /// secret, as a new tab is before its describe lands.
     #[cfg(test)]

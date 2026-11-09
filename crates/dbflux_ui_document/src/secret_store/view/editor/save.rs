@@ -85,6 +85,9 @@ impl SecretView {
             return false;
         };
 
+        // A draft of a deleted secret cannot be written, and says nothing
+        // beyond the notice its editor carries. One pending deletion is
+        // refused below, with the message the other uneditable cases use.
         if edit.removed {
             return false;
         }

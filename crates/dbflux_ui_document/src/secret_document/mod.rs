@@ -270,13 +270,14 @@ impl SecretDocument {
                 self.loaded = false;
                 self.load_when_ready(cx);
             }
-            SecretChangeKind::Changed if !self.removed && self.loaded => {
-                let name = self.name.clone();
-                self.view.update(cx, |view, cx| {
-                    view.follow_external_change(cx);
-                    view.describe(name.clone(), cx);
-                    view.load_versions(name, cx);
-                });
+            SecretChangeKind::Changed
+            | SecretChangeKind::Scheduled { .. }
+            | SecretChangeKind::Restored
+                if !self.removed && self.loaded =>
+            {
+                let (name, kind) = (self.name.clone(), change.kind);
+                self.view
+                    .update(cx, |view, cx| view.follow_external_write(&name, kind, cx));
             }
             _ => {}
         }

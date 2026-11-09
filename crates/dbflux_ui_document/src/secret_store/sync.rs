@@ -40,13 +40,17 @@ impl SecretStoreDocument {
 
         self.reload_listing_in_place(cx);
 
-        if shown && change.kind == SecretChangeKind::Changed {
-            let name = change.name.clone();
-            self.view.update(cx, |view, cx| {
-                view.follow_external_change(cx);
-                view.describe(name.clone(), cx);
-                view.load_versions(name, cx);
-            });
+        if shown
+            && matches!(
+                change.kind,
+                SecretChangeKind::Changed
+                    | SecretChangeKind::Scheduled { .. }
+                    | SecretChangeKind::Restored
+            )
+        {
+            let (name, kind) = (change.name.clone(), change.kind);
+            self.view
+                .update(cx, |view, cx| view.follow_external_write(&name, kind, cx));
         }
     }
 
