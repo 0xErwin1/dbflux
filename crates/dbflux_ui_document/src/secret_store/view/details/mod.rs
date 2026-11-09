@@ -505,13 +505,11 @@ impl SecretView {
                 format_optional_time(details.created),
                 cx,
             ));
-            if !self.in_tab() {
-                rows.push(detail_row(
-                    label("document.secret_store.details.last_changed"),
-                    last_changed_label(details),
-                    cx,
-                ));
-            }
+            rows.push(detail_row(
+                label("document.secret_store.details.last_changed"),
+                last_changed_label(details),
+                cx,
+            ));
             rows.push(detail_row(
                 label("document.secret_store.details.last_retrieved"),
                 last_retrieved_label(details.last_accessed),
@@ -555,9 +553,12 @@ impl SecretView {
     /// The Edit button of the Details section, for a store that changes the
     /// description alone.
     fn edit_description_action(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        // A store that changes the description alone has Edit here; one that
-        // rewrites the value for it has Edit description in the bottom bar.
-        (self.supports_description_edit() && !self.description_edit_rewrites_value()).then(|| {
+        // A store that changes the description alone has the button here in
+        // both hosts; one that rewrites the value for it has it in the pane's
+        // bottom bar, and here too in the tab, which has no bar.
+        (self.supports_description_edit()
+            && (self.in_tab() || !self.description_edit_rewrites_value()))
+        .then(|| {
             let button = Button::new(
                 "secret-details-edit",
                 dbflux_i18n::t!("document.secret_store.description_edit.button"),

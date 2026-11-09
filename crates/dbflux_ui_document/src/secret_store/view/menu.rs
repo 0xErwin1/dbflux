@@ -37,11 +37,10 @@ impl SecretView {
             items.push(self.copy_arn_item());
         }
 
-        // The design's Edit value entry: offered for a value that
-        // can be edited, dispatching to the editor the details pane
-        // already opens. The menu is built from the selected row's
-        // state, which is the state the editor opens on.
-        if self.can_edit_value() {
+        // The design's Edit value entry: offered when an edit can be asked
+        // for, like the bar's button. An unretrieved value is retrieved first,
+        // through the audited path.
+        if self.can_request_edit_value() {
             items.push(
                 SecretMenuItem::new(
                     SecretMenuAction::EditValue,

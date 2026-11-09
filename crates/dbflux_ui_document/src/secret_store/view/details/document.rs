@@ -3,12 +3,12 @@
 //! editor alone while a value is being edited (artboard 06). Every section is
 //! the one the details pane draws.
 
-use super::SecretView;
+use super::{DetailsState, SecretView};
 use dbflux_app::keymap::ContextId;
 use dbflux_components::controls::Button;
 use dbflux_components::fonts;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Badge, BadgeTone, Icon};
+use dbflux_components::primitives::{Badge, BadgeTone, BannerBlock, BannerVariant, Icon, Text};
 use dbflux_components::tokens::{ChromeColors, DocumentMetrics, SecretStoreMetrics};
 use dbflux_core::SecretStoreCapabilities;
 use gpui::prelude::*;
@@ -17,6 +17,9 @@ use gpui_component::ActiveTheme;
 use gpui_component::scroll::Scrollbar;
 
 /// Width of the tab's right-hand column of cards.
+/// The least the main column keeps before the side column wraps below it:
+/// room for the versions table with its staging labels.
+const MAIN_COLUMN_MIN_WIDTH: Pixels = px(520.0); // guardrail-allow: width the versions table needs, no token carries it
 const SIDE_COLUMN_WIDTH: Pixels = px(470.0); // guardrail-allow: artboard 02 right column, no token carries 470 px
 
 impl SecretView {
@@ -31,7 +34,7 @@ impl SecretView {
         self.host_context = host_context;
 
         let Some(summary) = self.selected_summary().cloned() else {
-            return div().flex_1().into_any_element();
+            return self.render_document_pending(subtitle, cx);
         };
 
         // While a value is edited the editor takes the whole tab.
@@ -67,16 +70,25 @@ impl SecretView {
                 .gap(SecretStoreMetrics::SECTION_GAP)
                 .children(sections)
         };
+        // The columns wrap: the side column drops below the main one when the
+        // tab cannot hold both, so nothing is squeezed out of the versions.
         let columns = div()
             .id("secret-document-sections")
             .flex()
+            .flex_wrap()
             .items_start()
             .gap(SecretStoreMetrics::SECTION_GAP)
-            .child(column("secret-document-main", left).flex_1())
+            .child(
+                column("secret-document-main", left)
+                    .flex_grow(1.0)
+                    .flex_basis(MAIN_COLUMN_MIN_WIDTH)
+                    .min_w(MAIN_COLUMN_MIN_WIDTH),
+            )
             .when(!right.is_empty(), |columns| {
                 columns.child(
                     column("secret-document-side", right)
                         .w(SIDE_COLUMN_WIDTH)
+                        .max_w_full()
                         .flex_shrink_0(),
                 )
             });
@@ -232,5 +244,118 @@ impl SecretView {
         }
 
         actions
+    }
+
+    /// A tab that has no summary yet: the secret is still being described, or
+    /// the describe failed. It says which, keeps Refresh, and offers a retry,
+    /// so a new tab is never blank.
+    fn render_document_pending(&mut self, subtitle: String, cx: &mut Context<Self>) -> AnyElement {
+        let Some(name) = self.name.clone() else {
+            return div().flex_1().into_any_element();
+        };
+
+        let theme = cx.theme();
+        let border = theme.border;
+        let warning = theme.warning;
+        let strong = ChromeColors::strong(theme);
+        let muted = theme.muted_foreground;
+
+        let header = div()
+            .id("secret-document-header")
+            .flex()
+            .items_center()
+            .gap(DocumentMetrics::GAP)
+            .px(SecretStoreMetrics::DETAILS_PADDING_X)
+            .py(SecretStoreMetrics::DETAILS_PADDING_Y)
+            .border_b_1()
+            .border_color(border)
+            .child(
+                Icon::new(AppIcon::KeyRound)
+                    .size(DocumentMetrics::TITLE_ICON)
+                    .color(warning),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .id("secret-document-name")
+                            .truncate()
+                            .font_family(fonts::editor_family(cx))
+                            .font_weight(FontWeight::BOLD)
+                            .text_size(SecretStoreMetrics::NAME_FONT)
+                            .text_color(strong)
+                            .child(name),
+                    )
+                    .child(
+                        div()
+                            .id("secret-document-subtitle")
+                            .truncate()
+                            .text_size(DocumentMetrics::TABLE_META_FONT)
+                            .text_color(muted)
+                            .child(subtitle),
+                    ),
+            )
+            .child(
+                Button::new(
+                    "secret-document-refresh",
+                    dbflux_i18n::t!("document.secret_store.toolbar.refresh"),
+                )
+                .icon(AppIcon::RefreshCcw)
+                .tab_stop(false)
+                .disabled(!self.connection_present)
+                .on_click(cx.listener(|this, _, _, cx| this.refresh_shown(cx))),
+            );
+
+        let body: AnyElement = match &self.details {
+            DetailsState::Failed(error) => div()
+                .id("secret-document-details-failed")
+                .flex()
+                .flex_col()
+                .gap(DocumentMetrics::GAP)
+                .child(
+                    BannerBlock::new(
+                        BannerVariant::Danger,
+                        dbflux_i18n::t!("document.secret_store.details.failed"),
+                    )
+                    .with_body(error.clone()),
+                )
+                .child(
+                    div().flex().child(
+                        Button::new(
+                            "secret-document-retry",
+                            dbflux_i18n::t!("document.secret.retry"),
+                        )
+                        .icon(AppIcon::RefreshCcw)
+                        .tab_stop(false)
+                        .on_click(cx.listener(|this, _, _, cx| this.refresh_shown(cx))),
+                    ),
+                )
+                .into_any_element(),
+            _ => div()
+                .id("secret-document-loading")
+                .child(
+                    Text::caption(dbflux_i18n::t!("document.secret_store.details.loading"))
+                        .muted_foreground(),
+                )
+                .into_any_element(),
+        };
+
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(
+                div()
+                    .px(SecretStoreMetrics::DETAILS_PADDING_X)
+                    .py(SecretStoreMetrics::DETAILS_PADDING_Y)
+                    .child(body),
+            )
+            .into_any_element()
     }
 }

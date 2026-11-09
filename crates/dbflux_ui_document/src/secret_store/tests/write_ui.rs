@@ -3328,9 +3328,10 @@ fn cx_advance(opened: &mut Opened<'_>, seconds: u64) {
     opened.window.run_until_parked();
 }
 
-/// The menu's keyboard index stays valid when the items shrink under it.
+/// The menu's keyboard index stays valid when the items change under it (Restore
+/// leaves, Edit value arrives).
 #[gpui::test]
-fn the_menu_selection_follows_a_shrinking_menu(cx: &mut TestAppContext) {
+fn the_menu_selection_stays_valid_when_the_items_change(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.load_everything();
     opened.open_secret(PENDING_DELETION_SECRET);
@@ -3359,8 +3360,12 @@ fn the_menu_selection_follows_a_shrinking_menu(cx: &mut TestAppContext) {
     opened.window.run_until_parked();
     let _ = opened.rendered_text();
 
-    let after = opened.read(|doc| doc.context_menu.as_ref().map_or(0, |menu| menu.items.len()));
-    assert!(after < before, "Restore left the menu: {before} -> {after}");
+    let actions = opened.menu_actions();
+    assert!(
+        !actions.contains(&"Restore".to_string()),
+        "Restore left the menu: {actions:?}"
+    );
+    let _ = before;
 
     let (index, count) = opened.read(|doc| {
         doc.context_menu

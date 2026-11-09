@@ -3422,6 +3422,7 @@ document:
     subtitle: "%{store} · %{connection} · %{region}"
     subtitle_no_region: "%{store} · %{connection}"
     close: "关闭标签页"
+    retry: "重试"
     removed:
       title: "此密钥已被删除"
       body: "%{name} 已不在存储中。此标签页不会读取或写入任何内容；请关闭它，或重新创建该密钥以在此处查看。"

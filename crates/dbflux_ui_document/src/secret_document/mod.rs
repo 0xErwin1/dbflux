@@ -414,7 +414,12 @@ impl SecretDocument {
         // A blocked tab neither reads nor writes: every command that would
         // reach the store stops here, and the state says why.
         if self.block(cx).is_some() {
-            return !matches!(cmd, Command::Cancel);
+            // The menu commands go on to the workspace, whose actions menu
+            // lists Close; every command that would reach the store stops here.
+            return !matches!(
+                cmd,
+                Command::Cancel | Command::OpenPaneActions | Command::OpenContextMenu
+            );
         }
 
         match cmd {

@@ -668,6 +668,10 @@ pub(crate) const SECRET_DOCUMENT: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::RefreshSchema),
         ),
         (
+            "secret-document-retry",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
             "secret-document-delete",
             KeyboardPath::Command(Command::Delete),
         ),

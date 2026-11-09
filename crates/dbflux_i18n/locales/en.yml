@@ -3422,6 +3422,7 @@ document:
     subtitle: "%{store} · %{connection} · %{region}"
     subtitle_no_region: "%{store} · %{connection}"
     close: "Close tab"
+    retry: "Retry"
     removed:
       title: "This secret was deleted"
       body: "%{name} is no longer in the store. Nothing is read or written from this tab; close it, or create the secret again to see it here."

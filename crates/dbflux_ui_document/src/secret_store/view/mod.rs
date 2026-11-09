@@ -317,6 +317,35 @@ impl SecretView {
         self.host == ViewHost::Tab
     }
 
+    /// The menu entries of `name`, as names, for the tests.
+    #[cfg(test)]
+    pub(crate) fn menu_actions_for_test(&self, name: &str) -> Vec<String> {
+        self.secret_menu_items(name)
+            .iter()
+            .map(|item| format!("{:?}", item.action))
+            .collect()
+    }
+
+    /// Puts the details in the loading state with nothing known of the
+    /// secret, as a new tab is before its describe lands.
+    #[cfg(test)]
+    pub(crate) fn load_details_for_test(&mut self, cx: &mut Context<Self>) {
+        self.details = DetailsState::Loading;
+        self.summary_cache = None;
+        self.listing_row = None;
+        cx.notify();
+    }
+
+    /// Puts the details in the failed state with nothing known of the secret,
+    /// as a describe that never succeeded leaves a new tab.
+    #[cfg(test)]
+    pub(crate) fn fail_details_for_test(&mut self, error: &str, cx: &mut Context<Self>) {
+        self.details = DetailsState::Failed(error.to_string());
+        self.summary_cache = None;
+        self.listing_row = None;
+        cx.notify();
+    }
+
     /// Names the host the view's announcements belong to, so the host does not
     /// follow its own news.
     pub(crate) fn set_change_origin(&mut self, origin: gpui::EntityId) {

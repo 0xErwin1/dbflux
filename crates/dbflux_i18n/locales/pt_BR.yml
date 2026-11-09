@@ -3422,6 +3422,7 @@ document:
     subtitle: "%{store} · %{connection} · %{region}"
     subtitle_no_region: "%{store} · %{connection}"
     close: "Fechar aba"
+    retry: "Tentar novamente"
     removed:
       title: "Este segredo foi excluído"
       body: "%{name} não está mais no armazenamento. Esta aba não lê nem grava nada; feche-a ou crie o segredo novamente para vê-lo aqui."

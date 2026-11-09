@@ -42,6 +42,19 @@ fn open_document_with<'a>(
     region: Option<&str>,
     edit: bool,
 ) -> Opened<'a> {
+    open_document_in(cx, FAKE_SECRETS_STORE_ID, name, region, edit, true)
+}
+
+/// The general opener: any store, and `settle` false leaves the tab as it is
+/// on its first frame, before the describe landed.
+fn open_document_in<'a>(
+    cx: &'a mut TestAppContext,
+    store_id: &str,
+    name: &str,
+    region: Option<&str>,
+    edit: bool,
+    settle: bool,
+) -> Opened<'a> {
     init_keyboard_runtime(cx);
 
     let driver =
@@ -56,18 +69,11 @@ fn open_document_with<'a>(
 
     let state = app_state.clone();
     let name = name.to_string();
+    let store_id = store_id.to_string();
     let region = region.map(str::to_string);
 
     let (doc, window) = cx.add_window_view(move |_window, cx| {
-        let mut document = SecretDocument::new(
-            profile_id,
-            FAKE_SECRETS_STORE_ID.to_string(),
-            name,
-            None,
-            region,
-            state,
-            cx,
-        );
+        let mut document = SecretDocument::new(profile_id, store_id, name, None, region, state, cx);
 
         if edit {
             document.begin_edit(cx);
@@ -76,7 +82,10 @@ fn open_document_with<'a>(
         document
     });
     window.simulate_resize(gpui::size(gpui::px(1500.0), gpui::px(1400.0)));
-    window.run_until_parked();
+
+    if settle {
+        window.run_until_parked();
+    }
 
     Opened {
         doc,
@@ -1703,12 +1712,31 @@ mod review_round {
                 view.save_value_edit(cx);
             });
         });
-        // The tab closes, and its view with it, before the answer lands.
+        // The tab closes before the answer lands: the close hook runs, and
+        // the view must hold neither the value nor the editor's text any
+        // more, though the write in flight keeps the view alive.
+        let view = opened.window.update(|_, cx| {
+            let view = doc.read(cx).view().clone();
+            SecretDocument::into_pane(doc.clone(), cx).on_close(cx);
+            view
+        });
+        opened.window.update(|_, cx| {
+            let view = view.read(cx);
+            assert!(!view.is_editing_value(), "the draft is gone");
+            assert!(
+                matches!(view.value(), ValueState::NotLoaded),
+                "the value is gone"
+            );
+        });
         drop(doc);
         opened.window.run_until_parked();
 
         assert_eq!(opened.driver.secret_store_calls().put_requests.len(), 1);
         assert!(!opened.pane_value_loaded(&pair), "the pane was told");
+        opened.window.update(|_, cx| {
+            let view = view.read(cx);
+            assert!(!view.is_editing_value() && matches!(view.value(), ValueState::NotLoaded));
+        });
     }
 
     /// #14: a tab with unsaved edits needs a decision at quit; a clean one
@@ -1843,5 +1871,141 @@ mod review_round {
         opened.click("secret-value-editor-discard");
         assert!(!opened.read_view(|view| view.is_editing_value()));
         assert!(opened.is_drawn("secret-document-removed"));
+    }
+}
+
+mod review_round_ui {
+    use super::*;
+    use dbflux_test_support::fake_driver::FAKE_PARAMETER_STORE_ID;
+
+    const PARAMETER: &str = "/app/prod/db/host";
+
+    fn width_of(opened: &mut Opened<'_>, id: &str) -> gpui::Pixels {
+        opened.bounds(id).size.width
+    }
+
+    /// #3: the row menu offers Edit value before the value was retrieved, as
+    /// the bar does.
+    #[gpui::test]
+    fn the_row_menu_offers_edit_value_for_an_unretrieved_secret(cx: &mut TestAppContext) {
+        let opened = open_document(cx, PLAINTEXT_SECRET, Some(CURRENT_REGION));
+        let doc = opened.doc.clone();
+        let items = opened.window.update(|_, cx| {
+            let view = doc.read(cx).view().clone();
+            view.read(cx).menu_actions_for_test(PLAINTEXT_SECRET)
+        });
+        assert!(items.iter().any(|item| item == "EditValue"), "{items:?}");
+    }
+
+    /// #4: below a width the two columns stack and nothing overlaps; wide,
+    /// they sit side by side.
+    #[gpui::test]
+    fn the_columns_stack_when_the_tab_is_narrow(cx: &mut TestAppContext) {
+        let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+        let wide_value = opened.bounds("secret-document-value-card");
+        let wide_rotation = opened.bounds("secret-document-rotation-card");
+        assert!(
+            wide_rotation.left() >= wide_value.right(),
+            "side by side when wide"
+        );
+
+        opened
+            .window
+            .simulate_resize(gpui::size(gpui::px(650.0), gpui::px(1400.0))); // guardrail-allow: test geometry, not spacing
+        opened.window.run_until_parked();
+
+        let value = opened.bounds("secret-document-value-card");
+        let versions = opened.bounds("secret-document-versions-card");
+        let rotation = opened.bounds("secret-document-rotation-card");
+        assert!(
+            rotation.top() >= versions.bottom() - gpui::px(1.0), // guardrail-allow: test geometry, not spacing
+            "the side column moved below the main one: {versions:?} / {rotation:?}"
+        );
+        assert!(
+            width_of(&mut opened, "secret-document-versions-card")
+                >= value.size.width - gpui::px(1.0)
+        ); // guardrail-allow: test geometry, not spacing
+        assert!(
+            opened.is_drawn("secret-version-0-labels"),
+            "staging labels stay visible"
+        );
+    }
+
+    /// #5: Last changed shows in the tab for a store without typed values.
+    #[gpui::test]
+    fn the_tab_shows_last_changed(cx: &mut TestAppContext) {
+        let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+        assert!(opened.rendered_text().contains("Last changed"));
+    }
+
+    /// #23: a plain-history store's tab offers Edit description in its
+    /// Details card.
+    #[gpui::test]
+    fn a_parameter_tab_offers_edit_description_in_its_details_card(cx: &mut TestAppContext) {
+        let mut opened = open_document_in(
+            cx,
+            FAKE_PARAMETER_STORE_ID,
+            PARAMETER,
+            Some(CURRENT_REGION),
+            false,
+            true,
+        );
+        assert!(opened.is_drawn("secret-details-edit"));
+        assert!(opened.inside("secret-details-edit", "secret-document-details-card"));
+        assert_eq!(opened.text_of("secret-details-edit"), "Edit description");
+    }
+
+    /// #13: a removed tab lets the menu commands through, so its Close entry
+    /// is reachable from the keyboard; store commands stay blocked.
+    #[gpui::test]
+    fn a_removed_tab_lets_the_menu_commands_through(cx: &mut TestAppContext) {
+        let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+        opened.announce(SecretChangeKind::Removed, KEY_VALUE_SECRET);
+        assert_eq!(opened.block(), Some(SecretDocumentBlock::Removed));
+
+        assert!(
+            !opened.command(Command::OpenPaneActions),
+            "falls through to the workspace"
+        );
+        assert!(!opened.command(Command::OpenContextMenu));
+        assert!(
+            opened.command(Command::EditValue),
+            "store commands stay swallowed"
+        );
+    }
+
+    /// #17: before the describe lands the tab shows it is loading and keeps
+    /// Refresh; a failed describe shows the error and a retry.
+    #[gpui::test]
+    fn a_new_tab_shows_loading_then_a_failure_with_retry(cx: &mut TestAppContext) {
+        let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+        let doc = opened.doc.clone();
+        opened.window.update(|_, cx| {
+            let view = doc.read(cx).view().clone();
+            view.update(cx, |view, cx| view.load_details_for_test(cx));
+        });
+        opened.window.run_until_parked();
+        assert!(
+            opened.is_drawn("secret-document-loading"),
+            "loading is shown"
+        );
+        assert!(opened.is_drawn("secret-document-refresh"), "Refresh stays");
+
+        opened.click("secret-document-refresh");
+        assert!(!opened.is_drawn("secret-document-loading"));
+
+        let doc = opened.doc.clone();
+        opened.window.update(|_, cx| {
+            let view = doc.read(cx).view().clone();
+            view.update(cx, |view, cx| view.fail_details_for_test("denied", cx));
+        });
+        opened.window.run_until_parked();
+        assert!(opened.is_drawn("secret-document-details-failed"));
+        let before = opened.driver.secret_store_calls().described.len();
+        opened.click("secret-document-retry");
+        assert!(
+            opened.driver.secret_store_calls().described.len() > before,
+            "retry reads again"
+        );
     }
 }

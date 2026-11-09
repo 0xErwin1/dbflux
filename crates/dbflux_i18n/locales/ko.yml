@@ -3422,6 +3422,7 @@ document:
     subtitle: "%{store} · %{connection} · %{region}"
     subtitle_no_region: "%{store} · %{connection}"
     close: "탭 닫기"
+    retry: "다시 시도"
     removed:
       title: "이 시크릿이 삭제되었습니다"
       body: "%{name}은(는) 더 이상 저장소에 없습니다. 이 탭에서는 아무것도 읽거나 쓰지 않습니다. 탭을 닫거나 시크릿을 다시 만들면 여기에 표시됩니다."

@@ -3790,8 +3790,8 @@ impl Opened<'_> {
 /// Right-clicking a secret row opens the menu anchored at the pointer, the
 /// row becomes the selection, and the menu holds the read items and the write
 /// entries: Rotate now, Edit tags and Delete.
-/// Edit value waits for a loaded value, so a row whose value was not
-/// retrieved does not offer it.
+/// Edit value is offered for a row whose value was not retrieved too: it
+/// retrieves the value first, through the audited path.
 #[gpui::test]
 fn a_secondary_click_opens_a_secret_row_menu(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
@@ -3810,6 +3810,7 @@ fn a_secondary_click_opens_a_secret_row_menu(cx: &mut TestAppContext) {
             "RetrieveValue",
             "CopyName",
             "CopyArn",
+            "EditValue",
             "RotateNow",
             "EditTags",
             "Delete"
@@ -3956,6 +3957,7 @@ fn a_parameter_row_offers_copy_name_and_retrieve_value(cx: &mut TestAppContext) 
             "OpenInTab",
             "RetrieveValue",
             "CopyName",
+            "EditValue",
             "EditTags",
             "Delete"
         ],
