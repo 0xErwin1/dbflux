@@ -1152,10 +1152,17 @@ fn a_listing_page_is_observed_for_every_row_it_returns(cx: &mut TestAppContext) 
     opened.confirm_restore(PENDING_DELETION_SECRET);
     opened.select(KEY_VALUE_SECRET);
 
+    // The listing holds the restored (active) row, as a reload after the
+    // restore would have left it.
     let generation = opened.listing_generation();
     let doc = opened.doc.clone();
     opened.window.update(|_, cx| {
         doc.update(cx, |doc, cx| {
+            for entry in doc.listing.entries.iter_mut() {
+                if entry.name == PENDING_DELETION_SECRET {
+                    entry.deletion_scheduled_for = None;
+                }
+            }
             let page = dbflux_core::SecretListPage {
                 entries: vec![active.clone()],
                 child_paths: Vec::new(),
@@ -1249,4 +1256,38 @@ fn a_session_change_during_a_write_invalidates_the_loaded_details(cx: &mut TestA
     opened.window.run_until_parked();
     assert!(opened.read_view(|view| matches!(view.details(), DetailsState::Loaded(_))));
     assert!(opened.update_view(|view, cx| view.details_session_is_live(cx)));
+}
+
+/// A page that repeats a secret keeps the listing's earlier row, so the
+/// repeated row, which the listing discarded, is no observation.
+#[gpui::test]
+fn a_discarded_duplicate_row_is_not_a_listing_observation(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    let scheduled = opened.stale_row(true);
+    let active = opened.stale_row(false);
+    opened.confirm_restore(PENDING_DELETION_SECRET);
+    opened.select(KEY_VALUE_SECRET);
+
+    let generation = opened.listing_generation();
+    let doc = opened.doc.clone();
+    opened.window.update(|_, cx| {
+        doc.update(cx, |doc, cx| {
+            let page = dbflux_core::SecretListPage {
+                entries: vec![active.clone()],
+                child_paths: Vec::new(),
+                next_page_token: None,
+            };
+            doc.apply_list(generation, Ok(page), 0, cx)
+        })
+    });
+
+    opened.select(PENDING_DELETION_SECRET);
+    opened.land_stale_describe(false);
+
+    assert!(
+        !opened.row_reads_as_pending(&scheduled),
+        "the retained row still says scheduled, so the listing does not agree with the restore"
+    );
 }
