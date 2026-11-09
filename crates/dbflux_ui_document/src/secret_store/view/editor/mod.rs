@@ -55,6 +55,7 @@
 
 use std::sync::Arc;
 
+use dbflux_components::vim::VimBinding;
 use dbflux_core::chrono::Utc;
 use dbflux_core::observability::EventSeverity;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
@@ -66,7 +67,7 @@ use dbflux_ui_base::notifications::ErrorNotification;
 use dbflux_ui_base::toast::{Toast, ToastAction, copy_action, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::{App, AppContext as _, Context, Entity, Subscription, Window};
-use gpui_component::input::TextareaState;
+use gpui_component::input::EditorState;
 
 pub(crate) mod json_layout;
 mod line_diff;
@@ -102,15 +103,6 @@ fn parses_as_json(text: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(text).is_ok()
 }
 
-/// The height a gutter row takes before the textarea has laid out.
-pub(in crate::secret_store) fn fallback_line_height(cx: &App) -> gpui::Pixels {
-    (dbflux_components::fonts::ui_px(
-        cx,
-        dbflux_components::tokens::DocumentMetrics::DETAIL_BLOCK_FONT,
-    ) * dbflux_components::tokens::DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT)
-        .round()
-}
-
 /// The open editor of the loaded plaintext value.
 pub(crate) struct ValueEditState {
     /// The stored text the editor opened with: the unchanged check and the
@@ -121,8 +113,13 @@ pub(crate) struct ValueEditState {
     /// JSON: a Save whose text no longer parses is refused before the seam.
     pub(in crate::secret_store) stored_is_json: bool,
 
-    /// The multi-line editor surface, built when the edit started.
-    pub(in crate::secret_store) editor: Entity<TextareaState>,
+    /// The editor surface, built when the edit started: the component the
+    /// code documents and the object editor use, with its own line numbers,
+    /// scrolling and find panel.
+    pub(in crate::secret_store) editor: Entity<EditorState>,
+
+    /// Vim mode for this editor, off unless the setting turns it on.
+    pub(in crate::secret_store) vim: VimBinding,
 
     /// True while a governed write is in flight, so a second Save waits and
     /// Discard does not drop what the landing still has to read.
@@ -141,15 +138,9 @@ pub(crate) struct ValueEditState {
     /// text-input context only while this is true.
     pub(in crate::secret_store) focused: bool,
 
-    /// Wraps the textarea and its Find panel, so focus inside either one is
+    /// Wraps the editor and its Find panel, so focus inside either one is
     /// focus inside the editor.
     pub(in crate::secret_store) focus: gpui::FocusHandle,
-
-    /// Where the row area holding the gutter, the tint and the text starts,
-    /// in window coordinates, as the last frame painted it. The text sits
-    /// lower than that when the Find panel pushes it down, and the gutter
-    /// follows by the difference.
-    pub(in crate::secret_store) rows_origin: std::rc::Rc<std::cell::Cell<gpui::Pixels>>,
     _focus_subscriptions: [Subscription; 2],
 
     /// The connection session the value was read from. A save names this
@@ -304,9 +295,38 @@ impl SecretView {
             return;
         };
 
-        edit.editor.update(cx, |state, cx| state.focus(window, cx));
-        window.dispatch_action(Box::new(gpui_component::input::Search), cx);
+        crate::object_text::open_find_panel(&edit.editor, window, cx);
         cx.notify();
+    }
+
+    /// Replaces the editor's text, as a long paste would.
+    #[cfg(test)]
+    pub(crate) fn replace_editor_text(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(edit) = &self.value_edit {
+            edit.editor
+                .update(cx, |state, cx| state.set_value(text, window, cx));
+        }
+    }
+
+    /// The height of the text area the editor laid out, for the tab tests.
+    #[cfg(test)]
+    pub(crate) fn editor_viewport_height(&self, cx: &App) -> Option<gpui::Pixels> {
+        self.value_edit
+            .as_ref()
+            .map(|edit| edit.editor.read(cx).input_bounds().size.height)
+    }
+
+    /// The caret's 1-based line, for the tab tests.
+    #[cfg(test)]
+    pub(crate) fn editor_caret_line(&self, cx: &App) -> Option<u32> {
+        self.value_edit
+            .as_ref()
+            .map(|edit| edit.editor.read(cx).cursor_position().line + 1)
     }
 
     /// Switches to the other mode, for the pane action.
@@ -410,14 +430,22 @@ impl SecretView {
         let opening = formatted_layout(&stored, stored_is_json);
 
         let editor = cx.new(|cx| {
-            let mut state = TextareaState::new(window, cx)
-                .auto_grow(2, super::details::VIEWER_VISIBLE_LINES as usize)
+            let state = EditorState::new(window, cx)
+                .line_number(true)
                 .soft_wrap(false)
                 .searchable(true);
-            state.set_value(&opening, window, cx);
-            state
+
+            if stored_is_json {
+                state.language("json")
+            } else {
+                state
+            }
         });
-        editor.update(cx, |state, cx| state.focus(window, cx));
+        editor.update(cx, |state, cx| {
+            state.set_value(&opening, window, cx);
+            state.focus(window, cx);
+        });
+        let vim = VimBinding::new(editor.clone(), window, cx);
         let observer = cx.observe(&editor, |_, _, cx| cx.notify());
         // Whether the editor holds the keyboard follows its focus handle,
         // so a click or a focus move that edits nothing still changes the
@@ -439,12 +467,12 @@ impl SecretView {
         self.value_edit = Some(ValueEditState {
             original: SecretString::from(stored),
             stored_is_json,
-            editor,
+            editor: editor.clone(),
+            vim,
             saving: false,
             mode,
             focused: true,
             focus: handle,
-            rows_origin: Default::default(),
             _observer: observer,
             _focus_subscriptions: [focus_in, focus_out],
             connection,
@@ -454,6 +482,7 @@ impl SecretView {
         self.value_inputs.clear();
         self.value_input_masks.clear();
         self.value_inputs_view = None;
+        VimBinding::follow_setting(self, editor.entity_id(), cx);
         cx.notify();
     }
 
@@ -968,3 +997,22 @@ pub(in crate::secret_store) fn write_failure_to_user_facing(
 
 #[cfg(test)]
 mod tests;
+
+impl dbflux_components::vim::VimHost for SecretView {
+    fn vim(&self, input: gpui::EntityId) -> Option<&VimBinding> {
+        self.value_edit
+            .as_ref()
+            .and_then(|edit| edit.vim.for_input(input))
+    }
+
+    fn vim_mut(&mut self, input: gpui::EntityId) -> Option<&mut VimBinding> {
+        self.value_edit
+            .as_mut()
+            .and_then(|edit| edit.vim.for_input_mut(input))
+    }
+
+    /// A save in flight keeps the text as it was sent.
+    fn vim_read_only(&self, _input: gpui::EntityId, _cx: &App) -> bool {
+        self.is_saving_value_edit()
+    }
+}

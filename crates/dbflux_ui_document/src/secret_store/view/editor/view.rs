@@ -14,11 +14,12 @@ use dbflux_components::primitives::{
     Badge, BadgeTone, Chamfer, SegmentedControl, SegmentedItem, Text,
 };
 use dbflux_components::tokens::{ChamferCut, DocumentMetrics, SecretStoreMetrics};
+use dbflux_components::vim::VimBinding;
 use dbflux_core::secrecy::ExposeSecret;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::input::{Textarea, TextareaState};
+use gpui_component::input::EditorState;
 
 use super::line_diff::{LineChanges, changed_lines};
 use super::{EditMode, ValueEditState};
@@ -28,12 +29,6 @@ use crate::secret_store::ValueState;
 use crate::secret_store::view::SecretView;
 use crate::secret_store::view::details::VIEWER_GUTTER_WIDTH;
 use crate::secret_store::view::details::VIEWER_VISIBLE_LINES;
-
-/// Width of the change-marker bar beside a gutter number.
-const MARKER_WIDTH: Pixels = px(3.0);
-
-/// How much of the row the changed-line tint covers.
-const TINT_OPACITY: f32 = 0.08;
 
 impl ValueEditState {
     /// The text Save compares the edit with: what the mode being edited
@@ -47,8 +42,8 @@ impl ValueEditState {
 }
 
 impl SecretView {
-    /// The editor of a plaintext value: the header row, the gutter beside
-    /// the text, the footer, and the hint.
+    /// The editor of a plaintext value: the header row, the editor, the
+    /// footer, and the hint.
     pub(in crate::secret_store) fn render_value_editor(&self, cx: &mut Context<Self>) -> Div {
         let Some(edit) = &self.value_edit else {
             return div();
@@ -75,7 +70,7 @@ impl SecretView {
             .flex_col()
             .gap(SecretStoreMetrics::ROW_GAP)
             .child(self.render_editor_header(cx))
-            .child(self.render_editor_body(&editor, &changes, false, cx))
+            .child(self.render_editor_body(false, cx))
             .child(self.render_editor_footer(&editor, &changes, write_size, cx))
             .child(Text::caption(dbflux_i18n::t!(hint_key)).muted_foreground())
     }
@@ -207,144 +202,69 @@ impl SecretView {
         .into_any_element()
     }
 
-    fn render_editor_body(
-        &self,
-        editor: &Entity<TextareaState>,
-        changes: &LineChanges,
-        bleed: bool,
-        cx: &App,
-    ) -> Div {
+    /// The editor component itself, wired for Vim and kept out of the
+    /// accessibility tree and the rendered frame: its text is the secret.
+    /// In the tab it fills the room it is given; in the pane it keeps a
+    /// capped height so the sections below it keep their place.
+    fn render_editor_body(&self, fill: bool, cx: &mut Context<Self>) -> AnyElement {
+        let Some(edit) = &self.value_edit else {
+            return div().into_any_element();
+        };
+
         let theme = cx.theme();
-        let foreground = theme.foreground;
-        let fill = theme.popover;
+        let background = theme.background;
         let border = theme.border;
-        let muted = theme.muted_foreground;
-        let warning = theme.warning;
+        let input_id = edit.editor.entity_id();
+        let saving = edit.saving;
+        let focus = edit.focus.clone();
+        let line_height = fonts::editor_line_height(cx);
 
-        let rows = self.editor_row_layout(editor, changes, cx);
-        let focus = self.value_edit.as_ref().map(|edit| edit.focus.clone());
-        let rows_origin = rows.origin.clone();
-
-        let tint = render_change_tint(changes, &rows, warning);
-        let gutter = render_line_gutter(changes, &rows, muted, warning);
-
-        // In the tab the editor fills the room it is given, edge to edge: no
-        // frame and no padding, and the textarea scrolls itself.
-        div()
-            .relative()
-            .when(bleed, |body| body.size_full())
-            .when(!bleed, |body| {
-                body.px(DocumentMetrics::DETAIL_BLOCK_PADDING_X)
-                    .py(DocumentMetrics::DETAIL_BLOCK_PADDING_Y)
-            })
-            .font_family(fonts::editor_family(cx))
-            .text_size(DocumentMetrics::DETAIL_BLOCK_FONT)
-            .line_height(relative(DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT))
-            .text_color(foreground)
-            .when(!bleed, |body| {
-                body.child(Chamfer::new(ChamferCut::INPUT).fill(fill).border(border))
-            })
+        let editor = div()
+            .id("secret-value-editor")
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .aria_hidden(true)
+            .frame_redacted(true)
+            .bg(background)
             .child(
-                div()
-                    .relative()
-                    .flex()
-                    .when(bleed, |inner| inner.size_full())
-                    .when_some(focus, |block, focus| block.track_focus(&focus))
-                    .child(
-                        canvas(
-                            {
-                                let rows_origin = rows_origin.clone();
-                                move |bounds, window, _| {
-                                    if rows_origin.replace(bounds.origin.y) != bounds.origin.y {
-                                        window.refresh();
-                                    }
-                                }
-                            },
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .size_full(),
-                    )
-                    .child(tint)
-                    .child(gutter)
-                    .child(
-                        div()
-                            .id("secret-value-editor")
-                            .flex_1()
-                            .min_w_0()
-                            .when(bleed, |editor| editor.h_full())
-                            .aria_hidden(true)
-                            .frame_redacted(true)
-                            .child(
-                                Textarea::new(editor)
-                                    .redacted(true)
-                                    .appearance(false)
-                                    .bordered(false)
-                                    .w_full(),
-                            ),
-                    ),
-            )
-    }
+                edit.vim
+                    .editor(saving)
+                    .redacted(true)
+                    .appearance(false)
+                    .w_full()
+                    .h_full(),
+            );
+        let indicator = edit.vim.render_indicator(cx);
+        let wrapper = edit
+            .vim
+            .leader_scope(div().flex_1().min_h_0().flex().flex_col(), cx);
 
-    /// Which rows of the value the viewport shows and where the row area
-    /// sits, from the textarea's last layout.
-    fn editor_row_layout(
-        &self,
-        editor: &Entity<TextareaState>,
-        changes: &LineChanges,
-        cx: &App,
-    ) -> EditorRowLayout {
-        let state = editor.read(cx);
-        let line_count = changes.marked.len().max(1);
-        let offset = state.scroll_offset().y;
-        let line_height = state
-            .line_height()
-            .unwrap_or_else(|| super::fallback_line_height(cx));
-        // Only the rows the viewport can show are drawn, however long the
-        // value is; the margin covers the frame the scroll lags behind.
-        let first_row = (-offset / line_height).floor().max(0.0) as usize;
-        let shown_rows = match state.input_bounds().size.height {
-            height if height > px(0.0) => (height / line_height).ceil() as usize,
-            _ => VIEWER_VISIBLE_LINES as usize,
-        };
-        let last_row = (first_row + shown_rows + 2).min(line_count);
-        let first_row = first_row.min(last_row);
-        let rows_top = offset + line_height * first_row as f32;
-        let origin = self
-            .value_edit
-            .as_ref()
-            .map(|edit| edit.rows_origin.clone())
-            .unwrap_or_default();
-        // The text viewport inside the row area: lower than the top when the
-        // Find panel is open. Rows are placed and clipped against it.
-        // `text_bounds()` already includes the scroll offset, so the origin
-        // comes from the unscrolled input bounds. Before the first layout
-        // there are none: the text starts at the textarea's top padding.
-        let viewport_top = match state.text_bounds() {
-            Some(_) => (state.input_bounds().origin.y - origin.get()).max(px(0.0)),
-            None => gpui_component::Size::default().input_py(),
-        };
-        let viewport_height = match state.input_bounds().size.height {
-            height if height > px(0.0) => height,
-            _ => line_height * VIEWER_VISIBLE_LINES,
-        };
+        let body =
+            VimBinding::capture_run_command(VimBinding::wire(wrapper, input_id, cx), input_id, cx)
+                .track_focus(&focus)
+                .child(editor)
+                .children(indicator);
 
-        EditorRowLayout {
-            line_height,
-            first_row,
-            last_row,
-            rows_top,
-            viewport_top,
-            viewport_height,
-            origin,
+        if fill {
+            return body.size_full().into_any_element();
         }
+
+        div()
+            .h(line_height * VIEWER_VISIBLE_LINES)
+            .flex()
+            .flex_col()
+            .border_1()
+            .border_color(border)
+            .child(body)
+            .into_any_element()
     }
 
     /// Encoding, size of what Save would write, the version being edited,
     /// the number of changed lines and the caret. Counts and ids only.
     fn render_editor_footer(
         &self,
-        editor: &Entity<TextareaState>,
+        editor: &Entity<EditorState>,
         changes: &LineChanges,
         write_size: usize,
         cx: &App,
@@ -422,159 +342,6 @@ impl SecretView {
                     ),
             )
     }
-}
-
-/// Where the editor's rows are drawn: the window of rows the viewport shows
-/// and the row area they sit in.
-#[derive(Clone)]
-struct EditorRowLayout {
-    line_height: Pixels,
-    first_row: usize,
-    last_row: usize,
-    rows_top: Pixels,
-    viewport_top: Pixels,
-    viewport_height: Pixels,
-    origin: std::rc::Rc<std::cell::Cell<Pixels>>,
-}
-
-/// The row tint behind every changed line.
-fn render_change_tint(
-    changes: &LineChanges,
-    rows: &EditorRowLayout,
-    warning: Hsla,
-) -> Stateful<Div> {
-    let EditorRowLayout {
-        line_height,
-        first_row,
-        last_row,
-        rows_top,
-        viewport_top,
-        viewport_height,
-        ..
-    } = *rows;
-
-    div()
-        .id("secret-value-editor-tint")
-        .absolute()
-        .top(viewport_top)
-        .left_0()
-        .w_full()
-        .h(viewport_height)
-        .overflow_hidden()
-        .child(
-            div()
-                .absolute()
-                .top(rows_top)
-                .left_0()
-                .w_full()
-                .flex()
-                .flex_col()
-                .children(
-                    changes
-                        .marked
-                        .iter()
-                        .skip(first_row)
-                        .take(last_row - first_row)
-                        .map(|marked| {
-                            div()
-                                .h(line_height)
-                                .w_full()
-                                .when(*marked, |row| row.bg(warning.opacity(TINT_OPACITY)))
-                        }),
-                ),
-        )
-}
-
-/// The gutter: one right-aligned number per drawn row and a bar on the
-/// changed ones.
-fn render_line_gutter(
-    changes: &LineChanges,
-    rows: &EditorRowLayout,
-    muted: Hsla,
-    warning: Hsla,
-) -> Stateful<Div> {
-    let EditorRowLayout {
-        line_height,
-        first_row,
-        last_row,
-        rows_top,
-        viewport_top,
-        viewport_height,
-        ..
-    } = *rows;
-
-    div()
-        .id("secret-value-editor-gutter")
-        .relative()
-        .flex_shrink_0()
-        .aria_hidden(true)
-        .text_color(muted)
-        .child(
-            div()
-                .absolute()
-                .top(viewport_top)
-                .left_0()
-                .w_full()
-                .h(viewport_height)
-                .overflow_hidden()
-                .child(
-                    div()
-                        .absolute()
-                        .top(rows_top)
-                        .left_0()
-                        .flex()
-                        .flex_col()
-                        .children((first_row..last_row).map(|index| {
-                            let marked = changes.marked.get(index).copied().unwrap_or(false);
-
-                            div()
-                                .id(SharedString::from(format!(
-                                    "secret-value-editor-line-{index}"
-                                )))
-                                .flex()
-                                .h(line_height)
-                                .child(
-                                    div()
-                                        .w(VIEWER_GUTTER_WIDTH)
-                                        .pr(DocumentMetrics::GAP)
-                                        .flex()
-                                        .justify_end()
-                                        .child(
-                                            div()
-                                                .id(SharedString::from(format!(
-                                                    "secret-value-editor-line-{index}-number"
-                                                )))
-                                                .child((index + 1).to_string()),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .w(MARKER_WIDTH)
-                                        .mr(DocumentMetrics::GAP)
-                                        .h_full()
-                                        .when(marked, |bar| {
-                                            bar.child(
-                                                div()
-                                                    .id(SharedString::from(format!(
-                                                        "secret-value-editor-line-{index}-marker"
-                                                    )))
-                                                    .size_full()
-                                                    .bg(warning),
-                                            )
-                                        }),
-                                )
-                        })),
-                ),
-        )
-        // Reserves the gutter's width; its rows are positioned over it.
-        .child(
-            div()
-                .invisible()
-                .flex()
-                .h(line_height)
-                .child(div().w(VIEWER_GUTTER_WIDTH).pr(DocumentMetrics::GAP))
-                .child(div().w(MARKER_WIDTH).mr(DocumentMetrics::GAP)),
-        )
 }
 
 /// "N changed lines", `None` while nothing differs from the stored text.
@@ -690,7 +457,9 @@ impl SecretView {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .child(self.render_editor_body(&editor, &changes, true, cx)),
+                    .flex()
+                    .flex_col()
+                    .child(self.render_editor_body(true, cx)),
             )
             .child(self.render_tab_editor_status(&editor, &changes, write_size, cx))
             .into_any_element()
@@ -701,7 +470,7 @@ impl SecretView {
     /// the caret on the right. Counts and ids only, never the text.
     fn render_tab_editor_status(
         &self,
-        editor: &Entity<TextareaState>,
+        editor: &Entity<EditorState>,
         changes: &LineChanges,
         write_size: usize,
         cx: &App,

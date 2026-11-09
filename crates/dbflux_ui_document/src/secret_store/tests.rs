@@ -5235,19 +5235,6 @@ mod editor_layout {
             self.window.run_until_parked();
         }
 
-        /// The gutter line elements the frame drew.
-        fn gutter_lines(&mut self) -> usize {
-            self.rendered_paths()
-                .iter()
-                .filter(|path| {
-                    path.rsplit_once("secret-value-editor-line-")
-                        .is_some_and(|(_, index)| {
-                            !index.is_empty() && index.chars().all(|ch| ch.is_ascii_digit())
-                        })
-                })
-                .count()
-        }
-
         /// The bounds of the element whose path ends with `suffix`.
         pub(super) fn element_bounds(&mut self, suffix: &str) -> gpui::Bounds<gpui::Pixels> {
             let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
@@ -5294,50 +5281,6 @@ mod editor_layout {
     }
 
     #[gpui::test]
-    fn the_gutter_has_one_number_per_line_and_follows_the_edit(cx: &mut TestAppContext) {
-        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
-        opened.select(PLAINTEXT_SECRET);
-        opened.show_value("a\nb\nc");
-        opened.start_edit();
-        assert_eq!(opened.gutter_lines(), 3);
-
-        opened.set_editor_text("a\nb\nc\nd\ne");
-        assert_eq!(opened.gutter_lines(), 5);
-
-        opened.set_editor_text("only");
-        assert_eq!(opened.gutter_lines(), 1);
-    }
-
-    #[gpui::test]
-    fn the_gutter_scrolls_with_the_editor(cx: &mut TestAppContext) {
-        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
-        opened.select(PLAINTEXT_SECRET);
-        let text = (0..40)
-            .map(|line| format!("line {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        opened.show_value(&text);
-        opened.start_edit();
-        assert!(
-            opened.gutter_lines() < 40,
-            "only the visible rows are drawn"
-        );
-
-        let first = opened.element_bounds("secret-value-editor-line-3").origin.y;
-        let editor =
-            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
-        opened.window.update(|_, cx| {
-            editor.update(cx, |state, cx| {
-                state.set_scroll_offset(gpui::point(gpui::px(0.), gpui::px(-60.)), cx)
-            });
-        });
-        opened.window.run_until_parked();
-
-        let scrolled = opened.element_bounds("secret-value-editor-line-3").origin.y;
-        assert!(scrolled < first, "{first:?} then {scrolled:?}");
-    }
-
-    #[gpui::test]
     fn the_toggle_is_offered_for_stored_json_only(cx: &mut TestAppContext) {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.edit_json("host = db.internal\nport = 5432");
@@ -5358,11 +5301,9 @@ mod editor_layout {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.edit_json(COMPACT);
         assert_eq!(opened.editor_text(), FORMATTED);
-        assert_eq!(opened.gutter_lines(), FORMATTED.lines().count());
 
         opened.set_mode(EditMode::Raw);
         assert_eq!(opened.editor_text(), COMPACT, "Raw shows the stored text");
-        assert_eq!(opened.gutter_lines(), 1);
 
         opened.set_mode(EditMode::Formatted);
         assert_eq!(opened.editor_text(), FORMATTED);
@@ -5484,29 +5425,7 @@ mod editor_layout {
             assert!(!text.contains("77b1-secret"), "{mode:?}: {text}");
             assert!(!text.contains("host"), "{mode:?}: {text}");
             assert!(!paths.iter().any(|path| path.contains("77b1")));
-            assert!(
-                paths
-                    .iter()
-                    .any(|path| path.ends_with("secret-value-editor-gutter")),
-                "{mode:?}: the gutter is drawn"
-            );
         }
-    }
-
-    #[gpui::test]
-    fn the_gutter_is_hidden_from_assistive_technology(cx: &mut TestAppContext) {
-        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
-        opened.edit_json(COMPACT);
-
-        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
-        let frame = capture.frame(opened.window);
-        let exposed = frame
-            .nodes()
-            .filter(|(_, node)| node.path().contains("secret-value-editor-line-"))
-            .filter(|(_, node)| frame.accessibility_node(node).is_some())
-            .count();
-
-        assert_eq!(exposed, 0, "no gutter line has an accessibility node");
     }
 
     #[gpui::test]
@@ -5595,46 +5514,6 @@ mod editor_chrome {
                 .collect::<Vec<_>>()
                 .join(" ")
         }
-    }
-
-    #[gpui::test]
-    fn gutter_numbers_are_right_aligned(cx: &mut TestAppContext) {
-        let text = (0..12)
-            .map(|i| format!("l{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
-        opened.edit_text(&text, &text);
-
-        let one = opened.rect("secret-value-editor-line-0-number");
-        let ten = opened.rect("secret-value-editor-line-9-number");
-
-        assert!(
-            (one.right() - ten.right()).abs() < gpui::px(0.5),
-            "{one:?} vs {ten:?}"
-        );
-        assert!(ten.size.width > one.size.width);
-    }
-
-    #[gpui::test]
-    fn changed_lines_get_a_marker_and_unchanged_ones_do_not(cx: &mut TestAppContext) {
-        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
-        opened.edit_text(THREE, THREE);
-        assert!(
-            !opened.exists("-marker"),
-            "an untouched value has no marker"
-        );
-
-        opened.set_editor_text("alpha-77b1\nbeta-CHANGED\ngamma-77b1");
-        assert!(opened.exists("secret-value-editor-line-1-marker"));
-        assert!(!opened.exists("secret-value-editor-line-0-marker"));
-        assert!(!opened.exists("secret-value-editor-line-2-marker"));
-
-        // An inserted line is the only one marked, not every line after it.
-        opened.set_editor_text("alpha-77b1\nNEW\nbeta-77b1\ngamma-77b1");
-        assert!(opened.exists("secret-value-editor-line-1-marker"));
-        assert!(!opened.exists("secret-value-editor-line-2-marker"));
-        assert!(!opened.exists("secret-value-editor-line-3-marker"));
     }
 
     #[gpui::test]
@@ -5936,17 +5815,6 @@ mod editor_chrome {
             );
             assert!(text.contains("modified"), "the chip is announced: {text}");
             assert!(text.contains("UTF-8"), "the footer is announced: {text}");
-
-            let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
-            let frame = capture.frame(opened.window);
-            // `aria_hidden` on the gutter removes its whole subtree (numbers
-            // and markers) from the accessibility tree.
-            let gutter_hidden = frame
-                .nodes()
-                .filter(|(_, node)| node.path().ends_with("secret-value-editor-gutter"))
-                .filter_map(|(_, node)| frame.accessibility_node(node))
-                .any(|accessible| accessible.is_hidden());
-            assert!(gutter_hidden, "gutter and markers stay out of the tree");
         }
     }
 }
@@ -7718,49 +7586,6 @@ mod editor_review {
         assert!(exists(&mut opened, "secret-value-editor-modified"));
     }
 
-    /// A long value draws a bounded number of gutter rows, however many
-    /// lines it has, and a change far below the viewport has no marker row.
-    #[gpui::test]
-    fn a_long_value_draws_only_the_visible_rows(cx: &mut TestAppContext) {
-        let lines: Vec<String> = (0..5000).map(|index| format!("line {index}")).collect();
-        let stored = lines.join("\n");
-        let mut edited = lines.clone();
-        edited[4000] = "changed".to_string();
-
-        let mut opened = open_hosted(cx);
-        start(&mut opened, &stored, &edited.join("\n"));
-
-        let rows = count_with(&mut opened, "secret-value-editor-line-");
-        assert!(rows > 0 && rows < 100, "{rows} gutter elements");
-        assert!(!exists(&mut opened, "secret-value-editor-line-4000-marker"));
-        assert!(exists(&mut opened, "secret-value-editor-line-0-number"));
-        assert!(
-            opened.footer_text().contains("1 line changed"),
-            "{}",
-            opened.footer_text()
-        );
-    }
-
-    /// The first frame, before the textarea has laid out, sizes gutter rows
-    /// with the height the textarea will use.
-    #[gpui::test]
-    fn the_fallback_line_height_is_the_textarea_line_height(cx: &mut TestAppContext) {
-        let mut opened = open_hosted(cx);
-        start(&mut opened, "a\nb", "a\nb");
-
-        let editor =
-            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
-        let laid_out = opened
-            .window
-            .update(|_, cx| editor.read(cx).line_height())
-            .expect("the textarea has laid out");
-        let fallback = opened
-            .window
-            .update(|_, cx| crate::secret_store::view::editor::fallback_line_height(cx));
-
-        assert_eq!(fallback, laid_out);
-    }
-
     /// The caret is where the test put it, in bytes, before the footer is
     /// asked: a byte-offset footer would pass `ñ` and fail after the emoji.
     #[gpui::test]
@@ -7846,167 +7671,6 @@ mod editor_review {
         let text = opened.rendered_text();
         assert!(text.contains("on one line back on one line"), "{text}");
         assert!(text.contains("several lines as it is here"), "{text}");
-    }
-
-    /// With the Find panel open and pushing the text down, gutter row N is
-    /// still beside text line N.
-    #[gpui::test]
-    fn the_gutter_follows_the_text_when_find_is_open(cx: &mut TestAppContext) {
-        let text = (0..30)
-            .map(|i| format!("l{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mut opened = open_hosted(cx);
-        start(&mut opened, &text, &text);
-        let editor =
-            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
-
-        let aligned = |opened: &mut Opened<'_>, stage: &str| {
-            for line in [0usize, 5] {
-                let offset = (0..line).map(|i| format!("l{i}\n").len()).sum::<usize>();
-                let glyph = opened
-                    .window
-                    .update(|_, cx| editor.read(cx).range_to_bounds(&(offset..offset + 1)))
-                    .expect("text laid out")
-                    .origin
-                    .y;
-                let gutter = opened
-                    .element_bounds(&format!("secret-value-editor-line-{line}-number"))
-                    .origin
-                    .y;
-                assert!(
-                    (gutter - glyph).abs() < gpui::px(1.5), // guardrail-allow: test tolerance, not spacing
-                    "{stage}, line {line}: gutter {gutter:?} vs text {glyph:?}"
-                );
-            }
-        };
-
-        opened.rendered_paths();
-        aligned(&mut opened, "closed");
-        open_find(&mut opened);
-        opened.rendered_paths();
-        aligned(&mut opened, "find open");
-    }
-
-    /// The first frame, before the textarea reports any bounds, puts gutter
-    /// row 0 where the textarea's padded text will start.
-    #[gpui::test]
-    fn the_first_frame_gutter_starts_at_the_padded_text_origin(cx: &mut TestAppContext) {
-        #[derive(Default)]
-        struct GutterRowTops(std::sync::Mutex<Vec<gpui::Pixels>>);
-
-        impl gpui::FrameObserver for GutterRowTops {
-            fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
-                let top = frame
-                    .nodes()
-                    .find(|(_, node)| node.path().ends_with("secret-value-editor-line-0-number"))
-                    .map(|(_, node)| node.bounds().origin.y);
-
-                if let Some(top) = top {
-                    self.0
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .push(top);
-                }
-            }
-        }
-
-        let mut opened = open_hosted(cx);
-        opened.select(PLAINTEXT_SECRET);
-        opened.show_value("a\nb");
-
-        let tops = std::sync::Arc::new(GutterRowTops::default());
-        opened
-            .window
-            .update(|window, _| window.observe_frames(&tops));
-
-        let doc = opened.doc.clone();
-        opened.window.update(|window, cx| {
-            doc.update(cx, |doc, cx| {
-                doc.view
-                    .update(cx, |view, cx| view.start_value_edit(window, cx))
-            })
-        });
-        opened.window.run_until_parked();
-        opened.rendered_paths();
-
-        let tops = tops
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        let (first, settled) = (tops[0], *tops.last().expect("frames drawn"));
-
-        assert!(
-            (first - settled).abs() < gpui::px(0.5), // guardrail-allow: test tolerance, not spacing
-            "first frame {first:?} vs settled {settled:?}: {tops:?}"
-        );
-
-        let editor =
-            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
-        let glyph = opened
-            .window
-            .update(|_, cx| editor.read(cx).range_to_bounds(&(0..1)))
-            .expect("text laid out")
-            .origin
-            .y;
-        assert!(
-            (first - glyph).abs() < gpui::px(1.5), // guardrail-allow: test tolerance, not spacing
-            "first frame {first:?} vs the first glyph {glyph:?}"
-        );
-    }
-
-    /// Scrolling a long value keeps gutter row N beside text line N, with
-    /// the Find panel closed and open.
-    #[gpui::test]
-    fn the_gutter_follows_the_text_while_scrolled(cx: &mut TestAppContext) {
-        let lines: Vec<String> = (0..80).map(|i| format!("l{i}")).collect();
-        let text = lines.join("\n");
-        let mut opened = open_hosted(cx);
-        start(&mut opened, &text, &text);
-        let editor =
-            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
-
-        let scroll_and_check = |opened: &mut Opened<'_>, stage: &str| {
-            let line_height = opened
-                .window
-                .update(|_, cx| editor.read(cx).line_height())
-                .expect("text laid out");
-            opened.window.update(|_, cx| {
-                editor.update(cx, |state, cx| {
-                    state.set_scroll_offset(gpui::point(gpui::px(0.), -line_height * 10.0), cx)
-                });
-            });
-            opened.window.run_until_parked();
-            opened.rendered_paths();
-            opened.rendered_paths();
-
-            for line in [11usize, 13] {
-                let offset = lines[..line]
-                    .iter()
-                    .map(|text| text.len() + 1)
-                    .sum::<usize>();
-                let glyph = opened
-                    .window
-                    .update(|_, cx| editor.read(cx).range_to_bounds(&(offset..offset + 1)))
-                    .expect("text laid out")
-                    .origin
-                    .y;
-                let gutter = opened
-                    .element_bounds(&format!("secret-value-editor-line-{line}-number"))
-                    .origin
-                    .y;
-                assert!(
-                    (gutter - glyph).abs() < gpui::px(1.5), // guardrail-allow: test tolerance, not spacing
-                    "{stage}, line {line}: gutter {gutter:?} vs text {glyph:?}"
-                );
-            }
-        };
-
-        opened.rendered_paths();
-        scroll_and_check(&mut opened, "closed");
-        open_find(&mut opened);
-        scroll_and_check(&mut opened, "find open");
     }
 }
 

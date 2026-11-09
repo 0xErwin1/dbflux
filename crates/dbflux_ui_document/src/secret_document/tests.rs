@@ -959,3 +959,49 @@ fn the_editing_tab_is_a_header_row_the_editor_and_a_status_bar(cx: &mut TestAppC
     );
     assert!(!opened.is_drawn("secret-document-delete"));
 }
+
+/// A long value does not leave the editor stranded at a fixed height: it
+/// fills the tab down to the status bar and scrolls, so the last line is
+/// reachable and the caret reports it.
+#[gpui::test]
+fn a_long_value_fills_the_tab_and_scrolls_to_its_last_line(cx: &mut TestAppContext) {
+    let mut opened = open_document_with(cx, PLAINTEXT_SECRET, Some(CURRENT_REGION), true);
+    let long: String = (1..=140)
+        .map(|line| format!("KEY_{line}=value-{line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let doc = opened.doc.clone();
+    opened.window.update(|window, cx| {
+        let view = doc.read(cx).view().clone();
+        view.update(cx, |view, cx| view.replace_editor_text(&long, window, cx));
+    });
+    opened.window.run_until_parked();
+
+    let editor = opened.bounds("secret-value-editor");
+    let status = opened.bounds("secret-document-editor-status");
+    assert!(
+        status.top() - editor.bottom() < gpui::px(4.0), // guardrail-allow: test geometry, not spacing
+        "the editor reaches the status bar: {editor:?} / {status:?}"
+    );
+    let laid_out = opened
+        .window
+        .update(|_, cx| {
+            let view = doc.read(cx).view().clone();
+            view.read(cx).editor_viewport_height(cx)
+        })
+        .expect("an open editor");
+    assert!(
+        laid_out > gpui::px(500.0), // guardrail-allow: test geometry, not spacing
+        "the text area fills the tab, not the old 14-row cap: {laid_out:?}"
+    );
+
+    // The caret at the end of the value is on line 140, in view.
+    opened.window.simulate_keystrokes("ctrl-end");
+    opened.window.run_until_parked();
+    let line = opened.window.update(|_, cx| {
+        let view = doc.read(cx).view().clone();
+        view.read(cx).editor_caret_line(cx)
+    });
+    assert_eq!(line, Some(140));
+    assert!(opened.rendered_text().contains("Ln 140"));
+}

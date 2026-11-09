@@ -306,3 +306,79 @@ fn the_e_key_in_the_listing_opens_the_tab_with_the_editor(cx: &mut TestAppContex
     assert_eq!(tab_count(&opened, window), 2);
     assert!(is_drawn(window, "secret-value-editor-save"));
 }
+
+/// Presses the drawn element `id` the way UI automation and a screen reader
+/// do: a press and a release at its centre, with no frame drawn afterwards.
+/// What the press asks for must happen from the event itself, not from the
+/// next render.
+fn press_without_a_frame(window: &mut gpui::VisualTestContext, id: &str) {
+    let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(window);
+    let center = capture
+        .frame(window)
+        .nodes()
+        .find(|(_, node)| node.id() == id)
+        .map(|(_, node)| node.bounds().center())
+        .unwrap_or_else(|| panic!("`{id}` is drawn"));
+
+    window.update(|window, cx| {
+        window.dispatch_event(
+            gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                position: center,
+                modifiers: gpui::Modifiers::default(),
+                button: gpui::MouseButton::Left,
+                click_count: 1,
+                first_mouse: false,
+            }),
+            cx,
+        );
+    });
+    window.update(|window, cx| {
+        window.dispatch_event(
+            gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                position: center,
+                modifiers: gpui::Modifiers::default(),
+                button: gpui::MouseButton::Left,
+                click_count: 1,
+            }),
+            cx,
+        );
+    });
+}
+
+/// The expand button opens the tab from the press itself.
+#[gpui::test]
+fn the_expand_button_opens_the_tab_without_waiting_for_a_frame(cx: &mut TestAppContext) {
+    let (opened, window) = open_listing(cx);
+    select_secret(&opened, window);
+
+    press_without_a_frame(window, "secret-details-expand");
+
+    assert_eq!(tab_count(&opened, window), 2);
+    assert!(has_secret_tab(&opened, window));
+}
+
+/// So does the row menu's Open in tab.
+#[gpui::test]
+fn the_menu_entry_opens_the_tab_without_waiting_for_a_frame(cx: &mut TestAppContext) {
+    let (opened, window) = open_listing(cx);
+
+    let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(window);
+    let row = capture
+        .frame(window)
+        .nodes()
+        .find(|(_, node)| node.id() == format!("secret-row-{SECRET}"))
+        .map(|(_, node)| node.bounds())
+        .expect("the row is drawn");
+    window.simulate_event(gpui::MouseDownEvent {
+        position: row.center(),
+        modifiers: gpui::Modifiers::default(),
+        button: gpui::MouseButton::Right,
+        click_count: 1,
+        first_mouse: false,
+    });
+    window.run_until_parked();
+
+    press_without_a_frame(window, "secret-menu-open-in-tab-item-0");
+
+    assert_eq!(tab_count(&opened, window), 2);
+}
