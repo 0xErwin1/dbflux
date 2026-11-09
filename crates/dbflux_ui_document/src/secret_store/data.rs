@@ -169,9 +169,25 @@ impl SecretStoreDocument {
         let applied = match result {
             Ok(page) => {
                 let count = page.entries.len();
+                let page_names: Vec<String> = page
+                    .entries
+                    .iter()
+                    .map(|entry| entry.name.clone())
+                    .collect();
                 let applied = self.listing.apply_page(generation, page);
 
                 if applied {
+                    // The listing keeps the earlier row of a repeated secret, so
+                    // what it retained is its word, not the discarded duplicate.
+                    let retained: Vec<_> = page_names
+                        .iter()
+                        .filter_map(|name| self.listing.find(name).cloned())
+                        .collect();
+
+                    self.view.update(cx, |view, cx| {
+                        view.observe_listed_rows(&retained, generation, cx)
+                    });
+
                     self.last_call = Some(CallTiming {
                         call: StoreCall::List {
                             count,

@@ -230,6 +230,22 @@ impl SecretView {
         );
     }
 
+    /// Offers every row a successful listing page returned to the override,
+    /// not only the selected one: a row read while another secret was
+    /// selected is still the listing's word about its own secret.
+    pub(in crate::secret_store) fn observe_listed_rows(
+        &mut self,
+        rows: &[SecretSummary],
+        generation: u64,
+        cx: &gpui::Context<Self>,
+    ) {
+        self.drop_confirmations_of_replaced_session(cx);
+
+        for summary in rows {
+            self.observe_listed(summary, generation);
+        }
+    }
+
     /// Offers a describe of a secret, issued as `generation`, to the override.
     pub(in crate::secret_store) fn observe_described(
         &mut self,
