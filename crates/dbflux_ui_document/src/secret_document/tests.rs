@@ -155,6 +155,28 @@ impl Opened<'_> {
             .update(|_, cx| state.read(cx).unread_error_count)
     }
 
+    fn error_summaries(&mut self) -> Vec<String> {
+        use dbflux_ui_base::notifications::{NotificationKey, NotificationSources};
+
+        let state = self.app_state.clone();
+        self.window.update(|_, cx| {
+            let state = state.read(cx);
+            state
+                .notifications
+                .snapshot(&NotificationSources::default())
+                .entries
+                .iter()
+                .filter_map(|entry| match &entry.key {
+                    NotificationKey::Error(id) => state
+                        .notifications
+                        .error(*id)
+                        .map(|error| error.summary.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+    }
+
     fn toasts(&mut self) -> usize {
         self.window.update(|_, cx| {
             cx.global::<dbflux_ui_base::toast::ToastGlobal>()
@@ -1248,4 +1270,77 @@ fn a_clean_editor_closes_when_the_secret_changes_elsewhere(cx: &mut TestAppConte
 
     assert!(!opened.read_view(|view| view.is_editing_value()));
     assert!(!opened.tab_value_loaded());
+}
+
+/// The region moves under a tab that holds a value and an open editor: every
+/// entry of the `m` menu is disabled, and running one anyway neither writes
+/// nor raises an error or a toast.
+#[gpui::test]
+fn a_region_mismatch_disables_the_menu_and_running_save_is_silent(cx: &mut TestAppContext) {
+    let mut opened = open_document_with(cx, PLAINTEXT_SECRET, Some(CURRENT_REGION), true);
+    opened.window.simulate_input("!");
+    opened.window.run_until_parked();
+    assert!(opened.read_view(|view| view.is_editing_value()));
+
+    opened.move_connection_to(OTHER_REGION);
+    assert!(opened.block().is_some());
+
+    let doc = opened.doc.clone();
+    let actions = opened
+        .window
+        .update(|_, cx| doc.read(cx).pane_actions(&doc, cx));
+    for id in [
+        "secret-editor-save",
+        "secret-editor-find",
+        "secret-editor-discard",
+        "secret-copy-value",
+        "secret-reveal-all",
+    ] {
+        if let Some(action) = actions.iter().find(|action| action.id.as_ref() == id) {
+            assert!(!action.enabled, "`{id}` is disabled");
+        }
+    }
+    assert!(
+        actions.iter().all(|action| !action.enabled),
+        "{:?}",
+        actions
+            .iter()
+            .filter(|action| action.enabled)
+            .map(|action| action.id.to_string())
+            .collect::<Vec<_>>()
+    );
+
+    let writes = opened.driver.secret_store_calls().put_attempts.len();
+    for action in actions {
+        // Copying the name touches neither the store nor the value; its
+        // confirmation toast is not what this test is about.
+        if action.id.as_ref() == "secret-copy-name" {
+            continue;
+        }
+
+        if let crate::pane::PaneActionRun::Callback(run) = action.run {
+            opened.window.update(|window, cx| run(window, cx));
+        }
+    }
+    opened.window.run_until_parked();
+    opened.command(Command::SaveQuery);
+
+    assert_eq!(
+        opened.driver.secret_store_calls().put_attempts.len(),
+        writes
+    );
+    assert_eq!(
+        opened.unread_errors(),
+        0,
+        "no error: {:?}",
+        opened.error_summaries()
+    );
+    let toast = opened.window.update(|_, cx| {
+        cx.global::<dbflux_ui_base::toast::ToastGlobal>()
+            .host
+            .clone()
+            .read(cx)
+            .last_toast_title()
+    });
+    assert_eq!(opened.toasts(), 0, "no toast: {toast:?}");
 }

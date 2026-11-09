@@ -32,9 +32,17 @@ impl SecretDocument {
                 Command::RefreshSchema,
                 ContextId::Results,
             )
-            .icon(AppIcon::RefreshCcw)
-            .enabled(self.block(cx).is_none()),
+            .icon(AppIcon::RefreshCcw),
         );
+
+        // A tab on another region than the connection's reads and writes
+        // nothing, so nothing in its menu can be chosen.
+        if self.block(cx).is_some() {
+            return actions
+                .into_iter()
+                .map(|action| action.enabled(false))
+                .collect();
+        }
 
         actions
     }

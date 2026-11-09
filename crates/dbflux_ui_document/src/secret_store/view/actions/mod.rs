@@ -213,7 +213,10 @@ impl SecretView {
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<WriteSession> {
-        if self.region_switch_blocks_writes(cx) || self.editor_save_blocks_writes(cx) {
+        if self.region_switch_blocks_writes(cx)
+            || self.editor_save_blocks_writes(cx)
+            || self.region_mismatch(cx)
+        {
             return None;
         }
 
@@ -462,7 +465,10 @@ impl SecretView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.region_switch_blocks_writes(cx) || self.editor_save_blocks_writes(cx) {
+        if self.region_switch_blocks_writes(cx)
+            || self.editor_save_blocks_writes(cx)
+            || self.region_mismatch(cx)
+        {
             return;
         }
 

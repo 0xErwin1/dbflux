@@ -388,6 +388,10 @@ impl SecretView {
             return;
         }
 
+        if self.region_mismatch(cx) {
+            return;
+        }
+
         let Some(live) = self.connection(cx) else {
             self.missing_connection_reported = true;
             report_error(
@@ -695,7 +699,7 @@ impl SecretView {
     ) -> Option<ValueWriteSession> {
         // A region switch is about to replace the session this would write
         // to: the shared guard comes before the connection is read.
-        if self.region_switch_blocks_writes(cx) {
+        if self.region_switch_blocks_writes(cx) || self.region_mismatch(cx) {
             return None;
         }
 
