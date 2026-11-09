@@ -20,7 +20,7 @@ use dbflux_components::fonts;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text};
 use dbflux_components::tokens::{
-    ChromeColors, DocumentMetrics, PreviewRailMetrics, SecretStoreMetrics, ui,
+    ChromeColors, DocumentMetrics, PreviewRailMetrics, SecretStoreMetrics, SplitterMetrics, ui,
 };
 use dbflux_core::{SecretDetails, SecretStoreCapabilities, SecretSummary};
 use gpui::prelude::*;
@@ -187,20 +187,30 @@ impl SecretView {
                 .into_any_element(),
         };
 
+        // The gutter sits left of the pane, between it and the listing; the
+        // pane keeps its minimum width however narrow the row gets.
         div()
-            .id("secret-details")
             .relative()
-            .w(self.details_width())
+            .w(self.details_width() + SplitterMetrics::GUTTER)
             .flex_shrink_1()
-            .min_w(SecretStoreMetrics::DETAILS_MIN_WIDTH)
+            .min_w(SecretStoreMetrics::DETAILS_MIN_WIDTH + SplitterMetrics::GUTTER)
             .h_full()
             .flex()
-            .flex_col()
-            .border_l_1()
-            .border_color(border)
-            .bg(background)
-            .child(body)
+            .child(self.measure_details_edge())
             .child(self.render_details_grip(cx))
+            .child(
+                div()
+                    .id("secret-details")
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .border_l_1()
+                    .border_color(border)
+                    .bg(background)
+                    .child(body),
+            )
             .into_any_element()
     }
 

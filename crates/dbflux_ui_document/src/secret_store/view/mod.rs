@@ -209,7 +209,10 @@ pub(crate) struct SecretView {
     host: ViewHost,
     /// The width the user dragged the details pane to; the default until then.
     details_width: Option<Pixels>,
-    details_resize: Option<details::resize::DetailsResize>,
+    /// Where the pane's right edge was painted, which a drag measures from.
+    details_right: Rc<Cell<Pixels>>,
+    /// Focus of the pane's gutter, which enables its arrow keys.
+    details_grip_focus: gpui::FocusHandle,
     /// A pane hands editing to the secret's tab instead of editing in the
     /// side pane. Cleared only by the view-level tests, which edit wherever
     /// they mount the view.
@@ -245,7 +248,8 @@ impl SecretView {
             opened_version: None,
             host,
             details_width: None,
-            details_resize: None,
+            details_right: Rc::new(Cell::new(px(0.0))),
+            details_grip_focus: cx.focus_handle(),
             edit_in_tab: host == ViewHost::Pane,
             profile_id,
             store,

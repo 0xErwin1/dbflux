@@ -149,4 +149,3 @@ crates/dbflux_ui_document/src/schema_viz/mod.rs:render_node: drag start
 crates/dbflux_ui_document/src/secret_store/context_menu.rs:render_context_menu: outside-press dismiss
 crates/dbflux_ui_document/src/secret_store/context_menu.rs:render_context_menu: propagation guard
 crates/dbflux_ui_document/src/tab_bar.rs:render_tab_action: propagation guard
-crates/dbflux_ui_document/src/secret_store/view/details/resize.rs:render_details_grip: resize grip

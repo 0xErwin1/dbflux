@@ -3552,6 +3552,7 @@ document:
       last_changed: "上次更改"
       last_retrieved: "上次获取"
       open_in_tab: "在标签页中打开"
+      resize: "调整详情面板大小"
     versions:
       title: "版本"
       history_title: "历史记录"

@@ -70,6 +70,13 @@ impl Opened<'_> {
             first_mouse: false,
         });
         self.window.run_until_parked();
+        // A drag starts once the pointer has left the press point.
+        self.window.simulate_event(gpui::MouseMoveEvent {
+            position: at(start.x - gpui::px(20.0)), // guardrail-allow: test geometry, not spacing
+            pressed_button: Some(gpui::MouseButton::Left),
+            modifiers: gpui::Modifiers::default(),
+        });
+        self.window.run_until_parked();
         self.window.simulate_event(gpui::MouseMoveEvent {
             position: at(x),
             pressed_button: Some(gpui::MouseButton::Left),
@@ -225,8 +232,8 @@ fn the_details_pane_resizes_by_its_left_edge(cx: &mut TestAppContext) {
     let before = opened.bounds("secret-details");
     let grip = opened.bounds("secret-details-grip");
     assert!(
-        grip.left() < before.left() + gpui::px(1.0) && grip.right() > before.left(),
-        "the grip sits on the pane's left edge"
+        (grip.right() - before.left()).abs() < gpui::px(1.0), // guardrail-allow: test geometry, not spacing
+        "the gutter sits against the pane's left edge: {grip:?} / {before:?}"
     );
 
     opened.drag_grip_to(grip.center().x - gpui::px(100.0));
@@ -238,4 +245,28 @@ fn the_details_pane_resizes_by_its_left_edge(cx: &mut TestAppContext) {
 
     opened.drag_grip_to(gpui::px(1499.0));
     assert_eq!(opened.bounds("secret-details").size.width, gpui::px(280.0));
+}
+
+/// The gutter has the keyboard path a resize needs: focused, Left widens the
+/// pane and Right narrows it, by the splitter's step.
+#[gpui::test]
+fn the_gutter_resizes_with_the_arrow_keys(cx: &mut TestAppContext) {
+    let mut opened = production_pane(cx);
+    opened.open_secret(KEY_VALUE_SECRET);
+    let before = opened.bounds("secret-details").size.width;
+
+    let doc = opened.doc.clone();
+    opened.window.update(|window, cx| {
+        let view = doc.read(cx).view.clone();
+        let handle = view.read(cx).details_grip_focus().clone();
+        window.focus(&handle, cx);
+    });
+    opened.window.simulate_keystrokes("left");
+    opened.window.run_until_parked();
+    let wider = opened.bounds("secret-details").size.width;
+    assert!(wider > before, "{before:?} -> {wider:?}");
+
+    opened.window.simulate_keystrokes("right");
+    opened.window.run_until_parked();
+    assert_eq!(opened.bounds("secret-details").size.width, before);
 }

@@ -1,28 +1,16 @@
-//! Dragging the left edge of the details pane to resize it, the way the
-//! sidebar's seam resizes the sidebar. The width lives for the session of the
-//! view, like the sidebar's: neither is persisted.
+//! Resizing the details pane by its left edge, with the design system's
+//! `Splitter`: the gutter drags, steps with the arrow keys while focused, and
+//! is a splitter to assistive technology. The width lives for the session of
+//! the view, like the sidebar's: neither is persisted.
 
 use super::SecretView;
-use dbflux_components::tokens::SecretStoreMetrics;
+use dbflux_components::composites::{SplitAxis, Splitter};
+use dbflux_components::tokens::{SecretStoreMetrics, SplitterMetrics};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
 
 /// The widest the pane grows; the listing keeps the rest.
-const DETAILS_MAX_WIDTH: Pixels = px(900.0);
-
-/// How far the grip reaches to each side of the pane's edge.
-const GRIP_REACH: Pixels = px(4.0); // guardrail-allow: a hit target on the pane's edge, not spacing
-
-/// Width of the line drawn on the edge while the grip is hovered or dragged.
-const GRIP_LINE_WIDTH: Pixels = px(2.0);
-
-/// A drag in flight: where the pointer and the pane's width were at the press.
-#[derive(Clone, Copy, Debug)]
-pub(in crate::secret_store) struct DetailsResize {
-    start_x: Pixels,
-    start_width: Pixels,
-}
+pub(in crate::secret_store) const DETAILS_MAX_WIDTH: Pixels = px(900.0); // guardrail-allow: layout clamp of the pane, no token carries it
 
 impl SecretView {
     /// The pane's width: what the user dragged it to, or the default.
@@ -31,107 +19,59 @@ impl SecretView {
             .unwrap_or(SecretStoreMetrics::DETAILS_WIDTH)
     }
 
-    pub(in crate::secret_store) fn begin_details_resize(
-        &mut self,
-        position_x: Pixels,
-        cx: &mut Context<Self>,
-    ) {
-        self.details_resize = Some(DetailsResize {
-            start_x: position_x,
-            start_width: self.details_width(),
-        });
-        cx.notify();
+    /// The gutter's focus handle, for the tests that press its keys.
+    #[cfg(test)]
+    pub(in crate::secret_store) fn details_grip_focus(&self) -> &FocusHandle {
+        &self.details_grip_focus
     }
 
-    /// Dragging left widens the pane, because its edge is its left one.
-    pub(in crate::secret_store) fn drag_details_resize(
-        &mut self,
-        position_x: Pixels,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(resize) = self.details_resize else {
-            return;
-        };
+    fn set_details_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
+        let width = width.clamp(SecretStoreMetrics::DETAILS_MIN_WIDTH, DETAILS_MAX_WIDTH);
 
-        let width = resize.start_width + (resize.start_x - position_x);
-        self.details_width =
-            Some(width.clamp(SecretStoreMetrics::DETAILS_MIN_WIDTH, DETAILS_MAX_WIDTH));
-        cx.notify();
-    }
-
-    pub(in crate::secret_store) fn finish_details_resize(&mut self, cx: &mut Context<Self>) {
-        if self.details_resize.take().is_some() {
+        if self.details_width != Some(width) {
+            self.details_width = Some(width);
             cx.notify();
         }
     }
 
-    pub(in crate::secret_store) fn is_resizing_details(&self) -> bool {
-        self.details_resize.is_some()
+    /// The gutter on the pane's left edge. A drag reports the pointer, so the
+    /// width is the distance from it to the pane's right edge, which the
+    /// last frame measured; an arrow key moves the edge by its step, so left
+    /// widens the pane.
+    pub(super) fn render_details_grip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let on_drag = cx.entity().downgrade();
+        let on_step = on_drag.clone();
+        let right_edge = self.details_right.clone();
+
+        Splitter::new("secret-details-grip", SplitAxis::Horizontal)
+            .track_focus(&self.details_grip_focus)
+            .aria_label(dbflux_i18n::t!("document.secret_store.details.resize"))
+            .on_drag(move |position, _, cx| {
+                let width = right_edge.get() - position - SplitterMetrics::GUTTER / 2.0;
+
+                on_drag
+                    .update(cx, |view, cx| view.set_details_width(width, cx))
+                    .ok();
+            })
+            .on_step(move |delta, _, cx| {
+                on_step
+                    .update(cx, |view, cx| {
+                        let width = view.details_width() - delta;
+                        view.set_details_width(width, cx);
+                    })
+                    .ok();
+            })
     }
 
-    /// The grip on the pane's left edge. While a drag is in flight the
-    /// window-level listeners follow the pointer wherever it goes, because
-    /// element listeners stop seeing the drag once the pointer leaves the
-    /// grip; they must be registered during paint, hence the canvas.
-    pub(super) fn render_details_grip(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let line_color = cx.theme().accent.opacity(0.6);
-        let dragging = self.is_resizing_details();
-        let view = cx.entity().clone();
+    /// Records where the pane's right edge is, as the last frame painted it.
+    pub(super) fn measure_details_edge(&self) -> impl IntoElement {
+        let right_edge = self.details_right.clone();
 
-        div()
-            .id("secret-details-grip")
-            .group("secret-details-grip")
-            .absolute()
-            .top_0()
-            .bottom_0()
-            .left(-GRIP_REACH)
-            .w(GRIP_REACH * 2.0)
-            .cursor_col_resize()
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(GRIP_REACH - GRIP_LINE_WIDTH / 2.0)
-                    .w(GRIP_LINE_WIDTH)
-                    .group_hover("secret-details-grip", move |line| line.bg(line_color))
-                    .when(dragging, move |line| line.bg(line_color)),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    this.begin_details_resize(event.position.x, cx);
-                }),
-            )
-            .when(dragging, |grip| {
-                grip.child(
-                    canvas(
-                        |_, _, _| {},
-                        move |_, _, window, _| {
-                            window.on_mouse_event({
-                                let view = view.clone();
-                                move |event: &MouseMoveEvent, phase, _, cx| {
-                                    if phase.bubble() {
-                                        view.update(cx, |view, cx| {
-                                            view.drag_details_resize(event.position.x, cx);
-                                        });
-                                    }
-                                }
-                            });
-
-                            window.on_mouse_event({
-                                let view = view.clone();
-                                move |_: &MouseUpEvent, phase, _, cx| {
-                                    if phase.bubble() {
-                                        view.update(cx, |view, cx| view.finish_details_resize(cx));
-                                    }
-                                }
-                            });
-                        },
-                    )
-                    .absolute()
-                    .size_full(),
-                )
-            })
+        canvas(
+            move |bounds, _, _| right_edge.set(bounds.right()),
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full()
     }
 }

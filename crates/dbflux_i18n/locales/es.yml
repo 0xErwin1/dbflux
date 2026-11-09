@@ -3552,6 +3552,7 @@ document:
       last_changed: "Último cambio"
       last_retrieved: "Última obtención"
       open_in_tab: "Abrir en una pestaña"
+      resize: "Redimensionar el panel de detalles"
     versions:
       title: "Versiones"
       history_title: "Historial"

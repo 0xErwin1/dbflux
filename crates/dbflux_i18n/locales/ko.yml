@@ -3552,6 +3552,7 @@ document:
       last_changed: "마지막 변경"
       last_retrieved: "마지막 조회"
       open_in_tab: "탭에서 열기"
+      resize: "세부 정보 창 크기 조절"
     versions:
       title: "버전"
       history_title: "기록"

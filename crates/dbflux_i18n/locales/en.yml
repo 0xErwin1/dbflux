@@ -3552,6 +3552,7 @@ document:
       last_changed: "Last changed"
       last_retrieved: "Last retrieved"
       open_in_tab: "Open in tab"
+      resize: "Resize the details pane"
     versions:
       title: "Versions"
       history_title: "History"
