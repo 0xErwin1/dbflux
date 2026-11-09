@@ -148,6 +148,39 @@ fn has_secret_tab(opened: &Opened, window: &mut gpui::VisualTestContext) -> bool
     })
 }
 
+fn active_id(
+    opened: &Opened,
+    window: &mut gpui::VisualTestContext,
+) -> Option<crate::ui::document::DocumentId> {
+    window.update(|_, cx| opened.workspace.read(cx).tab_manager.read(cx).active_id())
+}
+
+fn secret_tab_id(
+    opened: &Opened,
+    window: &mut gpui::VisualTestContext,
+) -> Option<crate::ui::document::DocumentId> {
+    let key = secret_key(opened.profile_id);
+
+    window.update(|_, cx| {
+        opened
+            .workspace
+            .read(cx)
+            .tab_manager
+            .read(cx)
+            .find_by_key(&key, cx)
+    })
+}
+
+/// How many tabs the workspace holds, read without letting a frame draw: what
+/// the assertion sees was done by the event, not by a render after it.
+fn tab_count_without_drawing(opened: &Opened, window: &mut gpui::VisualTestContext) -> usize {
+    use gpui::AppContext as _;
+
+    window.read_entity(&opened.workspace, |workspace, cx| {
+        workspace.tab_manager.read(cx).documents().len()
+    })
+}
+
 fn select_secret(opened: &Opened, window: &mut gpui::VisualTestContext) {
     select(opened, window, SECRET);
 }
@@ -201,14 +234,9 @@ fn the_expand_button_opens_the_secret_in_its_own_tab(cx: &mut TestAppContext) {
 
     assert_eq!(tab_count(&opened, window), 2);
     assert!(has_secret_tab(&opened, window));
-    assert!(
-        window.update(|_, cx| opened
-            .workspace
-            .read(cx)
-            .tab_manager
-            .read(cx)
-            .active_id()
-            .is_some()),
+    assert_eq!(
+        active_id(&opened, window),
+        secret_tab_id(&opened, window),
         "the new tab is the active one"
     );
 
@@ -224,6 +252,11 @@ fn the_expand_button_opens_the_secret_in_its_own_tab(cx: &mut TestAppContext) {
     window.run_until_parked();
     click(window, "secret-details-expand");
 
+    assert_eq!(
+        active_id(&opened, window),
+        secret_tab_id(&opened, window),
+        "the existing tab is focused again"
+    );
     assert_eq!(
         tab_count(&opened, window),
         2,
@@ -353,7 +386,7 @@ fn the_expand_button_opens_the_tab_without_waiting_for_a_frame(cx: &mut TestAppC
 
     press_without_a_frame(window, "secret-details-expand");
 
-    assert_eq!(tab_count(&opened, window), 2);
+    assert_eq!(tab_count_without_drawing(&opened, window), 2);
     assert!(has_secret_tab(&opened, window));
 }
 
@@ -380,5 +413,63 @@ fn the_menu_entry_opens_the_tab_without_waiting_for_a_frame(cx: &mut TestAppCont
 
     press_without_a_frame(window, "secret-menu-open-in-tab-item-0");
 
-    assert_eq!(tab_count(&opened, window), 2);
+    assert_eq!(tab_count_without_drawing(&opened, window), 2);
+}
+
+/// #27: the request is handled when it is raised. A tab switch before the
+/// listing renders again leaves nothing queued to open the secret later.
+#[gpui::test]
+fn the_request_is_handled_when_raised_not_on_the_next_render(cx: &mut TestAppContext) {
+    let (opened, window) = open_listing(cx);
+    select_secret(&opened, window);
+
+    window.update(|_, cx| {
+        opened
+            .listing
+            .update(cx, |listing, cx| listing.open_selected_in_tab(cx))
+    });
+
+    assert_eq!(tab_count_without_drawing(&opened, window), 2);
+    assert!(
+        window
+            .update(|_, cx| opened
+                .listing
+                .update(cx, |listing, _| listing.take_pending_open_secret()))
+            .is_none(),
+        "nothing is left queued on the listing"
+    );
+}
+
+/// #26: no tab is created for a profile that has no live connection: its
+/// descriptor would stay empty after a reconnect. The user is told instead.
+#[gpui::test]
+fn opening_a_secret_while_disconnected_creates_no_tab(cx: &mut TestAppContext) {
+    let (opened, window) = open_listing(cx);
+    select_secret(&opened, window);
+
+    let profile_id = opened.profile_id;
+    window.update(|_, cx| {
+        let app_state = opened.workspace.read(cx).app_state.clone();
+        app_state.update(cx, |state, _| {
+            state.connections_mut().remove(&profile_id);
+        });
+        opened
+            .listing
+            .update(cx, |listing, cx| listing.open_selected_in_tab(cx))
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        tab_count(&opened, window),
+        1,
+        "no tab for a dead connection"
+    );
+    let toasts = window.update(|_, cx| {
+        cx.global::<dbflux_ui_base::toast::ToastGlobal>()
+            .host
+            .clone()
+            .read(cx)
+            .toast_count()
+    });
+    assert!(toasts >= 1, "the user is told");
 }

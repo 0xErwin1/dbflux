@@ -302,6 +302,13 @@ impl SecretView {
         cx.notify();
     }
 
+    /// Gives the keyboard to the open editor, keeping its text.
+    pub(crate) fn focus_value_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(edit) = &self.value_edit {
+            edit.editor.update(cx, |state, cx| state.focus(window, cx));
+        }
+    }
+
     /// Replaces the editor's text, as a long paste would.
     #[cfg(test)]
     pub(crate) fn replace_editor_text(
@@ -322,6 +329,14 @@ impl SecretView {
         self.value_edit
             .as_ref()
             .map(|edit| edit.editor.read(cx).input_bounds().size.height)
+    }
+
+    /// The text the open editor holds, for the tests.
+    #[cfg(test)]
+    pub(crate) fn editor_text_for_test(&self, cx: &App) -> Option<String> {
+        self.value_edit
+            .as_ref()
+            .map(|edit| edit.editor.read(cx).value().to_string())
     }
 
     /// The caret's 1-based line, for the tab tests.

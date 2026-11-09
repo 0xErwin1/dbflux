@@ -380,6 +380,15 @@ impl SecretDocument {
             return;
         }
 
+        // An editor that is already open takes the keyboard back; it is not
+        // rebuilt, so its text is kept.
+        if self.view.read(cx).is_editing_value() {
+            self.edit_when_ready = false;
+            self.view
+                .update(cx, |view, cx| view.focus_value_editor(window, cx));
+            return;
+        }
+
         match self.view.read(cx).details() {
             DetailsState::Loaded(_) => {
                 self.edit_when_ready = false;

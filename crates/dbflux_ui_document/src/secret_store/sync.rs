@@ -55,8 +55,10 @@ impl SecretStoreDocument {
     pub(super) fn queue_open_secret(&mut self, name: String, edit: bool, cx: &mut Context<Self>) {
         self.pending_open_secret = Some(SecretOpenRequest {
             store_id: self.store.id.clone(),
+            // The tab opens on what the pane shows: an older version stays
+            // the tab's identity and what it retrieves.
+            version: self.view.read(cx).shown_version(),
             name,
-            version: None,
             region: self.region.clone(),
             edit,
         });

@@ -270,3 +270,26 @@ fn the_gutter_resizes_with_the_arrow_keys(cx: &mut TestAppContext) {
     opened.window.run_until_parked();
     assert_eq!(opened.bounds("secret-details").size.width, before);
 }
+
+/// #20: expanding a pane that shows an older version opens the tab on that
+/// version, so retrieving there shows the value the pane showed.
+#[gpui::test]
+fn expanding_a_pane_that_shows_a_version_opens_the_tab_on_it(cx: &mut TestAppContext) {
+    let mut opened = production_pane(cx);
+    opened.open_secret(KEY_VALUE_SECRET);
+    opened.update_view(|view, cx| view.activate_version(1, cx));
+    let shown = opened
+        .read_view(|view| view.value_version().map(str::to_string))
+        .expect("the pane shows an older version");
+
+    opened.click("secret-details-expand");
+
+    let request = opened.pending_open().expect("expand opens the tab");
+    assert_eq!(request.version.as_deref(), Some(shown.as_str()));
+    assert!(!request.edit);
+
+    // The current version opens the current tab.
+    opened.update_view(|view, cx| view.back_to_current_version(cx));
+    opened.click("secret-details-expand");
+    assert_eq!(opened.pending_open().expect("request").version, None);
+}

@@ -525,6 +525,12 @@ impl SecretView {
         &self.versions
     }
 
+    /// The version the value section shows, owned, `None` for the current
+    /// value.
+    pub(crate) fn shown_version(&self) -> Option<String> {
+        self.value_version.clone()
+    }
+
     /// The version the value section shows, `None` for the current value.
     #[cfg(test)]
     pub(crate) fn value_version(&self) -> Option<&str> {

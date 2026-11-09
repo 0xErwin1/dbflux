@@ -491,6 +491,29 @@ impl Workspace {
     /// Opens one secret in its own tab, or focuses the tab that already shows
     /// it. The key carries the region the listing was loaded under, so the
     /// same name in two regions gets two tabs.
+    /// Opens the secret the active tab asked to have opened in a tab of its
+    /// own, if it asked. The secret store listing raises the request from its
+    /// expand button and its row menu.
+    pub(in crate::ui::views::workspace) fn open_pending_secret(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let active_id = self.tab_manager.read(cx).active_id();
+        let pending = active_id.and_then(|id| {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.document(id).and_then(|tab| {
+                    tab.take_pending_open_secret(cx)
+                        .map(|request| (tab.connection_id(cx), request))
+                })
+            })
+        });
+
+        if let Some((Some(profile_id), request)) = pending {
+            self.open_secret_document(profile_id, request, window, cx);
+        }
+    }
+
     pub(in crate::ui::views::workspace) fn open_secret_document(
         &mut self,
         profile_id: uuid::Uuid,
@@ -519,6 +542,25 @@ impl Workspace {
                     }
                 });
             }
+            return;
+        }
+
+        // The tab reads its store's capabilities from the live connection when
+        // it is created, and keeps them: without one it would stay empty after
+        // a reconnect, with no writes and no history.
+        let connected = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+
+        if !connected {
+            let message =
+                documents_no_active_connection_message(NoActiveConnectionKind::SecretStore);
+            Toast::error(message.clone())
+                .meta_right(now_hms())
+                .action(copy_action(message))
+                .push(cx);
             return;
         }
 

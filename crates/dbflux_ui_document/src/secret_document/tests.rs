@@ -2009,3 +2009,60 @@ mod review_round_ui {
         );
     }
 }
+
+mod review_round_focus {
+    use super::*;
+    use dbflux_app::keymap::ContextId;
+
+    /// #25: asking again for the editor of a tab that already has it open
+    /// puts the keyboard back in it, without recreating it or losing its text.
+    #[gpui::test]
+    fn a_repeated_edit_request_refocuses_the_open_editor(cx: &mut TestAppContext) {
+        let mut opened = open_document_with(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION), true);
+        opened.window.update(|window, _| window.activate_window());
+        opened.window.simulate_keystrokes("ctrl-a");
+        opened.window.simulate_input("{\"kept\": 1}");
+        opened.window.run_until_parked();
+        let typed = opened.editor_text();
+
+        assert!(opened.command(Command::Cancel), "focus leaves the editor");
+        opened.window.run_until_parked();
+        assert_eq!(
+            opened.doc.read_with_active_context(&mut opened.window),
+            ContextId::Results
+        );
+
+        let doc = opened.doc.clone();
+        opened
+            .window
+            .update(|_, cx| doc.update(cx, |doc, cx| doc.begin_edit(cx)));
+        opened.window.run_until_parked();
+
+        assert_eq!(
+            opened.doc.read_with_active_context(&mut opened.window),
+            ContextId::TextInput,
+            "the editor has the keyboard again"
+        );
+        assert_eq!(opened.editor_text(), typed);
+    }
+
+    impl Opened<'_> {
+        fn editor_text(&mut self) -> Option<String> {
+            let doc = self.doc.clone();
+            self.window.update(|_, cx| {
+                let view = doc.read(cx).view().clone();
+                view.read(cx).editor_text_for_test(cx)
+            })
+        }
+    }
+
+    trait ActiveContext {
+        fn read_with_active_context(&self, window: &mut VisualTestContext) -> ContextId;
+    }
+
+    impl ActiveContext for Entity<SecretDocument> {
+        fn read_with_active_context(&self, window: &mut VisualTestContext) -> ContextId {
+            window.update(|_, cx| self.read(cx).active_context(cx))
+        }
+    }
+}

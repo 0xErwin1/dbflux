@@ -1551,6 +1551,10 @@ impl Workspace {
                 match event {
                     TabManagerEvent::DocumentRequestedFocus => {
                         this.set_focus(FocusTarget::Document, window, cx);
+                        // The raiser may have queued a secret to open in a tab
+                        // of its own: that is done now, not on a later render,
+                        // so a tab switch in between cannot strand it.
+                        this.open_pending_secret(window, cx);
                     }
                     TabManagerEvent::RequestSqlPreview {
                         context,
