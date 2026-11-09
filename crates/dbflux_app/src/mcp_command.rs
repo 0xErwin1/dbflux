@@ -1,4 +1,3 @@
-#[cfg(feature = "mcp")]
 use std::path::PathBuf;
 
 #[cfg(feature = "mcp")]
