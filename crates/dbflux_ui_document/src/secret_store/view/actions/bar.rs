@@ -5,7 +5,7 @@
 //! scheduled) is drawn disabled, with the reason in its tooltip.
 
 use crate::secret_store::ValueState;
-use crate::secret_store::view::SecretView;
+use crate::secret_store::view::{SecretView, SecretViewEvent};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::tokens::{ChromeColors, DocumentMetrics, SecretStoreMetrics};
@@ -15,10 +15,15 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 
 impl SecretView {
+    /// Whether the store takes writes, so Edit value is something to offer.
+    pub(crate) fn supports_value_edit(&self) -> bool {
+        self.store_allows(SecretStoreCapabilities::WRITE)
+    }
+
     /// Whether Edit value may be pressed: the secret takes writes, no editor
     /// or dialog is open, and the value is either loaded as text or can be
     /// retrieved first.
-    pub fn can_request_edit_value(&self) -> bool {
+    pub(crate) fn can_request_edit_value(&self) -> bool {
         if self.value_edit.is_some()
             || !self.connection_present
             || self.dialog_is_open()
@@ -38,8 +43,17 @@ impl SecretView {
     /// Edit value: opens the editor on the loaded value. A value that is not
     /// loaded is retrieved first — the retrieval is audited like any other —
     /// and the editor opens when it lands.
-    pub fn request_edit_value(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn request_edit_value(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_request_edit_value() {
+            return;
+        }
+
+        // The side pane never hosts the editor: the secret's tab does, and it
+        // retrieves the value first when it is not loaded.
+        if self.edit_in_tab
+            && let Some(name) = self.name.clone()
+        {
+            cx.emit(SecretViewEvent::OpenInTab { name, edit: true });
             return;
         }
 

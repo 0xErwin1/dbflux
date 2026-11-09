@@ -37,6 +37,7 @@ pub use bolt::composites::{
     render_menu_items, render_menu_overlay, render_separator, result_tab, result_tab_bar,
     scroll_strip,
 };
+pub use bolt::composites::{SplitAxis, Splitter};
 
 pub use breadcrumb::{Breadcrumb, BreadcrumbSegment};
 pub use control_shell::control_shell;

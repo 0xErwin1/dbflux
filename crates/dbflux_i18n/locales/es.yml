@@ -3418,6 +3418,31 @@ document:
     new: Nueva pestaña
     close_named: "Cerrar %{title}"
     unsaved_changes: Cambios sin guardar
+  secret:
+    subtitle: "%{store} · %{connection} · %{region}"
+    subtitle_no_region: "%{store} · %{connection}"
+    close: "Cerrar pestaña"
+    retry: "Reintentar"
+    removed:
+      title: "Este secreto fue eliminado"
+      body: "%{name} ya no está en el almacén. Esta pestaña no lee ni escribe nada. Ciérrala y abre el secreto de nuevo si se vuelve a crear."
+      draft_title: "Eliminado: se conserva tu texto sin guardar"
+      draft_body: "%{name} fue eliminado, así que no se puede guardar nada. El texto de abajo es de solo lectura; copia lo que necesites y luego descártalo."
+    scheduled:
+      draft_title: "Eliminación programada: se conserva tu texto sin guardar"
+      draft_body: "%{name} tiene la eliminación programada, así que no se puede guardar nada. El texto de abajo es de solo lectura. Restaura el secreto para editarlo de nuevo, o descarta el texto."
+    region_mismatch:
+      title: "Esta conexión está en otra región"
+      body: "%{name} pertenece a %{region} y la conexión está en %{live}. Esta pestaña no lee ni escribe nada hasta que la conexión vuelva a %{region}."
+    footer:
+      value_scope: "Valor visible solo en esta pestaña, se borra al cerrarla"
+      hint:
+        reveal: "mostrar"
+        edit: "editar"
+        roll_back: "revertir"
+    rotation_badge:
+      on: "Rotación activa"
+      off: "Rotación desactivada"
   secret_store:
     title: "%{store} · %{connection}"
     search_placeholder: "La búsqueda se ejecuta en el almacén; los valores nunca se listan"
@@ -3507,6 +3532,7 @@ document:
       every_days: "Cada %{count} días"
       every_hours: "Cada %{count} horas"
       on_schedule: "Según horario"
+      window: "Ventana"
       schedule_with_window: "%{schedule} · ventana %{window} (%{expression})"
       title: "Rotación"
       status: "Estado"
@@ -3531,6 +3557,8 @@ document:
       created: "Creado"
       last_changed: "Último cambio"
       last_retrieved: "Última obtención"
+      open_in_tab: "Abrir en una pestaña"
+      resize: "Redimensionar el panel de detalles"
     versions:
       title: "Versiones"
       history_title: "Historial"
@@ -3566,6 +3594,7 @@ document:
       arn_loading: "El ARN llega con los detalles…"
       arn_missing: "El almacén no informa de un identificador de recurso"
       arn_failed: "No se pudieron cargar los detalles: %{error}"
+      open_in_tab: "Abrir en una pestaña"
     toast:
       value_copied: "Valor copiado al portapapeles"
       resource_id_copied: "ARN copiado al portapapeles"
@@ -3638,7 +3667,9 @@ document:
         summary_unversioned: "UTF-8 · %{size}"
         changed_one: "1 línea modificada"
         changed_other: "%{count} líneas modificadas"
+        saving_note: "Guardar crea una versión nueva y la hace actual"
         caret: "Ln %{line}, Col %{column}"
+      changed_elsewhere: "Este secreto cambió en otra vista. Guardar escribe una versión nueva sobre él."
       hint_formatted: "Guardar escribe una versión nueva y la hace la actual. Formateado guarda de nuevo en una sola línea un valor almacenado en una línea, y un valor almacenado en varias líneas tal como está aquí; Sin formato guarda el texto exactamente como está aquí."
       mode:
         formatted: "Formateado"
@@ -3723,7 +3754,6 @@ document:
       unfinished_title: "Una rotación cancelada dejó pendiente la versión %{version}"
       unfinished_body: "Revise las credenciales de la versión %{version} y luego mueva o elimine su etapa pendiente. Hasta entonces se puede rechazar una rotación posterior."
     tags_edit:
-      short: "Editar"
       button: "Editar etiquetas"
       title: "Editar las etiquetas de %{name}"
       lead: "Cambiar una etiqueta no toca el valor ni ninguna versión."
@@ -3738,7 +3768,6 @@ document:
       no_change: "Ninguna etiqueta difiere de las que tiene el secreto."
       duplicate: "La clave %{key} aparece en más de una fila."
     description_edit:
-      short: "Editar"
       button: "Editar descripción"
       title: "Editar la descripción de %{name}"
       label: "Descripción"

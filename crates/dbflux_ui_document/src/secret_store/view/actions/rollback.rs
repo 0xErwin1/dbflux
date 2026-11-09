@@ -39,14 +39,14 @@ const ROLL_BACK_CAPABILITIES: SecretStoreCapabilities =
 
 impl SecretView {
     /// Whether the store can roll a secret back at all.
-    pub fn supports_roll_back(&self) -> bool {
+    pub(crate) fn supports_roll_back(&self) -> bool {
         self.store_allows(ROLL_BACK_CAPABILITIES)
     }
 
     /// Whether the history of the selected secret offers a roll back to the
     /// version at `index`: a version that is not current, of a secret
     /// nobody else manages and whose deletion is not pending.
-    pub fn can_roll_back_version(&self, index: usize) -> bool {
+    pub(crate) fn can_roll_back_version(&self, index: usize) -> bool {
         self.supports_roll_back()
             && self.connection_present
             && self.write_refusal_reason().is_none()
@@ -110,7 +110,7 @@ impl SecretView {
 
     /// Roll back to the most recent earlier version: the `b` key. Says why
     /// when there is nothing to roll back to.
-    pub fn roll_back_to_previous(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn roll_back_to_previous(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.supports_roll_back() || self.name.is_none() {
             return;
         }
@@ -150,7 +150,12 @@ impl SecretView {
 
     /// Opens the confirmation of a roll back to the version at `index` of
     /// the history. Nothing is written until it is confirmed.
-    pub fn open_roll_back(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_roll_back(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.supports_roll_back() || self.dialog_is_open() || self.write_in_flight {
             return;
         }

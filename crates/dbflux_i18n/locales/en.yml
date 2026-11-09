@@ -3418,6 +3418,31 @@ document:
     new: New tab
     close_named: "Close %{title}"
     unsaved_changes: Unsaved changes
+  secret:
+    subtitle: "%{store} · %{connection} · %{region}"
+    subtitle_no_region: "%{store} · %{connection}"
+    close: "Close tab"
+    retry: "Retry"
+    removed:
+      title: "This secret was deleted"
+      body: "%{name} is no longer in the store. Nothing is read or written from this tab. Close it, and open the secret again if it is recreated."
+      draft_title: "Deleted — your unsaved text is kept"
+      draft_body: "%{name} was deleted, so nothing can be saved. The text below is read-only; copy what you need, then discard it."
+    scheduled:
+      draft_title: "Deletion scheduled — your unsaved text is kept"
+      draft_body: "%{name} is scheduled for deletion, so nothing can be saved. The text below is read-only. Restore the secret to edit it again, or discard the text."
+    region_mismatch:
+      title: "This connection is on another region"
+      body: "%{name} belongs to %{region}, and the connection is on %{live}. Nothing is read or written from this tab until the connection is back on %{region}."
+    footer:
+      value_scope: "Value visible in this tab only, cleared on close"
+      hint:
+        reveal: "reveal"
+        edit: "edit"
+        roll_back: "roll back"
+    rotation_badge:
+      on: "Rotation on"
+      off: "Rotation off"
   secret_store:
     title: "%{store} · %{connection}"
     search_placeholder: "Search runs on the store, values are never listed"
@@ -3507,6 +3532,7 @@ document:
       every_days: "Every %{count} days"
       every_hours: "Every %{count} hours"
       on_schedule: "On a schedule"
+      window: "Window"
       schedule_with_window: "%{schedule} · window %{window} (%{expression})"
       title: "Rotation"
       status: "Status"
@@ -3531,6 +3557,8 @@ document:
       created: "Created"
       last_changed: "Last changed"
       last_retrieved: "Last retrieved"
+      open_in_tab: "Open in tab"
+      resize: "Resize the details pane"
     versions:
       title: "Versions"
       history_title: "History"
@@ -3566,6 +3594,7 @@ document:
       arn_loading: "The ARN arrives with the details…"
       arn_missing: "The store reports no resource identifier"
       arn_failed: "The details could not be loaded: %{error}"
+      open_in_tab: "Open in tab"
     toast:
       value_copied: "Value copied to the clipboard"
       resource_id_copied: "ARN copied to the clipboard"
@@ -3638,7 +3667,9 @@ document:
         summary_unversioned: "UTF-8 · %{size}"
         changed_one: "1 line changed"
         changed_other: "%{count} lines changed"
+        saving_note: "Saving creates a new version and makes it current"
         caret: "Ln %{line}, Col %{column}"
+      changed_elsewhere: "This secret changed elsewhere. Saving writes a new version over it."
       hint_formatted: "Saving writes a new version and makes it current. Formatted saves a value stored on one line back on one line, and a value stored on several lines as it is here; Raw saves the text exactly as it is here."
       mode:
         formatted: "Formatted"
@@ -3723,7 +3754,6 @@ document:
       unfinished_title: "A cancelled rotation left version %{version} pending"
       unfinished_body: "Check the credentials behind version %{version}, then move or remove its pending stage. Until then a later rotation can be refused."
     tags_edit:
-      short: "Edit"
       button: "Edit tags"
       title: "Edit tags of %{name}"
       lead: "Changing a tag does not touch the value or any version."
@@ -3738,7 +3768,6 @@ document:
       no_change: "No tag differs from the ones the secret has."
       duplicate: "The key %{key} appears in more than one row."
     description_edit:
-      short: "Edit"
       button: "Edit description"
       title: "Edit description of %{name}"
       label: "Description"

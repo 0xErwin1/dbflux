@@ -2,7 +2,7 @@
 
 use super::versions::LABEL_CHIP_GAP;
 use super::{DetailsState, SecretView};
-use super::{detail_row, or_unknown, rotate_with_reason, section, section_with_action};
+use super::{detail_row, or_unknown, rotate_with_reason};
 use crate::secret_store::render::{UNKNOWN, format_optional_time};
 use dbflux_components::controls::Button;
 use dbflux_components::fonts;
@@ -25,14 +25,13 @@ impl SecretView {
         &self,
         details: &SecretDetails,
         cx: &mut Context<Self>,
-    ) -> Div {
+    ) -> AnyElement {
         let edit = self.supports_tags().then(|| {
             let button = Button::new(
                 "secret-tags-edit",
-                dbflux_i18n::t!("document.secret_store.tags_edit.short"),
+                dbflux_i18n::t!("document.secret_store.tags_edit.button"),
             )
             .icon(AppIcon::Tag)
-            .aria_label(dbflux_i18n::t!("document.secret_store.tags_edit.button"))
             .tab_stop(false)
             .disabled(!self.can_edit_tags())
             .on_click(cx.listener(|this, _, window, cx| this.open_edit_tags(window, cx)));
@@ -44,9 +43,11 @@ impl SecretView {
             .into_any_element()
         });
 
-        section_with_action(
+        self.framed_section(
+            "secret-document-tags-card",
             dbflux_i18n::t!("document.secret_store.tags.title"),
-            edit,
+            None,
+            edit.into_iter().collect(),
             vec![tag_chips(details, cx)],
             cx,
         )
@@ -58,8 +59,8 @@ impl SecretView {
         &self,
         details: &SecretDetails,
         cx: &mut Context<Self>,
-    ) -> Div {
-        let mut rows = rotation_rows(details, cx);
+    ) -> AnyElement {
+        let mut rows = rotation_rows(details, self.in_tab(), cx);
 
         if let Some(notice) = self.rotation_notice_for_selection() {
             rows.push(
@@ -116,13 +117,17 @@ impl SecretView {
                     .flex_wrap()
                     .gap(DocumentMetrics::GAP)
                     .child(edit)
-                    .child(rotate)
+                    // The pane's bottom bar owns Rotate now; the tab has no bar.
+                    .when(self.in_tab(), |row| row.child(rotate))
                     .into_any_element(),
             );
         }
 
-        section(
+        self.framed_section(
+            "secret-document-rotation-card",
             dbflux_i18n::t!("document.secret_store.rotation.title"),
+            None,
+            Vec::new(),
             rows,
             cx,
         )
@@ -194,8 +199,60 @@ pub(super) fn managed_card(name: &str, service: &str) -> BannerBlock {
 }
 
 /// The rows of the Rotation section: the settings the store reports.
-pub(super) fn rotation_rows(details: &SecretDetails, cx: &App) -> Vec<AnyElement> {
+pub(super) fn rotation_rows(details: &SecretDetails, in_tab: bool, cx: &App) -> Vec<AnyElement> {
     let label = |key: &str| dbflux_i18n::t!(key);
+
+    // The tab lists what the store knows, in the artboard's order: status,
+    // schedule, window, function, last and next rotation.
+    if in_tab && let Some(rotation) = &details.summary.rotation {
+        let mut rows = vec![detail_row(
+            label("document.secret_store.rotation.status"),
+            if rotation.enabled {
+                label("document.secret_store.rotation.enabled")
+            } else {
+                label("document.secret_store.rotation.disabled")
+            },
+            cx,
+        )];
+
+        if let Some(schedule) = &rotation.schedule {
+            rows.push(detail_row(
+                label("document.secret_store.rotation.schedule"),
+                schedule.clone(),
+                cx,
+            ));
+        }
+        if let Some(window) = &rotation.window {
+            rows.push(detail_row(
+                label("document.secret_store.rotation.window"),
+                window.clone(),
+                cx,
+            ));
+        }
+        if let Some(function) = &rotation.function {
+            rows.push(detail_row(
+                label("document.secret_store.rotation.function"),
+                function.clone(),
+                cx,
+            ));
+        }
+        if let Some(last) = rotation.last_rotated {
+            rows.push(detail_row(
+                label("document.secret_store.rotation.last"),
+                format_optional_time(Some(last)),
+                cx,
+            ));
+        }
+        if let Some(next) = rotation.next_rotation {
+            rows.push(detail_row(
+                label("document.secret_store.rotation.next"),
+                format_optional_time(Some(next)),
+                cx,
+            ));
+        }
+
+        return rows;
+    }
 
     match &details.summary.rotation {
         Some(rotation) => vec![

@@ -648,6 +648,40 @@ pub(crate) const BUCKETS: SurfaceRegistry = SurfaceRegistry {
     ],
 };
 
+/// A secret tab: the ids only the tab draws. The sections of the secret are
+/// the ones of the listing's details pane, so a test composes this registry
+/// with [`SECRET_STORE`].
+pub(crate) const SECRET_DOCUMENT: SurfaceRegistry = SurfaceRegistry {
+    name: "secret document",
+    contexts: &[ContextId::Results, ContextId::Modal],
+    entries: &[
+        (
+            "secret-document-copy-arn",
+            KeyboardPath::Command(Command::ResultsCopyCell),
+        ),
+        (
+            "secret-document-details-copy-arn",
+            KeyboardPath::Command(Command::ResultsCopyCell),
+        ),
+        (
+            "secret-document-refresh",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "secret-document-retry",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "secret-document-delete",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-document-close",
+            KeyboardPath::Menu("secret-document-close"),
+        ),
+    ],
+};
+
 /// A secret store tab: its listing and details pane. The pane actions (`m`)
 /// list Retrieve value, the copy actions, Close details, Hide all, the error actions, Load
 /// next page, Refresh and, on a hierarchical store, the path mode and Up; on
@@ -723,6 +757,18 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
         (
             "secret-details-close",
             KeyboardPath::Menu("secret-details-close"),
+        ),
+        // The pane's resize gutter takes focus and steps with the arrow keys.
+        ("secret-details-grip", KeyboardPath::TabStop),
+        // Open in tab, from the pane header and the row menu: the pane
+        // action of the same id is the keyboard path of both.
+        (
+            "secret-details-expand",
+            KeyboardPath::Menu("secret-open-in-tab"),
+        ),
+        (
+            "secret-menu-open-in-tab-*",
+            KeyboardPath::Menu("secret-open-in-tab"),
         ),
         (
             "secret-value-editor-save",

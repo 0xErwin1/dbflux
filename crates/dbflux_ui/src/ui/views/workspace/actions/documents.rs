@@ -488,6 +488,108 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Opens one secret in its own tab, or focuses the tab that already shows
+    /// it. The key carries the region the listing was loaded under, so the
+    /// same name in two regions gets two tabs.
+    /// Opens the secret the active tab asked to have opened in a tab of its
+    /// own, if it asked. The secret store listing raises the request from its
+    /// expand button and its row menu.
+    pub(in crate::ui::views::workspace) fn open_pending_secret(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let active_id = self.tab_manager.read(cx).active_id();
+        let pending = active_id.and_then(|id| {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.document(id).and_then(|tab| {
+                    tab.take_pending_open_secret(cx)
+                        .map(|request| (tab.connection_id(cx), request))
+                })
+            })
+        });
+
+        if let Some((Some(profile_id), request)) = pending {
+            self.open_secret_document(profile_id, request, window, cx);
+        }
+    }
+
+    pub(in crate::ui::views::workspace) fn open_secret_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        request: crate::ui::document::SecretOpenRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = crate::ui::document::DocumentKey::Secret {
+            profile_id,
+            store_id: request.store_id.clone(),
+            name: request.name.clone(),
+            version: request.version.clone(),
+            region: request.region.clone(),
+        };
+
+        if let Some(id) = self.tab_manager.read(cx).find_by_key(&key, cx) {
+            self.tab_manager.update(cx, |mgr, cx| mgr.activate(id, cx));
+            self.set_focus(FocusTarget::Document, window, cx);
+
+            // The tab that exists takes the editor the way a key press would.
+            if request.edit {
+                let tab_manager = self.tab_manager.clone();
+                tab_manager.update(cx, |mgr, cx| {
+                    if let Some(tab) = mgr.document(id) {
+                        tab.dispatch_command(crate::keymap::Command::EditValue, window, cx);
+                    }
+                });
+            }
+            return;
+        }
+
+        // The tab reads its store's capabilities from the live connection when
+        // it is created, and keeps them: without one it would stay empty after
+        // a reconnect, with no writes and no history.
+        let connected = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+
+        if !connected {
+            let message =
+                documents_no_active_connection_message(NoActiveConnectionKind::SecretStore);
+            Toast::error(message.clone())
+                .meta_right(now_hms())
+                .action(copy_action(message))
+                .push(cx);
+            return;
+        }
+
+        let edit = request.edit;
+        let doc = cx.new(|cx| {
+            crate::ui::document::SecretDocument::new(
+                profile_id,
+                request.store_id,
+                request.name,
+                request.version,
+                request.region,
+                self.app_state.clone(),
+                cx,
+            )
+        });
+
+        if edit {
+            doc.update(cx, |doc, cx| doc.begin_edit(cx));
+        }
+
+        let pane = crate::ui::document::SecretDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     /// Opens the document of one secret store, or focuses the store's
     /// existing tab. A `path` of a hierarchical store opens at that path, and
     /// navigates an existing tab to it.

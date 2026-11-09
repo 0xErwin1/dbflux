@@ -20,6 +20,11 @@ impl SecretView {
     /// carry no resource identifier the document copies.
     pub(in crate::secret_store) fn secret_menu_items(&self, name: &str) -> Vec<SecretMenuItem> {
         let mut items = vec![
+            SecretMenuItem::new(
+                SecretMenuAction::OpenInTab,
+                dbflux_i18n::t!("document.secret_store.context_menu.open_in_tab").into(),
+                AppIcon::Maximize2,
+            ),
             self.retrieve_item(name),
             SecretMenuItem::new(
                 SecretMenuAction::CopyName,
@@ -32,11 +37,10 @@ impl SecretView {
             items.push(self.copy_arn_item());
         }
 
-        // The design's Edit value entry: offered for a value that
-        // can be edited, dispatching to the editor the details pane
-        // already opens. The menu is built from the selected row's
-        // state, which is the state the editor opens on.
-        if self.can_edit_value() {
+        // The design's Edit value entry: offered when an edit can be asked
+        // for, like the bar's button. An unretrieved value is retrieved first,
+        // through the audited path.
+        if self.can_request_edit_value() {
             items.push(
                 SecretMenuItem::new(
                     SecretMenuAction::EditValue,

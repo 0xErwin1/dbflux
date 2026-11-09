@@ -6,6 +6,8 @@ mod write_probes;
 mod write_ui;
 // Follow-ups to the extracted single-secret view.
 mod view_followups;
+// The pane's hand-over of editing, its header, labels and resizing.
+mod pane_chrome;
 
 use super::listing::{
     AUTO_CONTINUE_ENTRY_LIMIT, LARGEST_PAGE_ENTRIES, SecretListing, child_path_label,
@@ -47,10 +49,10 @@ use uuid::Uuid;
 
 use super::RegionListState;
 
-const KEY_VALUE_SECRET: &str = "prod/api/credentials";
+pub(crate) const KEY_VALUE_SECRET: &str = "prod/api/credentials";
 const MANAGED_SECRET: &str = "prod/db/master";
 const PENDING_DELETION_SECRET: &str = "prod/deploy/legacy-token";
-const PLAINTEXT_SECRET: &str = "prod/notify/webhook-token";
+pub(crate) const PLAINTEXT_SECRET: &str = "prod/notify/webhook-token";
 const BINARY_SECRET: &str = "prod/tls/signing-key";
 const DENIED_PARAMETER: &str = "/app/prod/db/password";
 /// A `.env` file a user stored in a secret: the line breaks are the point.
@@ -98,6 +100,13 @@ fn open_with<'a>(
         SecretStoreDocument::new(profile_id, store_id, path, state, window, cx)
     });
     window.run_until_parked();
+
+    // The view-level tests exercise the editor where the harness mounts the
+    // view; the pane's hand-over to the secret's tab is tested apart.
+    window.update(|_, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, _| view.set_edit_in_place(true));
+    });
 
     Opened {
         doc,
@@ -2111,6 +2120,23 @@ impl Opened<'_> {
         })
     }
 
+    /// What the open editor's find panel holds: the search text and the
+    /// replacement, as the editor component reports its search session.
+    fn find_fields(&mut self) -> (String, String) {
+        let editor = self.read_view(|view| {
+            view.value_edit
+                .as_ref()
+                .expect("editor open")
+                .editor
+                .clone()
+        });
+
+        self.window.update(|_, cx| {
+            let session = editor.read(cx).search_session().clone();
+            (session.query, session.replacement)
+        })
+    }
+
     /// The text the open editor holds.
     fn editor_text(&mut self) -> String {
         let editor = self.read_view(|view| {
@@ -2933,7 +2959,7 @@ fn the_edit_value_control_is_covered(cx: &mut TestAppContext) {
         .assert_covered(&capture.frame(opened.window));
 
     assert!(
-        checked.iter().any(|id| id == "secret-value-edit"),
+        checked.iter().any(|id| id == "secret-action-edit-value"),
         "{checked:?}"
     );
 
@@ -3053,13 +3079,13 @@ fn the_editor_controls_are_covered(cx: &mut TestAppContext) {
 
 // -- Region switch ---------------------------------------------------------
 
-const CURRENT_REGION: &str = "us-east-1";
-const OTHER_REGION: &str = "eu-west-1";
+pub(crate) const CURRENT_REGION: &str = "us-east-1";
+pub(crate) const OTHER_REGION: &str = "eu-west-1";
 
 /// An app state whose profile is an `aws_secrets` connection the manager can
 /// switch by region: the fake driver is registered under the built-in driver
 /// id the profile resolves to, so `prepare_switch_region` finds it.
-fn connected_aws_app_state(
+pub(crate) fn connected_aws_app_state(
     cx: &mut TestAppContext,
     driver: &FakeDriver,
     name: &str,
@@ -3171,6 +3197,13 @@ fn open_named_region_store<'a>(
         SecretStoreDocument::new(profile_id, store_id, path, state, window, cx)
     });
     window.run_until_parked();
+
+    // The view-level tests exercise the editor where the harness mounts the
+    // view; the pane's hand-over to the secret's tab is tested apart.
+    window.update(|_, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, _| view.set_edit_in_place(true));
+    });
 
     Opened {
         doc,
@@ -3774,8 +3807,8 @@ impl Opened<'_> {
 /// Right-clicking a secret row opens the menu anchored at the pointer, the
 /// row becomes the selection, and the menu holds the read items and the write
 /// entries: Rotate now, Edit tags and Delete.
-/// Edit value waits for a loaded value, so a row whose value was not
-/// retrieved does not offer it.
+/// Edit value is offered for a row whose value was not retrieved too: it
+/// retrieves the value first, through the audited path.
 #[gpui::test]
 fn a_secondary_click_opens_a_secret_row_menu(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
@@ -3790,9 +3823,11 @@ fn a_secondary_click_opens_a_secret_row_menu(cx: &mut TestAppContext) {
     assert_eq!(
         opened.menu_actions(),
         vec![
+            "OpenInTab",
             "RetrieveValue",
             "CopyName",
             "CopyArn",
+            "EditValue",
             "RotateNow",
             "EditTags",
             "Delete"
@@ -3823,6 +3858,7 @@ fn restricted_secrets_disable_delete_and_say_why(cx: &mut TestAppContext) {
         (
             MANAGED_SECRET,
             vec![
+                "OpenInTab",
                 "RetrieveValue",
                 "CopyName",
                 "CopyArn",
@@ -3834,6 +3870,7 @@ fn restricted_secrets_disable_delete_and_say_why(cx: &mut TestAppContext) {
         (
             PENDING_DELETION_SECRET,
             vec![
+                "OpenInTab",
                 "RetrieveValue",
                 "CopyName",
                 "CopyArn",
@@ -3889,9 +3926,9 @@ fn a_secret_pending_deletion_keeps_retrieve_value_disabled(cx: &mut TestAppConte
             .as_ref()
             .expect("menu open")
             .items
-            .first()
+            .get(1)
             .map(|item| (item.disabled, item.detail.clone()))
-            .expect("Retrieve value is the first entry")
+            .expect("Retrieve value is the second entry")
     });
     assert!(
         detail.0,
@@ -3916,9 +3953,9 @@ fn a_secret_pending_deletion_keeps_retrieve_value_disabled(cx: &mut TestAppConte
             .as_ref()
             .expect("menu open")
             .items
-            .first()
+            .get(1)
             .map(|item| item.disabled)
-            .expect("Retrieve value is the first entry")),
+            .expect("Retrieve value is the second entry")),
         "Retrieve value is enabled for a normal secret"
     );
 }
@@ -3933,7 +3970,14 @@ fn a_parameter_row_offers_copy_name_and_retrieve_value(cx: &mut TestAppContext) 
 
     assert_eq!(
         opened.menu_actions(),
-        vec!["RetrieveValue", "CopyName", "EditTags", "Delete"],
+        vec![
+            "OpenInTab",
+            "RetrieveValue",
+            "CopyName",
+            "EditValue",
+            "EditTags",
+            "Delete"
+        ],
         "a parameter row offers Copy name, Retrieve value, Edit tags and Delete"
     );
     let text = opened.rendered_text();
@@ -3975,8 +4019,9 @@ fn choosing_a_menu_item_runs_it_and_closes_the_menu(cx: &mut TestAppContext) {
 
     opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
 
-    // Copy name is the second entry of the menu.
-    opened.click_menu_item("secret-menu-copy-name-item-1");
+    // Copy name is the third entry of the menu, after Open in tab and
+    // Retrieve value.
+    opened.click_menu_item("secret-menu-copy-name-item-2");
 
     assert_eq!(opened.clipboard(), Some(KEY_VALUE_SECRET.to_string()));
     assert!(
@@ -4052,7 +4097,8 @@ fn the_keyboard_runs_the_menu(cx: &mut TestAppContext) {
     let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
     opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
 
-    // Retrieve value is the first entry: selecting it right away retrieves.
+    // Retrieve value is the second entry, after Open in tab.
+    assert!(opened.command(Command::MenuDown));
     assert!(opened.command(Command::MenuSelect));
     assert!(
         opened.read_view(|view| matches!(view.value(), ValueState::Loading))
@@ -4094,7 +4140,13 @@ fn the_right_click_menu_items_are_covered(cx: &mut TestAppContext) {
         assert!(
             checked
                 .iter()
-                .any(|id| id == "secret-menu-retrieve-value-item-0"),
+                .any(|id| id == "secret-menu-retrieve-value-item-1"),
+            "{checked:?}"
+        );
+        assert!(
+            checked
+                .iter()
+                .any(|id| id == "secret-menu-open-in-tab-item-0"),
             "{checked:?}"
         );
 
@@ -4134,7 +4186,7 @@ fn the_right_click_menu_items_are_covered(cx: &mut TestAppContext) {
     assert!(
         secrets_checked_ids
             .iter()
-            .any(|id| id == "secret-menu-copy-arn-item-2"),
+            .any(|id| id == "secret-menu-copy-arn-item-3"),
         "{secrets_checked_ids:?}"
     );
 }
@@ -4195,12 +4247,16 @@ fn the_menu_entries_carry_the_shortcuts_the_keymap_binds(cx: &mut TestAppContext
     };
 
     assert_eq!(
-        shortcuts[0].as_deref().map(str::to_string),
+        shortcuts[0], None,
+        "Open in tab has no chord and shows none"
+    );
+    assert_eq!(
+        shortcuts[1].as_deref().map(str::to_string),
         expected(Command::ToggleValuePanel),
         "Retrieve value shows the chord the keymap binds"
     );
-    assert_eq!(shortcuts[1], None, "Copy name has no chord and shows none");
-    assert_eq!(shortcuts[2], None, "Copy ARN has no chord and shows none");
+    assert_eq!(shortcuts[2], None, "Copy name has no chord and shows none");
+    assert_eq!(shortcuts[3], None, "Copy ARN has no chord and shows none");
 
     let mut opened = open(cx, FAKE_PARAMETER_STORE_ID, Some("/app/prod/"));
     opened.right_click("secret-path-row-/app/prod/db/");
@@ -4287,6 +4343,8 @@ fn enter_on_a_disabled_entry_leaves_the_menu_open(cx: &mut TestAppContext) {
     opened.right_click(&format!("secret-row-{PENDING_DELETION_SECRET}"));
 
     let before = opened.read(|doc| doc.selected().cloned());
+    // Open in tab is first; Retrieve value, the disabled entry, is second.
+    assert!(opened.command(Command::MenuDown));
     assert!(opened.command(Command::MenuSelect));
 
     assert!(
@@ -5196,19 +5254,6 @@ mod editor_layout {
             self.window.run_until_parked();
         }
 
-        /// The gutter line elements the frame drew.
-        fn gutter_lines(&mut self) -> usize {
-            self.rendered_paths()
-                .iter()
-                .filter(|path| {
-                    path.rsplit_once("secret-value-editor-line-")
-                        .is_some_and(|(_, index)| {
-                            !index.is_empty() && index.chars().all(|ch| ch.is_ascii_digit())
-                        })
-                })
-                .count()
-        }
-
         /// The bounds of the element whose path ends with `suffix`.
         pub(super) fn element_bounds(&mut self, suffix: &str) -> gpui::Bounds<gpui::Pixels> {
             let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(self.window);
@@ -5255,50 +5300,6 @@ mod editor_layout {
     }
 
     #[gpui::test]
-    fn the_gutter_has_one_number_per_line_and_follows_the_edit(cx: &mut TestAppContext) {
-        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
-        opened.select(PLAINTEXT_SECRET);
-        opened.show_value("a\nb\nc");
-        opened.start_edit();
-        assert_eq!(opened.gutter_lines(), 3);
-
-        opened.set_editor_text("a\nb\nc\nd\ne");
-        assert_eq!(opened.gutter_lines(), 5);
-
-        opened.set_editor_text("only");
-        assert_eq!(opened.gutter_lines(), 1);
-    }
-
-    #[gpui::test]
-    fn the_gutter_scrolls_with_the_editor(cx: &mut TestAppContext) {
-        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
-        opened.select(PLAINTEXT_SECRET);
-        let text = (0..40)
-            .map(|line| format!("line {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        opened.show_value(&text);
-        opened.start_edit();
-        assert!(
-            opened.gutter_lines() < 40,
-            "only the visible rows are drawn"
-        );
-
-        let first = opened.element_bounds("secret-value-editor-line-3").origin.y;
-        let editor =
-            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
-        opened.window.update(|_, cx| {
-            editor.update(cx, |state, cx| {
-                state.set_scroll_offset(gpui::point(gpui::px(0.), gpui::px(-60.)), cx)
-            });
-        });
-        opened.window.run_until_parked();
-
-        let scrolled = opened.element_bounds("secret-value-editor-line-3").origin.y;
-        assert!(scrolled < first, "{first:?} then {scrolled:?}");
-    }
-
-    #[gpui::test]
     fn the_toggle_is_offered_for_stored_json_only(cx: &mut TestAppContext) {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.edit_json("host = db.internal\nport = 5432");
@@ -5319,11 +5320,9 @@ mod editor_layout {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.edit_json(COMPACT);
         assert_eq!(opened.editor_text(), FORMATTED);
-        assert_eq!(opened.gutter_lines(), FORMATTED.lines().count());
 
         opened.set_mode(EditMode::Raw);
         assert_eq!(opened.editor_text(), COMPACT, "Raw shows the stored text");
-        assert_eq!(opened.gutter_lines(), 1);
 
         opened.set_mode(EditMode::Formatted);
         assert_eq!(opened.editor_text(), FORMATTED);
@@ -5445,29 +5444,7 @@ mod editor_layout {
             assert!(!text.contains("77b1-secret"), "{mode:?}: {text}");
             assert!(!text.contains("host"), "{mode:?}: {text}");
             assert!(!paths.iter().any(|path| path.contains("77b1")));
-            assert!(
-                paths
-                    .iter()
-                    .any(|path| path.ends_with("secret-value-editor-gutter")),
-                "{mode:?}: the gutter is drawn"
-            );
         }
-    }
-
-    #[gpui::test]
-    fn the_gutter_is_hidden_from_assistive_technology(cx: &mut TestAppContext) {
-        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
-        opened.edit_json(COMPACT);
-
-        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
-        let frame = capture.frame(opened.window);
-        let exposed = frame
-            .nodes()
-            .filter(|(_, node)| node.path().contains("secret-value-editor-line-"))
-            .filter(|(_, node)| frame.accessibility_node(node).is_some())
-            .count();
-
-        assert_eq!(exposed, 0, "no gutter line has an accessibility node");
     }
 
     #[gpui::test]
@@ -5556,46 +5533,6 @@ mod editor_chrome {
                 .collect::<Vec<_>>()
                 .join(" ")
         }
-    }
-
-    #[gpui::test]
-    fn gutter_numbers_are_right_aligned(cx: &mut TestAppContext) {
-        let text = (0..12)
-            .map(|i| format!("l{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
-        opened.edit_text(&text, &text);
-
-        let one = opened.rect("secret-value-editor-line-0-number");
-        let ten = opened.rect("secret-value-editor-line-9-number");
-
-        assert!(
-            (one.right() - ten.right()).abs() < gpui::px(0.5),
-            "{one:?} vs {ten:?}"
-        );
-        assert!(ten.size.width > one.size.width);
-    }
-
-    #[gpui::test]
-    fn changed_lines_get_a_marker_and_unchanged_ones_do_not(cx: &mut TestAppContext) {
-        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
-        opened.edit_text(THREE, THREE);
-        assert!(
-            !opened.exists("-marker"),
-            "an untouched value has no marker"
-        );
-
-        opened.set_editor_text("alpha-77b1\nbeta-CHANGED\ngamma-77b1");
-        assert!(opened.exists("secret-value-editor-line-1-marker"));
-        assert!(!opened.exists("secret-value-editor-line-0-marker"));
-        assert!(!opened.exists("secret-value-editor-line-2-marker"));
-
-        // An inserted line is the only one marked, not every line after it.
-        opened.set_editor_text("alpha-77b1\nNEW\nbeta-77b1\ngamma-77b1");
-        assert!(opened.exists("secret-value-editor-line-1-marker"));
-        assert!(!opened.exists("secret-value-editor-line-2-marker"));
-        assert!(!opened.exists("secret-value-editor-line-3-marker"));
     }
 
     #[gpui::test]
@@ -5791,6 +5728,33 @@ mod editor_chrome {
         assert!(opened.exists("secret-value-editor-find"));
     }
 
+    /// Find over a selection copies the selection into the panel's search
+    /// field; that field must not carry it into the accessibility tree either.
+    #[gpui::test]
+    fn find_over_a_selection_leaves_the_value_out_of_the_tree(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, THREE);
+        opened.window.simulate_keystrokes("ctrl-a");
+        opened.window.run_until_parked();
+
+        let doc = opened.doc.clone();
+        opened.window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.view
+                    .update(cx, |view, cx| view.find_in_value(window, cx))
+            })
+        });
+        opened.window.run_until_parked();
+
+        // The selection reached the search field: the test exercises the
+        // path that copies it there, not an empty panel.
+        assert!(opened.find_fields().0.contains("alpha-77b1"));
+
+        let text = opened.accessibility_update_text();
+        assert!(!text.contains("alpha-77b1"), "{text}");
+        assert!(opened.exists("secret-value-editor-find"));
+    }
+
     /// Focus decides the context, not a flag a keystroke sets: after Escape
     /// leaves the editor, a click back into it restores the editor's chords
     /// with no key in between.
@@ -5897,17 +5861,6 @@ mod editor_chrome {
             );
             assert!(text.contains("modified"), "the chip is announced: {text}");
             assert!(text.contains("UTF-8"), "the footer is announced: {text}");
-
-            let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(opened.window);
-            let frame = capture.frame(opened.window);
-            // `aria_hidden` on the gutter removes its whole subtree (numbers
-            // and markers) from the accessibility tree.
-            let gutter_hidden = frame
-                .nodes()
-                .filter(|(_, node)| node.path().ends_with("secret-value-editor-gutter"))
-                .filter_map(|(_, node)| frame.accessibility_node(node))
-                .any(|accessible| accessible.is_hidden());
-            assert!(gutter_hidden, "gutter and markers stay out of the tree");
         }
     }
 }
@@ -7353,10 +7306,10 @@ mod editor_key_value {
     fn edit_value_is_offered_for_a_key_value_secret(cx: &mut TestAppContext) {
         let mut opened = opened_key_value(cx);
         assert!(opened.read_view(|view| view.can_edit_value()));
-        assert!(has_path(&mut opened, "secret-value-edit"));
+        assert!(has_path(&mut opened, "secret-action-edit-value"));
 
         opened.update_view(|view, cx| view.set_value_view(ValueView::Plaintext, cx));
-        assert!(has_path(&mut opened, "secret-value-edit"));
+        assert!(has_path(&mut opened, "secret-action-edit-value"));
 
         opened.right_click(&format!("secret-row-{KEY_VALUE_SECRET}"));
         assert!(
@@ -7453,7 +7406,10 @@ mod editor_key_value {
                 "{name} loaded"
             );
             assert!(!opened.read_view(|view| view.can_edit_value()), "{name}");
-            assert!(!has_path(&mut opened, "secret-value-edit"), "{name}");
+            assert!(
+                !opened.read_view(|view| view.can_request_edit_value()),
+                "{name}"
+            );
         }
     }
 
@@ -7588,6 +7544,105 @@ mod editor_review {
         );
     }
 
+    /// With Vim mode on, the editor starts in Normal mode: `j` moves instead
+    /// of typing, `i` inserts, the first Escape returns to Normal and keeps
+    /// the keyboard in the editor, and the second leaves it.
+    #[gpui::test]
+    fn vim_mode_edits_the_secret_and_escape_steps_out(cx: &mut TestAppContext) {
+        use dbflux_app::keymap::ContextId;
+
+        let mut opened = open_hosted(cx);
+        opened
+            .window
+            .update(|_, cx| dbflux_components::vim::set_vim_enabled(cx, true));
+        start(&mut opened, "abc\ndef", "abc\ndef");
+
+        opened.window.simulate_keystrokes("j");
+        opened.window.run_until_parked();
+        assert_eq!(
+            opened.editor_text(),
+            "abc\ndef",
+            "`j` moved, it did not type"
+        );
+
+        opened.window.simulate_keystrokes("i");
+        opened.window.simulate_input("X");
+        opened.window.run_until_parked();
+        assert!(opened.editor_text().contains('X'));
+
+        opened.window.simulate_keystrokes("escape");
+        opened.window.run_until_parked();
+        assert_eq!(
+            opened.read_cx(|doc, cx| doc.active_context(cx)),
+            ContextId::TextInput,
+            "the first Escape only leaves Insert mode"
+        );
+        opened.window.simulate_keystrokes("x");
+        opened.window.run_until_parked();
+        assert_eq!(opened.editor_text(), "abc\ndef", "`x` deleted the typed X");
+
+        opened.window.simulate_keystrokes("escape");
+        opened.window.run_until_parked();
+        assert_eq!(
+            opened.read_cx(|doc, cx| doc.active_context(cx)),
+            ContextId::Results,
+            "Escape in Normal mode leaves the editor"
+        );
+    }
+
+    /// Turning the setting off updates an open editor at once: keys type
+    /// again.
+    #[gpui::test]
+    fn vim_mode_follows_the_setting_live_in_the_secret_editor(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        opened
+            .window
+            .update(|_, cx| dbflux_components::vim::set_vim_enabled(cx, true));
+        start(&mut opened, "abc", "abc");
+
+        opened
+            .window
+            .update(|_, cx| dbflux_components::vim::set_vim_enabled(cx, false));
+        opened.window.run_until_parked();
+        opened.window.simulate_input("j");
+        opened.window.run_until_parked();
+        assert!(opened.editor_text().contains('j'), "typed with Vim off");
+        let typed = opened.editor_text();
+
+        opened
+            .window
+            .update(|_, cx| dbflux_components::vim::set_vim_enabled(cx, true));
+        opened.window.run_until_parked();
+        opened.window.simulate_keystrokes("l");
+        opened.window.run_until_parked();
+        assert_eq!(opened.editor_text(), typed, "`l` moved, it did not type");
+    }
+
+    /// The save chord pressed in Normal mode writes through the gates.
+    #[gpui::test]
+    fn the_save_chord_in_vim_normal_mode_writes(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        opened
+            .window
+            .update(|_, cx| dbflux_components::vim::set_vim_enabled(cx, true));
+        start(&mut opened, "abc", "abc");
+
+        opened.window.simulate_keystrokes("i");
+        opened.window.simulate_input("X");
+        opened.window.simulate_keystrokes("escape");
+        opened.window.run_until_parked();
+        let typed = opened.editor_text();
+        assert_ne!(typed, "abc");
+
+        opened.window.simulate_keystrokes(save_chord());
+        opened.window.run_until_parked();
+
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), typed)]
+        );
+    }
+
     /// Focus inside the Find input is still the editor: the context stays
     /// the text input's and the chord still saves.
     #[gpui::test]
@@ -7676,49 +7731,6 @@ mod editor_review {
         assert!(exists(&mut opened, "secret-value-editor-modified"));
     }
 
-    /// A long value draws a bounded number of gutter rows, however many
-    /// lines it has, and a change far below the viewport has no marker row.
-    #[gpui::test]
-    fn a_long_value_draws_only_the_visible_rows(cx: &mut TestAppContext) {
-        let lines: Vec<String> = (0..5000).map(|index| format!("line {index}")).collect();
-        let stored = lines.join("\n");
-        let mut edited = lines.clone();
-        edited[4000] = "changed".to_string();
-
-        let mut opened = open_hosted(cx);
-        start(&mut opened, &stored, &edited.join("\n"));
-
-        let rows = count_with(&mut opened, "secret-value-editor-line-");
-        assert!(rows > 0 && rows < 100, "{rows} gutter elements");
-        assert!(!exists(&mut opened, "secret-value-editor-line-4000-marker"));
-        assert!(exists(&mut opened, "secret-value-editor-line-0-number"));
-        assert!(
-            opened.footer_text().contains("1 line changed"),
-            "{}",
-            opened.footer_text()
-        );
-    }
-
-    /// The first frame, before the textarea has laid out, sizes gutter rows
-    /// with the height the textarea will use.
-    #[gpui::test]
-    fn the_fallback_line_height_is_the_textarea_line_height(cx: &mut TestAppContext) {
-        let mut opened = open_hosted(cx);
-        start(&mut opened, "a\nb", "a\nb");
-
-        let editor =
-            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
-        let laid_out = opened
-            .window
-            .update(|_, cx| editor.read(cx).line_height())
-            .expect("the textarea has laid out");
-        let fallback = opened
-            .window
-            .update(|_, cx| crate::secret_store::view::editor::fallback_line_height(cx));
-
-        assert_eq!(fallback, laid_out);
-    }
-
     /// The caret is where the test put it, in bytes, before the footer is
     /// asked: a byte-offset footer would pass `ñ` and fail after the emoji.
     #[gpui::test]
@@ -7804,167 +7816,6 @@ mod editor_review {
         let text = opened.rendered_text();
         assert!(text.contains("on one line back on one line"), "{text}");
         assert!(text.contains("several lines as it is here"), "{text}");
-    }
-
-    /// With the Find panel open and pushing the text down, gutter row N is
-    /// still beside text line N.
-    #[gpui::test]
-    fn the_gutter_follows_the_text_when_find_is_open(cx: &mut TestAppContext) {
-        let text = (0..30)
-            .map(|i| format!("l{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mut opened = open_hosted(cx);
-        start(&mut opened, &text, &text);
-        let editor =
-            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
-
-        let aligned = |opened: &mut Opened<'_>, stage: &str| {
-            for line in [0usize, 5] {
-                let offset = (0..line).map(|i| format!("l{i}\n").len()).sum::<usize>();
-                let glyph = opened
-                    .window
-                    .update(|_, cx| editor.read(cx).range_to_bounds(&(offset..offset + 1)))
-                    .expect("text laid out")
-                    .origin
-                    .y;
-                let gutter = opened
-                    .element_bounds(&format!("secret-value-editor-line-{line}-number"))
-                    .origin
-                    .y;
-                assert!(
-                    (gutter - glyph).abs() < gpui::px(1.5), // guardrail-allow: test tolerance, not spacing
-                    "{stage}, line {line}: gutter {gutter:?} vs text {glyph:?}"
-                );
-            }
-        };
-
-        opened.rendered_paths();
-        aligned(&mut opened, "closed");
-        open_find(&mut opened);
-        opened.rendered_paths();
-        aligned(&mut opened, "find open");
-    }
-
-    /// The first frame, before the textarea reports any bounds, puts gutter
-    /// row 0 where the textarea's padded text will start.
-    #[gpui::test]
-    fn the_first_frame_gutter_starts_at_the_padded_text_origin(cx: &mut TestAppContext) {
-        #[derive(Default)]
-        struct GutterRowTops(std::sync::Mutex<Vec<gpui::Pixels>>);
-
-        impl gpui::FrameObserver for GutterRowTops {
-            fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
-                let top = frame
-                    .nodes()
-                    .find(|(_, node)| node.path().ends_with("secret-value-editor-line-0-number"))
-                    .map(|(_, node)| node.bounds().origin.y);
-
-                if let Some(top) = top {
-                    self.0
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .push(top);
-                }
-            }
-        }
-
-        let mut opened = open_hosted(cx);
-        opened.select(PLAINTEXT_SECRET);
-        opened.show_value("a\nb");
-
-        let tops = std::sync::Arc::new(GutterRowTops::default());
-        opened
-            .window
-            .update(|window, _| window.observe_frames(&tops));
-
-        let doc = opened.doc.clone();
-        opened.window.update(|window, cx| {
-            doc.update(cx, |doc, cx| {
-                doc.view
-                    .update(cx, |view, cx| view.start_value_edit(window, cx))
-            })
-        });
-        opened.window.run_until_parked();
-        opened.rendered_paths();
-
-        let tops = tops
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        let (first, settled) = (tops[0], *tops.last().expect("frames drawn"));
-
-        assert!(
-            (first - settled).abs() < gpui::px(0.5), // guardrail-allow: test tolerance, not spacing
-            "first frame {first:?} vs settled {settled:?}: {tops:?}"
-        );
-
-        let editor =
-            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
-        let glyph = opened
-            .window
-            .update(|_, cx| editor.read(cx).range_to_bounds(&(0..1)))
-            .expect("text laid out")
-            .origin
-            .y;
-        assert!(
-            (first - glyph).abs() < gpui::px(1.5), // guardrail-allow: test tolerance, not spacing
-            "first frame {first:?} vs the first glyph {glyph:?}"
-        );
-    }
-
-    /// Scrolling a long value keeps gutter row N beside text line N, with
-    /// the Find panel closed and open.
-    #[gpui::test]
-    fn the_gutter_follows_the_text_while_scrolled(cx: &mut TestAppContext) {
-        let lines: Vec<String> = (0..80).map(|i| format!("l{i}")).collect();
-        let text = lines.join("\n");
-        let mut opened = open_hosted(cx);
-        start(&mut opened, &text, &text);
-        let editor =
-            opened.read_view(|view| view.value_edit.as_ref().expect("editor").editor.clone());
-
-        let scroll_and_check = |opened: &mut Opened<'_>, stage: &str| {
-            let line_height = opened
-                .window
-                .update(|_, cx| editor.read(cx).line_height())
-                .expect("text laid out");
-            opened.window.update(|_, cx| {
-                editor.update(cx, |state, cx| {
-                    state.set_scroll_offset(gpui::point(gpui::px(0.), -line_height * 10.0), cx)
-                });
-            });
-            opened.window.run_until_parked();
-            opened.rendered_paths();
-            opened.rendered_paths();
-
-            for line in [11usize, 13] {
-                let offset = lines[..line]
-                    .iter()
-                    .map(|text| text.len() + 1)
-                    .sum::<usize>();
-                let glyph = opened
-                    .window
-                    .update(|_, cx| editor.read(cx).range_to_bounds(&(offset..offset + 1)))
-                    .expect("text laid out")
-                    .origin
-                    .y;
-                let gutter = opened
-                    .element_bounds(&format!("secret-value-editor-line-{line}-number"))
-                    .origin
-                    .y;
-                assert!(
-                    (gutter - glyph).abs() < gpui::px(1.5), // guardrail-allow: test tolerance, not spacing
-                    "{stage}, line {line}: gutter {gutter:?} vs text {glyph:?}"
-                );
-            }
-        };
-
-        opened.rendered_paths();
-        scroll_and_check(&mut opened, "closed");
-        open_find(&mut opened);
-        scroll_and_check(&mut opened, "find open");
     }
 }
 
@@ -8134,7 +7985,7 @@ mod details_design {
     }
 
     #[gpui::test]
-    fn the_pane_header_names_the_secret_with_copy_and_close(cx: &mut TestAppContext) {
+    fn the_pane_header_names_the_secret_with_copy_expand_and_close(cx: &mut TestAppContext) {
         let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
         opened.select(KEY_VALUE_SECRET);
 
@@ -8145,12 +7996,7 @@ mod details_design {
         assert!(has("secret-details-name"));
         assert!(has("secret-details-copy-name"));
         assert!(has("secret-details-close"));
-        assert!(
-            !paths
-                .iter()
-                .any(|path| path.contains("secret-details-expand")),
-            "open in tab is a later task"
-        );
+        assert!(has("secret-details-expand"), "{paths:?}");
         assert_eq!(
             node_text(&mut opened, "secret-details-name").as_deref(),
             Some(KEY_VALUE_SECRET)
@@ -8429,8 +8275,163 @@ mod details_design {
 
         let reveal = top(&mut opened, "secret-value-hide-all");
         let copy = top(&mut opened, "secret-value-copy-all");
-        let edit = top(&mut opened, "secret-value-edit");
         assert_eq!(reveal, copy);
-        assert_eq!(copy, edit);
+        assert!(
+            node_bounds(&mut opened, "secret-value-edit").is_none(),
+            "the bottom bar owns Edit value in the pane"
+        );
+    }
+}
+
+// -- The find panel of a redacted editor ---------------------------------------
+
+mod find_panel_redaction {
+    use super::*;
+    use gpui::{IntoElement, ParentElement as _, Render, Styled as _, Window, div};
+    use gpui_component::input::{Editor, EditorState};
+
+    const SECRETISH: &str = "alpha-77b1";
+
+    /// the replace field of a redacted editor's find panel withholds what
+    /// is typed into it.
+    #[gpui::test]
+    fn the_find_panels_replace_field_stays_out_of_the_tree(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.window.update(|window, _| window.activate_window());
+        opened.window.run_until_parked();
+        opened.select(PLAINTEXT_SECRET);
+        opened.show_value("seed");
+        opened.start_edit();
+        opened.set_editor_text("seed");
+
+        let doc = opened.doc.clone();
+        opened.window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.view
+                    .update(cx, |view, cx| view.find_in_value(window, cx))
+            })
+        });
+        opened.window.run_until_parked();
+        opened.window.simulate_input("zzsearchzz");
+        opened.window.run_until_parked();
+        opened.window.update(|window, cx| {
+            window.dispatch_action(Box::new(gpui_component::input::Replace), cx)
+        });
+        opened.window.run_until_parked();
+        opened.window.simulate_input("zzreplacezz");
+        opened.window.run_until_parked();
+
+        // Both fields hold what was typed, so the absence below is redaction
+        // and not a field that never received the text.
+        // The search field holds what was typed, and the replace field is
+        // drawn: the plain editor's twin of this test shows the same typing
+        // reaches both fields' accessibility values when nothing redacts them.
+        assert_eq!(opened.find_fields().0, "zzsearchzz");
+        let fields = opened
+            .rendered_paths()
+            .iter()
+            .filter(|path| path.contains("search-panel") && path.ends_with("input-state"))
+            .count();
+        assert_eq!(fields, 2, "the search and the replace field are drawn");
+
+        let text = opened.accessibility_update_text();
+        assert!(!text.contains("zzsearchzz"), "{text}");
+        assert!(!text.contains("zzreplacezz"), "{text}");
+    }
+
+    /// The twin of the redaction test: with nothing redacting them, the same
+    /// typing puts both texts in the accessibility tree, so the absence the
+    /// redacted editor shows is the redaction and not a field that never got
+    /// the text.
+    #[gpui::test]
+    fn a_plain_editors_find_fields_expose_what_is_typed_into_them(cx: &mut TestAppContext) {
+        init_keyboard_runtime(cx);
+        let (view, window) = cx.add_window_view(|window, cx| {
+            let editor = cx.new(|cx| EditorState::new(window, cx).searchable(true));
+            editor.update(cx, |state, cx| {
+                state.set_value("seed", window, cx);
+                state.focus(window, cx);
+            });
+            Plain { editor }
+        });
+        window.update(|window, _| window.activate_window());
+        window.run_until_parked();
+        let editor = window.update(|_, cx| view.read(cx).editor.clone());
+        window.update(|window, cx| crate::object_text::open_find_panel(&editor, window, cx));
+        window.run_until_parked();
+        window.simulate_input("zzsearchzz");
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.dispatch_action(Box::new(gpui_component::input::Replace), cx)
+        });
+        window.run_until_parked();
+        window.simulate_input("zzreplacezz");
+        window.run_until_parked();
+
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(window);
+        let frame = capture.frame(window);
+        let values: Vec<String> = frame
+            .nodes()
+            .filter_map(|(_, node)| frame.accessibility_node(node).and_then(|n| n.value()))
+            .map(|value| value.to_string())
+            .collect();
+        assert!(
+            values.iter().any(|value| value.contains("zzsearchzz")),
+            "{values:?}"
+        );
+        assert!(
+            values.iter().any(|value| value.contains("zzreplacezz")),
+            "{values:?}"
+        );
+    }
+
+    struct Plain {
+        editor: Entity<EditorState>,
+    }
+
+    impl Render for Plain {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(Editor::new(&self.editor).h(gpui::px(300.0)))
+        }
+    }
+
+    /// a non-redacted editor still fills the find field
+    /// from the selection (the value is exposed twice: editor + search field).
+    #[gpui::test]
+    fn a_plain_editor_still_fills_find_from_the_selection(cx: &mut TestAppContext) {
+        init_keyboard_runtime(cx);
+        let (view, window) = cx.add_window_view(|window, cx| {
+            let editor = cx.new(|cx| EditorState::new(window, cx).searchable(true));
+            editor.update(cx, |state, cx| {
+                state.set_value(SECRETISH, window, cx);
+                state.focus(window, cx);
+            });
+            Plain { editor }
+        });
+        window.update(|window, _| window.activate_window());
+        window.run_until_parked();
+        window.simulate_keystrokes("ctrl-a");
+        window.run_until_parked();
+        let editor = window.update(|_, cx| view.read(cx).editor.clone());
+        window.update(|window, cx| crate::object_text::open_find_panel(&editor, window, cx));
+        window.run_until_parked();
+
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(window);
+        let frame = capture.frame(window);
+        let values: Vec<String> = frame
+            .nodes()
+            .filter_map(|(_, node)| frame.accessibility_node(node).and_then(|n| n.value()))
+            .map(|value| value.to_string())
+            .collect();
+        let hits = values
+            .iter()
+            .filter(|value| value.contains(SECRETISH))
+            .count();
+        assert!(
+            hits >= 2,
+            "editor and search field both expose it: {values:?}"
+        );
     }
 }

@@ -9,6 +9,7 @@
 //! closes. Behavior that differs between stores follows the store's
 //! `SecretStoreCapabilities`, never a driver id.
 
+pub(crate) mod changes;
 mod context_menu;
 mod create;
 mod data;
@@ -18,6 +19,7 @@ mod pane;
 mod pane_actions;
 mod region;
 mod render;
+mod sync;
 mod value;
 mod view;
 mod write;
@@ -50,8 +52,22 @@ use gpui::*;
 use std::cell::Cell;
 use std::rc::Rc;
 use uuid::Uuid;
-use view::SecretViewEvent;
-pub use view::{DetailsState, SecretView, VersionsState};
+pub(crate) use view::{DetailsState, SecretView, VersionsState};
+pub(crate) use view::{SecretViewEvent, ViewHost, WriteEffect, land_save_answer};
+
+/// A request to open one secret in its own tab, raised by the listing and
+/// drained by the workspace. The region is the one the listing is loaded
+/// under: names are region-scoped.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SecretOpenRequest {
+    pub store_id: String,
+    pub name: String,
+    pub version: Option<String>,
+    pub region: Option<String>,
+    /// Open with the value editor active: the tab retrieves the value first
+    /// when it is not loaded, and never only reveals it.
+    pub edit: bool,
+}
 
 /// Which part of the document owns keyboard input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,23 +160,26 @@ pub struct SecretStoreDocument {
     /// What the listing showed when the create in flight was sent, so its
     /// landing can tell that the user moved on.
     create_origin: Option<create::ListingView>,
+    /// The secret the user asked to open in its own tab, drained by the
+    /// workspace on its next render.
+    pending_open_secret: Option<SecretOpenRequest>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<DocumentEvent> for SecretStoreDocument {}
 
 /// What the document reads from the live connection when it opens.
-struct ConnectionFacts {
-    name: String,
-    descriptor: SecretStoreDescriptor,
-    region: Option<String>,
-    region_switchable: bool,
+pub(crate) struct ConnectionFacts {
+    pub(crate) name: String,
+    pub(crate) descriptor: SecretStoreDescriptor,
+    pub(crate) region: Option<String>,
+    pub(crate) region_switchable: bool,
 }
 
 impl ConnectionFacts {
     /// A connection without the store yields a descriptor that supports
     /// nothing, so the document opens empty with an error.
-    fn read(
+    pub(crate) fn read(
         app_state: &Entity<AppStateEntity>,
         profile_id: Uuid,
         store_id: &str,
@@ -243,18 +262,23 @@ impl SecretStoreDocument {
         subscriptions.push(Self::watch_app_state(&app_state, cx));
 
         let region_switch_in_flight = Rc::new(Cell::new(false));
+        let origin = cx.entity_id();
         let view = cx.new(|cx| {
-            SecretView::new(
+            let mut view = SecretView::new(
                 profile_id,
                 descriptor.clone(),
                 app_state.clone(),
                 region_switch_in_flight.clone(),
+                ViewHost::Pane,
                 cx,
-            )
+            );
+            view.set_change_origin(origin);
+            view
         });
         // The view redraws itself on its own state; the document draws it.
         subscriptions.push(cx.observe(&view, |_, _, cx| cx.notify()));
         subscriptions.push(cx.subscribe_in(&view, window, Self::on_view_event));
+        subscriptions.push(changes::follow(cx, Self::on_secret_change));
 
         let mut doc = Self {
             id: DocumentId::new(),
@@ -291,6 +315,7 @@ impl SecretStoreDocument {
             clear_search_input: false,
             create_dialog: None,
             create_origin: None,
+            pending_open_secret: None,
             _subscriptions: subscriptions,
         };
 
@@ -362,23 +387,17 @@ impl SecretStoreDocument {
     /// listing on what the connection actually reaches.
     fn watch_app_state(app_state: &Entity<AppStateEntity>, cx: &mut Context<Self>) -> Subscription {
         cx.subscribe(app_state, |this, _, _: &AppStateChanged, cx| {
-            this.view.update(cx, |view, cx| {
-                view.sync_connection_presence(cx);
-                view.close_dialog_if_session_replaced(cx)
-            });
+            this.view
+                .update(cx, |view, cx| view.begin_connection_change(cx));
             this.adopt_connection_region(cx);
-            this.view.update(cx, |view, cx| {
-                view.adopt_connection_session(HistoryLoad::Automatic, cx)
-            });
             this.view
-                .update(cx, |view, cx| view.adopt_details_session(cx));
-            this.view
-                .update(cx, |view, cx| view.drop_value_of_replaced_session(cx));
+                .update(cx, |view, cx| view.finish_connection_change(cx));
         })
     }
 
-    /// The view of the selected secret.
-    pub fn view(&self) -> &Entity<SecretView> {
+    /// The view of the selected secret, for the cross-host tests.
+    #[cfg(test)]
+    pub(crate) fn view(&self) -> &Entity<SecretView> {
         &self.view
     }
 
@@ -785,6 +804,8 @@ impl SecretStoreDocument {
     ) {
         match event {
             SecretViewEvent::ReloadListing => self.reload_listing_in_place(cx),
+            // The listing has no close or quit flow of a secret to report.
+            SecretViewEvent::SaveFinished { .. } => {}
             SecretViewEvent::StoreCalled(timing) => self.last_call = Some(*timing),
             SecretViewEvent::Removed => self.selected = None,
             SecretViewEvent::DialogOpened => self.drop_context_menu(),
@@ -797,12 +818,16 @@ impl SecretStoreDocument {
                 }
             }
             SecretViewEvent::CloseRequested => self.close_details(window, cx),
+            SecretViewEvent::OpenInTab { name, edit } => {
+                self.queue_open_secret(name.clone(), *edit, cx)
+            }
             SecretViewEvent::Created { name, stands } => {
                 self.land_create(name, *stands, cx);
+                self.announce(name.clone(), changes::SecretChangeKind::Created, cx);
             }
         }
     }
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

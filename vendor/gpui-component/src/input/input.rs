@@ -684,7 +684,7 @@ impl RenderOnce for Input {
         // Overlay content is measured during synchronization, before the input's
         // styled container applies its font and spacing to the element tree.
         let mut overlays = window.with_text_style(Some(self.style.text.clone()), |window| {
-            state.render_overlays(window, cx)
+            state.render_overlays(self.redacted, window, cx)
         });
         overlays
             .floating

@@ -8,8 +8,8 @@
 //! pane actions already use — the menu adds no logic of its own. The write
 //! entries (Edit value, Restore, Delete, and the ones the store offers
 //! beyond them) open the same editor and dialogs the pane's buttons do, and
-//! "Open in tab" waits for a per-secret document target: the value pane is
-//! deliberately scoped to this tab.
+//! "Open in tab" hands the secret to the workspace, which opens it in its
+//! own document.
 
 use super::{SecretRowKey, SecretStoreDocument};
 use dbflux_app::keymap::{Command, ContextId};
@@ -45,6 +45,7 @@ pub(super) struct SecretMenuItem {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SecretMenuAction {
+    OpenInTab,
     RetrieveValue,
     EditValue,
     RotateNow,
@@ -62,6 +63,7 @@ impl SecretMenuAction {
     /// the coverage registry can give each row its own keyboard path.
     fn panel_id(self) -> &'static str {
         match self {
+            SecretMenuAction::OpenInTab => "secret-menu-open-in-tab",
             SecretMenuAction::RetrieveValue => "secret-menu-retrieve-value",
             SecretMenuAction::EditValue => "secret-menu-edit-value",
             SecretMenuAction::RotateNow => "secret-menu-rotate-now",
@@ -282,7 +284,7 @@ impl SecretStoreDocument {
             // then the document gets the keyboard back like any other entry.
             SecretMenuAction::EditValue => {
                 self.view
-                    .update(cx, |view, cx| view.start_value_edit(window, cx));
+                    .update(cx, |view, cx| view.request_edit_value(window, cx));
 
                 if self.view.read(cx).is_editing_value() {
                     return;
@@ -312,6 +314,7 @@ impl SecretStoreDocument {
                     return;
                 }
             }
+            SecretMenuAction::OpenInTab => self.open_selected_in_tab(cx),
             SecretMenuAction::Restore => self.view.update(cx, |view, cx| view.restore_selected(cx)),
             SecretMenuAction::RetrieveValue => self
                 .view

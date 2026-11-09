@@ -24,10 +24,7 @@ use std::time::Instant;
 impl SecretView {
     /// The live connection of the profile the view reads from.
     pub(crate) fn connection(&self, cx: &Context<Self>) -> Option<Arc<dyn Connection>> {
-        self.app_state
-            .read(cx)
-            .connections()
-            .get(&self.profile_id)
+        self.live_profile(cx)
             .map(|connected| connected.connection.clone())
     }
 
@@ -418,7 +415,7 @@ impl SecretView {
     /// the same audited retrieval Retrieve value uses. The request always
     /// names the row's id, the current version's row included: the current
     /// version can rotate between the listing and the click.
-    pub fn activate_version(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(crate) fn activate_version(&mut self, index: usize, cx: &mut Context<Self>) {
         let VersionsState::Loaded(versions) = &self.versions else {
             return;
         };
@@ -439,12 +436,12 @@ impl SecretView {
 
     /// Whether Back to current may run: a historical value is shown and no
     /// retrieval is in flight.
-    pub fn can_return_to_current(&self) -> bool {
+    pub(crate) fn can_return_to_current(&self) -> bool {
         self.shown_older_version().is_some()
     }
 
     /// Replaces a historical value with the current one.
-    pub fn back_to_current_version(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn back_to_current_version(&mut self, cx: &mut Context<Self>) {
         if self.can_return_to_current() {
             self.retrieve_version(None, cx);
         }
@@ -453,8 +450,8 @@ impl SecretView {
     /// Retrieve value: fetches the selected secret's current value. Every
     /// retrieval, successful or not, records one audit event without the
     /// value. Refused for a secret whose deletion is pending.
-    pub fn retrieve_selected_value(&mut self, cx: &mut Context<Self>) {
-        self.retrieve_version(None, cx);
+    pub(crate) fn retrieve_selected_value(&mut self, cx: &mut Context<Self>) {
+        self.retrieve_version(self.opened_version.clone(), cx);
     }
 
     /// Retrieves `version` of the selected secret, the current value when

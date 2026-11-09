@@ -55,6 +55,7 @@
 
 use std::sync::Arc;
 
+use dbflux_components::vim::VimBinding;
 use dbflux_core::chrono::Utc;
 use dbflux_core::observability::EventSeverity;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
@@ -66,18 +67,21 @@ use dbflux_ui_base::notifications::ErrorNotification;
 use dbflux_ui_base::toast::{Toast, ToastAction, copy_action, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::{App, AppContext as _, Context, Entity, Subscription, Window};
-use gpui_component::input::TextareaState;
+use gpui_component::input::EditorState;
 
 pub(crate) mod json_layout;
 mod line_diff;
+mod save;
 mod view;
 
-use super::{DetailsState, SecretView, ValueState};
+use super::{DetailsState, SecretView, SecretViewEvent, ValueState};
 use crate::object_text::db_error_to_user_facing;
 use crate::secret_store::write::{
     SecretOperation, SecretWriteFailure, SecretWriteFailureKind, WriteTarget, put_secret_value,
     store_unavailable_failure,
 };
+pub(crate) use save::land_save_answer;
+pub(in crate::secret_store) use save::write_failure_to_user_facing;
 
 /// How the editor lays out a value stored as JSON.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,17 +102,8 @@ fn formatted_layout(stored: &str, stored_is_json: bool) -> String {
     }
 }
 
-fn parses_as_json(text: &str) -> bool {
+pub(super) fn parses_as_json(text: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(text).is_ok()
-}
-
-/// The height a gutter row takes before the textarea has laid out.
-pub(in crate::secret_store) fn fallback_line_height(cx: &App) -> gpui::Pixels {
-    (dbflux_components::fonts::ui_px(
-        cx,
-        dbflux_components::tokens::DocumentMetrics::DETAIL_BLOCK_FONT,
-    ) * dbflux_components::tokens::DocumentMetrics::DETAIL_BLOCK_LINE_HEIGHT)
-        .round()
 }
 
 /// The open editor of the loaded plaintext value.
@@ -121,12 +116,26 @@ pub(crate) struct ValueEditState {
     /// JSON: a Save whose text no longer parses is refused before the seam.
     pub(in crate::secret_store) stored_is_json: bool,
 
-    /// The multi-line editor surface, built when the edit started.
-    pub(in crate::secret_store) editor: Entity<TextareaState>,
+    /// The editor surface, built when the edit started: the component the
+    /// code documents and the object editor use, with its own line numbers,
+    /// scrolling and find panel.
+    pub(in crate::secret_store) editor: Entity<EditorState>,
+
+    /// Vim mode for this editor, off unless the setting turns it on.
+    pub(in crate::secret_store) vim: VimBinding,
 
     /// True while a governed write is in flight, so a second Save waits and
     /// Discard does not drop what the landing still has to read.
     pub(in crate::secret_store) saving: bool,
+
+    /// The secret changed in another view while this editor held unsaved
+    /// text. The text is kept and Save still writes a new version; the
+    /// editor says so until it is saved.
+    pub(in crate::secret_store) changed_elsewhere: bool,
+
+    /// The secret was deleted while this editor held unsaved text. The text
+    /// stays, read-only, until it is discarded; nothing can be saved.
+    pub(in crate::secret_store) removed: bool,
 
     /// The layout the editor text is in. A value that is not JSON is always
     /// [`EditMode::Raw`].
@@ -141,15 +150,9 @@ pub(crate) struct ValueEditState {
     /// text-input context only while this is true.
     pub(in crate::secret_store) focused: bool,
 
-    /// Wraps the textarea and its Find panel, so focus inside either one is
+    /// Wraps the editor and its Find panel, so focus inside either one is
     /// focus inside the editor.
     pub(in crate::secret_store) focus: gpui::FocusHandle,
-
-    /// Where the row area holding the gutter, the tint and the text starts,
-    /// in window coordinates, as the last frame painted it. The text sits
-    /// lower than that when the Find panel pushes it down, and the gutter
-    /// follows by the difference.
-    pub(in crate::secret_store) rows_origin: std::rc::Rc<std::cell::Cell<gpui::Pixels>>,
     _focus_subscriptions: [Subscription; 2],
 
     /// The connection session the value was read from. A save names this
@@ -216,22 +219,13 @@ impl ValueEditState {
     }
 }
 
-/// What a save takes from the live connection, captured on the foreground so
-/// the write can run on the background executor.
-struct ValueWriteSession {
-    connection: Arc<dyn Connection>,
-    policy: MutationPolicy,
-    read_only_reason: Option<ReadOnlyReason>,
-    driver_id: String,
-}
-
 impl SecretView {
     /// Whether the details pane offers an editor for the loaded value: a
     /// plaintext value of a secret nobody else manages and whose deletion is
     /// not pending, in a store that advertises `WRITE`. A connection whose
     /// policy refuses writes keeps the editor — the refusal happens at Save,
     /// through the seam, where the decision is audited.
-    pub fn can_edit_value(&self) -> bool {
+    pub(crate) fn can_edit_value(&self) -> bool {
         if self.value_edit.is_some() || !self.connection_present {
             return false;
         }
@@ -262,8 +256,16 @@ impl SecretView {
             .map(|edit| edit.mode)
     }
 
+    /// Whether the open draft is read-only: its secret is deleted, or its
+    /// deletion is scheduled. A restore lifts it with the draft intact.
+    pub(crate) fn draft_is_locked(&self) -> bool {
+        self.value_edit
+            .as_ref()
+            .is_some_and(|edit| edit.removed || self.deletion_pending())
+    }
+
     /// Whether the open editor offers the Formatted / Raw toggle.
-    pub fn can_toggle_edit_mode(&self) -> bool {
+    pub(crate) fn can_toggle_edit_mode(&self) -> bool {
         self.edit_mode().is_some() && !self.is_saving_value_edit()
     }
 
@@ -299,18 +301,62 @@ impl SecretView {
     /// owned by `gpui-component` and reachable only through its `Search`
     /// action, so the button focuses the editor first and then dispatches the
     /// action its `ctrl-f` / `cmd-f` binding raises.
-    pub fn find_in_value(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn find_in_value(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(edit) = &self.value_edit else {
             return;
         };
 
-        edit.editor.update(cx, |state, cx| state.focus(window, cx));
-        window.dispatch_action(Box::new(gpui_component::input::Search), cx);
+        crate::object_text::open_find_panel(&edit.editor, window, cx);
         cx.notify();
     }
 
+    /// Gives the keyboard to the open editor, keeping its text.
+    pub(crate) fn focus_value_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(edit) = &self.value_edit {
+            edit.editor.update(cx, |state, cx| state.focus(window, cx));
+        }
+    }
+
+    /// Replaces the editor's text, as a long paste would.
+    #[cfg(test)]
+    pub(crate) fn replace_editor_text(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(edit) = &self.value_edit {
+            edit.editor
+                .update(cx, |state, cx| state.set_value(text, window, cx));
+        }
+    }
+
+    /// The height of the text area the editor laid out, for the tab tests.
+    #[cfg(test)]
+    pub(crate) fn editor_viewport_height(&self, cx: &App) -> Option<gpui::Pixels> {
+        self.value_edit
+            .as_ref()
+            .map(|edit| edit.editor.read(cx).input_bounds().size.height)
+    }
+
+    /// The text the open editor holds, for the tests.
+    #[cfg(test)]
+    pub(crate) fn editor_text_for_test(&self, cx: &App) -> Option<String> {
+        self.value_edit
+            .as_ref()
+            .map(|edit| edit.editor.read(cx).value().to_string())
+    }
+
+    /// The caret's 1-based line, for the tab tests.
+    #[cfg(test)]
+    pub(crate) fn editor_caret_line(&self, cx: &App) -> Option<u32> {
+        self.value_edit
+            .as_ref()
+            .map(|edit| edit.editor.read(cx).cursor_position().line + 1)
+    }
+
     /// Switches to the other mode, for the pane action.
-    pub fn cycle_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn cycle_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let next = match self.edit_mode() {
             Some(EditMode::Formatted) => EditMode::Raw,
             Some(EditMode::Raw) => EditMode::Formatted,
@@ -321,19 +367,19 @@ impl SecretView {
     }
 
     /// Whether the value editor is open.
-    pub fn is_editing_value(&self) -> bool {
+    pub(crate) fn is_editing_value(&self) -> bool {
         self.value_edit.is_some()
     }
 
     /// Whether a governed write of this editor is in flight.
-    pub fn is_saving_value_edit(&self) -> bool {
+    pub(crate) fn is_saving_value_edit(&self) -> bool {
         self.value_edit.as_ref().is_some_and(|edit| edit.saving)
     }
 
     /// Whether the open editor holds text that no save has written: the
     /// dirty dot, the unsaved-changes prompt on close and the guards on the
     /// transitions that would drop the editor all read this.
-    pub fn has_unsaved_value_edits(&self, cx: &App) -> bool {
+    pub(crate) fn has_unsaved_value_edits(&self, cx: &App) -> bool {
         self.value_edit
             .as_ref()
             .is_some_and(|edit| edit.is_changed(cx))
@@ -342,17 +388,18 @@ impl SecretView {
     /// The description the tab's dirty dot and the unsaved-changes prompt
     /// show while the editor holds unsaved text; `None` when there is
     /// nothing unsaved.
-    pub fn unsaved_change_summary(&self, cx: &App) -> Option<String> {
+    pub(crate) fn unsaved_change_summary(&self, cx: &App) -> Option<String> {
         self.has_unsaved_value_edits(cx)
             .then(|| dbflux_i18n::t!("document.secret_store.edit.change_summary").to_string())
     }
 
-    /// Opens the editor on the loaded value with the stored text. A value
-    /// that may not be edited ignores the request; a connection that is gone
-    /// is reported, as a save without one is.
-    pub fn start_value_edit(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+    /// The session the editor binds to, when an edit may start: the value
+    /// is editable, nothing else is writing, and the session the value was
+    /// read from is the live one. A value of a replaced session is dropped
+    /// instead of edited.
+    fn session_for_edit(&mut self, cx: &mut Context<Self>) -> Option<Arc<dyn Connection>> {
         if !self.can_edit_value() || self.region_switch_blocks_writes(cx) {
-            return;
+            return None;
         }
 
         if self.write_in_flight {
@@ -360,7 +407,11 @@ impl SecretView {
                 dbflux_i18n::t!("document.secret_store.write.in_progress"),
                 cx,
             );
-            return;
+            return None;
+        }
+
+        if self.region_mismatch(cx) {
+            return None;
         }
 
         let Some(live) = self.connection(cx) else {
@@ -372,15 +423,13 @@ impl SecretView {
                 ),
                 cx,
             );
-            return;
+            return None;
         };
 
         // The editor is bound to the session the value was read from, not to
         // whichever one is live now: a value of a replaced session is dropped
         // instead of edited.
-        let Some(connection) = self.value_session.clone() else {
-            return;
-        };
+        let connection = self.value_session.clone()?;
 
         if !Arc::ptr_eq(&connection, &live) {
             self.clear_value();
@@ -393,8 +442,19 @@ impl SecretView {
                 cx,
             );
             cx.notify();
-            return;
+            return None;
         }
+
+        Some(connection)
+    }
+
+    /// Opens the editor on the loaded value with the stored text. A value
+    /// that may not be edited ignores the request; a connection that is gone
+    /// is reported, as a save without one is.
+    pub(crate) fn start_value_edit(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let Some(connection) = self.session_for_edit(cx) else {
+            return;
+        };
 
         let ValueState::Loaded(value) = &self.value else {
             return;
@@ -409,15 +469,8 @@ impl SecretView {
         };
         let opening = formatted_layout(&stored, stored_is_json);
 
-        let editor = cx.new(|cx| {
-            let mut state = TextareaState::new(window, cx)
-                .auto_grow(2, super::details::VIEWER_VISIBLE_LINES as usize)
-                .soft_wrap(false)
-                .searchable(true);
-            state.set_value(&opening, window, cx);
-            state
-        });
-        editor.update(cx, |state, cx| state.focus(window, cx));
+        let editor = build_editor(&opening, stored_is_json, window, cx);
+        let vim = VimBinding::new(editor.clone(), window, cx);
         let observer = cx.observe(&editor, |_, _, cx| cx.notify());
         // Whether the editor holds the keyboard follows its focus handle,
         // so a click or a focus move that edits nothing still changes the
@@ -439,12 +492,14 @@ impl SecretView {
         self.value_edit = Some(ValueEditState {
             original: SecretString::from(stored),
             stored_is_json,
-            editor,
+            editor: editor.clone(),
+            vim,
             saving: false,
+            changed_elsewhere: false,
+            removed: false,
             mode,
             focused: true,
             focus: handle,
-            rows_origin: Default::default(),
             _observer: observer,
             _focus_subscriptions: [focus_in, focus_out],
             connection,
@@ -454,6 +509,61 @@ impl SecretView {
         self.value_inputs.clear();
         self.value_input_masks.clear();
         self.value_inputs_view = None;
+        VimBinding::follow_setting(self, editor.entity_id(), cx);
+        cx.notify();
+    }
+
+    /// Follows a write another view made to the shown secret: what this view
+    /// retrieved is stale, so it goes back to "Value not loaded" and reads
+    /// again on demand, through the audited path. An editor holding unsaved
+    /// text keeps it and says the secret changed; a clean one closes.
+    /// Follows a write of another view by its kind. A scheduled deletion is
+    /// taken as confirmed first, so nothing below asks the store for what it
+    /// refuses on a secret pending deletion; a draft stays, read-only, until
+    /// the secret is restored or the draft is discarded.
+    pub(crate) fn follow_external_write(
+        &mut self,
+        name: &str,
+        kind: super::super::changes::SecretChangeKind,
+        cx: &mut Context<Self>,
+    ) {
+        use super::super::changes::SecretChangeKind;
+
+        match kind {
+            SecretChangeKind::Scheduled { date } => self.confirm_deletion_scheduled(name, date, cx),
+            SecretChangeKind::Restored => self.confirm_restored(name, cx),
+            _ => {}
+        }
+
+        self.follow_external_change(cx);
+        self.describe(name.to_string(), cx);
+        self.load_versions(name.to_string(), cx);
+    }
+
+    pub(crate) fn follow_external_change(&mut self, cx: &mut Context<Self>) {
+        if self.has_unsaved_value_edits(cx) {
+            if let Some(edit) = &mut self.value_edit {
+                edit.changed_elsewhere = true;
+            }
+
+            // The text stays, but the value it was opened from is stale:
+            // Discard returns to "Value not loaded" and Copy value waits for
+            // a new audited retrieval.
+            self.value_generation = self.value_generation.wrapping_add(1);
+            self.value = ValueState::NotLoaded;
+            self.value_version = None;
+            self.value_inputs.clear();
+            self.value_input_masks.clear();
+            self.value_inputs_view = None;
+            cx.notify();
+            return;
+        }
+
+        if matches!(self.value, ValueState::NotLoaded) && self.value_edit.is_none() {
+            return;
+        }
+
+        self.clear_value();
         cx.notify();
     }
 
@@ -464,7 +574,7 @@ impl SecretView {
     /// save is in flight the landing still has to read what was typed after
     /// it started, so Discard sits out, and the pane action is disabled so
     /// the queue cannot carry one into the landing.
-    pub fn discard_value_edit(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn discard_value_edit(&mut self, cx: &mut Context<Self>) {
         if self.is_saving_value_edit() {
             return;
         }
@@ -547,423 +657,52 @@ impl SecretView {
         );
         true
     }
+}
 
-    /// Saves the edited text as a new version through the governed seam. A
-    /// save whose text is unchanged is a no-op, the secret's latest details
-    /// and the session the value came from are re-checked, and a value the
-    /// store kept as JSON must still parse as JSON — as any JSON, in the
-    /// layout the user typed; the gate checks the type, not the shape.
-    pub fn save_value_edit(&mut self, cx: &mut Context<Self>) {
-        let Some(edit) = &self.value_edit else {
-            return;
-        };
-
-        if edit.saving {
-            return;
-        }
-
-        if self.save_waits_for_another_write(cx) {
-            return;
-        }
-
-        let text = edit.text_to_write(edit.editor.read(cx).value().as_str());
-
-        if !edit.is_changed(cx) {
-            return;
-        }
-
-        let stored_is_json = edit.stored_is_json;
-        let value_connection = edit.connection.clone();
-
-        if let Some(reason) = self.value_edit_refusal_reason() {
-            report_error(
-                UserFacingError::new(ErrorKind::User, reason).with_severity(EventSeverity::Warn),
-                cx,
-            );
-            return;
-        }
-
-        let Some(session) = self.value_write_session(&value_connection, cx) else {
-            return;
-        };
-
-        if let Some(error) = stored_is_json
-            .then_some(&text)
-            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).err())
-        {
-            report_error(
-                UserFacingError::new(
-                    ErrorKind::User,
-                    dbflux_i18n::t!(
-                        "document.secret_store.edit.invalid_json",
-                        error = error.to_string()
-                    ),
-                ),
-                cx,
-            );
-            return;
-        }
-
-        let Some(name) = self.selected_summary().map(|summary| summary.name.clone()) else {
-            return;
-        };
-
-        self.send_value_write(session, name, text, cx);
+impl dbflux_components::vim::VimHost for SecretView {
+    fn vim(&self, input: gpui::EntityId) -> Option<&VimBinding> {
+        self.value_edit
+            .as_ref()
+            .and_then(|edit| edit.vim.for_input(input))
     }
 
-    /// Another write is in flight: a save out of an editor that is gone
-    /// still answers, and a second one would let the first answer release
-    /// the guard under it. Reports why.
-    fn save_waits_for_another_write(&self, cx: &mut Context<Self>) -> bool {
-        if !self.editor_save_in_flight && !self.write_in_flight {
-            return false;
-        }
-
-        self.report_write_warning(
-            dbflux_i18n::t!("document.secret_store.write.in_progress"),
-            cx,
-        );
-        true
+    fn vim_mut(&mut self, input: gpui::EntityId) -> Option<&mut VimBinding> {
+        self.value_edit
+            .as_mut()
+            .and_then(|edit| edit.vim.for_input_mut(input))
     }
 
-    /// What the save takes from the live connection. The save lands on the
-    /// session the value was read from: a profile whose connection was
-    /// replaced — a region switch, a reconnect, a credentials refresh —
-    /// refuses here, because the editor's value may not exist on the new
-    /// session and writing there would put a value somewhere the user did not
-    /// see.
-    fn value_write_session(
-        &mut self,
-        value_connection: &Arc<dyn Connection>,
-        cx: &mut Context<Self>,
-    ) -> Option<ValueWriteSession> {
-        // A region switch is about to replace the session this would write
-        // to: the shared guard comes before the connection is read.
-        if self.region_switch_blocks_writes(cx) {
-            return None;
-        }
-
-        let connected = self.app_state.read(cx).connections().get(&self.profile_id);
-
-        let Some(connected) = connected else {
-            self.missing_connection_reported = true;
-            report_error(
-                UserFacingError::new(
-                    ErrorKind::User,
-                    dbflux_i18n::t!("document.secret_store.error.connection_unavailable"),
-                ),
-                cx,
-            );
-            return None;
-        };
-
-        if !Arc::ptr_eq(&connected.connection, value_connection) {
-            report_error(
-                UserFacingError::new(
-                    ErrorKind::User,
-                    dbflux_i18n::t!("document.secret_store.edit.connection_replaced"),
-                )
-                .with_severity(EventSeverity::Warn),
-                cx,
-            );
-            return None;
-        }
-
-        Some(ValueWriteSession {
-            connection: connected.connection.clone(),
-            policy: connected.mutation_policy,
-            read_only_reason: connected.read_only_reason,
-            driver_id: connected.connection.metadata().id.clone(),
-        })
-    }
-
-    /// Sends the edited text through the seam on the background executor and
-    /// lands the answer on the view.
-    fn send_value_write(
-        &mut self,
-        session: ValueWriteSession,
-        name: String,
-        text: String,
-        cx: &mut Context<Self>,
-    ) {
-        let saved_on = session.connection.clone();
-        let ValueWriteSession {
-            connection,
-            policy,
-            read_only_reason,
-            driver_id,
-        } = session;
-        let audit = self.app_state.read(cx).audit_service().clone();
-        let store_id = self.store.id.clone();
-        let store_label = self.store.label.clone();
-        let profile_id = self.profile_id;
-        let generation = self.value_write_generation;
-        let entity = cx.entity().clone();
-        let request = SecretPutRequest::text(name.clone(), text);
-
-        if let Some(edit) = &mut self.value_edit {
-            edit.saving = true;
-        }
-        self.editor_save_in_flight = true;
-        cx.notify();
-
-        let task = cx.background_executor().spawn(async move {
-            match connection.secret_store(&store_id) {
-                Some(store) => put_secret_value(
-                    store,
-                    profile_id,
-                    driver_id.as_str(),
-                    policy,
-                    read_only_reason,
-                    &audit,
-                    &request,
-                ),
-                None => Err(store_unavailable_failure(
-                    &audit,
-                    SecretOperation::PutValue,
-                    &WriteTarget {
-                        profile_id,
-                        driver_id: driver_id.as_str(),
-                        store_id: store_id.as_str(),
-                        store_label: store_label.as_str(),
-                        name: request.name.as_str(),
-                    },
-                    DbError::NotSupported(dbflux_i18n::t!(
-                        "document.secret_store.error.store_unavailable",
-                        store = store_id
-                    )),
-                )),
-            }
-        });
-
-        cx.spawn(async move |_this, cx| {
-            let result = task.await;
-
-            cx.update(|cx| {
-                entity.update(cx, |view, cx| {
-                    view.editor_save_in_flight = false;
-                    view.apply_value_write(generation, &name, result, &saved_on, cx);
-                });
-            });
-        })
-        .detach();
-    }
-
-    /// Lands a governed write. A write the store accepted shows the value
-    /// the seam returned — its new version id — masks everything again and
-    /// refreshes the details; the editor closes when it still holds what was
-    /// saved, and stays open over text typed while the write was in flight,
-    /// with the saved text as its baseline. A refusal or a failure keeps the
-    /// editor open so the text can be fixed or dropped. The audit event of
-    /// every outcome was recorded by the seam itself, so the report below
-    /// adds none.
-    pub(crate) fn apply_value_write(
-        &mut self,
-        generation: u64,
-        name: &str,
-        result: Result<SecretValue, SecretWriteFailure>,
-        saved_on: &Arc<dyn Connection>,
-        cx: &mut Context<Self>,
-    ) {
-        let is_current = generation == self.value_write_generation && self.is_for(name);
-
-        // The save ran on the session captured when it started. If the
-        // connection was replaced since, the displayed value and the editor
-        // belong to whatever the user sees now: nothing of them is touched,
-        // the unsaved text stays, and the user is told where the write went.
-        let replaced = self
-            .connection(cx)
-            .is_some_and(|live| !Arc::ptr_eq(&live, saved_on));
-
-        if replaced {
-            match result {
-                Ok(_) => self.report_write_warning(
-                    dbflux_i18n::t!("document.secret_store.write.landed_on_previous_session"),
-                    cx,
-                ),
-                Err(failure) => {
-                    self.report_seam_write_failure(write_failure_to_user_facing(&failure), cx)
-                }
-            }
-
-            if let Some(edit) = &mut self.value_edit {
-                edit.saving = false;
-            }
-            cx.notify();
-            return;
-        }
-
-        match result {
-            Ok(written) => {
-                if is_current {
-                    self.value = ValueState::Loaded(Box::new(
-                        crate::secret_store::RetrievedValue::new(&written),
-                    ));
-                    self.value_session = Some(saved_on.clone());
-                    // The saved text is the current version now, whatever
-                    // version the pane was showing.
-                    self.value_version = None;
-
-                    // The saved text becomes the editor's new baseline: an
-                    // editor whose text still matches what was saved closes,
-                    // one holding text typed during the write stays open.
-                    let saved_text = match &written.payload {
-                        SecretPayload::Text(text) => text.expose_secret().to_string(),
-                        // The editor exists for text values only.
-                        SecretPayload::Binary(_) => String::new(),
-                    };
-                    let stored_is_json = parses_as_json(&saved_text);
-                    let keep_editing = self.value_edit.as_ref().is_some_and(|edit| {
-                        edit.text_to_write(edit.editor.read(cx).value().as_str()) != saved_text
-                    });
-
-                    if keep_editing {
-                        if let Some(edit) = &mut self.value_edit {
-                            edit.original = SecretString::from(saved_text);
-                            edit.stored_is_json = stored_is_json;
-                            if !stored_is_json {
-                                edit.mode = EditMode::Raw;
-                            }
-                            edit.saving = false;
-                        }
-                    } else {
-                        self.value_edit = None;
-                    }
-
-                    cx.notify();
-                    // The details refresh, so the version the pane reports
-                    // is the version the store now holds.
-                    self.describe(name.to_string(), cx);
-                }
-
-                // The new version and the labels that moved with it. Listing
-                // again also invalidates a history request still in flight,
-                // which predates the write.
-                if self.is_for(name) {
-                    self.request_versions(
-                        name.to_string(),
-                        crate::secret_store::HistoryLoad::Automatic,
-                        cx,
-                    );
-                }
-            }
-            Err(failure) => {
-                self.report_seam_write_failure(write_failure_to_user_facing(&failure), cx);
-
-                if is_current {
-                    if let Some(edit) = &mut self.value_edit {
-                        edit.saving = false;
-                    }
-                    cx.notify();
-                }
-            }
-        }
-    }
-
-    /// Reports a failure the seam already audited. The toast and the
-    /// notification-center entry go out through the same pieces
-    /// [`report_error`] uses — same styling, same correlation details, same
-    /// View-in-audit action — but without its tracing event: the audit
-    /// bridge turns that event into a second, `user_error` row next to the
-    /// one the seam recorded, and a failed write must not be audited twice.
-    pub(in crate::secret_store) fn report_seam_write_failure(
-        &self,
-        failure: UserFacingError,
-        cx: &mut Context<Self>,
-    ) {
-        let id = failure.correlation_id;
-        let id_str = id.to_string();
-        let summary = failure.summary.clone();
-
-        let mut toast = match failure.severity {
-            EventSeverity::Warn => Toast::warning(failure.summary.clone()),
-            _ => Toast::error(failure.summary.clone()),
-        };
-
-        if let Some(cause) = &failure.cause {
-            toast = toast.code_block(cause.clone());
-        }
-        if let Some(suggested) = &failure.suggested_action {
-            toast = toast.body(suggested.clone());
-        }
-
-        let app_state = self.app_state.clone();
-        toast
-            .meta_right(now_hms())
-            .details(dbflux_i18n::t!("errors.correlation.detail", id = id_str))
-            .action(copy_action(dbflux_i18n::t!(
-                "errors.correlation.clipboard",
-                summary = summary.as_str(),
-                id = id_str
-            )))
-            .action(
-                ToastAction::new(
-                    "view-in-audit",
-                    dbflux_i18n::t!("errors.action.view_in_audit"),
-                )
-                .on_click(move |cx: &mut App| {
-                    app_state.update(cx, |state, cx| {
-                        state.request_open_audit(Some(id), cx);
-                    });
-                }),
-            )
-            .push(cx);
-
-        self.app_state.update(cx, |state, cx| {
-            state
-                .notifications
-                .record_error(ErrorNotification::from_user_error(&failure, Utc::now()));
-            state.note_user_error(id, failure.severity, cx);
-        });
+    /// A save in flight keeps the text as it was sent.
+    fn vim_read_only(&self, _input: gpui::EntityId, _cx: &App) -> bool {
+        self.is_saving_value_edit()
     }
 }
 
-/// How a failed governed write reaches the user. The seam's own verdict
-/// decides, never the error variant: a refusal — the policy's, or the
-/// store's own write capability — is a decision, not a transient error, so
-/// it reads as one, a warning of the `User` kind. A store failure keeps the
-/// driver-facing error the retrieval path builds, even when its variant is
-/// one a refusal also uses. A write that landed with its audit row lost is
-/// neither: the message says the write stands and must not be retried, so
-/// it reads as an audit-storage problem at warning severity, not as a
-/// failure to repeat. The correlation id a store failure carries replaces
-/// the fresh one, so the toast and the failure's audit row tell one story.
-pub(in crate::secret_store) fn write_failure_to_user_facing(
-    failure: &SecretWriteFailure,
-) -> UserFacingError {
-    let mut user_error = match failure.kind {
-        SecretWriteFailureKind::Refused => {
-            UserFacingError::new(ErrorKind::User, failure.error.to_string())
-                .with_severity(EventSeverity::Warn)
-        }
-        SecretWriteFailureKind::StoreFailed => db_error_to_user_facing(&failure.error),
-        SecretWriteFailureKind::Indeterminate => {
-            db_error_to_user_facing(&failure.error).with_severity(EventSeverity::Warn)
-        }
-        SecretWriteFailureKind::AuditLost => {
-            UserFacingError::new(ErrorKind::Storage, failure.error.to_string())
-                .with_severity(EventSeverity::Warn)
-        }
-    };
+/// The editor component for the opened text: line numbers, no wrapping, its
+/// find panel, and JSON highlighting for a value stored as JSON.
+fn build_editor(
+    opening: &str,
+    stored_is_json: bool,
+    window: &mut Window,
+    cx: &mut Context<SecretView>,
+) -> Entity<EditorState> {
+    let editor = cx.new(|cx| {
+        let state = EditorState::new(window, cx)
+            .line_number(true)
+            .soft_wrap(false)
+            .searchable(true);
 
-    if let Some(correlation_id) = failure.correlation_id {
-        user_error.correlation_id = correlation_id;
-    }
-
-    if failure.kind == SecretWriteFailureKind::Indeterminate {
-        user_error.summary.push_str(&format!(
-            " {}",
-            dbflux_i18n::t!("document.secret_store.error.may_have_landed")
-        ));
-    }
-    if failure.audit_unrecorded {
-        user_error.summary.push_str(&format!(
-            " {}",
-            dbflux_i18n::t!("document.secret_store.error.audit_unrecorded")
-        ));
-    }
-
-    user_error
+        if stored_is_json {
+            state.language("json")
+        } else {
+            state
+        }
+    });
+    editor.update(cx, |state, cx| {
+        state.set_value(opening, window, cx);
+        state.focus(window, cx);
+    });
+    editor
 }
 
 #[cfg(test)]

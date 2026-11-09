@@ -39,8 +39,13 @@ impl SecretView {
                 header.child(Badge::new(label, BadgeTone::Accent).id("secret-value-kind"))
             })
             .child(div().flex_1())
-            .when_some(self.value_header_meta(), |header, meta| {
-                header.child(Text::caption(meta).muted_foreground())
+            .when(!self.in_tab(), |header| {
+                header.when_some(self.value_header_meta(), |header, meta| {
+                    header.child(Text::caption(meta).muted_foreground())
+                })
+            })
+            .when(self.in_tab(), |header| {
+                header.children(self.value_card_actions(cx))
             });
 
         let body: AnyElement = if let Some(date) = self.deletion_of(summary) {
@@ -58,6 +63,22 @@ impl SecretView {
                 ValueState::Failed(failure) => render_value_failed(failure, cx).into_any_element(),
             }
         };
+
+        if self.in_tab() {
+            let mut rows = Vec::new();
+
+            if let Some(version) = self.shown_older_version().map(str::to_string) {
+                rows.push(self.render_version_banner(version, cx).into_any_element());
+            }
+            rows.push(body);
+
+            return div().id("secret-value-section").child(super::card::card(
+                "secret-document-value-card",
+                header,
+                rows,
+                cx,
+            ));
+        }
 
         div()
             .id("secret-value-section")
@@ -101,7 +122,7 @@ impl SecretView {
     }
 
     /// "dotenv · 9 lines" once a value is shown: counts only, no text.
-    pub(super) fn value_kind_label(&self) -> Option<String> {
+    pub(in crate::secret_store) fn value_kind_label(&self) -> Option<String> {
         match &self.value {
             ValueState::Loaded(value) => Some(value.kind_label()),
             _ => None,
@@ -164,9 +185,13 @@ impl SecretView {
             .flex()
             .flex_col()
             .gap(SecretStoreMetrics::ROW_GAP)
-            .px(DocumentMetrics::DETAIL_BLOCK_PADDING_X)
-            .py(DocumentMetrics::DETAIL_BLOCK_PADDING_Y)
-            .child(Chamfer::new(ChamferCut::CARD).fill(fill).border(border))
+            .when(!self.in_tab(), |card| {
+                card.px(DocumentMetrics::DETAIL_BLOCK_PADDING_X)
+                    .py(DocumentMetrics::DETAIL_BLOCK_PADDING_Y)
+            })
+            .when(!self.in_tab(), |card| {
+                card.child(Chamfer::new(ChamferCut::CARD).fill(fill).border(border))
+            })
             .child(
                 div()
                     .flex()
@@ -243,7 +268,7 @@ impl SecretView {
 
         body = match &value.content {
             ValueContent::KeyValue { .. } | ValueContent::Plaintext(_) => {
-                body.child(self.render_value_view_switch(value, cx))
+                body.child(self.render_value_switch_row(value, cx))
             }
             ValueContent::Binary { size, .. } => body.child(
                 div()
@@ -285,10 +310,30 @@ impl SecretView {
             );
         }
 
+        // The tab keeps the actions in the card's title row and says the
+        // value is tab-only in its footer.
+        if self.in_tab() {
+            return body;
+        }
+
         body.child(self.render_value_actions(value, cx)).child(
             Text::caption(dbflux_i18n::t!("document.secret_store.value.tab_only"))
                 .muted_foreground(),
         )
+    }
+
+    /// The Key/value | Plaintext switch, with "Retrieved 14:02 · audited" at
+    /// its right in the tab.
+    fn render_value_switch_row(&self, value: &RetrievedValue, cx: &mut Context<Self>) -> Div {
+        let meta = self.in_tab().then(|| self.value_header_meta()).flatten();
+
+        div()
+            .flex()
+            .items_center()
+            .gap(DocumentMetrics::GAP)
+            .child(self.render_value_view_switch(value, cx))
+            .child(div().flex_1())
+            .children(meta.map(|meta| Text::caption(meta).muted_foreground()))
     }
 
     /// One value field: its key on a key/value secret, the value in a
@@ -395,6 +440,30 @@ impl SecretView {
         value: &RetrievedValue,
         cx: &mut Context<Self>,
     ) -> Div {
+        div()
+            .flex()
+            .flex_wrap()
+            .gap(DocumentMetrics::GAP)
+            .children(self.value_action_buttons(value, cx))
+    }
+
+    /// The actions of a loaded value shown in the tab's value card: Reveal
+    /// all, Copy JSON and Edit value. Empty while no value is loaded or the
+    /// editor is open.
+    fn value_card_actions(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        match &self.value {
+            ValueState::Loaded(value) if !self.is_editing_value() => {
+                self.value_action_buttons(value, cx)
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn value_action_buttons(
+        &self,
+        value: &RetrievedValue,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let copy_label = if value.content.has_key_value_view() {
             dbflux_i18n::t!("document.secret_store.value.copy_json")
         } else {
@@ -419,26 +488,26 @@ impl SecretView {
             .tab_stop(false)
             .on_click(cx.listener(|this, _, _, cx| this.toggle_reveal_all(cx)));
 
-        div()
-            .flex()
-            .flex_wrap()
-            .gap(DocumentMetrics::GAP)
-            .child(reveal_all)
-            .child(copy_all)
-            .when(self.can_edit_value(), |actions| {
-                actions.child(
-                    Button::new(
-                        "secret-value-edit",
-                        dbflux_i18n::t!("document.secret_store.edit.open"),
-                    )
-                    .inline()
-                    .icon(AppIcon::Pencil)
-                    .tab_stop(false)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.start_value_edit(window, cx);
-                    })),
+        let mut buttons = vec![reveal_all.into_any_element(), copy_all.into_any_element()];
+
+        // The pane's bottom bar owns Edit value; the tab has no bar.
+        if self.in_tab() && self.can_edit_value() {
+            buttons.push(
+                Button::new(
+                    "secret-value-edit",
+                    dbflux_i18n::t!("document.secret_store.edit.open"),
                 )
-            })
+                .primary()
+                .icon(AppIcon::Pencil)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.start_value_edit(window, cx);
+                }))
+                .into_any_element(),
+            );
+        }
+
+        buttons
     }
 }
 

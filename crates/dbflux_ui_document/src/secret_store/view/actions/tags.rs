@@ -196,13 +196,13 @@ impl TagsProblem {
 
 impl SecretView {
     /// Whether the store can edit tags at all.
-    pub fn supports_tags(&self) -> bool {
+    pub(crate) fn supports_tags(&self) -> bool {
         self.store_allows(TAGS_CAPABILITIES)
     }
 
     /// Whether Edit tags may open now: the secret's details are loaded, so the
     /// dialog starts from the tags the store reports and not from a guess.
-    pub fn can_edit_tags(&self) -> bool {
+    pub(crate) fn can_edit_tags(&self) -> bool {
         self.supports_tags()
             && self.connection_present
             && !self.write_in_flight
@@ -214,7 +214,7 @@ impl SecretView {
 
     /// Opens the Edit tags dialog on the selected secret's tags. Nothing is
     /// written until it is confirmed.
-    pub fn open_edit_tags(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_edit_tags(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_edit_tags() {
             return;
         }
@@ -258,7 +258,7 @@ impl SecretView {
 
     /// Adds an empty row to the open dialog and moves the keyboard to its
     /// key.
-    pub fn add_tag_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn add_tag_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.write_in_flight {
             return;
         }
@@ -284,7 +284,7 @@ impl SecretView {
     }
 
     /// Removes the row at `index` from the open dialog.
-    pub fn remove_tag_row(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(crate) fn remove_tag_row(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.write_in_flight {
             return;
         }

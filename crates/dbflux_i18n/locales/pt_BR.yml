@@ -3418,6 +3418,31 @@ document:
     new: Nova aba
     close_named: "Fechar %{title}"
     unsaved_changes: Alterações não salvas
+  secret:
+    subtitle: "%{store} · %{connection} · %{region}"
+    subtitle_no_region: "%{store} · %{connection}"
+    close: "Fechar aba"
+    retry: "Tentar novamente"
+    removed:
+      title: "Este segredo foi excluído"
+      body: "%{name} não está mais no armazenamento. Esta aba não lê nem grava nada. Feche-a e abra o segredo novamente se ele for recriado."
+      draft_title: "Excluído — seu texto não salvo foi mantido"
+      draft_body: "%{name} foi excluído, então nada pode ser salvo. O texto abaixo é somente leitura; copie o que precisar e depois descarte-o."
+    scheduled:
+      draft_title: "Exclusão agendada — seu texto não salvo foi mantido"
+      draft_body: "%{name} está com a exclusão agendada, então nada pode ser salvo. O texto abaixo é somente leitura. Restaure o segredo para editá-lo de novo, ou descarte o texto."
+    region_mismatch:
+      title: "Esta conexão está em outra região"
+      body: "%{name} pertence a %{region} e a conexão está em %{live}. Esta aba não lê nem grava nada até a conexão voltar para %{region}."
+    footer:
+      value_scope: "Valor visível apenas nesta aba, apagado ao fechar"
+      hint:
+        reveal: "revelar"
+        edit: "editar"
+        roll_back: "reverter"
+    rotation_badge:
+      on: "Rotação ativa"
+      off: "Rotação desativada"
   secret_store:
     title: "%{store} · %{connection}"
     search_placeholder: "A busca roda no cofre; os valores nunca são listados"
@@ -3507,6 +3532,7 @@ document:
       every_days: "A cada %{count} dias"
       every_hours: "A cada %{count} horas"
       on_schedule: "Em agenda"
+      window: "Janela"
       schedule_with_window: "%{schedule} · janela %{window} (%{expression})"
       title: "Rotação"
       status: "Status"
@@ -3531,6 +3557,8 @@ document:
       created: "Criado"
       last_changed: "Última alteração"
       last_retrieved: "Última obtenção"
+      open_in_tab: "Abrir em uma aba"
+      resize: "Redimensionar o painel de detalhes"
     versions:
       title: "Versões"
       history_title: "Histórico"
@@ -3566,6 +3594,7 @@ document:
       arn_loading: "O ARN chega com os detalhes…"
       arn_missing: "O armazenamento não informa um identificador de recurso"
       arn_failed: "Não foi possível carregar os detalhes: %{error}"
+      open_in_tab: "Abrir em uma aba"
     toast:
       value_copied: "Valor copiado para a área de transferência"
       resource_id_copied: "ARN copiado para a área de transferência"
@@ -3638,7 +3667,9 @@ document:
         summary_unversioned: "UTF-8 · %{size}"
         changed_one: "1 linha alterada"
         changed_other: "%{count} linhas alteradas"
+        saving_note: "Salvar cria uma nova versão e a torna atual"
         caret: "Ln %{line}, Col %{column}"
+      changed_elsewhere: "Este segredo mudou em outra visão. Salvar grava uma nova versão sobre ele."
       hint_formatted: "Salvar grava uma nova versão e a torna a atual. Formatado grava de volta em uma única linha um valor armazenado em uma linha, e um valor armazenado em várias linhas como está aqui; Bruto salva o texto exatamente como está aqui."
       mode:
         formatted: "Formatado"
@@ -3723,7 +3754,6 @@ document:
       unfinished_title: "Uma rotação cancelada deixou a versão %{version} pendente"
       unfinished_body: "Verifique as credenciais da versão %{version} e depois mova ou remova sua etapa pendente. Até lá, uma rotação posterior pode ser recusada."
     tags_edit:
-      short: "Editar"
       button: "Editar tags"
       title: "Editar as tags de %{name}"
       lead: "Alterar uma tag não toca no valor nem em nenhuma versão."
@@ -3738,7 +3768,6 @@ document:
       no_change: "Nenhuma tag difere das que o segredo tem."
       duplicate: "A chave %{key} aparece em mais de uma linha."
     description_edit:
-      short: "Editar"
       button: "Editar descrição"
       title: "Editar a descrição de %{name}"
       label: "Descrição"

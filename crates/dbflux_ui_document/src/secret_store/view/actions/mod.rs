@@ -25,6 +25,7 @@ mod tags;
 
 use super::editor::write_failure_to_user_facing;
 use super::{DetailsState, SecretView, SecretViewEvent};
+use crate::secret_store::changes::SecretChangeKind;
 use crate::secret_store::write::{
     SecretOperation, SecretWriteFailure, SecretWriteFailureKind, WriteContext, WriteTarget,
     store_unavailable_failure,
@@ -126,7 +127,7 @@ impl<T> Landing<T> {
 
 /// What a landed write changed, which decides what the view reloads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::secret_store) enum WriteEffect {
+pub(crate) enum WriteEffect {
     /// The versions of the secret: the shown value is stale.
     Versions,
 
@@ -139,7 +140,7 @@ pub(in crate::secret_store) enum WriteEffect {
 
 impl SecretView {
     /// Whether a write dialog is open over the host.
-    pub fn dialog_is_open(&self) -> bool {
+    pub(crate) fn dialog_is_open(&self) -> bool {
         self.dialog.is_some()
     }
 
@@ -149,7 +150,7 @@ impl SecretView {
     }
 
     /// Whether a governed write is in flight.
-    pub fn write_in_flight(&self) -> bool {
+    pub(crate) fn write_in_flight(&self) -> bool {
         self.write_in_flight
     }
 
@@ -213,11 +214,14 @@ impl SecretView {
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<WriteSession> {
-        if self.region_switch_blocks_writes(cx) || self.editor_save_blocks_writes(cx) {
+        if self.region_switch_blocks_writes(cx)
+            || self.editor_save_blocks_writes(cx)
+            || self.region_mismatch(cx)
+        {
             return None;
         }
 
-        let connected = self.app_state.read(cx).connections().get(&self.profile_id);
+        let connected = self.live_profile(cx);
 
         let Some(connected) = connected else {
             self.missing_connection_reported = true;
@@ -361,10 +365,7 @@ impl SecretView {
 
     /// Reads the selected secret again from the live session: its details,
     /// its history and its listing row.
-    pub(in crate::secret_store) fn refresh_selection_for_session(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn refresh_selection_for_session(&mut self, cx: &mut Context<Self>) {
         let Some(name) = self.name.clone() else {
             return;
         };
@@ -425,17 +426,27 @@ impl SecretView {
     /// the secret are read again when it is still the selection, and the
     /// listing is reloaded in place so a row's rotation, description or
     /// deletion date follows the store.
-    pub(in crate::secret_store) fn refresh_after_write(
+    pub(crate) fn refresh_after_write(
         &mut self,
         name: &str,
         effect: WriteEffect,
         cx: &mut Context<Self>,
     ) {
+        // The other views learn what was written to `name`, which the
+        // selection may no longer be.
+        self.announce_change(name, self.change_kind_of(name, effect), cx);
+
         if effect == WriteEffect::Removed {
             self.forget_removed_secret(name, cx);
         } else if self.is_for(name) {
             if effect == WriteEffect::Versions {
-                self.clear_value();
+                // A deletion or a restore keeps a draft (read-only while the
+                // secret is pending); the value it was opened from goes.
+                if self.has_unsaved_value_edits(cx) && self.has_confirmed_deletion_state(name) {
+                    self.follow_external_change(cx);
+                } else {
+                    self.clear_value();
+                }
             }
 
             self.describe(name.to_string(), cx);
@@ -462,7 +473,10 @@ impl SecretView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.region_switch_blocks_writes(cx) || self.editor_save_blocks_writes(cx) {
+        if self.region_switch_blocks_writes(cx)
+            || self.editor_save_blocks_writes(cx)
+            || self.region_mismatch(cx)
+        {
             return;
         }
 
@@ -489,7 +503,7 @@ impl SecretView {
     }
 
     /// Closes the dialog without writing, and hands the keyboard back.
-    pub fn close_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_dialog(&mut self, cx: &mut Context<Self>) {
         if self.dialog_is_submitting() {
             return;
         }
@@ -600,7 +614,7 @@ impl SecretView {
     ///
     /// Returns whether the confirmed dialog is the host's own (New secret),
     /// which the host sends itself; every other dialog is sent from here.
-    pub fn confirm_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn confirm_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.dialog_is_submitting() || !self.dialog_pin_holds(cx) {
             return false;
         }
@@ -619,10 +633,7 @@ impl SecretView {
         false
     }
 
-    pub(in crate::secret_store) fn render_write_dialog(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    pub(crate) fn render_write_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let dialog = self.dialog.as_ref()?;
 
         Some(match dialog {

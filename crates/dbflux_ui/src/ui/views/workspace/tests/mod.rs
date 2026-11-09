@@ -18,6 +18,7 @@ use std::rc::Rc;
 mod close_flush;
 mod document_focus;
 mod secret_edit;
+mod secret_open;
 mod sidebar_seam;
 
 fn new_workspace(

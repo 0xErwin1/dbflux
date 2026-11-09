@@ -73,6 +73,18 @@ impl SecretStoreDocument {
             ));
         }
 
+        if matches!(self.selected, Some(SecretRowKey::Secret(_))) {
+            actions.push(
+                view::callback_action(
+                    &target,
+                    "secret-open-in-tab",
+                    "document.secret_store.context_menu.open_in_tab",
+                    Self::open_selected_in_tab,
+                )
+                .icon(AppIcon::Maximize2),
+            );
+        }
+
         if matches!(self.selected, Some(SecretRowKey::Path(_))) {
             actions.push(view::callback_action(
                 &target,

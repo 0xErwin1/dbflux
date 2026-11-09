@@ -159,6 +159,11 @@ impl SecretStoreDocument {
             Box::new(move |cx| e.read(cx).status_segments(cx))
         });
 
+        pane.take_pending_open_secret = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.update(cx, |d, _cx| d.take_pending_open_secret()))
+        });
+
         pane.navigate_secret_path = Some({
             let e = entity.clone();
             Box::new(move |path, cx| e.update(cx, |d, cx| d.navigate_to(path, cx)))
