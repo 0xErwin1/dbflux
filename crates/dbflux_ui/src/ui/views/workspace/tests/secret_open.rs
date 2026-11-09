@@ -307,6 +307,55 @@ fn the_e_key_in_the_listing_opens_the_tab_with_the_editor(cx: &mut TestAppContex
     assert!(is_drawn(window, "secret-value-editor-save"));
 }
 
+/// The pane's Edit value opens, or focuses, the secret's tab with the editor
+/// active: the value is retrieved there through the audited path first, the
+/// side pane never hosts the editor, and the editor is not drawn until then.
+#[gpui::test]
+fn edit_value_in_the_pane_opens_the_tab_with_the_editor(cx: &mut TestAppContext) {
+    let (opened, window) = open_listing(cx);
+    select(&opened, window, PLAINTEXT);
+    assert!(!is_drawn(window, "secret-value-editor-save"));
+
+    click(window, "secret-action-edit-value");
+
+    assert_eq!(tab_count(&opened, window), 2);
+    assert!(
+        is_drawn(window, "secret-value-editor-save"),
+        "the new tab shows the editor"
+    );
+
+    // The same press again focuses the tab that exists; nothing opens twice.
+    let listing_id = window.update(|_, cx| opened.listing.read(cx).id());
+    window.update(|_, cx| {
+        opened.workspace.update(cx, |workspace, cx| {
+            workspace
+                .tab_manager
+                .update(cx, |manager, cx| manager.activate(listing_id, cx));
+        })
+    });
+    window.run_until_parked();
+    click(window, "secret-action-edit-value");
+
+    assert_eq!(tab_count(&opened, window), 2);
+}
+
+/// `e` on the listing does the same through the workspace's own dispatch.
+#[gpui::test]
+fn the_e_key_in_the_listing_opens_the_tab_with_the_editor(cx: &mut TestAppContext) {
+    let (opened, window) = open_listing(cx);
+    select(&opened, window, PLAINTEXT);
+
+    window.update(|window, cx| {
+        opened.workspace.update(cx, |workspace, cx| {
+            workspace.dispatch(crate::keymap::Command::EditValue, window, cx);
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(tab_count(&opened, window), 2);
+    assert!(is_drawn(window, "secret-value-editor-save"));
+}
+
 /// Presses the drawn element `id` the way UI automation and a screen reader
 /// do: a press and a release at its centre, with no frame drawn afterwards.
 /// What the press asks for must happen from the event itself, not from the
@@ -332,6 +381,8 @@ fn press_without_a_frame(window: &mut gpui::VisualTestContext, id: &str) {
             cx,
         );
     });
+    // The bridge waits for a drawn frame between the press and the release.
+    window.update(|window, cx| window.draw(cx).clear(cx));
     window.update(|window, cx| {
         window.dispatch_event(
             gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
