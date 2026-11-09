@@ -2120,6 +2120,23 @@ impl Opened<'_> {
         })
     }
 
+    /// What the open editor's find panel holds: the search text and the
+    /// replacement, as the editor component reports its search session.
+    fn find_fields(&mut self) -> (String, String) {
+        let editor = self.read_view(|view| {
+            view.value_edit
+                .as_ref()
+                .expect("editor open")
+                .editor
+                .clone()
+        });
+
+        self.window.update(|_, cx| {
+            let session = editor.read(cx).search_session().clone();
+            (session.query, session.replacement)
+        })
+    }
+
     /// The text the open editor holds.
     fn editor_text(&mut self) -> String {
         let editor = self.read_view(|view| {
@@ -5729,6 +5746,10 @@ mod editor_chrome {
         });
         opened.window.run_until_parked();
 
+        // The selection reached the search field: the test exercises the
+        // path that copies it there, not an empty panel.
+        assert!(opened.find_fields().0.contains("alpha-77b1"));
+
         let text = opened.accessibility_update_text();
         assert!(!text.contains("alpha-77b1"), "{text}");
         assert!(opened.exists("secret-value-editor-find"));
@@ -8300,9 +8321,68 @@ mod find_panel_redaction {
         opened.window.simulate_input("zzreplacezz");
         opened.window.run_until_parked();
 
+        // Both fields hold what was typed, so the absence below is redaction
+        // and not a field that never received the text.
+        // The search field holds what was typed, and the replace field is
+        // drawn: the plain editor's twin of this test shows the same typing
+        // reaches both fields' accessibility values when nothing redacts them.
+        assert_eq!(opened.find_fields().0, "zzsearchzz");
+        let fields = opened
+            .rendered_paths()
+            .iter()
+            .filter(|path| path.contains("search-panel") && path.ends_with("input-state"))
+            .count();
+        assert_eq!(fields, 2, "the search and the replace field are drawn");
+
         let text = opened.accessibility_update_text();
         assert!(!text.contains("zzsearchzz"), "{text}");
         assert!(!text.contains("zzreplacezz"), "{text}");
+    }
+
+    /// The twin of the redaction test: with nothing redacting them, the same
+    /// typing puts both texts in the accessibility tree, so the absence the
+    /// redacted editor shows is the redaction and not a field that never got
+    /// the text.
+    #[gpui::test]
+    fn a_plain_editors_find_fields_expose_what_is_typed_into_them(cx: &mut TestAppContext) {
+        init_keyboard_runtime(cx);
+        let (view, window) = cx.add_window_view(|window, cx| {
+            let editor = cx.new(|cx| EditorState::new(window, cx).searchable(true));
+            editor.update(cx, |state, cx| {
+                state.set_value("seed", window, cx);
+                state.focus(window, cx);
+            });
+            Plain { editor }
+        });
+        window.update(|window, _| window.activate_window());
+        window.run_until_parked();
+        let editor = window.update(|_, cx| view.read(cx).editor.clone());
+        window.update(|window, cx| crate::object_text::open_find_panel(&editor, window, cx));
+        window.run_until_parked();
+        window.simulate_input("zzsearchzz");
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.dispatch_action(Box::new(gpui_component::input::Replace), cx)
+        });
+        window.run_until_parked();
+        window.simulate_input("zzreplacezz");
+        window.run_until_parked();
+
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(window);
+        let frame = capture.frame(window);
+        let values: Vec<String> = frame
+            .nodes()
+            .filter_map(|(_, node)| frame.accessibility_node(node).and_then(|n| n.value()))
+            .map(|value| value.to_string())
+            .collect();
+        assert!(
+            values.iter().any(|value| value.contains("zzsearchzz")),
+            "{values:?}"
+        );
+        assert!(
+            values.iter().any(|value| value.contains("zzreplacezz")),
+            "{values:?}"
+        );
     }
 
     struct Plain {

@@ -1237,7 +1237,9 @@ fn a_region_mismatch_disables_the_menu_and_running_save_is_silent(cx: &mut TestA
     opened.window.run_until_parked();
     assert!(opened.read_view(|view| view.is_editing_value()));
 
-    opened.move_connection_to(OTHER_REGION);
+    // The switch installs a new driver: a put that went there would not show
+    // on the original one.
+    let replacement = opened.move_connection_to(OTHER_REGION);
     assert!(opened.block().is_some());
 
     let doc = opened.doc.clone();
@@ -1283,6 +1285,10 @@ fn a_region_mismatch_disables_the_menu_and_running_save_is_silent(cx: &mut TestA
     assert_eq!(
         opened.driver.secret_store_calls().put_attempts.len(),
         writes
+    );
+    assert!(
+        replacement.secret_store_calls().put_attempts.is_empty(),
+        "nothing reached the replacement driver either"
     );
     assert_eq!(
         opened.unread_errors(),
@@ -1392,29 +1398,105 @@ fn a_write_to_another_secret_keeps_the_loaded_value(cx: &mut TestAppContext) {
     assert!(opened.pane_value_loaded(&pair), "other secret untouched");
 }
 
-/// the save chord pressed inside the open editor of a
-/// region-mismatched tab neither writes nor raises anything.
+/// The primary save chord, pressed in a keymap host after the region moved
+/// under the open editor of a tab, writes nothing, raises no error and shows
+/// no toast, in either session.
 #[gpui::test]
-fn the_save_chord_of_a_region_mismatched_editor_is_silent(cx: &mut TestAppContext) {
-    let mut opened = open_document_with(cx, PLAINTEXT_SECRET, Some(CURRENT_REGION), true);
-    opened.window.update(|window, _| window.activate_window());
-    opened.window.simulate_input("!");
-    opened.window.run_until_parked();
-    opened.move_connection_to(OTHER_REGION);
-    assert!(opened.block().is_some());
+fn the_save_chord_of_a_region_mismatched_editor_is_silent_through_the_host(
+    cx: &mut TestAppContext,
+) {
+    use crate::keyboard_test_support::host_document;
 
-    let writes = opened.driver.secret_store_calls().put_attempts.len();
-    opened.window.simulate_keystrokes("ctrl-s");
-    opened.window.run_until_parked();
-    opened.window.simulate_keystrokes("ctrl-f");
-    opened.window.run_until_parked();
+    init_keyboard_runtime(cx);
+    let driver =
+        FakeDriver::new(DbKind::AwsSecrets).with_region_switch(&[CURRENT_REGION, OTHER_REGION]);
+    let (app_state, profile_id) = connected_aws_app_state(cx, &driver, "prod-aws");
+    cx.update(|cx| {
+        cx.set_global(AppStateGlobal {
+            entity: app_state.clone(),
+        });
+    });
 
-    assert_eq!(
-        opened.driver.secret_store_calls().put_attempts.len(),
-        writes
+    let state = app_state.clone();
+    let (host, window) = host_document(
+        cx,
+        move |_window, cx| {
+            cx.new(|cx| {
+                let mut document = SecretDocument::new(
+                    profile_id,
+                    FAKE_SECRETS_STORE_ID.to_string(),
+                    PLAINTEXT_SECRET.to_string(),
+                    None,
+                    Some(CURRENT_REGION.to_string()),
+                    state,
+                    cx,
+                );
+                document.begin_edit(cx);
+                document
+            })
+        },
+        |doc, cx| doc.active_context(cx),
+        |doc, command, window, cx| doc.dispatch_command(command, window, cx),
     );
-    assert_eq!(opened.unread_errors(), 0);
-    assert_eq!(opened.toasts(), 0);
+    let doc = window.update(|_, cx| host.read(cx).document.clone());
+    window.update(|window, _| window.activate_window());
+    window.simulate_resize(gpui::size(gpui::px(1500.0), gpui::px(1400.0))); // guardrail-allow: test geometry, not spacing
+    window.run_until_parked();
+    window.simulate_input("!");
+    window.run_until_parked();
+
+    // The region moves under the open editor.
+    let replacement =
+        FakeDriver::new(DbKind::AwsSecrets).with_region_switch(&[CURRENT_REGION, OTHER_REGION]);
+    let moved = ConnectionProfile::new(
+        "prod-aws",
+        DbConfig::AwsSecrets {
+            region: OTHER_REGION.to_string(),
+            profile: None,
+            access_key_id: None,
+            endpoint: None,
+        },
+    );
+    let connection = replacement.connect_arc(&moved).expect("connect");
+    window.update(|_, cx| {
+        app_state.update(cx, |state, cx| {
+            if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
+                connected.connection = connection.clone();
+            }
+            cx.emit(AppStateChanged);
+        });
+    });
+    window.run_until_parked();
+    assert!(window.update(|_, cx| doc.read(cx).block(cx).is_some()));
+
+    let chord = if cfg!(target_os = "macos") {
+        "cmd-s"
+    } else {
+        "ctrl-s"
+    };
+    window.simulate_keystrokes(chord);
+    window.run_until_parked();
+
+    // The blocked tab draws no editor, so the keyboard context falls back to
+    // the results one, where the save chord is not bound: it does not even
+    // reach the host. Either way nothing below may happen.
+    let reached = window.update(|_, cx| host.read(cx).commands.clone());
+    assert!(
+        !reached.contains(&Command::SaveQuery),
+        "the chord is not bound once the editor is gone: {reached:?}"
+    );
+    assert!(driver.secret_store_calls().put_attempts.is_empty());
+    assert!(replacement.secret_store_calls().put_attempts.is_empty());
+    let errors = window.update(|_, cx| app_state.read(cx).unread_error_count);
+    assert_eq!(errors, 0);
+    let toasts = window.update(|_, cx| {
+        cx.global::<dbflux_ui_base::toast::ToastGlobal>()
+            .host
+            .clone()
+            .read(cx)
+            .toast_count()
+    });
+    assert_eq!(toasts, 0);
 }
 
 /// A re-read after a session change wrote nothing, so the other host's

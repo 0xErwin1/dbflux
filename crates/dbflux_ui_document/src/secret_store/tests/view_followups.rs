@@ -958,6 +958,10 @@ fn a_disconnect_emits_no_user_error_event(cx: &mut TestAppContext) {
 fn a_view_bound_to_another_region_sees_no_connection(cx: &mut TestAppContext) {
     let mut opened = open_with_regions(cx, &[OTHER_REGION, CURRENT_REGION]);
     opened.open_secret(KEY_VALUE_SECRET);
+    // A dirty editor, so Save has something to refuse.
+    opened.update_view(|view, cx| view.retrieve_selected_value(cx));
+    opened.start_edit();
+    opened.set_editor_text(r#"{"changed": 1}"#);
 
     opened.update_view(|view, cx| view.set_region_pin(Some(OTHER_REGION.to_string()), cx));
 
@@ -968,12 +972,20 @@ fn a_view_bound_to_another_region_sees_no_connection(cx: &mut TestAppContext) {
 
     let reads_before = opened.driver.secret_store_calls().value_requests.len();
     opened.update_view(|view, cx| view.retrieve_selected_value(cx));
-    assert!(opened.read_view(|view| matches!(view.value(), ValueState::NotLoaded)));
     assert_eq!(
         opened.driver.secret_store_calls().value_requests.len(),
-        reads_before
+        reads_before,
+        "no read while the view is bound elsewhere"
     );
     assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+
+    // Save is refused before anything is sent, and silently: the view says
+    // the connection is elsewhere, Save adds no error of its own (the
+    // retrieval above is what reported one).
+    let reported_before = opened.reported_errors().len();
+    opened.update_view(|view, cx| view.save_value_edit(cx));
+    assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+    assert_eq!(opened.reported_errors().len(), reported_before);
 
     opened.update_view(|view, cx| view.set_region_pin(Some(CURRENT_REGION.to_string()), cx));
     assert!(opened.read_view(|view| view.can_retrieve_value()));
