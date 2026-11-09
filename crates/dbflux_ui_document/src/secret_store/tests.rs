@@ -7521,6 +7521,105 @@ mod editor_review {
         );
     }
 
+    /// With Vim mode on, the editor starts in Normal mode: `j` moves instead
+    /// of typing, `i` inserts, the first Escape returns to Normal and keeps
+    /// the keyboard in the editor, and the second leaves it.
+    #[gpui::test]
+    fn vim_mode_edits_the_secret_and_escape_steps_out(cx: &mut TestAppContext) {
+        use dbflux_app::keymap::ContextId;
+
+        let mut opened = open_hosted(cx);
+        opened
+            .window
+            .update(|_, cx| dbflux_components::vim::set_vim_enabled(cx, true));
+        start(&mut opened, "abc\ndef", "abc\ndef");
+
+        opened.window.simulate_keystrokes("j");
+        opened.window.run_until_parked();
+        assert_eq!(
+            opened.editor_text(),
+            "abc\ndef",
+            "`j` moved, it did not type"
+        );
+
+        opened.window.simulate_keystrokes("i");
+        opened.window.simulate_input("X");
+        opened.window.run_until_parked();
+        assert!(opened.editor_text().contains('X'));
+
+        opened.window.simulate_keystrokes("escape");
+        opened.window.run_until_parked();
+        assert_eq!(
+            opened.read_cx(|doc, cx| doc.active_context(cx)),
+            ContextId::TextInput,
+            "the first Escape only leaves Insert mode"
+        );
+        opened.window.simulate_keystrokes("x");
+        opened.window.run_until_parked();
+        assert_eq!(opened.editor_text(), "abc\ndef", "`x` deleted the typed X");
+
+        opened.window.simulate_keystrokes("escape");
+        opened.window.run_until_parked();
+        assert_eq!(
+            opened.read_cx(|doc, cx| doc.active_context(cx)),
+            ContextId::Results,
+            "Escape in Normal mode leaves the editor"
+        );
+    }
+
+    /// Turning the setting off updates an open editor at once: keys type
+    /// again.
+    #[gpui::test]
+    fn vim_mode_follows_the_setting_live_in_the_secret_editor(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        opened
+            .window
+            .update(|_, cx| dbflux_components::vim::set_vim_enabled(cx, true));
+        start(&mut opened, "abc", "abc");
+
+        opened
+            .window
+            .update(|_, cx| dbflux_components::vim::set_vim_enabled(cx, false));
+        opened.window.run_until_parked();
+        opened.window.simulate_input("j");
+        opened.window.run_until_parked();
+        assert!(opened.editor_text().contains('j'), "typed with Vim off");
+        let typed = opened.editor_text();
+
+        opened
+            .window
+            .update(|_, cx| dbflux_components::vim::set_vim_enabled(cx, true));
+        opened.window.run_until_parked();
+        opened.window.simulate_keystrokes("l");
+        opened.window.run_until_parked();
+        assert_eq!(opened.editor_text(), typed, "`l` moved, it did not type");
+    }
+
+    /// The save chord pressed in Normal mode writes through the gates.
+    #[gpui::test]
+    fn the_save_chord_in_vim_normal_mode_writes(cx: &mut TestAppContext) {
+        let mut opened = open_hosted(cx);
+        opened
+            .window
+            .update(|_, cx| dbflux_components::vim::set_vim_enabled(cx, true));
+        start(&mut opened, "abc", "abc");
+
+        opened.window.simulate_keystrokes("i");
+        opened.window.simulate_input("X");
+        opened.window.simulate_keystrokes("escape");
+        opened.window.run_until_parked();
+        let typed = opened.editor_text();
+        assert_ne!(typed, "abc");
+
+        opened.window.simulate_keystrokes(save_chord());
+        opened.window.run_until_parked();
+
+        assert_eq!(
+            opened.written_values(),
+            vec![(PLAINTEXT_SECRET.to_string(), typed)]
+        );
+    }
+
     /// Focus inside the Find input is still the editor: the context stays
     /// the text input's and the chord still saves.
     #[gpui::test]
