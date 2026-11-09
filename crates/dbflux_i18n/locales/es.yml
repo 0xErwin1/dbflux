@@ -3425,7 +3425,7 @@ document:
     retry: "Reintentar"
     removed:
       title: "Este secreto fue eliminado"
-      body: "%{name} ya no está en el almacén. Esta pestaña no lee ni escribe nada; ciérrala, o vuelve a crear el secreto para verlo aquí."
+      body: "%{name} ya no está en el almacén. Esta pestaña no lee ni escribe nada. Ciérrala y abre el secreto de nuevo si se vuelve a crear."
       draft_title: "Eliminado: se conserva tu texto sin guardar"
       draft_body: "%{name} fue eliminado, así que no se puede guardar nada. El texto de abajo es de solo lectura; copia lo que necesites y luego descártalo."
     region_mismatch:

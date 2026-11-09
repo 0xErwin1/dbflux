@@ -3425,7 +3425,7 @@ document:
     retry: "Retry"
     removed:
       title: "This secret was deleted"
-      body: "%{name} is no longer in the store. Nothing is read or written from this tab; close it, or create the secret again to see it here."
+      body: "%{name} is no longer in the store. Nothing is read or written from this tab. Close it, and open the secret again if it is recreated."
       draft_title: "Deleted — your unsaved text is kept"
       draft_body: "%{name} was deleted, so nothing can be saved. The text below is read-only; copy what you need, then discard it."
     region_mismatch:

@@ -402,9 +402,9 @@ A read-only delete does not change the clipboard.
 | `/` | Focus search/filter |
 | `x` | Delete row |
 | `r` | Rename / edit |
-| `e` | Edit the value of the selected secret in the AWS Secrets document: retrieves the value first when it is not loaded (the retrieval is audited), then opens the editor; only when it can be edited (plaintext, not managed by another service, not scheduled for deletion, in a store that accepts writes) |
+| `e` | Edit the value of the selected secret in the AWS Secrets document: retrieves the value first when it is not loaded (the retrieval is audited when auditing is on; with auditing off, or when the audit write fails, it can succeed without a record), then opens the editor; only when it can be edited (plaintext, not managed by another service, not scheduled for deletion, in a store that accepts writes) |
 | `b` | Roll the selected secret back to its most recent earlier version in the AWS Secrets document (asks first; only in a store with staging labels, for a secret not managed by another service and not scheduled for deletion) |
-| `m` → Open in tab | Open the selected secret of the AWS Secrets document in its own tab (also the expand button of the details pane and the row menu's Open in tab). In that tab `e`, `b`, `x` and `F5` act on its one secret as they do in the listing. A tab whose region differs from the connection's, or whose secret was deleted, reads and writes nothing and says why Edit value (`e`) in the listing opens that tab with the editor active, retrieving the value first (audited) when it is not loaded. |
+| `m` → Open in tab | Open the selected secret of the AWS Secrets document in its own tab (also the expand button of the details pane and the row menu's Open in tab). In that tab `e`, `b`, `x` and `F5` act on its one secret as they do in the listing. A tab whose region differs from the connection's, or whose secret was deleted, starts no read or write and says why (a save already in flight is not cancelled and may still land on the previous region). Edit value (`e`) in the listing opens that tab with the editor active, retrieving the value first when it is not loaded (audited when auditing is on). |
 | `o` | Add row |
 | `y` | Copy row |
 | `i` | Toggle the record view (one row, field per line) |
