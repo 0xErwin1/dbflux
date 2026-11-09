@@ -493,6 +493,16 @@ impl SecretView {
             if let Some(edit) = &mut self.value_edit {
                 edit.changed_elsewhere = true;
             }
+
+            // The text stays, but the value it was opened from is stale:
+            // Discard returns to "Value not loaded" and Copy value waits for
+            // a new audited retrieval.
+            self.value_generation = self.value_generation.wrapping_add(1);
+            self.value = ValueState::NotLoaded;
+            self.value_version = None;
+            self.value_inputs.clear();
+            self.value_input_masks.clear();
+            self.value_inputs_view = None;
             cx.notify();
             return;
         }

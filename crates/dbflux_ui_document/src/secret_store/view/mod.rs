@@ -77,8 +77,11 @@ pub(crate) enum VersionsState {
 /// What a view tells its host.
 pub(crate) enum SecretViewEvent {
     /// A write or a follow-up read changed what the listing shows for the
-    /// secret: the host reloads its listing in place.
-    ReloadListing,
+    /// secret: the host reloads its listing in place. `written` is set when
+    /// a write caused it, which is the only case the other views of the
+    /// secret are told about: a re-read after a session change wrote
+    /// nothing, so what they hold is not stale.
+    ReloadListing { written: bool },
 
     /// A store call finished, for the host's status bar.
     StoreCalled(CallTiming),

@@ -8259,3 +8259,97 @@ mod details_design {
         );
     }
 }
+
+// -- The find panel of a redacted editor ---------------------------------------
+
+mod find_panel_redaction {
+    use super::*;
+    use gpui::{IntoElement, ParentElement as _, Render, Styled as _, Window, div};
+    use gpui_component::input::{Editor, EditorState};
+
+    const SECRETISH: &str = "alpha-77b1";
+
+    /// the replace field of a redacted editor's find panel withholds what
+    /// is typed into it.
+    #[gpui::test]
+    fn the_find_panels_replace_field_stays_out_of_the_tree(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.window.update(|window, _| window.activate_window());
+        opened.window.run_until_parked();
+        opened.select(PLAINTEXT_SECRET);
+        opened.show_value("seed");
+        opened.start_edit();
+        opened.set_editor_text("seed");
+
+        let doc = opened.doc.clone();
+        opened.window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.view
+                    .update(cx, |view, cx| view.find_in_value(window, cx))
+            })
+        });
+        opened.window.run_until_parked();
+        opened.window.simulate_input("zzsearchzz");
+        opened.window.run_until_parked();
+        opened.window.update(|window, cx| {
+            window.dispatch_action(Box::new(gpui_component::input::Replace), cx)
+        });
+        opened.window.run_until_parked();
+        opened.window.simulate_input("zzreplacezz");
+        opened.window.run_until_parked();
+
+        let text = opened.accessibility_update_text();
+        assert!(!text.contains("zzsearchzz"), "{text}");
+        assert!(!text.contains("zzreplacezz"), "{text}");
+    }
+
+    struct Plain {
+        editor: Entity<EditorState>,
+    }
+
+    impl Render for Plain {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(Editor::new(&self.editor).h(gpui::px(300.0)))
+        }
+    }
+
+    /// a non-redacted editor still fills the find field
+    /// from the selection (the value is exposed twice: editor + search field).
+    #[gpui::test]
+    fn a_plain_editor_still_fills_find_from_the_selection(cx: &mut TestAppContext) {
+        init_keyboard_runtime(cx);
+        let (view, window) = cx.add_window_view(|window, cx| {
+            let editor = cx.new(|cx| EditorState::new(window, cx).searchable(true));
+            editor.update(cx, |state, cx| {
+                state.set_value(SECRETISH, window, cx);
+                state.focus(window, cx);
+            });
+            Plain { editor }
+        });
+        window.update(|window, _| window.activate_window());
+        window.run_until_parked();
+        window.simulate_keystrokes("ctrl-a");
+        window.run_until_parked();
+        let editor = window.update(|_, cx| view.read(cx).editor.clone());
+        window.update(|window, cx| crate::object_text::open_find_panel(&editor, window, cx));
+        window.run_until_parked();
+
+        let capture = dbflux_ui_base::keyboard_coverage::FrameCapture::observe(window);
+        let frame = capture.frame(window);
+        let values: Vec<String> = frame
+            .nodes()
+            .filter_map(|(_, node)| frame.accessibility_node(node).and_then(|n| n.value()))
+            .map(|value| value.to_string())
+            .collect();
+        let hits = values
+            .iter()
+            .filter(|value| value.contains(SECRETISH))
+            .count();
+        assert!(
+            hits >= 2,
+            "editor and search field both expose it: {values:?}"
+        );
+    }
+}

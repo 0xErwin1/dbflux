@@ -335,7 +335,7 @@ impl SecretView {
                 }
 
                 // The other views of the secret learn what was written.
-                cx.emit(SecretViewEvent::ReloadListing);
+                cx.emit(SecretViewEvent::ReloadListing { written: true });
             }
             Err(failure) => {
                 self.report_seam_write_failure(write_failure_to_user_facing(&failure), cx);

@@ -367,7 +367,7 @@ impl SecretView {
                 crate::secret_store::HistoryLoad::Automatic,
                 cx,
             );
-            cx.emit(SecretViewEvent::ReloadListing);
+            cx.emit(SecretViewEvent::ReloadListing { written: true });
         }
 
         true

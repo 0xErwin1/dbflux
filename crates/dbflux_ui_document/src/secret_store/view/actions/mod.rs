@@ -364,17 +364,14 @@ impl SecretView {
 
     /// Reads the selected secret again from the live session: its details,
     /// its history and its listing row.
-    pub(in crate::secret_store) fn refresh_selection_for_session(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn refresh_selection_for_session(&mut self, cx: &mut Context<Self>) {
         let Some(name) = self.name.clone() else {
             return;
         };
 
         self.describe(name.clone(), cx);
         self.request_versions(name, crate::secret_store::HistoryLoad::Automatic, cx);
-        cx.emit(SecretViewEvent::ReloadListing);
+        cx.emit(SecretViewEvent::ReloadListing { written: false });
     }
 
     /// After a reconnect that kept the region, the selection still describes
@@ -391,7 +388,7 @@ impl SecretView {
             && let Some(name) = self.name.clone()
         {
             self.describe(name, cx);
-            cx.emit(SecretViewEvent::ReloadListing);
+            cx.emit(SecretViewEvent::ReloadListing { written: false });
         }
     }
 
@@ -449,7 +446,7 @@ impl SecretView {
             );
         }
 
-        cx.emit(SecretViewEvent::ReloadListing);
+        cx.emit(SecretViewEvent::ReloadListing { written: true });
         cx.notify();
     }
 

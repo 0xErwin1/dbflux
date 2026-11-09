@@ -1328,3 +1328,135 @@ fn a_region_mismatch_disables_the_menu_and_running_save_is_silent(cx: &mut TestA
     });
     assert_eq!(opened.toasts(), 0, "no toast: {toast:?}");
 }
+
+fn audited_retrievals(opened: &mut Opened<'_>) -> usize {
+    opened
+        .audit_actions()
+        .iter()
+        .filter(|action| action.as_str() == "secret_value_retrieved")
+        .count()
+}
+
+/// a dirty follower keeps its text; once it discards, the value it
+/// shows must not be the stale one it retrieved before the write.
+#[gpui::test]
+fn a_dirty_follower_shows_no_stale_value_after_discard(cx: &mut TestAppContext) {
+    let mut opened = open_document_with(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION), true);
+    let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+    opened.window.simulate_keystrokes("ctrl-a");
+    opened.window.simulate_input("{\"changed\": 1}");
+    opened.window.run_until_parked();
+
+    rotate_in_pane(&mut opened, &pair);
+    assert!(opened.read_view(|view| view.is_editing_value()));
+
+    let doc = opened.doc.clone();
+    opened.window.update(|_, cx| {
+        let view = doc.read(cx).view().clone();
+        view.update(cx, |view, cx| view.discard_value_edit(cx));
+    });
+    opened.window.run_until_parked();
+
+    assert!(!opened.read_view(|view| view.is_editing_value()));
+    assert!(
+        !opened.tab_value_loaded(),
+        "after discard the tab still shows the value retrieved before the write"
+    );
+}
+
+/// the dirty follower's save lands, then the pane (the writer of the
+/// rotation) follows the tab's save in turn.
+#[gpui::test]
+fn a_dirty_followers_save_is_followed_by_the_other_host(cx: &mut TestAppContext) {
+    let mut opened = open_document_with(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION), true);
+    let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+    opened.window.simulate_keystrokes("ctrl-a");
+    opened.window.simulate_input("{\"changed\": 2}");
+    opened.window.run_until_parked();
+    rotate_in_pane(&mut opened, &pair);
+
+    opened.pane_view(&pair, |view, cx| view.retrieve_selected_value(cx));
+    assert!(opened.pane_value_loaded(&pair));
+
+    let puts = opened.driver.secret_store_calls().put_requests.len();
+    opened.click("secret-value-editor-save");
+    assert_eq!(
+        opened.driver.secret_store_calls().put_requests.len(),
+        puts + 1
+    );
+    assert!(!opened.is_drawn("secret-value-editor-changed-elsewhere"));
+    assert!(
+        !opened.pane_value_loaded(&pair),
+        "pane follows the tab's save"
+    );
+    assert_eq!(opened.unread_errors(), 0);
+}
+
+/// the re-retrieval after a follow is audited exactly once.
+#[gpui::test]
+fn retrieving_after_following_a_change_is_audited_once(cx: &mut TestAppContext) {
+    let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+    opened.click("secret-retrieve-value");
+    let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+    rotate_in_pane(&mut opened, &pair);
+    assert!(!opened.tab_value_loaded());
+
+    let before = audited_retrievals(&mut opened);
+    opened.click("secret-retrieve-value");
+    assert!(opened.tab_value_loaded());
+    assert_eq!(audited_retrievals(&mut opened), before + 1);
+}
+
+/// a write to another secret leaves the pane's loaded value
+/// of a different secret alone.
+#[gpui::test]
+fn a_write_to_another_secret_keeps_the_loaded_value(cx: &mut TestAppContext) {
+    let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+    opened.click("secret-retrieve-value");
+    let pair = opened.open_listing_pane(PLAINTEXT_SECRET);
+    assert!(opened.pane_value_loaded(&pair));
+
+    rotate_in_tab(&mut opened);
+
+    assert!(opened.pane_value_loaded(&pair), "other secret untouched");
+}
+
+/// the save chord pressed inside the open editor of a
+/// region-mismatched tab neither writes nor raises anything.
+#[gpui::test]
+fn the_save_chord_of_a_region_mismatched_editor_is_silent(cx: &mut TestAppContext) {
+    let mut opened = open_document_with(cx, PLAINTEXT_SECRET, Some(CURRENT_REGION), true);
+    opened.window.update(|window, _| window.activate_window());
+    opened.window.simulate_input("!");
+    opened.window.run_until_parked();
+    opened.move_connection_to(OTHER_REGION);
+    assert!(opened.block().is_some());
+
+    let writes = opened.driver.secret_store_calls().put_attempts.len();
+    opened.window.simulate_keystrokes("ctrl-s");
+    opened.window.run_until_parked();
+    opened.window.simulate_keystrokes("ctrl-f");
+    opened.window.run_until_parked();
+
+    assert_eq!(
+        opened.driver.secret_store_calls().put_attempts.len(),
+        writes
+    );
+    assert_eq!(opened.unread_errors(), 0);
+    assert_eq!(opened.toasts(), 0);
+}
+
+/// A re-read after a session change wrote nothing, so the other host's
+/// loaded value is not stale and stays.
+#[gpui::test]
+fn a_re_read_that_wrote_nothing_keeps_the_other_hosts_value(cx: &mut TestAppContext) {
+    let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+    opened.click("secret-retrieve-value");
+    let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+    assert!(opened.tab_value_loaded());
+
+    opened.pane_view(&pair, |view, cx| view.refresh_selection_for_session(cx));
+
+    assert!(opened.tab_value_loaded(), "no write, no drop");
+    assert!(opened.pane_value_loaded(&pair));
+}

@@ -288,8 +288,10 @@ impl SecretDocument {
                 self.removed = true;
                 self.announce(name.clone(), SecretChangeKind::Removed, cx);
             }
-            SecretViewEvent::ReloadListing => {
-                self.announce(self.name.clone(), SecretChangeKind::Changed, cx);
+            SecretViewEvent::ReloadListing { written } => {
+                if *written {
+                    self.announce(self.name.clone(), SecretChangeKind::Changed, cx);
+                }
             }
             SecretViewEvent::CloseRequested => cx.emit(DocumentEvent::RequestClose),
             SecretViewEvent::StoreCalled(_)

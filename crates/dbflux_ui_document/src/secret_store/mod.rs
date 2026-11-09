@@ -800,10 +800,10 @@ impl SecretStoreDocument {
         cx: &mut Context<Self>,
     ) {
         match event {
-            SecretViewEvent::ReloadListing => {
+            SecretViewEvent::ReloadListing { written } => {
                 self.reload_listing_in_place(cx);
 
-                if let Some(name) = self.view.read(cx).name().map(str::to_string) {
+                if *written && let Some(name) = self.view.read(cx).name().map(str::to_string) {
                     self.announce(name, changes::SecretChangeKind::Changed, cx);
                 }
             }
