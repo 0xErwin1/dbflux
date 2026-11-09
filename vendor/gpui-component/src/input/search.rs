@@ -64,6 +64,9 @@ pub(super) struct SearchPanel<M: crate::input::overlay::OverlayMode> {
     replace_input: Entity<InputState>,
     session: gpui_base::input::SearchSession,
     input_width: Pixels,
+    /// Set while the host input is redacted: the search and replace fields
+    /// then withhold their text from the accessibility tree and the frame.
+    redacted: bool,
 
     _subscriptions: Vec<Subscription>,
 }
@@ -71,6 +74,10 @@ pub(super) struct SearchPanel<M: crate::input::overlay::OverlayMode> {
 impl<M: crate::input::overlay::OverlayMode> SearchPanel<M> {
     pub(super) fn replace_mode(&self) -> bool {
         self.session.replace_mode
+    }
+
+    pub(super) fn set_redacted(&mut self, redacted: bool) {
+        self.redacted = redacted;
     }
 
     pub(super) fn sync_session(&mut self, session: &gpui_base::input::SearchSession) {
@@ -117,6 +124,7 @@ impl<M: crate::input::overlay::OverlayMode> SearchPanel<M> {
                 replace_input,
                 session: gpui_base::input::SearchSession::default(),
                 input_width: Pixels::ZERO,
+                redacted: false,
                 _subscriptions,
             }
         })
@@ -376,6 +384,7 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                             .gap_1()
                             .child(
                                 Input::new(&self.search_input)
+                                    .redacted(self.redacted)
                                     .focus_bordered(false)
                                     .suffix(
                                         Button::new("case-insensitive")
@@ -462,6 +471,7 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                         .gap_2()
                         .child(
                             Input::new(&self.replace_input)
+                                .redacted(self.redacted)
                                 .focus_bordered(false)
                                 .small()
                                 .w(self.input_width)

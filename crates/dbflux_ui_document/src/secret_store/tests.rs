@@ -5709,6 +5709,29 @@ mod editor_chrome {
         assert!(opened.exists("secret-value-editor-find"));
     }
 
+    /// Find over a selection copies the selection into the panel's search
+    /// field; that field must not carry it into the accessibility tree either.
+    #[gpui::test]
+    fn find_over_a_selection_leaves_the_value_out_of_the_tree(cx: &mut TestAppContext) {
+        let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+        opened.edit_text(THREE, THREE);
+        opened.window.simulate_keystrokes("ctrl-a");
+        opened.window.run_until_parked();
+
+        let doc = opened.doc.clone();
+        opened.window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.view
+                    .update(cx, |view, cx| view.find_in_value(window, cx))
+            })
+        });
+        opened.window.run_until_parked();
+
+        let text = opened.accessibility_update_text();
+        assert!(!text.contains("alpha-77b1"), "{text}");
+        assert!(opened.exists("secret-value-editor-find"));
+    }
+
     /// Focus decides the context, not a flag a keystroke sets: after Escape
     /// leaves the editor, a click back into it restores the editor's chords
     /// with no key in between.
