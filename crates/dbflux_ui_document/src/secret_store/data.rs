@@ -169,9 +169,14 @@ impl SecretStoreDocument {
         let applied = match result {
             Ok(page) => {
                 let count = page.entries.len();
+                let read_rows = page.entries.clone();
                 let applied = self.listing.apply_page(generation, page);
 
                 if applied {
+                    self.view.update(cx, |view, cx| {
+                        view.observe_listed_rows(&read_rows, generation, cx)
+                    });
+
                     self.last_call = Some(CallTiming {
                         call: StoreCall::List {
                             count,

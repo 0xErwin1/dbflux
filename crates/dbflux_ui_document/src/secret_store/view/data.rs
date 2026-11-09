@@ -90,6 +90,16 @@ impl SecretView {
 
         self.drop_confirmations_of_replaced_session(cx);
 
+        // A describe read from a session the profile no longer holds says
+        // nothing of the new one: its date, or its absence, must not reach the
+        // new connection's state. Read again from the live session instead.
+        if self.connection(cx).is_some() && !self.details_session_is_live(cx) {
+            self.describe(name.to_string(), cx);
+            cx.emit(SecretViewEvent::ReloadListing);
+            cx.notify();
+            return;
+        }
+
         if let Ok(details) = &result {
             self.observe_described(&details.summary, generation);
         }

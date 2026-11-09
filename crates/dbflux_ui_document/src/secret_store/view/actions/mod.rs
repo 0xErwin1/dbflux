@@ -343,6 +343,7 @@ impl SecretView {
     /// the view is not touched beyond closing its dialog.
     fn land_on_replaced_session<T>(&mut self, landing: Landing<T>, cx: &mut Context<Self>) {
         self.dismiss_dialog(cx);
+        self.adopt_details_session(cx);
 
         match landing {
             Landing::Done(_) => self.report_write_warning(
@@ -384,10 +385,17 @@ impl SecretView {
 
         // The history follows the connection on its own
         // (`adopt_connection_session`); only the details and the row are left.
-        if stale
-            && !self.write_in_flight
-            && let Some(name) = self.name.clone()
-        {
+        if stale && self.write_in_flight {
+            // The read waits for the write, but what was loaded from a
+            // previous session must not stay on screen meanwhile; the write's
+            // landing reads again. Details that were never read hold nothing
+            // to drop.
+            if self.details_session.take().is_some() {
+                self.details_generation = self.details_generation.wrapping_add(1);
+                self.details = DetailsState::Loading;
+                cx.notify();
+            }
+        } else if stale && let Some(name) = self.name.clone() {
             self.describe(name, cx);
             cx.emit(SecretViewEvent::ReloadListing);
         }

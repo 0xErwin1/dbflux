@@ -1136,3 +1136,117 @@ fn a_scheduled_delete_without_a_date_toasts_a_scheduled_message(cx: &mut TestApp
         dbflux_i18n::t!("document.secret_store.delete.done", name = KEY_VALUE_SECRET)
     );
 }
+
+// -- The confirmed deletion, fourth round ---------------------------------------
+
+/// Every row a listing page returns counts for the override, not only the
+/// selected secret's: a restore reload that returns A while B is selected
+/// still leaves A's listing agreeing.
+#[gpui::test]
+fn a_listing_page_is_observed_for_every_row_it_returns(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    let scheduled = opened.stale_row(true);
+    let active = opened.stale_row(false);
+    opened.confirm_restore(PENDING_DELETION_SECRET);
+    opened.select(KEY_VALUE_SECRET);
+
+    let generation = opened.listing_generation();
+    let doc = opened.doc.clone();
+    opened.window.update(|_, cx| {
+        doc.update(cx, |doc, cx| {
+            let page = dbflux_core::SecretListPage {
+                entries: vec![active.clone()],
+                child_paths: Vec::new(),
+                next_page_token: None,
+            };
+            doc.apply_list(generation, Ok(page), 0, cx)
+        })
+    });
+
+    opened.select(PENDING_DELETION_SECRET);
+    opened.land_stale_describe(false);
+
+    assert!(
+        opened.row_reads_as_pending(&scheduled),
+        "listing and describe both agreed with the restore, so the override ended"
+    );
+}
+
+/// A describe read from a session the profile has since replaced is not
+/// applied: it is read again from the live one.
+#[gpui::test]
+fn a_describe_from_a_replaced_session_is_not_applied(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    let mut details = opened
+        .read_view(|view| match view.details() {
+            DetailsState::Loaded(details) => Some((**details).clone()),
+            _ => None,
+        })
+        .expect("loaded details");
+    details.summary.deletion_scheduled_for = Some(dbflux_core::chrono::Utc::now());
+    let doc = opened.doc.clone();
+
+    let generation = opened.window.update(|_, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, cx| {
+            view.describe(PENDING_DELETION_SECRET.to_string(), cx);
+            view.details_generation
+        })
+    });
+    let _other_account = opened.replace_connection();
+    opened.window.update(|_, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, cx| {
+            view.confirm_restored(PENDING_DELETION_SECRET, cx);
+            view.apply_details(generation, PENDING_DELETION_SECRET, Ok(details), 0, cx)
+        })
+    });
+
+    assert!(
+        opened.read_view(|view| matches!(view.details(), DetailsState::Loading)),
+        "the previous session's describe must not become the details"
+    );
+
+    opened.window.run_until_parked();
+    assert!(opened.read_view(|view| matches!(view.details(), DetailsState::Loaded(_))));
+    assert!(opened.update_view(|view, cx| view.details_session_is_live(cx)));
+}
+
+/// A session change while a write is in flight cannot leave the previous
+/// session's details on screen; the write's landing reads them again.
+#[gpui::test]
+fn a_session_change_during_a_write_invalidates_the_loaded_details(cx: &mut TestAppContext) {
+    let mut opened = open(cx, FAKE_SECRETS_STORE_ID, None);
+    opened.load_everything();
+    opened.open_secret(PENDING_DELETION_SECRET);
+    assert!(opened.read_view(|view| matches!(view.details(), DetailsState::Loaded(_))));
+    let doc = opened.doc.clone();
+
+    opened.window.update(|_, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, cx| view.restore_selected(cx));
+    });
+    assert!(opened.read_view(|view| view.write_in_flight()));
+
+    let _other_account = opened.replace_connection();
+    opened.window.update(|_, cx| {
+        let view = doc.read(cx).view.clone();
+        view.update(cx, |view, cx| {
+            view.begin_connection_change(cx);
+            view.finish_connection_change(cx);
+        })
+    });
+
+    assert!(
+        opened.read_view(|view| matches!(view.details(), DetailsState::Loading)),
+        "details of the previous session stayed loaded"
+    );
+
+    opened.window.run_until_parked();
+    assert!(opened.read_view(|view| matches!(view.details(), DetailsState::Loaded(_))));
+    assert!(opened.update_view(|view, cx| view.details_session_is_live(cx)));
+}
