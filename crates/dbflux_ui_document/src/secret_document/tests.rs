@@ -2110,7 +2110,7 @@ mod review_round_focus {
         assert!(opened.command(Command::Cancel), "focus leaves the editor");
         opened.window.run_until_parked();
         assert_eq!(
-            opened.doc.read_with_active_context(&mut opened.window),
+            opened.doc.read_with_active_context(opened.window),
             ContextId::Results
         );
 
@@ -2121,7 +2121,7 @@ mod review_round_focus {
         opened.window.run_until_parked();
 
         assert_eq!(
-            opened.doc.read_with_active_context(&mut opened.window),
+            opened.doc.read_with_active_context(opened.window),
             ContextId::TextInput,
             "the editor has the keyboard again"
         );
