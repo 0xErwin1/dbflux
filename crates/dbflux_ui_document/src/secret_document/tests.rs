@@ -1084,22 +1084,6 @@ impl Opened<'_> {
         result
     }
 
-    fn tab_view_update<R>(
-        &mut self,
-        f: impl FnOnce(
-            &mut crate::secret_store::SecretView,
-            &mut gpui::Context<crate::secret_store::SecretView>,
-        ) -> R,
-    ) -> R {
-        let doc = self.doc.clone();
-        let result = self.window.update(|_, cx| {
-            let view = doc.read(cx).view().clone();
-            view.update(cx, f)
-        });
-        self.window.run_until_parked();
-        result
-    }
-
     fn pane_value_loaded(&mut self, pair: &Pair) -> bool {
         self.pane_view(pair, |view, _| {
             matches!(view.value(), ValueState::Loaded(_))

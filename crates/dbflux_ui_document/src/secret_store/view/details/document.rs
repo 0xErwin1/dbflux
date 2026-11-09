@@ -118,7 +118,6 @@ impl SecretView {
         let theme = cx.theme();
         let border = theme.border;
         let warning = theme.warning;
-        let danger = theme.danger;
         let strong = ChromeColors::strong(theme);
         let muted = theme.muted_foreground;
         let rotating = summary
@@ -141,7 +140,6 @@ impl SecretView {
                     )
                 }
             });
-        let has_resource_id = !self.hierarchical();
 
         div()
             .id("secret-document-header")
@@ -185,39 +183,54 @@ impl SecretView {
             .children(
                 chip.map(|(label, tone)| Badge::new(label, tone).id("secret-document-rotation")),
             )
-            .when(has_resource_id, |header| {
-                header.child(
-                    Button::new(
-                        "secret-document-copy-arn",
-                        dbflux_i18n::t!("document.secret_store.action.copy_resource_id"),
-                    )
-                    .icon(AppIcon::Copy)
-                    .tab_stop(false)
-                    .on_click(cx.listener(|this, _, _, cx| this.copy_resource_id(cx))),
-                )
-            })
-            .child(
+            .children(self.document_header_actions(cx))
+    }
+
+    /// Copy ARN (when the store has one), Refresh and Delete.
+    fn document_header_actions(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let danger = cx.theme().danger;
+        let mut actions = Vec::new();
+
+        if !self.hierarchical() {
+            actions.push(
                 Button::new(
-                    "secret-document-refresh",
-                    dbflux_i18n::t!("document.secret_store.toolbar.refresh"),
+                    "secret-document-copy-arn",
+                    dbflux_i18n::t!("document.secret_store.action.copy_resource_id"),
                 )
-                .icon(AppIcon::RefreshCcw)
+                .icon(AppIcon::Copy)
                 .tab_stop(false)
-                .disabled(!self.connection_present)
-                .on_click(cx.listener(|this, _, _, cx| this.refresh_shown(cx))),
+                .on_click(cx.listener(|this, _, _, cx| this.copy_resource_id(cx)))
+                .into_any_element(),
+            );
+        }
+
+        actions.push(
+            Button::new(
+                "secret-document-refresh",
+                dbflux_i18n::t!("document.secret_store.toolbar.refresh"),
             )
-            .when(self.supports_delete(), |header| {
-                header.child(
-                    Button::new(
-                        "secret-document-delete",
-                        dbflux_i18n::t!("document.secret_store.delete.button"),
-                    )
-                    .icon(AppIcon::Delete)
-                    .text_color(danger)
-                    .tab_stop(false)
-                    .disabled(!self.can_delete_selected())
-                    .on_click(cx.listener(|this, _, window, cx| this.open_delete(window, cx))),
+            .icon(AppIcon::RefreshCcw)
+            .tab_stop(false)
+            .disabled(!self.connection_present)
+            .on_click(cx.listener(|this, _, _, cx| this.refresh_shown(cx)))
+            .into_any_element(),
+        );
+
+        if self.supports_delete() {
+            actions.push(
+                Button::new(
+                    "secret-document-delete",
+                    dbflux_i18n::t!("document.secret_store.delete.button"),
                 )
-            })
+                .icon(AppIcon::Delete)
+                .text_color(danger)
+                .tab_stop(false)
+                .disabled(!self.can_delete_selected())
+                .on_click(cx.listener(|this, _, window, cx| this.open_delete(window, cx)))
+                .into_any_element(),
+            );
+        }
+
+        actions
     }
 }
