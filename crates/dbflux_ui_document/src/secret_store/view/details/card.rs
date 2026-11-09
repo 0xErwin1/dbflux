@@ -4,8 +4,8 @@
 //! builder serves both hosts.
 
 use super::{SecretView, section_title};
-use dbflux_components::primitives::Chamfer;
-use dbflux_components::tokens::{ChamferCut, DocumentMetrics, SecretStoreMetrics};
+use dbflux_components::primitives::{SurfaceRole, surface};
+use dbflux_components::tokens::{DocumentMetrics, SecretStoreMetrics};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -52,16 +52,14 @@ pub(super) fn card(
     rows: Vec<AnyElement>,
     cx: &App,
 ) -> Stateful<Div> {
-    let theme = cx.theme();
-    let fill = theme.popover;
-    let border = theme.border;
+    let border = cx.theme().border;
 
-    div()
+    // The frame is the design system's Card surface; the title row and the
+    // body are this section's own.
+    surface(SurfaceRole::Card, cx)
         .id(id)
-        .relative()
         .flex()
         .flex_col()
-        .child(Chamfer::new(ChamferCut::CARD).fill(fill).border(border))
         .child(
             div()
                 .px(DocumentMetrics::DETAIL_BLOCK_PADDING_X)
