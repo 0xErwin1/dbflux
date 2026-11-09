@@ -754,6 +754,8 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
             "secret-details-close",
             KeyboardPath::Menu("secret-details-close"),
         ),
+        // The pane's resize gutter takes focus and steps with the arrow keys.
+        ("secret-details-grip", KeyboardPath::TabStop),
         // Open in tab, from the pane header and the row menu: the pane
         // action of the same id is the keyboard path of both.
         (
