@@ -52,6 +52,10 @@ pub struct SecretDocument {
     /// on another region, and shows it once the region matches.
     loaded: bool,
     removed: bool,
+    /// A close the unsaved-changes dialog asked for waits for the save it
+    /// started: the tab closes only once that write lands and nothing is left
+    /// unsaved.
+    close_after_save: bool,
     /// An Edit value asked for before the details landed: the editor opens on
     /// the render pass that finds the secret ready, retrieving the value
     /// first (audited) when it is not loaded.
@@ -74,15 +78,18 @@ impl SecretDocument {
         let facts = ConnectionFacts::read(&app_state, profile_id, &store_id, cx);
         let store = facts.descriptor;
 
+        let origin = cx.entity_id();
         let view = cx.new(|cx| {
-            SecretView::new(
+            let mut view = SecretView::new(
                 profile_id,
                 store.clone(),
                 app_state.clone(),
                 Rc::new(Cell::new(false)),
                 ViewHost::Tab,
                 cx,
-            )
+            );
+            view.set_change_origin(origin);
+            view
         });
         view.update(cx, |view, cx| {
             view.set_region_pin(region.clone(), cx);
@@ -116,6 +123,7 @@ impl SecretDocument {
             view,
             loaded: false,
             removed: false,
+            close_after_save: false,
             edit_when_ready: false,
             _subscriptions: subscriptions,
         };
@@ -284,15 +292,10 @@ impl SecretDocument {
         cx: &mut Context<Self>,
     ) {
         match event {
-            SecretViewEvent::Removed { name } => {
-                self.removed = true;
-                self.announce(name.clone(), SecretChangeKind::Removed, cx);
-            }
-            SecretViewEvent::ReloadListing { written } => {
-                if *written {
-                    self.announce(self.name.clone(), SecretChangeKind::Changed, cx);
-                }
-            }
+            SecretViewEvent::Removed => self.removed = true,
+            SecretViewEvent::SaveFinished { succeeded } => self.finish_save(*succeeded, cx),
+            // The view announces its own writes where they land.
+            SecretViewEvent::ReloadListing => {}
             SecretViewEvent::CloseRequested => cx.emit(DocumentEvent::RequestClose),
             SecretViewEvent::StoreCalled(_)
             | SecretViewEvent::DialogOpened
@@ -304,18 +307,57 @@ impl SecretDocument {
         cx.notify();
     }
 
-    fn announce(&self, name: String, kind: SecretChangeKind, cx: &mut Context<Self>) {
-        changes::publish(
-            SecretChange {
-                profile_id: self.profile_id,
-                store_id: self.store.id.clone(),
-                region: self.region.clone(),
-                name,
-                kind,
-                origin: cx.entity_id(),
-            },
-            cx,
-        );
+    /// Reports a finished save to the workspace's close and quit flows. A tab
+    /// asked to close closes only when the write landed and no text is left
+    /// unsaved; any other outcome keeps it open with its text.
+    fn finish_save(&mut self, succeeded: bool, cx: &mut Context<Self>) {
+        let close = std::mem::take(&mut self.close_after_save);
+
+        cx.emit(DocumentEvent::SaveFinished { succeeded });
+
+        if close && succeeded && !self.view.read(cx).has_unsaved_value_edits(cx) {
+            cx.emit(DocumentEvent::RequestClose);
+        }
+    }
+
+    /// Starts the save of a quit or a close the user confirmed, through the
+    /// view's own gates. `false` means nothing was sent: a refusal is already
+    /// reported, no result follows, and the caller keeps the draft.
+    pub fn save_for_quit(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.block(cx).is_some() {
+            return false;
+        }
+
+        self.view
+            .update(cx, |view, cx| view.try_save_value_edit(cx))
+    }
+
+    /// [`Self::save_for_quit`] that also closes the tab once it landed.
+    pub fn save_for_close(&mut self, cx: &mut Context<Self>) -> bool {
+        self.close_after_save = true;
+
+        let started = self.save_for_quit(cx);
+
+        if !started {
+            self.close_after_save = false;
+        }
+
+        started
+    }
+
+    /// What quitting means for the tab: unsaved text needs the user's call,
+    /// because saving it goes through the write gates and may be refused.
+    pub fn quit_disposition(&self, cx: &App) -> crate::pane::QuitDisposition {
+        if self.view.read(cx).has_unsaved_value_edits(cx) {
+            crate::pane::QuitDisposition::NeedsDecision
+        } else {
+            crate::pane::QuitDisposition::Clean
+        }
+    }
+
+    /// Drops the draft for a quit the user confirmed without saving it.
+    pub fn discard_for_quit(&mut self, cx: &mut Context<Self>) {
+        self.view.update(cx, |view, cx| view.discard_value_edit(cx));
     }
 
     /// Asks for the value editor: it opens as soon as the secret is ready,

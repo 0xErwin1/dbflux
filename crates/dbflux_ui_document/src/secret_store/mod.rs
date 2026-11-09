@@ -53,7 +53,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use uuid::Uuid;
 pub(crate) use view::{DetailsState, SecretView, VersionsState};
-pub(crate) use view::{SecretViewEvent, ViewHost};
+pub(crate) use view::{SecretViewEvent, ViewHost, WriteEffect, land_save_answer};
 
 /// A request to open one secret in its own tab, raised by the listing and
 /// drained by the workspace. The region is the one the listing is loaded
@@ -262,15 +262,18 @@ impl SecretStoreDocument {
         subscriptions.push(Self::watch_app_state(&app_state, cx));
 
         let region_switch_in_flight = Rc::new(Cell::new(false));
+        let origin = cx.entity_id();
         let view = cx.new(|cx| {
-            SecretView::new(
+            let mut view = SecretView::new(
                 profile_id,
                 descriptor.clone(),
                 app_state.clone(),
                 region_switch_in_flight.clone(),
                 ViewHost::Pane,
                 cx,
-            )
+            );
+            view.set_change_origin(origin);
+            view
         });
         // The view redraws itself on its own state; the document draws it.
         subscriptions.push(cx.observe(&view, |_, _, cx| cx.notify()));
@@ -800,18 +803,11 @@ impl SecretStoreDocument {
         cx: &mut Context<Self>,
     ) {
         match event {
-            SecretViewEvent::ReloadListing { written } => {
-                self.reload_listing_in_place(cx);
-
-                if *written && let Some(name) = self.view.read(cx).name().map(str::to_string) {
-                    self.announce(name, changes::SecretChangeKind::Changed, cx);
-                }
-            }
+            SecretViewEvent::ReloadListing => self.reload_listing_in_place(cx),
+            // The listing has no close or quit flow of a secret to report.
+            SecretViewEvent::SaveFinished { .. } => {}
             SecretViewEvent::StoreCalled(timing) => self.last_call = Some(*timing),
-            SecretViewEvent::Removed { name } => {
-                self.selected = None;
-                self.announce(name.clone(), changes::SecretChangeKind::Removed, cx);
-            }
+            SecretViewEvent::Removed => self.selected = None,
             SecretViewEvent::DialogOpened => self.drop_context_menu(),
             SecretViewEvent::DialogClosed => {
                 // The event is delivered after the update that closed the

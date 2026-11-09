@@ -18,6 +18,7 @@ use gpui::{App, AppContext as _, Context};
 
 use super::{EditMode, parses_as_json};
 use crate::object_text::db_error_to_user_facing;
+use crate::secret_store::changes::SecretChangeKind;
 use crate::secret_store::view::{DetailsState, SecretView, SecretViewEvent, ValueState};
 use crate::secret_store::write::{
     SecretOperation, SecretWriteFailure, SecretWriteFailureKind, WriteTarget, put_secret_value,
@@ -33,6 +34,37 @@ struct ValueWriteSession {
     driver_id: String,
 }
 
+/// Lands the answer of a save on its view and, when the write may have
+/// landed, announces it from the scope captured at send time. The
+/// announcement does not go through the view: a tab closed mid-write has
+/// nobody left to forward it.
+pub(crate) fn land_save_answer(
+    entity: &gpui::Entity<SecretView>,
+    scope: &crate::secret_store::changes::ChangeScope,
+    generation: u64,
+    name: &str,
+    result: Result<SecretValue, SecretWriteFailure>,
+    saved_on: &Arc<dyn Connection>,
+    cx: &mut App,
+) {
+    let may_have_landed = match &result {
+        Ok(_) => true,
+        Err(failure) => matches!(
+            failure.kind,
+            SecretWriteFailureKind::AuditLost | SecretWriteFailureKind::Indeterminate
+        ),
+    };
+
+    entity.update(cx, |view, cx| {
+        view.editor_save_in_flight = false;
+        view.apply_value_write(generation, name, result, saved_on, cx);
+    });
+
+    if may_have_landed {
+        scope.publish(name, SecretChangeKind::Changed, cx);
+    }
+}
+
 impl SecretView {
     /// Saves the edited text as a new version through the governed seam. A
     /// save whose text is unchanged is a no-op, the secret's latest details
@@ -40,22 +72,35 @@ impl SecretView {
     /// store kept as JSON must still parse as JSON — as any JSON, in the
     /// layout the user typed; the gate checks the type, not the shape.
     pub(crate) fn save_value_edit(&mut self, cx: &mut Context<Self>) {
+        self.try_save_value_edit(cx);
+    }
+
+    /// [`Self::save_value_edit`], reporting whether a save is under way: one
+    /// this call started, or one already in flight, whose answer the caller
+    /// will see as [`SecretViewEvent::SaveFinished`]. `false` means nothing
+    /// was sent (a gate refused it, or there was nothing to save), and no
+    /// `SaveFinished` follows.
+    pub(crate) fn try_save_value_edit(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(edit) = &self.value_edit else {
-            return;
+            return false;
         };
 
+        if edit.removed {
+            return false;
+        }
+
         if edit.saving {
-            return;
+            return true;
         }
 
         if self.save_waits_for_another_write(cx) {
-            return;
+            return false;
         }
 
         let text = edit.text_to_write(edit.editor.read(cx).value().as_str());
 
         if !edit.is_changed(cx) {
-            return;
+            return false;
         }
 
         let stored_is_json = edit.stored_is_json;
@@ -66,11 +111,11 @@ impl SecretView {
                 UserFacingError::new(ErrorKind::User, reason).with_severity(EventSeverity::Warn),
                 cx,
             );
-            return;
+            return false;
         }
 
         let Some(session) = self.value_write_session(&value_connection, cx) else {
-            return;
+            return false;
         };
 
         if let Some(error) = stored_is_json
@@ -87,14 +132,15 @@ impl SecretView {
                 ),
                 cx,
             );
-            return;
+            return false;
         }
 
         let Some(name) = self.selected_summary().map(|summary| summary.name.clone()) else {
-            return;
+            return false;
         };
 
         self.send_value_write(session, name, text, cx);
+        true
     }
 
     /// Another write is in flight: a save out of an editor that is gone
@@ -186,9 +232,15 @@ impl SecretView {
         let generation = self.value_write_generation;
         let entity = cx.entity().clone();
         let request = SecretPutRequest::text(name.clone(), text);
+        // Captured now: the announcement of a write that may have landed must
+        // not depend on the view or its tab being alive when the answer comes.
+        let scope = self.change_scope(saved_on.current_region(), cx);
 
         if let Some(edit) = &mut self.value_edit {
             edit.saving = true;
+            // Saving writes over whatever changed elsewhere before this point;
+            // a change that arrives from here on is a new one.
+            edit.changed_elsewhere = false;
         }
         self.editor_save_in_flight = true;
         cx.notify();
@@ -226,10 +278,7 @@ impl SecretView {
             let result = task.await;
 
             cx.update(|cx| {
-                entity.update(cx, |view, cx| {
-                    view.editor_save_in_flight = false;
-                    view.apply_value_write(generation, &name, result, &saved_on, cx);
-                });
+                land_save_answer(&entity, &scope, generation, &name, result, &saved_on, cx);
             });
         })
         .detach();
@@ -251,15 +300,34 @@ impl SecretView {
         saved_on: &Arc<dyn Connection>,
         cx: &mut Context<Self>,
     ) {
+        let succeeded = result.is_ok();
+
+        self.land_value_write(generation, name, result, saved_on, cx);
+        cx.emit(SecretViewEvent::SaveFinished { succeeded });
+    }
+
+    fn land_value_write(
+        &mut self,
+        generation: u64,
+        name: &str,
+        result: Result<SecretValue, SecretWriteFailure>,
+        saved_on: &Arc<dyn Connection>,
+        cx: &mut Context<Self>,
+    ) {
         let is_current = generation == self.value_write_generation && self.is_for(name);
 
         // The save ran on the session captured when it started. If the
         // connection was replaced since, the displayed value and the editor
         // belong to whatever the user sees now: nothing of them is touched,
         // the unsaved text stays, and the user is told where the write went.
-        let replaced = self
-            .connection(cx)
-            .is_some_and(|live| !Arc::ptr_eq(&live, saved_on));
+        // A connection the view cannot see is a replaced session when the
+        // profile is connected on another region (the view is bound to one);
+        // a profile with no connection at all is a disconnect, which the
+        // view reports on its own.
+        let replaced = match self.connection(cx) {
+            Some(live) => !Arc::ptr_eq(&live, saved_on),
+            None => self.region_mismatch(cx),
+        };
 
         if replaced {
             match result {
@@ -282,10 +350,23 @@ impl SecretView {
         match result {
             Ok(written) => {
                 if is_current {
-                    self.value = ValueState::Loaded(Box::new(
-                        crate::secret_store::RetrievedValue::new(&written),
-                    ));
-                    self.value_session = Some(saved_on.clone());
+                    // Another view changed the secret while this save was in
+                    // flight: the answer cannot say which write came last, so
+                    // what it carries is not shown as current.
+                    let stale = self
+                        .value_edit
+                        .as_ref()
+                        .is_some_and(|edit| edit.changed_elsewhere);
+
+                    if stale {
+                        self.value = ValueState::NotLoaded;
+                        self.value_session = None;
+                    } else {
+                        self.value = ValueState::Loaded(Box::new(
+                            crate::secret_store::RetrievedValue::new(&written),
+                        ));
+                        self.value_session = Some(saved_on.clone());
+                    }
                     // The saved text is the current version now, whatever
                     // version the pane was showing.
                     self.value_version = None;
@@ -311,7 +392,6 @@ impl SecretView {
                                 edit.mode = EditMode::Raw;
                             }
                             edit.saving = false;
-                            edit.changed_elsewhere = false;
                         }
                     } else {
                         self.value_edit = None;
@@ -334,8 +414,7 @@ impl SecretView {
                     );
                 }
 
-                // The other views of the secret learn what was written.
-                cx.emit(SecretViewEvent::ReloadListing { written: true });
+                cx.emit(SecretViewEvent::ReloadListing);
             }
             Err(failure) => {
                 self.report_seam_write_failure(write_failure_to_user_facing(&failure), cx);
@@ -345,6 +424,22 @@ impl SecretView {
                         edit.saving = false;
                     }
                     cx.notify();
+                }
+
+                // The store may have taken the write: read the secret again
+                // and let the listing follow. The editor keeps its text.
+                if matches!(
+                    failure.kind,
+                    SecretWriteFailureKind::AuditLost | SecretWriteFailureKind::Indeterminate
+                ) && self.is_for(name)
+                {
+                    self.describe(name.to_string(), cx);
+                    self.request_versions(
+                        name.to_string(),
+                        crate::secret_store::HistoryLoad::Automatic,
+                        cx,
+                    );
+                    cx.emit(SecretViewEvent::ReloadListing);
                 }
             }
         }

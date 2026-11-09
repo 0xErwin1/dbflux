@@ -192,6 +192,27 @@ impl SecretDocument {
             Box::new(move |cx| e.read(cx).pane_actions(&e, cx))
         });
 
+        pane.quit_disposition = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).quit_disposition(cx))
+        });
+
+        pane.save_for_quit = Some({
+            let e = entity.clone();
+            Box::new(move |_w, cx| e.update(cx, |d, cx| d.save_for_quit(cx)))
+        });
+
+        pane.discard_for_quit = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.update(cx, |d, cx| d.discard_for_quit(cx)))
+        });
+
+        // The close dialog's Save: the tab closes once the write lands.
+        pane.save_for_close = Some({
+            let e = entity.clone();
+            Box::new(move |_w, cx| e.update(cx, |d, cx| d.save_for_close(cx)))
+        });
+
         pane.status_segments = Some({
             let e = entity.clone();
             Box::new(move |cx| e.read(cx).status_segments(cx))

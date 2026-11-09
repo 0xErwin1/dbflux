@@ -11,7 +11,7 @@ use dbflux_components::controls::Button;
 use dbflux_components::fonts;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{
-    Badge, BadgeTone, Chamfer, SegmentedControl, SegmentedItem, Text,
+    Badge, BadgeTone, BannerBlock, BannerVariant, Chamfer, SegmentedControl, SegmentedItem, Text,
 };
 use dbflux_components::tokens::{ChamferCut, DocumentMetrics, SecretStoreMetrics};
 use dbflux_components::vim::VimBinding;
@@ -118,7 +118,7 @@ impl SecretView {
         let saving = edit.saving;
         let toggle = self
             .edit_mode()
-            .map(|mode| self.render_edit_mode_toggle(mode, saving, cx));
+            .map(|mode| self.render_edit_mode_toggle(mode, saving || edit.removed, cx));
         let save_shortcut = dbflux_ui_base::effective_keymap()
             .shortcut_for_command(self.host_context, Command::SaveQuery);
 
@@ -128,7 +128,7 @@ impl SecretView {
         )
         .primary()
         .tab_stop(false)
-        .disabled(unchanged || saving)
+        .disabled(unchanged || saving || edit.removed)
         .on_click(cx.listener(|this, _, _, cx| this.save_value_edit(cx)));
 
         if let Some(shortcut) = save_shortcut {
@@ -237,7 +237,7 @@ impl SecretView {
             .bg(background)
             .child(
                 edit.vim
-                    .editor(saving)
+                    .editor(saving || edit.removed)
                     .redacted(true)
                     .appearance(false)
                     .w_full()
@@ -389,7 +389,7 @@ impl SecretView {
     /// The tab while a value is edited, as artboard 06 draws it: one header
     /// row (name, type, where it lives, "modified", and the controls), the
     /// editor taking the rest of the tab, and a status bar. Nothing else.
-    pub(in crate::secret_store) fn render_tab_editor(
+    pub(crate) fn render_tab_editor(
         &self,
         name: &str,
         subtitle: String,
@@ -399,6 +399,7 @@ impl SecretView {
             return div().flex_1().into_any_element();
         };
 
+        let removed = edit.removed;
         let editor = edit.editor.clone();
         let text = editor.read(cx).value().to_string();
         let line_count = text.split('\n').count();
@@ -461,6 +462,18 @@ impl SecretView {
             .flex()
             .flex_col()
             .child(header)
+            .children(removed.then(|| {
+                div().id("secret-document-removed").child(
+                    BannerBlock::new(
+                        BannerVariant::Warning,
+                        dbflux_i18n::t!("document.secret.removed.draft_title"),
+                    )
+                    .with_body(dbflux_i18n::t!(
+                        "document.secret.removed.draft_body",
+                        name = name
+                    )),
+                )
+            }))
             .child(
                 div()
                     .flex_1()

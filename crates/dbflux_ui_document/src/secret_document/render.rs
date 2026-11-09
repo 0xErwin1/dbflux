@@ -140,7 +140,15 @@ impl Render for SecretDocument {
         let context = self.active_context(cx);
         let subtitle = self.subtitle();
 
+        let draft_kept = self.view.read(cx).is_editing_value();
         let body = match self.block(cx) {
+            // A deleted secret under unsaved text keeps the text on screen,
+            // read-only, under the notice that it was deleted.
+            Some(SecretDocumentBlock::Removed) if draft_kept => {
+                let name = self.name.clone();
+                self.view
+                    .update(cx, |view, cx| view.render_tab_editor(&name, subtitle, cx))
+            }
             Some(block) => self.render_blocked(&block, cx),
             None => self.view.update(cx, |view, cx| {
                 view.render_document_body(context, subtitle, cx)

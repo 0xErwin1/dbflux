@@ -20,6 +20,7 @@ use super::{
 };
 use crate::secret_store::DetailsState;
 use crate::secret_store::SecretOperation;
+use crate::secret_store::changes::SecretChangeKind;
 use crate::secret_store::view::{SecretView, SecretViewEvent};
 use crate::secret_store::write::{rotate_secret_now, update_secret_rotation};
 use dbflux_components::controls::{Checkbox, Input, InputEvent, InputState};
@@ -367,7 +368,8 @@ impl SecretView {
                 crate::secret_store::HistoryLoad::Automatic,
                 cx,
             );
-            cx.emit(SecretViewEvent::ReloadListing { written: true });
+            self.announce_change(name, SecretChangeKind::Changed, cx);
+            cx.emit(SecretViewEvent::ReloadListing);
         }
 
         true

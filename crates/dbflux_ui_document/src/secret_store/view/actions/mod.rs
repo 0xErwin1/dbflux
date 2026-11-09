@@ -25,6 +25,7 @@ mod tags;
 
 use super::editor::write_failure_to_user_facing;
 use super::{DetailsState, SecretView, SecretViewEvent};
+use crate::secret_store::changes::SecretChangeKind;
 use crate::secret_store::write::{
     SecretOperation, SecretWriteFailure, SecretWriteFailureKind, WriteContext, WriteTarget,
     store_unavailable_failure,
@@ -126,7 +127,7 @@ impl<T> Landing<T> {
 
 /// What a landed write changed, which decides what the view reloads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::secret_store) enum WriteEffect {
+pub(crate) enum WriteEffect {
     /// The versions of the secret: the shown value is stale.
     Versions,
 
@@ -371,7 +372,7 @@ impl SecretView {
 
         self.describe(name.clone(), cx);
         self.request_versions(name, crate::secret_store::HistoryLoad::Automatic, cx);
-        cx.emit(SecretViewEvent::ReloadListing { written: false });
+        cx.emit(SecretViewEvent::ReloadListing);
     }
 
     /// After a reconnect that kept the region, the selection still describes
@@ -388,7 +389,7 @@ impl SecretView {
             && let Some(name) = self.name.clone()
         {
             self.describe(name, cx);
-            cx.emit(SecretViewEvent::ReloadListing { written: false });
+            cx.emit(SecretViewEvent::ReloadListing);
         }
     }
 
@@ -425,12 +426,24 @@ impl SecretView {
     /// the secret are read again when it is still the selection, and the
     /// listing is reloaded in place so a row's rotation, description or
     /// deletion date follows the store.
-    pub(in crate::secret_store) fn refresh_after_write(
+    pub(crate) fn refresh_after_write(
         &mut self,
         name: &str,
         effect: WriteEffect,
         cx: &mut Context<Self>,
     ) {
+        // The other views learn what was written to `name`, which the
+        // selection may no longer be.
+        self.announce_change(
+            name,
+            if effect == WriteEffect::Removed {
+                SecretChangeKind::Removed
+            } else {
+                SecretChangeKind::Changed
+            },
+            cx,
+        );
+
         if effect == WriteEffect::Removed {
             self.forget_removed_secret(name, cx);
         } else if self.is_for(name) {
@@ -446,7 +459,7 @@ impl SecretView {
             );
         }
 
-        cx.emit(SecretViewEvent::ReloadListing { written: true });
+        cx.emit(SecretViewEvent::ReloadListing);
         cx.notify();
     }
 

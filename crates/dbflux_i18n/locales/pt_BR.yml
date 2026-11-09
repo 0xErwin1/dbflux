@@ -3425,6 +3425,8 @@ document:
     removed:
       title: "Este segredo foi excluído"
       body: "%{name} não está mais no armazenamento. Esta aba não lê nem grava nada; feche-a ou crie o segredo novamente para vê-lo aqui."
+      draft_title: "Excluído — seu texto não salvo foi mantido"
+      draft_body: "%{name} foi excluído, então nada pode ser salvo. O texto abaixo é somente leitura; copie o que precisar e depois descarte-o."
     region_mismatch:
       title: "Esta conexão está em outra região"
       body: "%{name} pertence a %{region} e a conexão está em %{live}. Esta aba não lê nem grava nada até a conexão voltar para %{region}."

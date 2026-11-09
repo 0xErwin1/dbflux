@@ -80,6 +80,7 @@ use crate::secret_store::write::{
     SecretOperation, SecretWriteFailure, SecretWriteFailureKind, WriteTarget, put_secret_value,
     store_unavailable_failure,
 };
+pub(crate) use save::land_save_answer;
 pub(in crate::secret_store) use save::write_failure_to_user_facing;
 
 /// How the editor lays out a value stored as JSON.
@@ -131,6 +132,10 @@ pub(crate) struct ValueEditState {
     /// text. The text is kept and Save still writes a new version; the
     /// editor says so until it is saved.
     pub(in crate::secret_store) changed_elsewhere: bool,
+
+    /// The secret was deleted while this editor held unsaved text. The text
+    /// stays, read-only, until it is discarded; nothing can be saved.
+    pub(in crate::secret_store) removed: bool,
 
     /// The layout the editor text is in. A value that is not JSON is always
     /// [`EditMode::Raw`].
@@ -468,6 +473,7 @@ impl SecretView {
             vim,
             saving: false,
             changed_elsewhere: false,
+            removed: false,
             mode,
             focused: true,
             focus: handle,

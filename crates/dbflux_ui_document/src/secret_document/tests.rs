@@ -560,44 +560,6 @@ fn a_delete_from_the_document_reflects_in_the_listing(cx: &mut TestAppContext) {
     );
 }
 
-/// A write the document announces makes the listing read the store again.
-#[gpui::test]
-fn a_change_announced_by_the_document_reloads_the_listing(cx: &mut TestAppContext) {
-    let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
-    let (state, profile_id) = (opened.app_state.clone(), opened.profile_id);
-
-    let listing = opened.window.update(|window, cx| {
-        cx.new(|cx| {
-            SecretStoreDocument::new(
-                profile_id,
-                FAKE_SECRETS_STORE_ID.to_string(),
-                None,
-                state,
-                window,
-                cx,
-            )
-        })
-    });
-    opened.window.run_until_parked();
-
-    let lists = |opened: &mut Opened<'_>| opened.driver.secret_store_calls().list_requests.len();
-    let before = lists(&mut opened);
-
-    let doc = opened.doc.clone();
-    opened.window.update(|_, cx| {
-        doc.update(cx, |doc, cx| {
-            doc.announce(KEY_VALUE_SECRET.to_string(), SecretChangeKind::Changed, cx)
-        })
-    });
-    opened.window.run_until_parked();
-
-    assert!(
-        lists(&mut opened) > before,
-        "the listing read the store again"
-    );
-    drop(listing);
-}
-
 /// Every clickable element of the tab has a keyboard path: the tab's own
 /// registry composed with the sections it shares with the listing's pane.
 #[gpui::test]
@@ -1459,4 +1421,427 @@ fn a_re_read_that_wrote_nothing_keeps_the_other_hosts_value(cx: &mut TestAppCont
 
     assert!(opened.tab_value_loaded(), "no write, no drop");
     assert!(opened.pane_value_loaded(&pair));
+}
+
+// -- Review round: notifications, close and quit, deletion under a draft -------
+
+mod review_round {
+    use super::*;
+    use crate::handle::DocumentEvent;
+    use crate::pane::{CloseDisposition, QuitDisposition};
+    use crate::secret_store::{SecretRowKey, WriteEffect};
+    use dbflux_core::DbError;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// Types over the whole editor so the text differs from the stored one.
+    /// The value is JSON, so the edit stays valid JSON to be savable.
+    fn make_dirty(opened: &mut Opened<'_>) {
+        opened.window.simulate_keystrokes("ctrl-a");
+        opened.window.simulate_input("{\"changed\": 1}");
+        opened.window.run_until_parked();
+    }
+
+    fn dirty_tab<'a>(cx: &'a mut TestAppContext) -> Opened<'a> {
+        let mut opened = open_document_with(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION), true);
+        make_dirty(&mut opened);
+        opened
+    }
+
+    fn record_events(opened: &mut Opened<'_>) -> Rc<RefCell<Vec<String>>> {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let doc = opened.doc.clone();
+        let sink = log.clone();
+        opened.window.update(|_, cx| {
+            cx.subscribe(&doc, move |_, event: &DocumentEvent, _| {
+                sink.borrow_mut().push(format!("{event:?}"));
+            })
+            .detach();
+        });
+        log
+    }
+
+    fn failure(
+        kind: crate::secret_store::SecretWriteFailureKind,
+    ) -> crate::secret_store::SecretWriteFailure {
+        crate::secret_store::SecretWriteFailure {
+            error: DbError::Timeout,
+            correlation_id: None,
+            kind,
+            audit_unrecorded: false,
+        }
+    }
+
+    fn select_in_pane(opened: &mut Opened<'_>, pair: &Pair, name: &str) {
+        let listing = pair.listing.clone();
+        let name = name.to_string();
+        opened.window.update(|_, cx| {
+            listing.update(cx, |listing, cx| {
+                listing.select_row(SecretRowKey::Secret(name), cx)
+            })
+        });
+        opened.window.run_until_parked();
+    }
+
+    /// #6: another view's change that arrives while a save is in flight is
+    /// not erased when the save's answer lands.
+    #[gpui::test]
+    fn a_save_answer_keeps_an_external_change_that_arrived_meanwhile(cx: &mut TestAppContext) {
+        let mut opened = dirty_tab(cx);
+        let origin = opened.foreign_origin();
+        let doc = opened.doc.clone();
+        let (profile_id, region) = (opened.profile_id, CURRENT_REGION.to_string());
+
+        opened.window.update(|_, cx| {
+            let view = doc.read(cx).view().clone();
+            view.update(cx, |view, cx| view.save_value_edit(cx));
+            changes::publish(
+                SecretChange {
+                    profile_id,
+                    store_id: FAKE_SECRETS_STORE_ID.to_string(),
+                    region: Some(region),
+                    name: KEY_VALUE_SECRET.to_string(),
+                    kind: SecretChangeKind::Changed,
+                    origin,
+                },
+                cx,
+            );
+        });
+        opened.window.run_until_parked();
+
+        assert!(
+            !opened.tab_value_loaded(),
+            "the invalidation survived the answer"
+        );
+        assert!(
+            !opened.read_view(|view| view.is_saving_value_edit()),
+            "the saving state was released"
+        );
+    }
+
+    /// #7: a region switch that hides the connection while a save is in
+    /// flight is a replaced session: the editor is kept and the user is told.
+    #[gpui::test]
+    fn a_save_answer_after_a_region_switch_keeps_the_editor(cx: &mut TestAppContext) {
+        let mut opened = dirty_tab(cx);
+        let doc = opened.doc.clone();
+
+        opened.window.update(|_, cx| {
+            let view = doc.read(cx).view().clone();
+            view.update(cx, |view, cx| view.save_value_edit(cx));
+        });
+        opened.swap_connection(OTHER_REGION, false);
+        opened.window.run_until_parked();
+
+        assert!(
+            opened.read_view(|view| view.is_editing_value()),
+            "the editor stays: the write landed on the previous session"
+        );
+        assert!(
+            opened
+                .error_summaries()
+                .iter()
+                .any(|summary| summary.contains("previous")),
+            "the user is told where the write went: {:?}",
+            opened.error_summaries()
+        );
+    }
+
+    /// #8: a save that may have landed tells the other views.
+    #[gpui::test]
+    fn a_save_that_may_have_landed_makes_the_other_views_drop_their_value(cx: &mut TestAppContext) {
+        use crate::secret_store::SecretWriteFailureKind::{AuditLost, Indeterminate};
+
+        for kind in [AuditLost, Indeterminate] {
+            let mut opened = open_document_with(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION), true);
+            let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+            make_dirty(&mut opened);
+            assert!(opened.pane_value_loaded(&pair));
+
+            let doc = opened.doc.clone();
+            opened.window.update(|_, cx| {
+                let view = doc.read(cx).view().clone();
+                let (generation, connection, scope) = view.update(cx, |view, cx| {
+                    let connection = view.connection(cx).expect("connected");
+                    let scope = view.change_scope(connection.current_region(), cx);
+                    (view.write_generation_for_test(), connection, scope)
+                });
+                crate::secret_store::land_save_answer(
+                    &view,
+                    &scope,
+                    generation,
+                    KEY_VALUE_SECRET,
+                    Err(failure(kind)),
+                    &connection,
+                    cx,
+                );
+            });
+            opened.window.run_until_parked();
+
+            assert!(!opened.pane_value_loaded(&pair), "{kind:?}");
+            assert!(
+                opened.read_view(|view| view.is_editing_value()),
+                "text kept: {kind:?}"
+            );
+        }
+    }
+
+    /// #9: a write announces the secret it wrote, not whatever the writer has
+    /// selected when the answer lands.
+    #[gpui::test]
+    fn a_write_announces_its_target_not_the_current_selection(cx: &mut TestAppContext) {
+        let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+        opened.click("secret-retrieve-value");
+        let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+        select_in_pane(&mut opened, &pair, PLAINTEXT_SECRET);
+
+        opened.pane_view(&pair, |view, cx| {
+            view.refresh_after_write(KEY_VALUE_SECRET, WriteEffect::Versions, cx)
+        });
+
+        assert!(
+            !opened.tab_value_loaded(),
+            "the tab of the written secret followed"
+        );
+    }
+
+    /// #24: a removal is published even when the writer moved its selection.
+    #[gpui::test]
+    fn a_removal_is_published_when_the_selection_moved(cx: &mut TestAppContext) {
+        let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+        let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+        select_in_pane(&mut opened, &pair, PLAINTEXT_SECRET);
+
+        opened.pane_view(&pair, |view, cx| {
+            view.refresh_after_write(KEY_VALUE_SECRET, WriteEffect::Removed, cx)
+        });
+
+        assert_eq!(opened.block(), Some(SecretDocumentBlock::Removed));
+        let selected = opened
+            .window
+            .update(|_, cx| pair.listing.read(cx).selected().cloned());
+        assert_eq!(
+            selected,
+            Some(SecretRowKey::Secret(PLAINTEXT_SECRET.to_string())),
+            "the new selection is untouched"
+        );
+    }
+
+    /// #16: a write whose tab closed mid-flight still reaches the others.
+    #[gpui::test]
+    fn a_write_landing_after_its_tab_closed_still_announces(cx: &mut TestAppContext) {
+        let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+        let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+        assert!(opened.pane_value_loaded(&pair));
+
+        // A second tab, built outside the window's root so dropping it frees it.
+        let (state, profile_id) = (opened.app_state.clone(), opened.profile_id);
+        let doc = opened.window.update(|_, cx| {
+            cx.new(|cx| {
+                SecretDocument::new(
+                    profile_id,
+                    FAKE_SECRETS_STORE_ID.to_string(),
+                    KEY_VALUE_SECRET.to_string(),
+                    None,
+                    Some(CURRENT_REGION.to_string()),
+                    state,
+                    cx,
+                )
+            })
+        });
+        opened.window.run_until_parked();
+        opened.window.update(|window, cx| {
+            let view = doc.read(cx).view().clone();
+            view.update(cx, |view, cx| {
+                view.rotate_selected_now(window, cx);
+                view.confirm_dialog(window, cx);
+            });
+        });
+        // The tab closes before the answer lands.
+        drop(doc);
+        opened.window.run_until_parked();
+
+        assert!(!opened.pane_value_loaded(&pair), "the pane was told");
+    }
+
+    /// #16: a save whose tab closed before the answer landed still announces
+    /// it, from the scope captured when it was sent.
+    #[gpui::test]
+    fn a_save_landing_after_its_tab_closed_still_announces(cx: &mut TestAppContext) {
+        let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+        let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+        assert!(opened.pane_value_loaded(&pair));
+
+        let (state, profile_id) = (opened.app_state.clone(), opened.profile_id);
+        let doc = opened.window.update(|_, cx| {
+            cx.new(|cx| {
+                SecretDocument::new(
+                    profile_id,
+                    FAKE_SECRETS_STORE_ID.to_string(),
+                    KEY_VALUE_SECRET.to_string(),
+                    None,
+                    Some(CURRENT_REGION.to_string()),
+                    state,
+                    cx,
+                )
+            })
+        });
+        opened.window.run_until_parked();
+        opened.window.update(|window, cx| {
+            let view = doc.read(cx).view().clone();
+            view.update(cx, |view, cx| {
+                view.retrieve_selected_value(cx);
+            });
+            let _ = window;
+        });
+        opened.window.run_until_parked();
+        opened.window.update(|window, cx| {
+            let view = doc.read(cx).view().clone();
+            view.update(cx, |view, cx| {
+                view.start_value_edit(window, cx);
+                view.replace_editor_text("{\"changed\": 3}", window, cx);
+                view.save_value_edit(cx);
+            });
+        });
+        // The tab closes, and its view with it, before the answer lands.
+        drop(doc);
+        opened.window.run_until_parked();
+
+        assert_eq!(opened.driver.secret_store_calls().put_requests.len(), 1);
+        assert!(!opened.pane_value_loaded(&pair), "the pane was told");
+    }
+
+    /// #14: a tab with unsaved edits needs a decision at quit; a clean one
+    /// does not.
+    #[gpui::test]
+    fn a_dirty_tab_needs_a_quit_decision(cx: &mut TestAppContext) {
+        let mut opened = open_document_with(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION), true);
+        let doc = opened.doc.clone();
+        let disposition = |opened: &mut Opened<'_>| {
+            let doc = doc.clone();
+            opened
+                .window
+                .update(|_, cx| SecretDocument::into_pane(doc, cx).quit_disposition(cx))
+        };
+        assert_eq!(disposition(&mut opened), QuitDisposition::Clean);
+
+        make_dirty(&mut opened);
+        assert_eq!(disposition(&mut opened), QuitDisposition::NeedsDecision);
+    }
+
+    /// #14: Save in the quit dialog saves through the normal gates and
+    /// reports the outcome; Discard drops the draft.
+    #[gpui::test]
+    fn the_quit_save_writes_through_the_gates_and_reports_the_outcome(cx: &mut TestAppContext) {
+        let mut opened = dirty_tab(cx);
+        let log = record_events(&mut opened);
+        let doc = opened.doc.clone();
+
+        let started = opened.window.update(|window, cx| {
+            SecretDocument::into_pane(doc.clone(), cx).save_for_quit(window, cx)
+        });
+        opened.window.run_until_parked();
+
+        assert!(started);
+        assert_eq!(opened.driver.secret_store_calls().put_requests.len(), 1);
+        assert!(
+            log.borrow()
+                .iter()
+                .any(|event| event.contains("SaveFinished") && event.contains("true")),
+            "{:?}",
+            log.borrow()
+        );
+        assert!(
+            !log.borrow()
+                .iter()
+                .any(|event| event.contains("RequestClose")),
+            "a quit save does not close the tab"
+        );
+    }
+
+    #[gpui::test]
+    fn the_quit_discard_drops_the_draft(cx: &mut TestAppContext) {
+        let mut opened = dirty_tab(cx);
+        let doc = opened.doc.clone();
+
+        opened
+            .window
+            .update(|_, cx| SecretDocument::into_pane(doc.clone(), cx).discard_for_quit(cx));
+
+        assert!(!opened.read_view(|view| view.is_editing_value()));
+    }
+
+    /// #15: Save in the close dialog writes, then closes the tab.
+    #[gpui::test]
+    fn the_close_save_writes_then_asks_to_close(cx: &mut TestAppContext) {
+        let mut opened = dirty_tab(cx);
+        let log = record_events(&mut opened);
+        let doc = opened.doc.clone();
+
+        let started = opened.window.update(|window, cx| {
+            SecretDocument::into_pane(doc.clone(), cx).save_for_close(window, cx)
+        });
+        opened.window.run_until_parked();
+
+        assert!(started);
+        assert_eq!(opened.driver.secret_store_calls().put_requests.len(), 1);
+        assert!(
+            log.borrow()
+                .iter()
+                .any(|event| event.contains("RequestClose")),
+            "{:?}",
+            log.borrow()
+        );
+    }
+
+    /// #15: a refused save does not start, and the tab stays open.
+    #[gpui::test]
+    fn a_refused_close_save_keeps_the_tab_open(cx: &mut TestAppContext) {
+        let mut opened = dirty_tab(cx);
+        let log = record_events(&mut opened);
+        opened.move_connection_to(OTHER_REGION);
+        let doc = opened.doc.clone();
+
+        let started = opened.window.update(|window, cx| {
+            SecretDocument::into_pane(doc.clone(), cx).save_for_close(window, cx)
+        });
+        opened.window.run_until_parked();
+
+        assert!(!started);
+        assert!(opened.driver.secret_store_calls().put_requests.is_empty());
+        assert!(
+            !log.borrow()
+                .iter()
+                .any(|event| event.contains("RequestClose"))
+        );
+        let _ = CloseDisposition::KeepOpen;
+    }
+
+    /// #10: a deletion under unsaved edits keeps the text, read-only, says so
+    /// and refuses writes; Discard drops it.
+    #[gpui::test]
+    fn a_deleted_secret_keeps_the_unsaved_text_read_only(cx: &mut TestAppContext) {
+        let mut opened = dirty_tab(cx);
+
+        opened.announce(SecretChangeKind::Removed, KEY_VALUE_SECRET);
+
+        assert_eq!(opened.block(), Some(SecretDocumentBlock::Removed));
+        assert!(
+            opened.is_drawn("secret-document-removed"),
+            "says it was deleted"
+        );
+        assert!(
+            opened.read_view(|view| view.is_editing_value()),
+            "the draft is kept"
+        );
+        assert!(opened.is_drawn("secret-value-editor"), "and shown");
+
+        opened.command(Command::SaveQuery);
+        assert!(opened.driver.secret_store_calls().put_attempts.is_empty());
+        assert_eq!(opened.unread_errors(), 0);
+
+        opened.click("secret-value-editor-discard");
+        assert!(!opened.read_view(|view| view.is_editing_value()));
+        assert!(opened.is_drawn("secret-document-removed"));
+    }
 }

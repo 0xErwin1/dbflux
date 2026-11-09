@@ -28,6 +28,35 @@ pub(crate) struct SecretChange {
     pub origin: EntityId,
 }
 
+/// Where a view's changes are announced, captured when a write starts so the
+/// announcement does not depend on the view or its host still being around
+/// when the write lands: the connection, the store, the region the write was
+/// sent to, and the host whose own news it is.
+#[derive(Clone, Debug)]
+pub(crate) struct ChangeScope {
+    pub profile_id: Uuid,
+    pub store_id: String,
+    pub region: Option<String>,
+    pub origin: EntityId,
+}
+
+impl ChangeScope {
+    /// Announces `kind` for `name` within this scope.
+    pub(crate) fn publish(&self, name: &str, kind: SecretChangeKind, cx: &mut App) {
+        publish(
+            SecretChange {
+                profile_id: self.profile_id,
+                store_id: self.store_id.clone(),
+                region: self.region.clone(),
+                name: name.to_string(),
+                kind,
+                origin: self.origin,
+            },
+            cx,
+        );
+    }
+}
+
 impl SecretChange {
     /// Whether the announcement concerns the entries of this scope.
     pub(crate) fn is_in_scope(

@@ -21,10 +21,12 @@ mod pane_actions;
 pub(super) use data::ValueAsk;
 pub(super) use pane_actions::callback_action;
 
+pub(crate) use actions::WriteEffect;
 #[cfg(test)]
 pub(super) use actions::{DeleteKind, Landing};
 pub(super) use actions::{DialogHost, DialogShell, FooterSpec, dialog_footer, dialog_modal};
-pub(super) use actions::{DialogPin, TagRow, WriteDialog, WriteEffect, new_tag_row};
+pub(super) use actions::{DialogPin, TagRow, WriteDialog, new_tag_row};
+pub(crate) use editor::land_save_answer;
 
 use super::value::{ValueState, ValueView};
 use crate::secret_store::CallTiming;
@@ -77,17 +79,22 @@ pub(crate) enum VersionsState {
 /// What a view tells its host.
 pub(crate) enum SecretViewEvent {
     /// A write or a follow-up read changed what the listing shows for the
-    /// secret: the host reloads its listing in place. `written` is set when
-    /// a write caused it, which is the only case the other views of the
-    /// secret are told about: a re-read after a session change wrote
-    /// nothing, so what they hold is not stale.
-    ReloadListing { written: bool },
+    /// secret: the host reloads its listing in place. Telling the other
+    /// views of the secret is the view's own job, done where a write lands
+    /// (see [`SecretView::announce_change`]): a re-read after a session
+    /// change wrote nothing, so it announces nothing.
+    ReloadListing,
+
+    /// The write that was sent from the editor finished. `succeeded` says
+    /// whether the store took it; the host reports it to the workspace's close
+    /// and quit flows.
+    SaveFinished { succeeded: bool },
 
     /// A store call finished, for the host's status bar.
     StoreCalled(CallTiming),
 
     /// The shown secret no longer exists: the host drops its selection.
-    Removed { name: String },
+    Removed,
 
     /// A write dialog opened over the host, which closes its own menus.
     DialogOpened,
@@ -206,6 +213,8 @@ pub(crate) struct SecretView {
     /// is on another one, the view sees no connection: it neither reads nor
     /// writes, whatever the profile's session would serve.
     region_pin: Option<String>,
+    /// The host whose own news the view's announcements are.
+    change_origin: Option<gpui::EntityId>,
     /// The version Retrieve value fetches: the one a document was opened at,
     /// `None` for the current value.
     opened_version: Option<String>,
@@ -248,6 +257,7 @@ impl SecretView {
 
         Self {
             region_pin: None,
+            change_origin: None,
             opened_version: None,
             host,
             details_width: None,
@@ -305,6 +315,54 @@ impl SecretView {
     /// Whether the view is hosted as a secret's tab.
     pub(crate) fn in_tab(&self) -> bool {
         self.host == ViewHost::Tab
+    }
+
+    /// Names the host the view's announcements belong to, so the host does not
+    /// follow its own news.
+    pub(crate) fn set_change_origin(&mut self, origin: gpui::EntityId) {
+        self.change_origin = Some(origin);
+    }
+
+    /// Where an announcement of this view goes: the connection and store it
+    /// reads, `region` as the write was sent to it.
+    pub(crate) fn change_scope(
+        &self,
+        region: Option<String>,
+        cx: &Context<Self>,
+    ) -> super::changes::ChangeScope {
+        super::changes::ChangeScope {
+            profile_id: self.profile_id,
+            store_id: self.store.id.clone(),
+            region,
+            origin: self.change_origin.unwrap_or_else(|| cx.entity_id()),
+        }
+    }
+
+    /// The region the view reads under now.
+    fn scope_region(&self, cx: &App) -> Option<String> {
+        self.live_profile(cx)
+            .and_then(|connected| connected.connection.current_region())
+            .or_else(|| self.region_pin.clone())
+    }
+
+    /// Tells the other views of the store that `name` changed here. Called
+    /// where a write landed, with the target the write carried: the
+    /// selection may have moved on since.
+    pub(crate) fn announce_change(
+        &self,
+        name: &str,
+        kind: super::changes::SecretChangeKind,
+        cx: &mut Context<Self>,
+    ) {
+        let scope = self.change_scope(self.scope_region(cx), cx);
+        scope.publish(name, kind, cx);
+    }
+
+    /// The generation a write started now would carry, for the tests that
+    /// land a write by hand.
+    #[cfg(test)]
+    pub(crate) fn write_generation_for_test(&self) -> u64 {
+        self.value_write_generation
     }
 
     /// Whether the profile had a live connection at the last state change.
@@ -613,15 +671,27 @@ impl SecretView {
             return;
         }
 
+        // Unsaved text outlives the secret: it stays, read-only, until the
+        // user discards it. Nothing of it can be written any more.
+        let draft = self
+            .has_unsaved_value_edits(cx)
+            .then(|| self.value_edit.take())
+            .flatten();
+
         self.clear_value();
         self.details_generation = self.details_generation.wrapping_add(1);
         self.details = DetailsState::Idle;
         self.reset_versions();
         self.name = None;
         self.listing_row = None;
-        cx.emit(SecretViewEvent::Removed {
-            name: name.to_string(),
-        });
+
+        if let Some(mut draft) = draft {
+            draft.removed = true;
+            draft.saving = false;
+            self.value_edit = Some(draft);
+        }
+
+        cx.emit(SecretViewEvent::Removed);
     }
 
     // -- Value -------------------------------------------------------------
