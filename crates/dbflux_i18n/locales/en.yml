@@ -3663,6 +3663,7 @@ document:
         changed_other: "%{count} lines changed"
         saving_note: "Saving creates a new version and makes it current"
         caret: "Ln %{line}, Col %{column}"
+      changed_elsewhere: "This secret changed elsewhere. Saving writes a new version over it."
       hint_formatted: "Saving writes a new version and makes it current. Formatted saves a value stored on one line back on one line, and a value stored on several lines as it is here; Raw saves the text exactly as it is here."
       mode:
         formatted: "Formatted"

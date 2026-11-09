@@ -3663,6 +3663,7 @@ document:
         changed_other: "%{count} linhas alteradas"
         saving_note: "Salvar cria uma nova versão e a torna atual"
         caret: "Ln %{line}, Col %{column}"
+      changed_elsewhere: "Este segredo mudou em outra visão. Salvar grava uma nova versão sobre ele."
       hint_formatted: "Salvar grava uma nova versão e a torna a atual. Formatado grava de volta em uma única linha um valor armazenado em uma linha, e um valor armazenado em várias linhas como está aqui; Bruto salva o texto exatamente como está aqui."
       mode:
         formatted: "Formatado"

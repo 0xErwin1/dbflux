@@ -265,6 +265,7 @@ impl SecretDocument {
             SecretChangeKind::Changed if !self.removed && self.loaded => {
                 let name = self.name.clone();
                 self.view.update(cx, |view, cx| {
+                    view.follow_external_change(cx);
                     view.describe(name.clone(), cx);
                     view.load_versions(name, cx);
                 });

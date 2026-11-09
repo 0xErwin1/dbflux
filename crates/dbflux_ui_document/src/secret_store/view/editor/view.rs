@@ -72,6 +72,14 @@ impl SecretView {
             .child(self.render_editor_header(cx))
             .child(self.render_editor_body(false, cx))
             .child(self.render_editor_footer(&editor, &changes, write_size, cx))
+            .children(self.editor_changed_elsewhere().then(|| {
+                div().id("secret-value-editor-changed-elsewhere").child(
+                    Text::caption(dbflux_i18n::t!(
+                        "document.secret_store.edit.changed_elsewhere"
+                    ))
+                    .warning(),
+                )
+            }))
             .child(Text::caption(dbflux_i18n::t!(hint_key)).muted_foreground())
     }
 
@@ -526,6 +534,16 @@ impl SecretView {
                 changed_lines_label(changes.changed())
                     .map(|label| separated("secret-value-editor-footer-changes", label)),
             )
+            .children(self.editor_changed_elsewhere().then(|| {
+                div()
+                    .id("secret-value-editor-changed-elsewhere")
+                    .text_color(cx.theme().warning)
+                    .whitespace_nowrap()
+                    .child(format!(
+                        "· {}",
+                        dbflux_i18n::t!("document.secret_store.edit.changed_elsewhere")
+                    ))
+            }))
             .child(separated(
                 "secret-document-editor-saving-note",
                 dbflux_i18n::t!("document.secret_store.edit.footer.saving_note"),
@@ -537,6 +555,13 @@ impl SecretView {
                     .font_family(family)
                     .child(caret_label),
             )
+    }
+
+    /// Whether the open editor was told the secret changed in another view.
+    fn editor_changed_elsewhere(&self) -> bool {
+        self.value_edit
+            .as_ref()
+            .is_some_and(|edit| edit.changed_elsewhere)
     }
 
     /// The staging labels the history holds for `version`, joined, when it

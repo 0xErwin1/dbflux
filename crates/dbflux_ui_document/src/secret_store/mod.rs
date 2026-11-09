@@ -392,6 +392,12 @@ impl SecretStoreDocument {
         })
     }
 
+    /// The view of the selected secret, for the cross-host tests.
+    #[cfg(test)]
+    pub(crate) fn view(&self) -> &Entity<SecretView> {
+        &self.view
+    }
+
     pub fn id(&self) -> DocumentId {
         self.id
     }

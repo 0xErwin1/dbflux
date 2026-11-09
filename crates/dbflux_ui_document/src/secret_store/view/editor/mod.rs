@@ -73,7 +73,7 @@ pub(crate) mod json_layout;
 mod line_diff;
 mod view;
 
-use super::{DetailsState, SecretView, ValueState};
+use super::{DetailsState, SecretView, SecretViewEvent, ValueState};
 use crate::object_text::db_error_to_user_facing;
 use crate::secret_store::write::{
     SecretOperation, SecretWriteFailure, SecretWriteFailureKind, WriteTarget, put_secret_value,
@@ -124,6 +124,11 @@ pub(crate) struct ValueEditState {
     /// True while a governed write is in flight, so a second Save waits and
     /// Discard does not drop what the landing still has to read.
     pub(in crate::secret_store) saving: bool,
+
+    /// The secret changed in another view while this editor held unsaved
+    /// text. The text is kept and Save still writes a new version; the
+    /// editor says so until it is saved.
+    pub(in crate::secret_store) changed_elsewhere: bool,
 
     /// The layout the editor text is in. A value that is not JSON is always
     /// [`EditMode::Raw`].
@@ -470,6 +475,7 @@ impl SecretView {
             editor: editor.clone(),
             vim,
             saving: false,
+            changed_elsewhere: false,
             mode,
             focused: true,
             focus: handle,
@@ -483,6 +489,27 @@ impl SecretView {
         self.value_input_masks.clear();
         self.value_inputs_view = None;
         VimBinding::follow_setting(self, editor.entity_id(), cx);
+        cx.notify();
+    }
+
+    /// Follows a write another view made to the shown secret: what this view
+    /// retrieved is stale, so it goes back to "Value not loaded" and reads
+    /// again on demand, through the audited path. An editor holding unsaved
+    /// text keeps it and says the secret changed; a clean one closes.
+    pub(crate) fn follow_external_change(&mut self, cx: &mut Context<Self>) {
+        if self.has_unsaved_value_edits(cx) {
+            if let Some(edit) = &mut self.value_edit {
+                edit.changed_elsewhere = true;
+            }
+            cx.notify();
+            return;
+        }
+
+        if matches!(self.value, ValueState::NotLoaded) && self.value_edit.is_none() {
+            return;
+        }
+
+        self.clear_value();
         cx.notify();
     }
 
@@ -854,6 +881,7 @@ impl SecretView {
                                 edit.mode = EditMode::Raw;
                             }
                             edit.saving = false;
+                            edit.changed_elsewhere = false;
                         }
                     } else {
                         self.value_edit = None;
@@ -875,6 +903,9 @@ impl SecretView {
                         cx,
                     );
                 }
+
+                // The other views of the secret learn what was written.
+                cx.emit(SecretViewEvent::ReloadListing);
             }
             Err(failure) => {
                 self.report_seam_write_failure(write_failure_to_user_facing(&failure), cx);

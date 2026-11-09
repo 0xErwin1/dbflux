@@ -3663,6 +3663,7 @@ document:
         changed_other: "已更改 %{count} 行"
         saving_note: "保存会创建新版本并将其设为当前版本"
         caret: "第 %{line} 行，第 %{column} 列"
+      changed_elsewhere: "此密钥已在别处更改。保存会在其上写入新版本。"
       hint_formatted: "保存会写入新版本并将其设为当前版本。格式化视图会把原本为单行的值还原为单行，把原本为多行的值按此处文本保存；原始视图按此处文本原样保存。"
       mode:
         formatted: "格式化"

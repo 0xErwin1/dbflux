@@ -1005,3 +1005,247 @@ fn a_long_value_fills_the_tab_and_scrolls_to_its_last_line(cx: &mut TestAppConte
     assert_eq!(line, Some(140));
     assert!(opened.rendered_text().contains("Ln 140"));
 }
+
+// -- One secret in two hosts ---------------------------------------------------
+
+/// A tab and the listing's pane over the same secret, both with the value
+/// loaded.
+struct Pair {
+    listing: Entity<SecretStoreDocument>,
+}
+
+impl Opened<'_> {
+    fn open_listing_pane(&mut self, name: &str) -> Pair {
+        let (state, profile_id) = (self.app_state.clone(), self.profile_id);
+        let listing = self.window.update(|window, cx| {
+            cx.new(|cx| {
+                SecretStoreDocument::new(
+                    profile_id,
+                    FAKE_SECRETS_STORE_ID.to_string(),
+                    None,
+                    state,
+                    window,
+                    cx,
+                )
+            })
+        });
+        self.window.run_until_parked();
+
+        let name = name.to_string();
+        let pane = listing.clone();
+        self.window.update(|_, cx| {
+            pane.update(cx, |listing, cx| {
+                listing.select_row(crate::secret_store::SecretRowKey::Secret(name), cx);
+                let view = listing.view().clone();
+                view.update(cx, |view, cx| view.retrieve_selected_value(cx));
+            })
+        });
+        self.window.run_until_parked();
+
+        Pair { listing }
+    }
+
+    fn pane_view<R>(
+        &mut self,
+        pair: &Pair,
+        f: impl FnOnce(
+            &mut crate::secret_store::SecretView,
+            &mut gpui::Context<crate::secret_store::SecretView>,
+        ) -> R,
+    ) -> R {
+        let listing = pair.listing.clone();
+        let result = self.window.update(|_, cx| {
+            let view = listing.read(cx).view().clone();
+            view.update(cx, f)
+        });
+        self.window.run_until_parked();
+        result
+    }
+
+    fn tab_view_update<R>(
+        &mut self,
+        f: impl FnOnce(
+            &mut crate::secret_store::SecretView,
+            &mut gpui::Context<crate::secret_store::SecretView>,
+        ) -> R,
+    ) -> R {
+        let doc = self.doc.clone();
+        let result = self.window.update(|_, cx| {
+            let view = doc.read(cx).view().clone();
+            view.update(cx, f)
+        });
+        self.window.run_until_parked();
+        result
+    }
+
+    fn pane_value_loaded(&mut self, pair: &Pair) -> bool {
+        self.pane_view(pair, |view, _| {
+            matches!(view.value(), ValueState::Loaded(_))
+        })
+    }
+
+    fn tab_value_loaded(&mut self) -> bool {
+        self.read_view(|view| matches!(view.value(), ValueState::Loaded(_)))
+    }
+}
+
+/// Rotates the secret from the pane and confirms.
+fn rotate_in_pane(opened: &mut Opened<'_>, pair: &Pair) {
+    let listing = pair.listing.clone();
+    opened.window.update(|window, cx| {
+        let view = listing.read(cx).view().clone();
+        view.update(cx, |view, cx| {
+            view.rotate_selected_now(window, cx);
+            view.confirm_dialog(window, cx);
+        });
+    });
+    opened.window.run_until_parked();
+}
+
+/// Rotates the secret from the tab and confirms.
+fn rotate_in_tab(opened: &mut Opened<'_>) {
+    let doc = opened.doc.clone();
+    opened.window.update(|window, cx| {
+        let view = doc.read(cx).view().clone();
+        view.update(cx, |view, cx| {
+            view.rotate_selected_now(window, cx);
+            view.confirm_dialog(window, cx);
+        });
+    });
+    opened.window.run_until_parked();
+}
+
+/// A write in the tab leaves the pane's retrieved value stale: the pane goes
+/// back to "Value not loaded" and re-retrieves on demand, through the audited
+/// path.
+#[gpui::test]
+fn a_rotation_in_the_tab_drops_the_panes_loaded_value(cx: &mut TestAppContext) {
+    let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+    opened.click("secret-retrieve-value");
+    let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+    assert!(opened.pane_value_loaded(&pair) && opened.tab_value_loaded());
+
+    rotate_in_tab(&mut opened);
+
+    assert!(
+        !opened.pane_value_loaded(&pair),
+        "the pane dropped the value"
+    );
+    let before = opened.driver.secret_store_calls().value_requests.len();
+    opened.pane_view(&pair, |view, cx| view.retrieve_selected_value(cx));
+    assert!(opened.pane_value_loaded(&pair));
+    assert_eq!(
+        opened.driver.secret_store_calls().value_requests.len(),
+        before + 1,
+        "a new audited retrieval"
+    );
+}
+
+/// And the other way: a write in the pane drops the tab's value.
+#[gpui::test]
+fn a_rotation_in_the_pane_drops_the_tabs_loaded_value(cx: &mut TestAppContext) {
+    let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+    opened.click("secret-retrieve-value");
+    let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+    assert!(opened.tab_value_loaded());
+
+    rotate_in_pane(&mut opened, &pair);
+
+    assert!(!opened.tab_value_loaded(), "the tab dropped the value");
+}
+
+/// A roll back in the tab drops the pane's loaded value.
+#[gpui::test]
+fn a_roll_back_in_the_tab_drops_the_panes_loaded_value(cx: &mut TestAppContext) {
+    let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+    opened.click("secret-retrieve-value");
+    let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+
+    let doc = opened.doc.clone();
+    opened.window.update(|window, cx| {
+        let view = doc.read(cx).view().clone();
+        view.update(cx, |view, cx| {
+            view.open_roll_back(1, window, cx);
+            view.confirm_dialog(window, cx);
+        });
+    });
+    opened.window.run_until_parked();
+
+    assert!(!opened.pane_value_loaded(&pair));
+}
+
+/// A roll back in the pane drops the tab's loaded value.
+#[gpui::test]
+fn a_roll_back_in_the_pane_drops_the_tabs_loaded_value(cx: &mut TestAppContext) {
+    let mut opened = open_document(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION));
+    opened.click("secret-retrieve-value");
+    let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+
+    let listing = pair.listing.clone();
+    opened.window.update(|window, cx| {
+        let view = listing.read(cx).view().clone();
+        view.update(cx, |view, cx| {
+            view.open_roll_back(1, window, cx);
+            view.confirm_dialog(window, cx);
+        });
+    });
+    opened.window.run_until_parked();
+
+    assert!(!opened.tab_value_loaded());
+}
+
+/// A save from the tab's editor drops the pane's value too.
+#[gpui::test]
+fn a_save_in_the_tab_drops_the_panes_loaded_value(cx: &mut TestAppContext) {
+    let mut opened = open_document_with(cx, PLAINTEXT_SECRET, Some(CURRENT_REGION), true);
+    let pair = opened.open_listing_pane(PLAINTEXT_SECRET);
+    assert!(opened.pane_value_loaded(&pair));
+
+    opened.window.simulate_input("!");
+    opened.window.run_until_parked();
+    opened.click("secret-value-editor-save");
+
+    assert_eq!(opened.driver.secret_store_calls().put_requests.len(), 1);
+    assert!(!opened.pane_value_loaded(&pair));
+}
+
+/// A tab editor with unsaved text keeps it when the secret changes elsewhere,
+/// says so inline, and Save still writes through the gates.
+#[gpui::test]
+fn an_editor_with_unsaved_text_keeps_it_when_the_secret_changes_elsewhere(cx: &mut TestAppContext) {
+    let mut opened = open_document_with(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION), true);
+    let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+    // The value is JSON, so the edit has to stay valid JSON to be saved.
+    opened.window.simulate_keystrokes("ctrl-a");
+    opened.window.simulate_input("{\"changed\": 1}");
+    opened.window.run_until_parked();
+    assert!(!opened.is_drawn("secret-value-editor-changed-elsewhere"));
+
+    rotate_in_pane(&mut opened, &pair);
+
+    assert!(
+        opened.read_view(|view| view.is_editing_value()),
+        "the text is kept"
+    );
+    assert!(opened.is_drawn("secret-value-editor-changed-elsewhere"));
+    let before = opened.driver.secret_store_calls().put_requests.len();
+    opened.click("secret-value-editor-save");
+    assert_eq!(
+        opened.driver.secret_store_calls().put_requests.len(),
+        before + 1,
+        "Save still writes a new version"
+    );
+}
+
+/// A clean open editor closes when the secret changes elsewhere.
+#[gpui::test]
+fn a_clean_editor_closes_when_the_secret_changes_elsewhere(cx: &mut TestAppContext) {
+    let mut opened = open_document_with(cx, KEY_VALUE_SECRET, Some(CURRENT_REGION), true);
+    let pair = opened.open_listing_pane(KEY_VALUE_SECRET);
+    assert!(opened.read_view(|view| view.is_editing_value()));
+
+    rotate_in_pane(&mut opened, &pair);
+
+    assert!(!opened.read_view(|view| view.is_editing_value()));
+    assert!(!opened.tab_value_loaded());
+}
