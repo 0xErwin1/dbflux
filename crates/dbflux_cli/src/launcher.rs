@@ -1,6 +1,5 @@
 use dbflux_ipc::protocol::IpcMessage;
-use dbflux_ipc::{send_app_control_request, send_focus_request, socket_name};
-use interprocess::local_socket::{Stream as IpcStream, prelude::*};
+use dbflux_ipc::{send_app_control_request, send_focus_request};
 use std::io;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -10,10 +9,7 @@ const CONNECT_RETRIES: usize = 20;
 const RETRY_DELAY_MS: u64 = 50;
 
 pub(crate) fn focus_running_instance() -> bool {
-    socket_name()
-        .and_then(|name| IpcStream::connect(name))
-        .and_then(|mut stream| send_focus_request(&mut stream, 1))
-        .is_ok()
+    send_focus_request().is_ok()
 }
 
 pub(crate) fn open_or_spawn(path: Option<PathBuf>) -> i32 {
