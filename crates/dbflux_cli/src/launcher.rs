@@ -14,8 +14,14 @@ pub(crate) fn focus_running_instance() -> bool {
 
 pub(crate) fn open_or_spawn(path: Option<PathBuf>) -> i32 {
     let msg = match path.as_ref() {
-        Some(p) => IpcMessage::OpenScript { path: p.clone() },
         None => IpcMessage::Focus,
+        Some(p) => {
+            let Ok(absolute) = p.canonicalize() else {
+                eprintln!("Invalid path: {}", p.display());
+                return 1;
+            };
+            IpcMessage::OpenScript { path: absolute }
+        },
     };
 
     if send_app_control_request(msg.clone()).is_ok() {
