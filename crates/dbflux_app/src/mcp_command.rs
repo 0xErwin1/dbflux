@@ -28,7 +28,7 @@ pub fn run_mcp_command(client_id: String, config_dir: Option<PathBuf>) -> i32 {
 }
 
 #[cfg(not(feature = "mcp"))]
-pub fn run_mcp_command(client_id: String, config_dir: Option<PathBuf>) -> i32 {
+pub fn run_mcp_command(_client_id: String, _config_dir: Option<PathBuf>) -> i32 {
     eprintln!("Error: MCP support not compiled into this build.");
     eprintln!();
     eprintln!("To enable MCP functionality, rebuild with:");
