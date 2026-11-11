@@ -130,6 +130,22 @@ Requires the `VIEW SERVER STATE` permission.
   the KILL itself may fail with a permission error; the driver surfaces
   that to the user.
 
+### Dropped sessions
+
+- Each session's socket has TCP keepalive enabled (first probe after 60
+  seconds idle), so NAT gateways, firewalls and load balancers that drop
+  silent connections keep the session open.
+- When the server or the network drops the session anyway, the next call
+  fails with an I/O error (broken pipe, connection reset or unexpected end
+  of file). The driver drops the dead client and marks the connection for
+  reconnection, the same way it does after a cancel.
+- Metadata reads (databases, tables, views, table and view details, schema
+  types, indexes, foreign keys and routines) open a new session, restore the
+  active database and retry once, so opening a table after an idle period
+  works without reconnecting by hand.
+- A query batch is never retried, because the server may already have run
+  it. Its error is shown, and the next query or ping opens a new session.
+
 ### Schema discovery
 
 - Databases (`sys.databases`, hides system DBs).

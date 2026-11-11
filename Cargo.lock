@@ -3510,6 +3510,7 @@ dependencies = [
  "log",
  "serde_json",
  "sha2 0.11.1",
+ "socket2 0.6.3",
  "tiberius",
  "tokio",
  "tokio-util",
