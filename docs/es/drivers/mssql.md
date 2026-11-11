@@ -164,6 +164,13 @@ Requiere el permiso `VIEW SERVER STATE`.
   tablas y vistas, tipos, índices, foreign keys y rutinas del schema) abren
   una sesión nueva, restauran la base de datos activa y reintentan una vez,
   así que abrir una tabla tras un rato inactivo funciona sin reconectar a mano.
+- Las ediciones de filas (insert, update, delete), la navegación, el conteo y
+  las consultas de filas y dependencias abren la sesión nueva antes de
+  ejecutarse, así que funcionan justo tras una caída sin reconectar a mano; una
+  escritura fallida nunca se repite. La recuperación está serializada, de modo
+  que los llamadores concurrentes comparten una sola sesión nueva en lugar de
+  reemplazarse entre sí. Un error del servidor que indica una sesión terminada
+  (596, 233, 6005) se trata igual que un socket caído.
 - Un batch de queries nunca se reintenta, porque el servidor puede haberlo
   ejecutado ya. Se muestra su error, y la siguiente query o ping abre una
   sesión nueva.

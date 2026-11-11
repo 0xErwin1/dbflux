@@ -878,7 +878,7 @@ fn mssql_cancel_query_kills_session_and_reconnects() -> Result<(), DbError> {
 }
 
 // ---------------------------------------------------------------------------
-// Lost transport: the server or the network drops the session (#1302)
+// Lost transport: the server or the network drops the session
 // ---------------------------------------------------------------------------
 
 /// Kill the session behind `connection` from a second, independent
@@ -959,6 +959,74 @@ fn mssql_execute_surfaces_a_dropped_session_without_retrying_it() -> Result<(), 
             )?,
             Value::Int(0)
         );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_row_edits_recover_after_a_failed_call_on_a_dropped_session() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri.clone())?;
+        connection.execute(&QueryRequest::new(
+            "IF OBJECT_ID('dbo.lost_transport_rows', 'U') IS NOT NULL \
+             DROP TABLE dbo.lost_transport_rows; \
+             CREATE TABLE dbo.lost_transport_rows (id INT PRIMARY KEY, name NVARCHAR(50))",
+        ))?;
+
+        kill_session_externally(connection.as_ref(), uri)?;
+
+        let failed = connection.execute(&QueryRequest::new("SELECT 1"));
+        assert!(
+            failed.is_err(),
+            "the dropped session should fail the first call"
+        );
+
+        let inserted = connection.insert_row(&RowInsert::new(
+            "lost_transport_rows".to_string(),
+            Some("dbo".to_string()),
+            vec!["id".to_string(), "name".to_string()],
+            vec![Value::Int(1), Value::Text("alice".to_string())],
+        ))?;
+        assert_eq!(inserted.affected_rows, 1);
+
+        // The recovered session is back on the database it was using.
+        assert_eq!(
+            single_value(connection.as_ref(), "SELECT DB_NAME()")?,
+            Value::Text(TEST_DATABASE.to_string())
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_browse_and_count_recover_after_a_failed_call_on_a_dropped_session() -> Result<(), DbError>
+{
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri.clone())?;
+        connection.execute(&QueryRequest::new(
+            "IF OBJECT_ID('dbo.lost_transport_browse', 'U') IS NOT NULL \
+             DROP TABLE dbo.lost_transport_browse; \
+             CREATE TABLE dbo.lost_transport_browse (id INT PRIMARY KEY); \
+             INSERT INTO dbo.lost_transport_browse (id) VALUES (1), (2)",
+        ))?;
+
+        kill_session_externally(connection.as_ref(), uri)?;
+
+        let failed = connection.execute(&QueryRequest::new("SELECT 1"));
+        assert!(
+            failed.is_err(),
+            "the dropped session should fail the first call"
+        );
+
+        let count = connection.count_table(&TableCountRequest::new(TableRef::with_schema(
+            "dbo",
+            "lost_transport_browse",
+        )))?;
+        assert_eq!(count, 2);
 
         Ok(())
     })

@@ -143,6 +143,13 @@ Requires the `VIEW SERVER STATE` permission.
   types, indexes, foreign keys and routines) open a new session, restore the
   active database and retry once, so opening a table after an idle period
   works without reconnecting by hand.
+- Row edits (insert, update, delete), browsing, counting and the row and
+  dependency lookups open the new session before they run, so they work
+  right after a drop without reconnecting by hand; a failed write is never
+  replayed. Recovery is serialized, so concurrent callers share one new
+  session instead of each replacing the other's. A server error that reports
+  a killed session (596, 233, 6005) is treated the same way as a dropped
+  socket.
 - A query batch is never retried, because the server may already have run
   it. Its error is shown, and the next query or ping opens a new session.
 

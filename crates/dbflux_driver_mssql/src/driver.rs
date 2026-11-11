@@ -1078,18 +1078,19 @@ fn enable_tcp_keepalive(tcp: &TcpStream) -> std::io::Result<()> {
 fn is_transport_lost(error: &tiberius::error::Error) -> bool {
     use std::io::ErrorKind;
 
-    matches!(
-        error,
-        tiberius::error::Error::Io {
-            kind: ErrorKind::BrokenPipe
+    match error {
+        tiberius::error::Error::Io { kind, .. } => matches!(
+            kind,
+            ErrorKind::BrokenPipe
                 | ErrorKind::ConnectionReset
                 | ErrorKind::ConnectionAborted
                 | ErrorKind::NotConnected
                 | ErrorKind::UnexpectedEof
-                | ErrorKind::TimedOut,
-            ..
-        }
-    )
+                | ErrorKind::TimedOut
+        ),
+        tiberius::error::Error::Server(token) => is_kill_code(token.code()),
+        _ => false,
+    }
 }
 
 /// Failure raised inside a [`MssqlConnection::with_client`] closure.
@@ -1220,6 +1221,7 @@ impl MssqlDriver {
             spid: Arc::new(AtomicI32::new(spid)),
             reconnect_config: Arc::new(reconnect_config),
             poisoned: Arc::new(AtomicBool::new(false)),
+            recovery: Mutex::new(()),
         }))
     }
 
@@ -1395,6 +1397,7 @@ fn build_mssql_connection(
         spid: Arc::new(AtomicI32::new(session.spid)),
         reconnect_config: Arc::new(session.reconnect_config),
         poisoned: Arc::new(AtomicBool::new(false)),
+        recovery: Mutex::new(()),
     }
 }
 
@@ -1423,6 +1426,12 @@ pub struct MssqlConnection {
     spid: Arc<AtomicI32>,
     reconnect_config: Arc<tiberius::Config>,
     poisoned: Arc<AtomicBool>,
+
+    // Serializes session recovery so two callers that both observed
+    // `poisoned` cannot each reconnect and drop the session the other just
+    // restored. Lock order: `recovery`, then `current_database` (briefly),
+    // then `inner`.
+    recovery: Mutex<()>,
 }
 
 struct MssqlCancelHandle {
@@ -2171,9 +2180,16 @@ impl Connection for MssqlConnection {
     }
 
     fn cleanup_after_cancel(&self) -> Result<(), DbError> {
+        let _recovery = self
+            .recovery
+            .lock()
+            .unwrap_or_else(|poison_err| poison_err.into_inner());
+
         // Only reconnect if a previous `cancel()` or a lost transport (see
         // `with_client`) poisoned the connection. For ordinary errors the
-        // existing client is still usable and this is a no-op.
+        // existing client is still usable and this is a no-op. Checked under
+        // the recovery lock, so a caller that waited on another recovery
+        // finds the session already restored and does not reconnect again.
         if !self.poisoned.load(Ordering::SeqCst) {
             self.cancelled.store(false, Ordering::SeqCst);
             return Ok(());
@@ -2435,6 +2451,8 @@ impl Connection for MssqlConnection {
         schema: Option<&str>,
         table: &str,
     ) -> Result<Option<TableCreationMetadata>, DbError> {
+        self.recover_session()?;
+
         let schema_name = schema.unwrap_or("dbo");
         let escaped_db = database.replace(']', "]]");
         let qualified_db = format!("[{escaped_db}]");
@@ -2894,6 +2912,8 @@ impl Connection for MssqlConnection {
     }
 
     fn set_active_database(&self, database: Option<&str>) -> Result<(), DbError> {
+        self.recover_session()?;
+
         let mut current = self
             .current_database
             .lock()
@@ -3027,6 +3047,8 @@ impl Connection for MssqlConnection {
         schema: Option<&str>,
         table: &str,
     ) -> Result<Vec<dbflux_core::RelationRef>, DbError> {
+        self.recover_session()?;
+
         let sql = dependents_sql(database);
         let schema = schema.unwrap_or("dbo").to_string();
         let table = table.to_string();
@@ -3117,6 +3139,8 @@ impl Connection for MssqlConnection {
             ));
         }
 
+        self.recover_session()?;
+
         let sql = build_update_with_output(patch)?;
         log::debug!("[UPDATE] Executing: {}", sql);
 
@@ -3130,6 +3154,8 @@ impl Connection for MssqlConnection {
                 "Cannot insert row: no columns specified".to_string().into(),
             ));
         }
+
+        self.recover_session()?;
 
         let sql = build_insert_with_output(insert)?;
         log::debug!("[INSERT] Executing: {}", sql);
@@ -3146,6 +3172,8 @@ impl Connection for MssqlConnection {
                     .into(),
             ));
         }
+
+        self.recover_session()?;
 
         let sql = build_delete_with_output(delete)?;
         log::debug!("[DELETE] Executing: {}", sql);
@@ -3979,8 +4007,16 @@ fn is_kill_error(err: &DbError) -> bool {
         | DbError::PermissionDenied(fe)
         | DbError::ObjectNotFound(fe)
         | DbError::ConnectionFailed(fe)
-        if matches!(fe.code.as_deref(), Some("596") | Some("233") | Some("6005"))
+        if fe
+            .code
+            .as_deref()
+            .and_then(|code| code.parse::<u32>().ok())
+            .is_some_and(is_kill_code)
     )
+}
+
+fn is_kill_code(code: u32) -> bool {
+    matches!(code, 596 | 233 | 6005)
 }
 
 // ---------------------------------------------------------------------------
@@ -5727,6 +5763,21 @@ mod tests {
     }
 
     #[test]
+    fn kill_state_server_codes_mean_a_lost_session() {
+        // `TokenError` cannot be built outside tiberius, so the server-error
+        // arm of `is_transport_lost` is exercised through the shared code list.
+        for code in [596, 233, 6005] {
+            assert!(is_kill_code(code), "{code} should be a kill-state code");
+        }
+        for code in [547, 2627, 18456, 0] {
+            assert!(
+                !is_kill_code(code),
+                "{code} should not be a kill-state code"
+            );
+        }
+    }
+
+    #[test]
     fn classify_mssql_code_routes_known_codes() {
         assert_eq!(classify_mssql_code(18456), Some(MssqlErrorClass::Auth));
         assert_eq!(classify_mssql_code(547), Some(MssqlErrorClass::Constraint));
@@ -7467,6 +7518,7 @@ mod query_safety_tests {
             spid: Arc::new(AtomicI32::new(0)),
             reconnect_config: Arc::new(tiberius::Config::new()),
             poisoned: Arc::new(AtomicBool::new(false)),
+            recovery: Mutex::new(()),
         }
     }
 
