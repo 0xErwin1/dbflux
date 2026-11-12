@@ -1113,11 +1113,7 @@ impl DataGridPanel {
             return false;
         };
         let (_, _, filter_items, _) = self.build_filter_items(menu, backend, cx);
-        let mut actions = vec![
-            ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
-            ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
-            ContextMenuAction::RemoveOrdering,
-        ];
+        let mut actions = Self::column_header_menu_fixed_actions().to_vec();
         actions.extend(filter_items.into_iter().map(|(_, action)| action));
 
         match cmd {
@@ -1943,6 +1939,11 @@ impl DataGridPanel {
             }
             ContextMenuAction::RemoveOrdering => {
                 self.handle_sort_clear(cx);
+            }
+            ContextMenuAction::CopyColumnName => {
+                if let Some(column) = self.result.columns.get(menu.col) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(column.name.clone()));
+                }
             }
             ContextMenuAction::InspectRow => {
                 self.open_row_inspector(menu.row, menu.col, cx);

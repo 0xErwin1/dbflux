@@ -62,9 +62,9 @@ cells, so unsaved changes, Save Row and revert work the same in both layouts;
 
 ## Column header menu
 
-Right-click a column header for a menu scoped to that column: order ascending
-or descending, clear the ordering, and every filter operator, in one flat
-list. A left click on the header still cycles the sort.
+Right-click a column header for a menu scoped to that column: copy the column
+name, order ascending or descending, clear the ordering, and every filter
+operator, in one flat list. A left click on the header still cycles the sort.
 
 ## Value panel
 

@@ -1600,6 +1600,7 @@ document:
       header: "%{column} · 행 %{row}"
       item:
         copy: 복사
+        copy_column_name: 열 이름 복사
         view_document: 문서 보기
         add_document: 문서 추가
         duplicate_document: 문서 복제
@@ -5428,6 +5429,8 @@ sidebar:
     new_script_folder: 새 폴더
     reveal_file_manager: 파일 관리자에서 표시
     copy_path: 경로 복사
+    copy_column_name: 열 이름 복사
+    copy_field_name: 필드 이름 복사
     schema_diff_unsupported: 스키마 비교는 관계형 연결에서만 사용할 수 있습니다.
     new_dashboard: 새 대시보드…
     import_dashboard: JSON에서 대시보드 가져오기…

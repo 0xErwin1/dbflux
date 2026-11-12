@@ -1600,6 +1600,7 @@ document:
       header: "%{column} · linha %{row}"
       item:
         copy: Copiar
+        copy_column_name: Copiar nome da coluna
         view_document: Ver documento
         add_document: Adicionar documento
         duplicate_document: Duplicar documento
@@ -5429,6 +5430,8 @@ sidebar:
     new_script_folder: Nova pasta
     reveal_file_manager: Mostrar no gerenciador de arquivos
     copy_path: Copiar caminho
+    copy_column_name: Copiar nome da coluna
+    copy_field_name: Copiar nome do campo
     schema_diff_unsupported: A comparação de schema só está disponível para conexões relacionais.
     new_dashboard: Novo dashboard…
     import_dashboard: Importar dashboard de JSON…
