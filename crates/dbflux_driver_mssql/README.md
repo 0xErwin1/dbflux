@@ -145,8 +145,9 @@ Requires the `VIEW SERVER STATE` permission.
   works without reconnecting by hand.
 - Row edits (insert, update, delete), browsing, counting and the row and
   dependency lookups open the new session before they run, so they work
-  right after a drop without reconnecting by hand; a failed write is never
-  replayed. Recovery is serialized, so concurrent callers share one new
+  without reconnecting by hand once a previous call has detected the drop.
+  If nothing detected it yet, the first operation fails and is not replayed;
+  a failed write is never replayed. Recovery is serialized, so concurrent callers share one new
   session instead of each replacing the other's. A server error that reports
   a killed session (596, 233, 6005) is treated the same way as a dropped
   socket.

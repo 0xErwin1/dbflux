@@ -2204,7 +2204,17 @@ impl Connection for MssqlConnection {
             .ok()
             .and_then(|guard| guard.clone());
 
-        let new_session: Result<(TiberiusClient, i32, Option<String>), tiberius::error::Error> = {
+        // The new session starts in whatever the login defaults to. The
+        // previously active database is restored on the new client before it
+        // is published, so no other caller can take the client and run an
+        // unqualified statement on the wrong database. If `USE [db]` fails
+        // the client is dropped, `poisoned` stays true and the next call
+        // retries recovery.
+        let restore_statement = active_database
+            .as_ref()
+            .map(|db| format!("USE [{}]", db.replace(']', "]]")));
+
+        let new_session: Result<(i32, Option<String>), DbError> = {
             let mut guard = match self.inner.lock() {
                 Ok(g) => g,
                 Err(poison_err) => poison_err.into_inner(),
@@ -2214,42 +2224,44 @@ impl Connection for MssqlConnection {
             // promptly; tiberius does not always tear down on KILL alone.
             guard.client = None;
 
-            guard.runtime.block_on(async move {
-                let mut client = establish_tiberius(config).await?;
-                let (spid, database) = capture_session_info(&mut client).await?;
-                Ok((client, spid, database))
+            let session = guard.runtime.block_on(async move {
+                let mut client = establish_tiberius(config).await.map_err(|e| {
+                    log::error!("[CLEANUP] Reconnect failed: {}", e);
+                    // Address fields aren't worth reconstructing here — the
+                    // message from tiberius is already host-aware via
+                    // Config::get_addr().
+                    format_mssql_connect_error(&e, "?", 0)
+                })?;
+                let (spid, database) = capture_session_info(&mut client)
+                    .await
+                    .map_err(|e| format_mssql_connect_error(&e, "?", 0))?;
+
+                if let Some(statement) = restore_statement {
+                    client
+                        .simple_query(statement)
+                        .await
+                        .map_err(|e| format_mssql_query_error(&e))?
+                        .into_results()
+                        .await
+                        .map_err(|e| format_mssql_query_error(&e))?;
+                }
+
+                Ok::<_, DbError>((client, spid, database))
+            });
+
+            session.map(|(client, spid, database)| {
+                guard.client = Some(client);
+                (spid, database)
             })
         };
 
-        let (new_client, new_spid, new_database) = new_session.map_err(|e| {
-            log::error!("[CLEANUP] Reconnect failed: {}", e);
-            // Address fields aren't worth reconstructing here — the message
-            // from tiberius is already host-aware via Config::get_addr().
-            format_mssql_connect_error(&e, "?", 0)
-        })?;
-
-        {
-            let mut guard = match self.inner.lock() {
-                Ok(g) => g,
-                Err(poison_err) => poison_err.into_inner(),
-            };
-            guard.client = Some(new_client);
-        }
+        let (new_spid, new_database) = new_session?;
 
         self.spid.store(new_spid, Ordering::SeqCst);
 
-        // The new session starts in whatever the login defaults to. If the
-        // user was previously on a specific database, restore that selection
-        // before clearing the poisoned flag — otherwise a failing `USE [db]`
-        // would leave the connection alive on the login's default database
-        // while callers (with `poisoned == false`) assume recovery succeeded
-        // on the requested one. With the clear deferred, a USE failure leaves
-        // `poisoned == true`, so the next `execute()` triggers another
-        // recovery attempt instead of silently running on the wrong DB.
-        if let Some(db) = active_database {
-            let escaped = db.replace(']', "]]");
-            self.execute_simple(&format!("USE [{}]", escaped))?;
-        } else if let Some(db) = new_database {
+        if active_database.is_none()
+            && let Some(db) = new_database
+        {
             // No previous selection to restore: the reconnect landed in the
             // login's default database, so track that actual database rather
             // than leaving the selection unknown.

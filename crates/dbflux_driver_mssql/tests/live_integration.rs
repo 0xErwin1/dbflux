@@ -932,6 +932,46 @@ fn mssql_table_details_recovers_after_the_session_is_dropped() -> Result<(), DbE
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn mssql_first_statement_after_recovery_runs_in_the_active_database() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri.clone())?;
+        connection.execute(&QueryRequest::new(
+            "IF OBJECT_ID('dbo.lost_transport_unqualified', 'U') IS NOT NULL \
+             DROP TABLE dbo.lost_transport_unqualified; \
+             CREATE TABLE dbo.lost_transport_unqualified (id INT PRIMARY KEY)",
+        ))?;
+
+        kill_session_externally(connection.as_ref(), uri)?;
+
+        let failed = connection.execute(&QueryRequest::new("SELECT 1"));
+        assert!(
+            failed.is_err(),
+            "the dropped session should fail the first call"
+        );
+
+        // The session is published already on the active database, so an
+        // unqualified statement cannot land in the login's default database.
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO dbo.lost_transport_unqualified (id) VALUES (1)",
+        ))?;
+        assert_eq!(
+            single_value(
+                connection.as_ref(),
+                "SELECT COUNT(*) FROM dbo.lost_transport_unqualified"
+            )?,
+            Value::Int(1)
+        );
+        assert_eq!(
+            single_value(connection.as_ref(), "SELECT DB_NAME()")?,
+            Value::Text(TEST_DATABASE.to_string())
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn mssql_execute_surfaces_a_dropped_session_without_retrying_it() -> Result<(), DbError> {
     containers::with_mssql_url(|uri| {
         let (connection, _) = connect_mssql(uri.clone())?;
