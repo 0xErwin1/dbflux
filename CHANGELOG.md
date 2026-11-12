@@ -4,6 +4,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-12
+
 ### Added
 
 * **Copy a column name** — A column in the sidebar schema tree now opens a context menu (right click or `m`) with Copy column name, and a collection field one with Copy field name; both copy the bare name, without the table or collection. The data grid's column header menu lists Copy column name first, above the ordering entries, and the table menu (`m`) offers it for the active cell's column, so the keyboard reaches it too.
