@@ -1600,6 +1600,7 @@ document:
       header: "%{column} · 第 %{row} 行"
       item:
         copy: 复制
+        copy_column_name: 复制列名
         view_document: 查看文档
         add_document: 添加文档
         duplicate_document: 复制文档
@@ -5427,6 +5428,8 @@ sidebar:
     new_script_folder: 新建文件夹
     reveal_file_manager: 在文件管理器中显示
     copy_path: 复制路径
+    copy_column_name: 复制列名
+    copy_field_name: 复制字段名
     schema_diff_unsupported: Schema 差异仅适用于关系型连接。
     new_dashboard: 新建仪表盘…
     import_dashboard: 从 JSON 导入仪表盘…

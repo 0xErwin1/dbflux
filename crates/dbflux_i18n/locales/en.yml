@@ -1600,6 +1600,7 @@ document:
       header: "%{column} · row %{row}"
       item:
         copy: Copy
+        copy_column_name: Copy column name
         view_document: View document
         add_document: Add document
         duplicate_document: Duplicate document
@@ -5429,6 +5430,8 @@ sidebar:
     new_script_folder: New folder
     reveal_file_manager: Reveal in file manager
     copy_path: Copy path
+    copy_column_name: Copy column name
+    copy_field_name: Copy field name
     schema_diff_unsupported: Schema diff is only available for relational connections.
     new_dashboard: New dashboard…
     import_dashboard: Import dashboard from JSON…

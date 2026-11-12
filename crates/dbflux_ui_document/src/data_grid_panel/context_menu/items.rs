@@ -89,15 +89,27 @@ pub(super) fn build_context_menu_items(
         return items;
     }
 
-    let mut items = vec![ContextMenuItem {
-        label: dbflux_i18n::t!("document.data.context_menu.item.copy").into(),
-        action: Some(ContextMenuAction::Copy),
-        icon: Some(AppIcon::Copy),
-        is_separator: false,
-        is_danger: false,
-        detail: None,
-        disabled: false,
-    }];
+    // The column name needs no row under the cursor, only the column.
+    let mut items = vec![
+        ContextMenuItem {
+            label: dbflux_i18n::t!("document.data.context_menu.item.copy").into(),
+            action: Some(ContextMenuAction::Copy),
+            icon: Some(AppIcon::Copy),
+            is_separator: false,
+            is_danger: false,
+            detail: None,
+            disabled: false,
+        },
+        ContextMenuItem {
+            label: dbflux_i18n::t!("document.data.context_menu.item.copy_column_name").into(),
+            action: Some(ContextMenuAction::CopyColumnName),
+            icon: Some(AppIcon::Copy),
+            is_separator: false,
+            is_danger: false,
+            detail: None,
+            disabled: false,
+        },
+    ];
 
     // Offered for read-only results too — the panel is how a long JSON or XML
     // value gets read at all, whether or not it can be changed. It still needs

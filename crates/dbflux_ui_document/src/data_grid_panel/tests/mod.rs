@@ -688,6 +688,7 @@ mod builder_mutations;
 mod bulk_delete_outcome;
 mod close_completion;
 mod collection_views;
+mod column_header_menu;
 mod export_all;
 mod facets;
 mod fk_label_identity;
