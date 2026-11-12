@@ -4749,6 +4749,9 @@ mod tests {
         let labels = labels(&items);
 
         assert!(labels.contains(&item_label("document.data.context_menu.item.add_row")));
+        assert!(labels.contains(&item_label(
+            "document.data.context_menu.item.copy_column_name"
+        )));
         assert!(!labels.contains(&item_label("document.data.context_menu.item.edit")));
         assert!(!labels.contains(&item_label("document.data.context_menu.item.edit_in_modal")));
         assert!(!labels.contains(&item_label("document.data.context_menu.item.duplicate_row")));
@@ -4761,7 +4764,10 @@ mod tests {
 
         assert_eq!(
             labels(&items),
-            vec![item_label("document.data.context_menu.item.copy")]
+            vec![
+                item_label("document.data.context_menu.item.copy"),
+                item_label("document.data.context_menu.item.copy_column_name"),
+            ]
         );
     }
 
@@ -4778,6 +4784,21 @@ mod tests {
             false, false, false, false, true,
         ));
         assert!(!without_row.contains(&item_label("document.data.context_menu.item.view_value")));
+    }
+
+    /// Copy column name sits right after Copy, and the document menu, which
+    /// has no columns, leaves it out.
+    #[test]
+    fn copy_column_name_follows_copy_in_the_table_menu_only() {
+        let table = DataGridPanel::build_context_menu_items(false, false, true, false, true);
+        assert_eq!(
+            table[1].action,
+            Some(dbflux_components::components::data_table::ContextMenuAction::CopyColumnName)
+        );
+
+        let document = DataGridPanel::build_context_menu_items(true, true, true, false, true);
+        assert!(!document.iter().any(|item| item.action
+            == Some(dbflux_components::components::data_table::ContextMenuAction::CopyColumnName)));
     }
 
     #[test]

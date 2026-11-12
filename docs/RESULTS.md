@@ -65,6 +65,8 @@ cells, so unsaved changes, Save Row and revert work the same in both layouts;
 Right-click a column header for a menu scoped to that column: copy the column
 name, order ascending or descending, clear the ordering, and every filter
 operator, in one flat list. A left click on the header still cycles the sort.
+The table menu (`m`) also offers **Copy column name** for the active cell's
+column, so the keyboard reaches it too.
 
 ## Value panel
 

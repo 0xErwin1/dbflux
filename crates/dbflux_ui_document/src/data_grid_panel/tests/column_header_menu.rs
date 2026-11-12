@@ -70,3 +70,59 @@ fn selecting_copy_column_name_copies_the_header_name(cx: &mut TestAppContext) {
     assert_eq!(copied.as_deref(), Some("name"));
     assert!(window.update(|_, cx| panel.read(cx).context_menu.is_none()));
 }
+
+/// The table menu (`m`) carries Copy column name for the active cell's
+/// column, right after Copy, so the keyboard reaches it without the header.
+#[gpui::test]
+fn table_menu_copies_the_active_column_name_from_the_keyboard(cx: &mut TestAppContext) {
+    use dbflux_app::keymap::ContextId;
+
+    init_keyboard_runtime(cx);
+    let app_state = isolated_test_app_state(cx);
+    let (_host, panel, window) = host_result_grid(cx, app_state);
+
+    let active_column = |window: &mut VisualTestContext| {
+        window.update(|_, cx| {
+            panel
+                .read(cx)
+                .grid_table
+                .table_state
+                .as_ref()
+                .and_then(|state| state.read(cx).selection().active)
+                .map(|coord| coord.col)
+        })
+    };
+
+    window.update(|_, cx| {
+        let table_state = panel
+            .read(cx)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("the result builds a table");
+        table_state.update(cx, |state, cx| {
+            state.select_cell(CellCoord::new(0, 1), cx);
+        });
+    });
+    window.run_until_parked();
+    assert_eq!(active_column(window), Some(1), "the name column is active");
+
+    window.simulate_keystrokes("m");
+    window.run_until_parked();
+    assert_eq!(
+        window.update(|_, cx| panel.read(cx).active_context(cx)),
+        ContextId::ContextMenu,
+        "`m` opens the table menu"
+    );
+
+    for key in ["j", "enter"] {
+        window.simulate_keystrokes(key);
+        window.run_until_parked();
+    }
+
+    let copied = window
+        .update(|_, cx| cx.read_from_clipboard())
+        .and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("name"));
+    assert!(window.update(|_, cx| panel.read(cx).context_menu.is_none()));
+}
