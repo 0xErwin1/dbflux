@@ -1,0 +1,41 @@
+{
+  "title": "DBFlux redesign: Streaming: priority B (writes) and C (Schema Registry, Connect) · light",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Streaming, row \"Streaming: priority B (writes) and C (Schema Registry, Connect) · light\".",
+  "artboards": [
+    {
+      "file": "01-isl-light-str-produce.html",
+      "title": "Streaming B: produce message",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-light-str-topic-admin.html",
+      "title": "Streaming B: create and delete topic",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-light-str-offset-reset.html",
+      "title": "Streaming B: reset consumer group offsets",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "04-isl-light-str-schemas.html",
+      "title": "Streaming C: Schema Registry",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "05-isl-light-str-connect.html",
+      "title": "Streaming C: Kafka Connect",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}

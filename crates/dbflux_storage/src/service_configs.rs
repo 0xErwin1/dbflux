@@ -34,6 +34,7 @@ fn rpc_service_kind_from_storage(kind: &str) -> RpcServiceKind {
     match kind {
         "driver" => RpcServiceKind::Driver,
         "auth_provider" => RpcServiceKind::AuthProvider,
+        "secret_provider" => RpcServiceKind::SecretProvider,
         other => {
             log::warn!(
                 "Unknown RPC service kind '{}'; defaulting to driver for compatibility",

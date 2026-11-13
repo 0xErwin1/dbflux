@@ -1,23 +1,19 @@
-//! Store calls of `SecretStoreDocument`. Each one runs on the background
+//! Listing calls of `SecretStoreDocument`. Each one runs on the background
 //! executor, because the seam is synchronous, and lands on the foreground
 //! through a generation check, so a result that a newer call replaced is
 //! dropped. The first catch site of a user-triggered failure reports it.
 
-use super::listing::PathMode;
-use super::value::{RetrievalTarget, RetrievedValue, ValueFailure, value_retrieval_event};
-use super::{CallTiming, DetailsState, SecretRowKey, SecretStoreDocument, StoreCall, ValueState};
+use super::listing::{LARGEST_PAGE_ENTRIES, PathMode, keeps_loading};
+use super::{CallTiming, SecretRowKey, SecretStoreDocument, StoreCall};
 use crate::object_text::db_error_to_user_facing;
-use dbflux_core::observability::EventSink as _;
-use dbflux_core::{
-    Connection, DbError, SecretDetails, SecretListPage, SecretListRequest, SecretValue,
-};
-use dbflux_ui_base::user_error::{report_error, report_error_async};
+use dbflux_core::{Connection, DbError, SecretListPage, SecretListRequest};
+use dbflux_ui_base::user_error::report_error_async;
 use gpui::Context;
 use std::sync::Arc;
 use std::time::Instant;
 
 impl SecretStoreDocument {
-    fn connection(&self, cx: &Context<Self>) -> Option<Arc<dyn Connection>> {
+    pub(crate) fn connection(&self, cx: &Context<Self>) -> Option<Arc<dyn Connection>> {
         self.app_state
             .read(cx)
             .connections()
@@ -40,19 +36,34 @@ impl SecretStoreDocument {
             recursive: hierarchical && self.path_mode == PathMode::Flat,
             name_filter,
             page_token,
-            page_size: None,
+            page_size: Some(LARGEST_PAGE_ENTRIES),
         }
     }
 
     /// Lists the current level from its first page. The selection, its
-    /// details and any retrieved value are dropped with the old listing.
+    /// details and any retrieved value are dropped with the old listing, and
+    /// a menu open over it would act on rows that no longer exist — none of
+    /// which may happen under an editor holding unsaved text.
     pub fn load_first_page(&mut self, cx: &mut Context<Self>) {
+        if self.block_unsaved_value_edits(cx) {
+            return;
+        }
+
         self.selected = None;
-        self.details_generation = self.details_generation.wrapping_add(1);
-        self.details = DetailsState::Idle;
-        self.clear_value();
+        self.view.update(cx, |view, cx| view.clear_selection(cx));
+        self.drop_context_menu();
 
         let generation = self.listing.begin(true);
+        self.spawn_list(generation, None, cx);
+    }
+
+    /// Lists the current level again after a write, leaving the selection,
+    /// its details and its value where they are: the rows are replaced when
+    /// the first page lands, so a changed rotation, description or deletion
+    /// date reads from the store instead of from the listing the write
+    /// outdated.
+    pub(crate) fn reload_listing_in_place(&mut self, cx: &mut Context<Self>) {
+        let generation = self.listing.begin_reload();
         self.spawn_list(generation, None, cx);
     }
 
@@ -72,12 +83,30 @@ impl SecretStoreDocument {
     }
 
     /// Refresh: lists the level again and drops the retrieved value.
+    ///
+    /// A region discovery that failed is asked again, so granting
+    /// `ec2:DescribeRegions` brings the picker back without reopening the
+    /// document.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.block_unsaved_value_edits(cx) {
+            return;
+        }
+
+        // An explicit refresh believes the store over what a write confirmed.
+        self.view
+            .update(cx, |view, _| view.clear_confirmed_deletions());
+
+        if matches!(self.regions, super::RegionListState::Failed(_)) {
+            self.load_regions(cx);
+        }
+
         self.load_first_page(cx);
     }
 
     fn spawn_list(&mut self, generation: u64, page_token: Option<String>, cx: &mut Context<Self>) {
         cx.notify();
+        self.view
+            .update(cx, |view, _| view.note_listing_issued(generation));
 
         let Some(connection) = self.connection(cx) else {
             self.listing.apply_error(
@@ -123,14 +152,47 @@ impl SecretStoreDocument {
         millis: u128,
         cx: &mut Context<Self>,
     ) {
+        // A reload that replaces the rows starts from nothing, so a page that
+        // is shorter than the listing it replaces still made progress.
+        let replacing = self.listing.replaces_on_next_page();
+        let loaded_before = if replacing {
+            0
+        } else {
+            self.listing.entries.len()
+        };
+        let paths_before = if replacing {
+            0
+        } else {
+            self.listing.child_paths.len()
+        };
+
         let applied = match result {
             Ok(page) => {
                 let count = page.entries.len();
+                let page_names: Vec<String> = page
+                    .entries
+                    .iter()
+                    .map(|entry| entry.name.clone())
+                    .collect();
                 let applied = self.listing.apply_page(generation, page);
 
                 if applied {
+                    // The listing keeps the earlier row of a repeated secret, so
+                    // what it retained is its word, not the discarded duplicate.
+                    let retained: Vec<_> = page_names
+                        .iter()
+                        .filter_map(|name| self.listing.find(name).cloned())
+                        .collect();
+
+                    self.view.update(cx, |view, cx| {
+                        view.observe_listed_rows(&retained, generation, cx)
+                    });
+
                     self.last_call = Some(CallTiming {
-                        call: StoreCall::List { count },
+                        call: StoreCall::List {
+                            count,
+                            hierarchical: self.hierarchical(),
+                        },
                         millis,
                     });
                 }
@@ -140,212 +202,60 @@ impl SecretStoreDocument {
             Err(error) => self.listing.apply_error(generation, error.to_string()),
         };
 
-        if applied {
-            cx.notify();
-        }
-    }
-
-    /// Describes `name` for the details pane. Never fetches its value.
-    pub(crate) fn describe(&mut self, name: String, cx: &mut Context<Self>) {
-        self.details_generation = self.details_generation.wrapping_add(1);
-        let generation = self.details_generation;
-        self.details = DetailsState::Loading;
-
-        let Some(connection) = self.connection(cx) else {
-            self.details = DetailsState::Failed(dbflux_i18n::t!(
-                "document.secret_store.error.connection_unavailable"
-            ));
-            return;
-        };
-
-        let store_id = self.store.id.clone();
-        let entity = cx.entity().clone();
-
-        let task = cx.background_executor().spawn({
-            let name = name.clone();
-            async move {
-                let started = Instant::now();
-                let result = match connection.secret_store(&store_id) {
-                    Some(store) => store.describe(&name),
-                    None => Err(store_unavailable(&store_id)),
-                };
-
-                (result, started.elapsed().as_millis())
-            }
-        });
-
-        cx.spawn(async move |_this, cx| {
-            let (result, millis) = task.await;
-
-            if let Err(error) = &result {
-                report_error_async(db_error_to_user_facing(error), cx);
-            }
-
-            cx.update(|cx| {
-                entity.update(cx, |doc, cx| {
-                    doc.apply_details(generation, &name, result, millis, cx)
-                });
-            });
-        })
-        .detach();
-    }
-
-    pub(crate) fn apply_details(
-        &mut self,
-        generation: u64,
-        name: &str,
-        result: Result<SecretDetails, DbError>,
-        millis: u128,
-        cx: &mut Context<Self>,
-    ) {
-        let is_current = generation == self.details_generation
-            && self.selected == Some(SecretRowKey::Secret(name.to_string()));
-
-        if !is_current {
+        if !applied {
             return;
         }
 
-        self.details = match result {
-            Ok(details) => DetailsState::Loaded(Box::new(details)),
-            Err(error) => DetailsState::Failed(error.to_string()),
-        };
-        self.last_call = Some(CallTiming {
-            call: StoreCall::Describe,
-            millis,
-        });
-        cx.notify();
-    }
-
-    /// Retrieve value: fetches the selected secret's current value. Every
-    /// retrieval, successful or not, records one audit event without the
-    /// value. Refused for a secret whose deletion is pending.
-    pub fn retrieve_selected_value(&mut self, cx: &mut Context<Self>) {
-        if !self.can_retrieve_value() {
-            return;
-        }
-
-        let Some(name) = self.selected_summary().map(|summary| summary.name.clone()) else {
-            return;
-        };
-
-        self.clear_value();
-        let generation = self.value_generation;
-        self.value = ValueState::Loading;
+        self.push_listing_row(Some(generation), cx);
         cx.notify();
 
-        let Some(connection) = self.connection(cx) else {
-            self.apply_value(
-                generation,
-                &name,
-                Err(DbError::connection_failed(dbflux_i18n::t!(
-                    "document.secret_store.error.connection_unavailable"
-                ))),
-                0,
-                cx,
-            );
+        // A failed page ends the chain: the retained rows are not progress, and
+        // asking for the old next page would clear the error and mix pages of
+        // two different loads.
+        if self.listing.error.is_some() {
             return;
+        }
+
+        // A page that landed under the limit asks for the next one instead of
+        // making the user click for it; the manual row remains for the rest.
+        //
+        // A page that added nothing stops the chain regardless: a store that
+        // keeps handing back a token while returning no entries would
+        // otherwise be asked forever.
+        let made_progress = self.listing.entries.len() > loaded_before
+            || self.listing.child_paths.len() > paths_before;
+
+        if made_progress && keeps_loading(self.listing.entries.len(), self.listing.has_more()) {
+            self.load_more(cx);
+        }
+    }
+
+    /// Gives the view the listing's row of the selected secret. A failed page
+    /// keeps the rows but does not refresh what the view remembers of them.
+    /// `observed_by` is the generation of the load that just landed, `None`
+    /// when no load did.
+    pub(super) fn push_listing_row(&mut self, observed_by: Option<u64>, cx: &mut Context<Self>) {
+        let row = match &self.selected {
+            Some(SecretRowKey::Secret(name)) => self.listing.find(name).cloned(),
+            _ => None,
         };
+        let refresh_cache = self.listing.error.is_none();
 
-        let store_id = self.store.id.clone();
-        let entity = cx.entity().clone();
-
-        let task = cx.background_executor().spawn({
-            let name = name.clone();
-            async move {
-                let started = Instant::now();
-                let result = match connection.secret_store(&store_id) {
-                    Some(store) => store.get_value(&name, None),
-                    None => Err(store_unavailable(&store_id)),
-                };
-
-                (result, started.elapsed().as_millis())
-            }
+        self.view.update(cx, |view, cx| {
+            view.set_listing_row(row, refresh_cache, observed_by, cx)
         });
-
-        cx.spawn(async move |_this, cx| {
-            let (result, millis) = task.await;
-
-            cx.update(|cx| {
-                entity.update(cx, |doc, cx| {
-                    doc.apply_value(generation, &name, result, millis, cx)
-                });
-            });
-        })
-        .detach();
-    }
-
-    /// Lands a retrieval. The audit event is recorded even when the user
-    /// moved on, because the store was read; the value itself is then
-    /// dropped instead of shown.
-    pub(crate) fn apply_value(
-        &mut self,
-        generation: u64,
-        name: &str,
-        result: Result<SecretValue, DbError>,
-        millis: u128,
-        cx: &mut Context<Self>,
-    ) {
-        let is_current = generation == self.value_generation
-            && self.selected == Some(SecretRowKey::Secret(name.to_string()));
-
-        let driver_id = self
-            .connection(cx)
-            .map(|connection| connection.metadata().id.clone())
-            .unwrap_or_default();
-
-        let target = RetrievalTarget {
-            profile_id: self.profile_id,
-            driver_id: &driver_id,
-            store_id: &self.store.id,
-            store_label: &self.store.label,
-            name,
-        };
-
-        match result {
-            Ok(value) => {
-                self.record_audit(
-                    value_retrieval_event(&target, value.version.as_deref(), None),
-                    cx,
-                );
-
-                if is_current {
-                    self.value = ValueState::Loaded(Box::new(RetrievedValue::new(&value)));
-                }
-            }
-            Err(error) => {
-                let user_error = db_error_to_user_facing(&error);
-                let failure = ValueFailure {
-                    message: error.to_string(),
-                    correlation_id: user_error.correlation_id,
-                    decrypt_denied: matches!(error, DbError::PermissionDenied(_)),
-                };
-
-                self.record_audit(value_retrieval_event(&target, None, Some(&failure)), cx);
-                report_error(user_error, cx);
-
-                if is_current {
-                    self.value = ValueState::Failed(failure);
-                }
-            }
-        }
-
-        if is_current {
-            self.last_call = Some(CallTiming {
-                call: StoreCall::Retrieve,
-                millis,
-            });
-            cx.notify();
-        }
-    }
-
-    fn record_audit(&self, event: dbflux_core::observability::EventRecord, cx: &gpui::App) {
-        if let Err(error) = self.app_state.read(cx).audit_service().record(event) {
-            log::warn!("[secret store] failed to record value retrieval audit event: {error}");
-        }
     }
 }
 
-fn store_unavailable(store_id: &str) -> DbError {
+/// Why the history is being listed: something the user did, or a reload the
+/// view runs on its own after the connection changed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HistoryLoad {
+    Requested,
+    Automatic,
+}
+
+pub(super) fn store_unavailable(store_id: &str) -> DbError {
     DbError::NotSupported(dbflux_i18n::t!(
         "document.secret_store.error.store_unavailable",
         store = store_id

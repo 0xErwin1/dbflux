@@ -53,6 +53,8 @@ DBFlux 的翻译分布在三处，各自的贡献方式不同：应用程序界�
 1. 在 `web/src/i18n/locale-registry.ts` 中注册该区域设置。`id` 是公开标识——它会成为 URL 前缀（`/es/`、`/zh-Hans/`）以及 HTML 的 `lang`/`hreflang` 取值，因此必须是合法的 [BCP-47](https://en.wikipedia.org/wiki/IETF_language_tag) 标签（用连字符，绝不用下划线）。`docsDirectory` 指定 `docs/` 下的文件夹名称，可以与 `id` 不同。
 2. 新增 `web/src/i18n/<locale>.ts`，导出一个 `Dictionary` 对象。该类型是穷尽的：缺少任何键都会导致编译错误，由 `pnpm check` 捕获。
 
+已注册的区域设置也会参与网站根路径的语言检测：访问 `/` 时，网站会以浏览器语言中第一个已有翻译的语言打开，除非读者已在语言切换器中选择了语言。只有 `/` 会被重定向，因此指明了区域设置的链接始终按原样打开。
+
 如果你不熟悉 TypeScript，可以提交一个 issue 说明你的语言，由我们来接手代码部分——真正需要母语者投入时间的是翻译文件与文档翻译。
 
 ## 检查你的工作

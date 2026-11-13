@@ -139,3 +139,234 @@ fn profile_config_rejects_a_blank_region() {
 
     assert!(matches!(error, DbError::InvalidProfile(_)));
 }
+
+fn secrets_config(region: &str) -> DbConfig {
+    DbConfig::AwsSecrets {
+        region: region.to_string(),
+        profile: Some("11111111-1111-1111-1111-111111111111".to_string()),
+        access_key_id: None,
+        endpoint: Some("http://localhost:4566".to_string()),
+    }
+}
+
+#[test]
+fn metadata_advertises_the_region_switch() {
+    assert!(
+        AWS_SECRETS_METADATA
+            .capabilities
+            .contains(DriverCapabilities::REGION_SWITCH)
+    );
+}
+
+#[test]
+fn with_region_rewrites_only_the_region() {
+    let config = secrets_config("us-east-1");
+
+    let switched = AwsSecretsDriver::new()
+        .with_region(&config, " eu-west-1 ")
+        .expect("the aws secrets driver supports a region");
+
+    match (&config, &switched) {
+        (
+            DbConfig::AwsSecrets {
+                profile: before_profile,
+                access_key_id: before_keys,
+                endpoint: before_endpoint,
+                ..
+            },
+            DbConfig::AwsSecrets {
+                region,
+                profile,
+                access_key_id,
+                endpoint,
+            },
+        ) => {
+            assert_eq!(region, "eu-west-1");
+            assert_eq!(profile, before_profile);
+            assert_eq!(access_key_id, before_keys);
+            assert_eq!(endpoint, before_endpoint);
+        }
+        other => panic!("expected two DbConfig::AwsSecrets, got {other:?}"),
+    }
+}
+
+#[test]
+fn with_region_refuses_an_empty_region() {
+    let config = secrets_config("us-east-1");
+
+    assert!(
+        AwsSecretsDriver::new()
+            .with_region(&config, "   ")
+            .is_none()
+    );
+}
+
+#[test]
+fn with_region_ignores_another_drivers_config() {
+    let config = DbConfig::default_s3();
+
+    assert!(
+        AwsSecretsDriver::new()
+            .with_region(&config, "eu-west-1")
+            .is_none()
+    );
+}
+
+#[test]
+fn region_names_come_back_sorted_trimmed_and_distinct() {
+    let names = normalize_regions([
+        "us-west-2".to_string(),
+        " eu-west-1 ".to_string(),
+        "us-west-2".to_string(),
+        String::new(),
+        "ap-south-1".to_string(),
+    ]);
+
+    assert_eq!(names, ["ap-south-1", "eu-west-1", "us-west-2"]);
+}
+
+#[test]
+fn the_region_catalog_fetches_once_and_reuses_the_answer() {
+    let catalog = RegionCatalog::new();
+    let mut fetches = 0;
+
+    for _ in 0..2 {
+        let regions = catalog
+            .regions(|| {
+                fetches += 1;
+                Ok(vec!["eu-west-1".to_string()])
+            })
+            .expect("regions");
+        assert_eq!(regions, ["eu-west-1"]);
+    }
+
+    assert_eq!(fetches, 1);
+}
+
+#[test]
+fn the_region_catalog_does_not_cache_a_failure() {
+    let catalog = RegionCatalog::new();
+
+    let failed = catalog.regions(|| {
+        Err(DbError::PermissionDenied(dbflux_core::FormattedError::new(
+            "denied",
+        )))
+    });
+    assert!(failed.is_err());
+
+    let regions = catalog
+        .regions(|| Ok(vec!["eu-west-1".to_string()]))
+        .expect("the retry reaches the provider");
+
+    assert_eq!(regions, ["eu-west-1"]);
+}
+
+/// Two concurrent callers of a cold catalog share one fetch: the lock is held
+/// from the cache check through the cache write, so the second caller waits
+/// for the first one's answer instead of asking the provider again.
+#[test]
+fn concurrent_callers_of_a_cold_catalog_share_one_fetch() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let catalog = Arc::new(RegionCatalog::new());
+    let fetches = Arc::new(AtomicUsize::new(0));
+    let start = Arc::new(std::sync::Barrier::new(2));
+
+    let callers: Vec<_> = (0..2)
+        .map(|_| {
+            let catalog = catalog.clone();
+            let fetches = fetches.clone();
+            let start = start.clone();
+
+            std::thread::spawn(move || {
+                start.wait();
+                catalog
+                    .regions(|| {
+                        fetches.fetch_add(1, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        Ok(vec!["eu-west-1".to_string()])
+                    })
+                    .expect("regions")
+            })
+        })
+        .collect();
+
+    for caller in callers {
+        let regions = caller.join().expect("caller thread");
+        assert_eq!(regions, ["eu-west-1"]);
+    }
+
+    assert_eq!(fetches.load(Ordering::SeqCst), 1);
+}
+
+fn static_key_config(access_key_id: Option<&str>) -> DbConfig {
+    DbConfig::AwsSecrets {
+        region: "us-east-1".to_string(),
+        profile: None,
+        access_key_id: access_key_id.map(str::to_string),
+        endpoint: Some("http://localhost:4566".to_string()),
+    }
+}
+
+/// A profile that names an Access Key ID must not connect without its secret:
+/// the SDK would build no static credentials and answer with whatever identity
+/// the default chain finds.
+#[test]
+fn an_access_key_id_without_its_secret_is_refused() {
+    let error = require_static_secret(&static_key_config(Some("AKIAEXAMPLE")), None)
+        .expect_err("the secret access key is missing");
+
+    match error {
+        DbError::InvalidProfile(message) => {
+            assert!(message.contains("Access Key ID"), "{message}");
+            assert!(message.contains("secret access key"), "{message}");
+        }
+        other => panic!("expected InvalidProfile, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_access_key_id_with_its_secret_passes_the_guard() {
+    let secret = SecretString::from("secret".to_string());
+
+    require_static_secret(&static_key_config(Some("AKIAEXAMPLE")), Some(&secret))
+        .expect("the key is present");
+}
+
+/// The guard belongs to the secret-bearing path only: a profile without an
+/// Access Key ID reaches the default credential chain on purpose.
+#[test]
+fn a_profile_without_static_keys_passes_the_guard_without_a_password() {
+    require_static_secret(&static_key_config(None), None).expect("no static key to guard");
+
+    require_static_secret(&DbConfig::default_s3(), None)
+        .expect("another driver's config is not this driver's concern");
+}
+
+/// The guard runs on the path the connect pipeline and both switch paths use,
+/// before any AWS call, so a profile that lost its stored secret fails with a
+/// message instead of connecting as whatever identity the SDK finds.
+#[test]
+fn connecting_a_static_key_profile_without_its_secret_fails_before_any_aws_call() {
+    let profile = ConnectionProfile::new_with_driver(
+        "static-keys",
+        DbKind::AwsSecrets,
+        "builtin:aws_secrets",
+        static_key_config(Some("AKIAEXAMPLE")),
+    );
+
+    let Err(error) = AwsSecretsDriver::new().connect_with_secrets(&profile, None, None) else {
+        panic!("a static-key profile without its secret must not connect");
+    };
+
+    assert!(matches!(error, DbError::InvalidProfile(_)), "{error:?}");
+}
+
+/// A blank Access Key ID means "no static keys" everywhere else — `profile_config`
+/// trims it away — so the guard must not treat it as a key that lost its secret.
+#[test]
+fn a_blank_access_key_id_counts_as_no_static_key() {
+    require_static_secret(&static_key_config(Some("   ")), None)
+        .expect("a blank id reaches the default credential chain");
+}

@@ -1,0 +1,34 @@
+{
+  "title": "DBFlux redesign: Streaming: topic details, consumer groups, cluster overview · light",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Streaming, row \"Streaming: topic details, consumer groups, cluster overview · light\".",
+  "artboards": [
+    {
+      "file": "01-isl-light-str-topic.html",
+      "title": "Streaming: topic details",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-light-str-groups.html",
+      "title": "Streaming: consumer groups, list and detail",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-light-str-groups-states.html",
+      "title": "Streaming: consumer groups states",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 920
+    },
+    {
+      "file": "04-isl-light-str-overview.html",
+      "title": "Streaming: cluster overview",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}

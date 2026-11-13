@@ -23,7 +23,7 @@ mod slot_sync;
 
 /// A document connection whose builder support is set per test. It
 /// answers no query.
-struct StubDocumentConnection {
+pub(in crate::data_grid_panel) struct StubDocumentConnection {
     metadata: dbflux_core::DriverMetadata,
     features: DocumentFeatures,
     codec: Option<MongoDocumentCodec>,
@@ -32,7 +32,11 @@ struct StubDocumentConnection {
 }
 
 impl StubDocumentConnection {
-    fn new(category: DatabaseCategory, features: DocumentFeatures, codec: bool) -> Self {
+    pub(in crate::data_grid_panel) fn new(
+        category: DatabaseCategory,
+        features: DocumentFeatures,
+        codec: bool,
+    ) -> Self {
         Self {
             metadata: dbflux_core::DriverMetadata {
                 id: "stub-documents".to_string(),

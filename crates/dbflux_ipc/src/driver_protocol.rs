@@ -1,14 +1,14 @@
 use crate::audit::AuditEventEmitDto;
-use crate::envelope::{DRIVER_RPC_V1_6, DRIVER_RPC_V1_7, ProtocolVersion};
+use crate::envelope::{DRIVER_RPC_V1_6, DRIVER_RPC_V1_7, DRIVER_RPC_V1_9, ProtocolVersion};
 use dbflux_core::{
     CodeGenCapabilities, CodeGeneratorInfo, CollectionBrowseRequest, CollectionCountRequest,
     CollectionRef, ColumnMeta, CrudResult, CustomTypeInfo, DatabaseInfo, DbSchemaInfo,
     DescribeRequest, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, DriverFormDef,
     DriverMetadata, ExecutionContext, ExplainRequest, Pagination, QueryRequest, QueryResult,
-    QueryResultShape, Row, RowDelete, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticFilter,
-    SemanticPlan, SemanticRequest, TableBrowseRequest, TableCountRequest, TableInfo, Value,
-    ViewInfo,
+    QueryResultShape, RootSectionDef, RootSectionPage, Row, RowDelete, RowInsert, RowPatch,
+    SchemaColumnInfo, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SemanticFilter, SemanticPlan, SemanticRequest, TableBrowseRequest,
+    TableCountRequest, TableInfo, Value, ViewInfo,
 };
 use dbflux_core::{
     HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -548,6 +548,15 @@ pub fn protocol_carries_result_sets(version: ProtocolVersion) -> bool {
         || (version.major == DRIVER_RPC_V1_7.major && version.minor >= DRIVER_RPC_V1_7.minor)
 }
 
+/// Whether the root section requests (`RootSections`, `RootSectionItems`,
+/// `ExecuteRootSectionAction`) and their responses are available on a session
+/// that negotiated `version`. Introduced in v1.9; an older peer cannot decode
+/// those variants, so neither side sends them to it.
+pub fn protocol_carries_root_sections(version: ProtocolVersion) -> bool {
+    version.major > DRIVER_RPC_V1_9.major
+        || (version.major == DRIVER_RPC_V1_9.major && version.minor >= DRIVER_RPC_V1_9.minor)
+}
+
 /// Whether `Execute` and `ExecuteWithHandle` may carry `QueryRequestDto::limit`
 /// on a session that negotiated `version`.
 ///
@@ -774,6 +783,18 @@ pub enum DriverRequestBody {
     KvKeyCount {
         keyspace: Option<u32>,
     },
+    // v1.9: driver-declared sidebar root sections, appended after the last
+    // v1.8 variant. Sent only on sessions that negotiated v1.9 or newer.
+    RootSections,
+    RootSectionItems {
+        section_id: String,
+        page_token: Option<String>,
+    },
+    ExecuteRootSectionAction {
+        section_id: String,
+        item_id: String,
+        action_id: String,
+    },
 }
 
 /// Request envelope for driver RPC operations.
@@ -950,6 +971,15 @@ pub enum DriverResponseBody {
     BrowseResultSets {
         results: QueryResultSetsDto,
     },
+    // v1.9: answers to the root section requests, appended after the last
+    // v1.8 variant.
+    RootSections {
+        sections: Vec<RootSectionDef>,
+    },
+    RootSectionPage {
+        page: RootSectionPage,
+    },
+    RootSectionActionDone,
 }
 
 /// Response envelope for driver RPC operations.
@@ -1021,7 +1051,7 @@ mod tests {
         DriverRequestBody, DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
         DriverRpcError, DriverRpcErrorCode, QueryRequestDto, QueryResultDto, QueryResultSetsDto,
         QueryResultShapeDto, ResultSetDto, protocol_carries_request_row_limit,
-        protocol_carries_result_sets,
+        protocol_carries_result_sets, protocol_carries_root_sections,
     };
     use crate::ProtocolVersion;
     use dbflux_core::{
@@ -1879,6 +1909,54 @@ mod tests {
         assert!(protocol_carries_request_row_limit(ProtocolVersion::new(
             2, 0
         )));
+    }
+
+    #[test]
+    fn root_section_requests_need_v1_9() {
+        assert!(!protocol_carries_root_sections(ProtocolVersion::new(1, 0)));
+        assert!(!protocol_carries_root_sections(ProtocolVersion::new(1, 8)));
+        assert!(protocol_carries_root_sections(ProtocolVersion::new(1, 9)));
+        assert!(protocol_carries_root_sections(ProtocolVersion::new(2, 0)));
+    }
+
+    #[test]
+    fn root_section_requests_are_appended_after_the_last_v1_8_request_variant() {
+        assert_eq!(wire_variant_index(&DriverRequestBody::RootSections), 58);
+        assert_eq!(
+            wire_variant_index(&DriverRequestBody::RootSectionItems {
+                section_id: "buckets".into(),
+                page_token: None,
+            }),
+            59
+        );
+        assert_eq!(
+            wire_variant_index(&DriverRequestBody::ExecuteRootSectionAction {
+                section_id: "buckets".into(),
+                item_id: "logs".into(),
+                action_id: "delete".into(),
+            }),
+            60
+        );
+    }
+
+    #[test]
+    fn root_section_responses_are_appended_after_the_last_v1_8_response_variant() {
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::RootSections {
+                sections: Vec::new()
+            }),
+            40
+        );
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::RootSectionPage {
+                page: dbflux_core::RootSectionPage::default()
+            }),
+            41
+        );
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::RootSectionActionDone),
+            42
+        );
     }
 
     #[test]

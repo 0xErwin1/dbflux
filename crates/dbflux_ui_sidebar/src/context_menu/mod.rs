@@ -72,7 +72,10 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
         | SchemaNodeKind::InstanceMetricLeaf
         | SchemaNodeKind::InstanceInspectorsFolder
         | SchemaNodeKind::InstanceInspectorLeaf
-        | SchemaNodeKind::InstanceOverviewLeaf => true,
+        | SchemaNodeKind::InstanceOverviewLeaf
+        | SchemaNodeKind::RootSectionItem
+        | SchemaNodeKind::Column
+        | SchemaNodeKind::CollectionField => true,
 
         SchemaNodeKind::Loading
         | SchemaNodeKind::EmptyDatabasesFolder
@@ -100,13 +103,11 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
         | SchemaNodeKind::ForeignKeysFolder
         | SchemaNodeKind::ConstraintsFolder
         | SchemaNodeKind::StorageHintsFolder
-        | SchemaNodeKind::Column
         | SchemaNodeKind::Constraint
         | SchemaNodeKind::StorageHintItem
         | SchemaNodeKind::Routine
         | SchemaNodeKind::DatabaseIndexesFolder
         | SchemaNodeKind::CollectionFieldsFolder
-        | SchemaNodeKind::CollectionField
         | SchemaNodeKind::CollectionIndexesFolder
         | SchemaNodeKind::CollectionIndex
         | SchemaNodeKind::EnumValue
@@ -114,8 +115,8 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
         | SchemaNodeKind::Placeholder
         | SchemaNodeKind::DependentsFolder
         | SchemaNodeKind::DependentItem
-        | SchemaNodeKind::Bucket
-        | SchemaNodeKind::BucketsFolder
+        | SchemaNodeKind::RootSection
+        | SchemaNodeKind::RootSectionLoadMore
         | SchemaNodeKind::SecretStore
         | SchemaNodeKind::SecretPath
         | SchemaNodeKind::InstanceFolder => false,
@@ -221,7 +222,7 @@ impl ContextMenuState {
 }
 
 impl Sidebar {
-    fn append_menu_section(
+    pub(crate) fn append_menu_section(
         items: &mut Vec<ContextMenuItem>,
         section: impl IntoIterator<Item = ContextMenuItem>,
     ) {
@@ -1434,6 +1435,24 @@ impl Sidebar {
                 items
             }
 
+            SchemaNodeKind::RootSectionItem => self.root_section_item_menu(item_id),
+
+            SchemaNodeKind::Column => vec![
+                ContextMenuItem::item(
+                    dbflux_i18n::t!("sidebar.menu.copy_column_name"),
+                    ContextMenuAction::CopyColumnName,
+                )
+                .with_icon(AppIcon::Copy),
+            ],
+
+            SchemaNodeKind::CollectionField => vec![
+                ContextMenuItem::item(
+                    dbflux_i18n::t!("sidebar.menu.copy_field_name"),
+                    ContextMenuAction::CopyColumnName,
+                )
+                .with_icon(AppIcon::Copy),
+            ],
+
             _ => vec![],
         }
     }
@@ -1835,7 +1854,8 @@ impl Sidebar {
                     | SchemaNodeKind::SavedChartItem
                     | SchemaNodeKind::InstanceMetricLeaf
                     | SchemaNodeKind::InstanceInspectorLeaf
-                    | SchemaNodeKind::InstanceOverviewLeaf => {
+                    | SchemaNodeKind::InstanceOverviewLeaf
+                    | SchemaNodeKind::RootSectionItem => {
                         // Delegate to execute_item which emits the correct sidebar event.
                         self.execute_item(&item_id, cx);
                     }
@@ -2100,8 +2120,19 @@ impl Sidebar {
                     cx.write_to_clipboard(ClipboardItem::new_string(id_str));
                 }
             }
+            ContextMenuAction::CopyColumnName => {
+                if let Some(
+                    SchemaNodeId::Column { name, .. } | SchemaNodeId::CollectionField { name, .. },
+                ) = parse_node_id(&item_id)
+                {
+                    cx.write_to_clipboard(ClipboardItem::new_string(name));
+                }
+            }
             ContextMenuAction::CompareSchema => {
                 self.open_schema_diff_from_context(&item_id, cx);
+            }
+            ContextMenuAction::RootSectionAction(action_id) => {
+                self.request_root_section_action(&item_id, &action_id, cx);
             }
         }
 
@@ -2409,13 +2440,15 @@ mod menu_i18n_tests {
         assert_ne!(english, spanish);
     }
 
-    const B3_KEYS: [&str; 6] = [
+    const B3_KEYS: [&str; 8] = [
         "sidebar.menu.new_dashboard",
         "sidebar.menu.import_dashboard",
         "sidebar.menu.rename_ellipsis",
         "sidebar.menu.delete",
         "sidebar.menu.copy_metric_id",
         "sidebar.menu.copy_inspector_id",
+        "sidebar.menu.copy_column_name",
+        "sidebar.menu.copy_field_name",
     ];
 
     #[test]
@@ -2534,7 +2567,7 @@ mod menu_availability_tests {
     ];
 
     /// Kinds whose rows open a context menu.
-    const KINDS_WITH_MENU: [SchemaNodeKind; 24] = [
+    const KINDS_WITH_MENU: [SchemaNodeKind; 27] = [
         SchemaNodeKind::ConnectionFolder,
         SchemaNodeKind::Profile,
         SchemaNodeKind::DatabasesFolder,
@@ -2559,13 +2592,17 @@ mod menu_availability_tests {
         SchemaNodeKind::InstanceInspectorsFolder,
         SchemaNodeKind::InstanceInspectorLeaf,
         SchemaNodeKind::InstanceOverviewLeaf,
+        SchemaNodeKind::RootSectionItem,
+        SchemaNodeKind::Column,
+        SchemaNodeKind::CollectionField,
     ];
 
     #[test]
     fn every_node_kind_declares_whether_it_has_a_menu() {
         let mut all_kinds = ALL_KINDS.to_vec();
-        all_kinds.push(SchemaNodeKind::Bucket);
-        all_kinds.push(SchemaNodeKind::BucketsFolder);
+        all_kinds.push(SchemaNodeKind::RootSection);
+        all_kinds.push(SchemaNodeKind::RootSectionItem);
+        all_kinds.push(SchemaNodeKind::RootSectionLoadMore);
         all_kinds.push(SchemaNodeKind::SecretStore);
         all_kinds.push(SchemaNodeKind::SecretPath);
 
@@ -2943,6 +2980,16 @@ mod menu_availability_tests {
                 metric_id: "sessions".into(),
             },
             SchemaNodeId::InstanceOverviewLeaf { profile_id },
+            SchemaNodeId::Column {
+                profile_id,
+                table: "users".into(),
+                name: "email".into(),
+            },
+            SchemaNodeId::CollectionField {
+                profile_id,
+                collection: "events".into(),
+                name: "payload".into(),
+            },
         ];
 
         window
@@ -2964,6 +3011,55 @@ mod menu_availability_tests {
                 }
             })
             .expect("sidebar alive");
+    }
+
+    /// The column and collection field menus copy the bare name, not the
+    /// qualified one or the node id.
+    #[gpui::test]
+    async fn column_and_field_menus_copy_the_bare_name(cx: &mut TestAppContext) {
+        let (state, profile_id) = connected_profile(cx);
+        let window = cx.add_window(|window, cx| Sidebar::new(state.clone(), window, cx));
+
+        let cases = [
+            (
+                SchemaNodeId::Column {
+                    profile_id,
+                    table: "users".into(),
+                    name: "email".into(),
+                },
+                "email",
+            ),
+            (
+                SchemaNodeId::CollectionField {
+                    profile_id,
+                    collection: "events".into(),
+                    name: "payload".into(),
+                },
+                "payload",
+            ),
+        ];
+
+        for (node_id, expected) in cases {
+            window
+                .update(cx, |sidebar, _, cx| {
+                    sidebar.open_menu_for_item(&node_id.to_string(), point(px(0.), px(0.)), cx);
+                    let menu = sidebar.context_menu_state().expect("menu opens");
+                    let index = menu
+                        .items
+                        .iter()
+                        .position(|item| matches!(item.action, ContextMenuAction::CopyColumnName))
+                        .expect("menu offers the copy entry");
+                    sidebar.context_menu_execute_at(index, cx);
+                    assert!(!sidebar.has_context_menu_open());
+                })
+                .expect("sidebar alive");
+
+            let copied = cx
+                .read_from_clipboard()
+                .and_then(|item| item.text())
+                .expect("clipboard holds text");
+            assert_eq!(copied, expected);
+        }
     }
 
     fn center(bounds: Bounds<Pixels>) -> gpui::Point<Pixels> {

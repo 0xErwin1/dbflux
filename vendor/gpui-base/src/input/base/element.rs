@@ -4085,6 +4085,145 @@ mod tests {
         assert_eq!(displayed_line_number(10_000_000), 9_999_999);
     }
 
+    struct FieldHarness(Entity<crate::input::InputState>);
+
+    impl Render for FieldHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.0.clone())
+        }
+    }
+
+    fn decoration_field(
+        cx: &mut TestAppContext,
+        text: &str,
+        masked: bool,
+    ) -> (
+        Entity<crate::input::InputState>,
+        gpui::WindowHandle<FieldHarness>,
+    ) {
+        cx.update(crate::init);
+        let mut field = None;
+        let window = cx.open_window(size(px(240.), px(40.)), |window, cx| {
+            let state = cx.new(|cx| {
+                crate::input::InputState::new(window, cx)
+                    .masked(masked)
+                    .default_value(text)
+            });
+            field = Some(state.clone());
+            FieldHarness(state)
+        });
+        (field.unwrap(), window)
+    }
+
+    /// The styles the single-line field turns into text runs this frame.
+    fn field_styles(
+        field: &Entity<crate::input::InputState>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Vec<(Range<usize>, HighlightStyle)>> {
+        window.draw(cx).clear(cx);
+        let len = field.read(cx).text.len();
+        TextElement::new(field.clone()).highlight_lines(&[0], px(0.), 0..len, cx)
+    }
+
+    fn reference_style() -> HighlightStyle {
+        HighlightStyle {
+            color: Some(gpui::red()),
+            background_color: Some(gpui::blue()),
+            underline: Some(gpui::UnderlineStyle {
+                thickness: px(1.),
+                color: Some(gpui::green()),
+                wavy: false,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn styled_ranges(styles: &[(Range<usize>, HighlightStyle)]) -> Vec<Range<usize>> {
+        styles
+            .iter()
+            .filter(|(_, style)| *style == reference_style())
+            .map(|(range, _)| range.clone())
+            .collect()
+    }
+
+    #[gpui::test]
+    fn single_line_decorations_style_runs_while_editing_and_follow_edits(cx: &mut TestAppContext) {
+        let (field, window) = decoration_field(cx, "a {{x}} b", false);
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, cx| {
+            let collection = field.update(cx, |state, cx| {
+                state.focus(window, cx);
+                state.create_decorations_collection(
+                    vec![crate::input::TextDecoration::new(2..7, reference_style())],
+                    cx,
+                )
+            });
+            let styles = field_styles(&field, window, cx).expect("decorated runs");
+            assert_eq!(styled_ranges(&styles), vec![2..7]);
+            assert_eq!(styles.first().map(|(range, _)| range.clone()), Some(0..2));
+            assert_eq!(styles.last().map(|(range, _)| range.clone()), Some(7..9));
+
+            let type_at = |offset: usize, text: &str, window: &mut Window, cx: &mut App| {
+                field.update(cx, |state, cx| {
+                    state.set_selected_range(offset..offset, cx);
+                    state.replace_text_in_range(None, text, window, cx);
+                });
+            };
+            // Before: the range shifts.
+            type_at(0, "XY", window, cx);
+            assert_eq!(collection.get_ranges(cx), vec![4..9]);
+            // Inside: the range grows.
+            type_at(6, "z", window, cx);
+            assert_eq!(collection.get_ranges(cx), vec![4..10]);
+            // At either edge: the range does not grow.
+            type_at(10, "!", window, cx);
+            type_at(4, "?", window, cx);
+            assert_eq!(collection.get_ranges(cx), vec![5..11]);
+            assert_eq!(field.read(cx).value(), "XYa ?{{zx}}! b");
+            let styles = field_styles(&field, window, cx).expect("decorated runs");
+            assert_eq!(styled_ranges(&styles), vec![5..11]);
+
+            collection.set(
+                vec![crate::input::TextDecoration::new(0..1, reference_style())],
+                cx,
+            );
+            let styles = field_styles(&field, window, cx).expect("decorated runs");
+            assert_eq!(styled_ranges(&styles), vec![0..1]);
+            collection.clear(cx);
+            assert_eq!(field_styles(&field, window, cx), None);
+        });
+    }
+
+    #[gpui::test]
+    fn single_line_decorations_are_not_drawn_while_masked(cx: &mut TestAppContext) {
+        let (field, window) = decoration_field(cx, "secret", true);
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, cx| {
+            let collection = field.update(cx, |state, cx| {
+                state.create_decorations_collection(
+                    vec![crate::input::TextDecoration::new(0..3, reference_style())],
+                    cx,
+                )
+            });
+            assert_eq!(field_styles(&field, window, cx), None);
+            assert_eq!(collection.get_ranges(cx), vec![0..3]);
+
+            field.update(cx, |state, cx| state.set_masked(false, window, cx));
+            let styles = field_styles(&field, window, cx).expect("decorated runs");
+            assert_eq!(styled_ranges(&styles), vec![0..3]);
+        });
+    }
+
+    #[gpui::test]
+    fn single_line_field_without_decorations_keeps_plain_runs(cx: &mut TestAppContext) {
+        let (field, window) = decoration_field(cx, "plain {{x}}", false);
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, cx| {
+            assert_eq!(field_styles(&field, window, cx), None);
+        });
+    }
+
     struct DecorationHarness(Entity<EditorState>);
 
     impl Render for DecorationHarness {

@@ -68,7 +68,7 @@ DBFlux 的翻译工作在 [Hosted Weblate](https://hosted.weblate.org/engage/dbf
 curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/install.sh | sudo bash
 ```
 
-各平台都有对应的安装包 — tarball、AUR、`.deb`、`.rpm`、AppImage、Nix、macOS DMG 与 Windows 安装程序 — 都放在 [Releases](https://github.com/0xErwin1/dbflux/releases) 页面。完整指南（包括未签名的 macOS 与 Windows 构建所需的 Gatekeeper 与 SmartScreen 步骤）见[安装 DBFlux](INSTALL.md)。
+各平台都有对应的安装包 — tarball、AUR、`.deb`、`.rpm`、AppImage、Nix、macOS DMG 与 Windows 安装程序 — 都放在 [Releases](https://github.com/0xErwin1/dbflux/releases) 页面。完整指南（包括未签名的 macOS 与 Windows 构建所需的 Gatekeeper 与 SmartScreen 步骤）见[安装 DBFlux](INSTALL.md)。在 macOS 与 Linux 上，也可以通过 Homebrew 安装：`brew install --cask 0xErwin1/dbflux/dbflux`。
 
 ## 功能
 

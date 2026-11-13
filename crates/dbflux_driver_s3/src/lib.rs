@@ -16,5 +16,6 @@
 
 mod driver;
 mod error_formatter;
+mod root_sections;
 
 pub use driver::{S3_FORM, S3_METADATA, S3Driver};

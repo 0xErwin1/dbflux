@@ -178,6 +178,7 @@ fn map_ssm_error(
         message,
         recovery_hint,
         retriable: false,
+        correlation_id: None,
     }
     .into()
 }

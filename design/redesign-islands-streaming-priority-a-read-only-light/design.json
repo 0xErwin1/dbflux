@@ -1,0 +1,34 @@
+{
+  "title": "DBFlux redesign: Streaming (Kafka, Redpanda, MSK): priority A, read only · light",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Streaming, row \"Streaming (Kafka, Redpanda, MSK): priority A, read only · light\".",
+  "artboards": [
+    {
+      "file": "01-isl-light-str-browser.html",
+      "title": "Streaming: topic message browser + detail pane",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-light-str-browser-states.html",
+      "title": "Streaming: message browser states",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1260
+    },
+    {
+      "file": "03-isl-light-str-sidebar.html",
+      "title": "Streaming: sidebar sections, states and menus",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 860
+    },
+    {
+      "file": "04-isl-light-str-conn-form.html",
+      "title": "Streaming: connection form, per-endpoint test",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1140
+    }
+  ]
+}

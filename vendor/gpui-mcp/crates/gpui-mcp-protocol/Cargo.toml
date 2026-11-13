@@ -3,6 +3,8 @@ name = "gpui-mcp-protocol"
 description = "Authenticated local wire protocol shared by gpui-mcp components"
 version = "0.1.0"
 edition = "2024"
+# Apps link this crate, so it builds on an older Rust than the rest of the
+# workspace. The `msrv` CI job keeps it that way.
 rust-version = "1.95"
 license = "Apache-2.0"
 repository = "https://github.com/themixednuts/gpui-mcp"

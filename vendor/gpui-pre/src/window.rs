@@ -2611,6 +2611,23 @@ impl Window {
         }
     }
 
+    /// Schedule a frame without discarding cached views.
+    ///
+    /// [`Self::refresh`] renders every cached view again. This only marks the
+    /// window dirty, so the frame costs what the pending notifications cost:
+    /// a cached view that was not notified replays its previous output.
+    pub fn request_frame(&mut self) {
+        if self.invalidator.not_drawing() {
+            self.invalidator.set_dirty(true);
+        }
+    }
+
+    /// Whether the window has been invalidated since it last drew, so that GPUI
+    /// will draw another frame without any further invalidation.
+    pub fn frame_pending(&self) -> bool {
+        self.invalidator.is_dirty()
+    }
+
     /// Observe completed rendered frames and paint a final tooling overlay.
     ///
     /// The window stores a weak reference. Retain `observer` for as long as it
@@ -2647,6 +2664,31 @@ impl Window {
         let Some(node_id) = self.rendered_frame.observed.accessibility_id(id) else {
             return false;
         };
+        // Composite controls may redirect semantic focus to an inner editor.
+        // Honor their standard AccessKit Focus handler before using the frame's
+        // own focus handle, just as a screen reader does.
+        #[cfg(not(target_family = "wasm"))]
+        if self
+            .a11y
+            .action_listeners
+            .get(&node_id)
+            .is_some_and(|listeners| {
+                listeners
+                    .iter()
+                    .any(|(action, _)| *action == accesskit::Action::Focus)
+            })
+        {
+            self.handle_a11y_action(
+                accesskit::ActionRequest {
+                    action: accesskit::Action::Focus,
+                    target_tree: accesskit::TreeId::ROOT,
+                    target_node: node_id,
+                    data: None,
+                },
+                cx,
+            );
+            return true;
+        }
         let Some(focus_id) = self.a11y.focus_ids.get(&node_id).copied() else {
             return false;
         };
@@ -3778,6 +3820,7 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
+        let draw_started = Instant::now();
         // Drain every draw in profiler builds so a previous frame's
         // first-invalidation timestamp can't be attributed to this one.
         #[cfg(feature = "profiler")]
@@ -3920,6 +3963,7 @@ impl Window {
         }
         self.needs_present.set(true);
 
+        let draw_duration = draw_started.elapsed();
         #[cfg(feature = "profiler")]
         {
             self.window_profiler
@@ -3928,6 +3972,15 @@ impl Window {
                 .window_profiler
                 .end_draw(frame_dirty.dirty_at, frame_dirty.invalidations);
             self.debug_frame_overlay.record_frame(draw_duration);
+        }
+        if self.rendered_frame.observed.is_enabled() {
+            let frame_observers = crate::frame_observer::live_observers(&mut self.frame_observers);
+            if !frame_observers.is_empty() {
+                let frame = self.rendered_frame.observed.drawn(draw_duration);
+                for observer in &frame_observers {
+                    observer.frame_drawn(&frame);
+                }
+            }
         }
 
         // Exit the scope to obtain the arena-clear token this draw owes; the
@@ -4029,9 +4082,14 @@ impl Window {
 
         let mut frame_observers = crate::frame_observer::live_observers(&mut self.frame_observers);
         self.next_frame.observed.begin(!frame_observers.is_empty());
+        self.next_frame.observed.set_window_refresh(self.refreshing);
+        let observation_started = Instant::now();
         for observer in &frame_observers {
             observer.frame_started(self);
         }
+        self.next_frame
+            .observed
+            .add_observation(observation_started.elapsed());
 
         self.a11y.sync_active_flag(!frame_observers.is_empty());
         let platform_a11y_active_at_start = self.a11y.platform_is_active();
@@ -4111,21 +4169,33 @@ impl Window {
                 scale_factor: self.scale_factor,
                 tab_stop_count: self.next_frame.tab_stops.tab_stop_count(),
             };
-            Some(self.a11y.end_frame(frame_info))
+            let finish_started = Instant::now();
+            let tree_update = self.a11y.end_frame(frame_info);
+            // Without a platform adapter the tree is finished only for observers.
+            if !platform_a11y_active_at_start {
+                self.next_frame
+                    .observed
+                    .add_observation(finish_started.elapsed());
+            }
+            Some(tree_update)
         } else {
             None
         };
+        let observation_started = Instant::now();
         if let Some(tree_update) = tree_update.as_ref()
             && !frame_observers.is_empty()
         {
-            let frame = self.next_frame.observed.finish(tree_update.clone());
+            let frame = Arc::new(self.next_frame.observed.finish(tree_update.clone()));
             for observer in &frame_observers {
-                observer.accessibility_updated(&frame);
+                observer.accessibility_frame(&frame);
             }
         }
         for observer in &frame_observers {
             observer.paint_started();
         }
+        self.next_frame
+            .observed
+            .add_observation(observation_started.elapsed());
 
         // Now actually paint the elements.
         #[cfg(feature = "profiler")]
@@ -4157,12 +4227,16 @@ impl Window {
                 paint: Instant::now().duration_since(paint_start),
             });
 
+        let observation_started = Instant::now();
         for observer in &frame_observers {
             observer.paint_overlay(self, cx);
         }
         for observer in &frame_observers {
             observer.frame_finished();
         }
+        self.next_frame
+            .observed
+            .add_observation(observation_started.elapsed());
 
         if platform_a11y_active_at_start
             && self.a11y.platform_is_active()

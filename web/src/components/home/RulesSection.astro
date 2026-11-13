@@ -23,7 +23,7 @@ const RULES = [
   <ol class="rules__grid reveal-group">
     {
       RULES.map((rule) => (
-        <li class="rules__card c14 lift">
+        <li class="rules__card card c14 lift">
           <div class="rules__top">
             <span class="rules__n x">{rule.n}</span>
             <Glyph name={rule.icon} size={26} class="rules__icon" />
@@ -49,7 +49,6 @@ const RULES = [
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 14px;
-    align-items: start;
     margin: 0;
     padding: 0;
     list-style: none;
@@ -59,21 +58,7 @@ const RULES = [
     display: flex;
     flex-direction: column;
     gap: 16px;
-    min-height: 364px;
     padding: 30px 26px 34px;
-    background: var(--panel);
-  }
-
-  .rules__card:nth-child(2) {
-    margin-top: 60px;
-  }
-
-  .rules__card:nth-child(3) {
-    margin-top: 120px;
-  }
-
-  .rules__card:nth-child(4) {
-    margin-top: 180px;
   }
 
   .rules__top {
@@ -106,11 +91,6 @@ const RULES = [
   @media (max-width: 1180px) {
     .rules__grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .rules__card:nth-child(n) {
-      margin-top: 0;
-      min-height: 0;
     }
   }
 

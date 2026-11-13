@@ -175,10 +175,22 @@ components:
   value_source:
     literal: 字符
     env: 环境变量
+    dotenv: "Dotenv 文件"
+    file: "密钥文件"
     secret: AWS 云密钥管理
     parameter: AWS 参数存储
     auth: 认证会话字段
     json_key_placeholder: JSON 键（可选）
+    placeholder:
+      env: "VARIABLE_NAME"
+      dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+      file: "/run/secrets/db_password"
+    hint:
+      env: "DBFlux 每次连接时从环境变量 %{name} 读取。DBFlux 不保存该值。"
+      dotenv: "DBFlux 每次连接时从 %{path} 中的 %{key} 读取。该文件必须只有您能读取。"
+      dotenv_missing_key: "在路径后添加键：~/path/to/file.env#KEY"
+      file: "DBFlux 每次连接时从 %{path} 读取。该文件必须只有您能读取。"
+      file_with_key: "DBFlux 每次连接时从 JSON 文件 %{path} 中的 %{key} 读取。该文件必须只有您能读取。"
   file_picker:
     browse: 浏览…
   column_projection:
@@ -325,6 +337,7 @@ connection_manager:
     seconds: 秒
     connection_name: 连接名称
     password: 密码
+    password_unreadable: "无法读取已保存的密码：系统密钥环可能已锁定"
     key_passphrase_optional: 密钥口令（可选）
     ssh_password: SSH 密码
     ca_cert_path: CA 证书路径
@@ -1587,6 +1600,7 @@ document:
       header: "%{column} · 第 %{row} 行"
       item:
         copy: 复制
+        copy_column_name: 复制列名
         view_document: 查看文档
         add_document: 添加文档
         duplicate_document: 复制文档
@@ -3405,6 +3419,31 @@ document:
     new: 新建标签页
     close_named: "关闭 %{title}"
     unsaved_changes: 未保存的更改
+  secret:
+    subtitle: "%{store} · %{connection} · %{region}"
+    subtitle_no_region: "%{store} · %{connection}"
+    close: "关闭标签页"
+    retry: "重试"
+    removed:
+      title: "此密钥已被删除"
+      body: "%{name} 已不在存储中。此标签页不会读取或写入任何内容。请关闭它，并在密钥被重新创建后再次打开。"
+      draft_title: "已删除 — 保留了你未保存的文本"
+      draft_body: "%{name} 已被删除，因此无法保存任何内容。下面的文本为只读；请复制所需内容，然后丢弃。"
+    scheduled:
+      draft_title: "已安排删除 — 保留了你未保存的文本"
+      draft_body: "%{name} 已安排删除，因此无法保存任何内容。下面的文本为只读。恢复该密钥后可再次编辑，或丢弃该文本。"
+    region_mismatch:
+      title: "此连接位于另一个区域"
+      body: "%{name} 属于 %{region}，而连接位于 %{live}。在连接回到 %{region} 之前，此标签页不会读取或写入任何内容。"
+    footer:
+      value_scope: "值仅在此标签页中可见，关闭时清除"
+      hint:
+        reveal: "显示"
+        edit: "编辑"
+        roll_back: "回滚"
+    rotation_badge:
+      on: "轮换已开启"
+      off: "轮换已关闭"
   secret_store:
     title: "%{store} · %{connection}"
     search_placeholder: "搜索在存储端执行，绝不会列出值"
@@ -3412,6 +3451,9 @@ document:
       refresh: "刷新"
     load_more: "加载下一页"
     loading_more: "正在加载下一页…"
+    region:
+      label: "区域"
+      switch_failed: "无法切换到区域 %{region}：%{error}"
     columns:
       name: "名称"
       description: "描述"
@@ -3438,29 +3480,60 @@ document:
     error:
       connection_unavailable: "连接不可用"
       store_unavailable: "该连接没有存储 %{store}"
+      may_have_landed: "服务可能在失败之前已应用该更改。请先检查该密钥，再重试。"
+      audit_unrecorded: "无法将该失败写入审计记录。"
     footer:
       loaded:
         one: "已加载 %{count} 个密钥"
         many: "已加载 %{count} 个密钥"
+      paths:
+        one: "%{count} 个路径"
+        many: "%{count} 个路径"
+      parameters:
+        one: "%{count} 个参数"
+        many: "%{count} 个参数"
+      tree_summary: "%{path} 下已加载 %{paths} · %{parameters}"
+      flat_summary: "%{path} 下 %{parameters}"
       hint:
         open: "打开"
         retrieve: "获取值"
-        copy_id: "复制 ID"
+        copy_arn: "复制 ARN"
         filter: "筛选"
         up: "上移"
     status:
       list_timing:
         one: "列出 · %{count} 个密钥 · %{millis} ms"
         many: "列出 · %{count} 个密钥 · %{millis} ms"
+      list_timing_parameters:
+        one: "列出 · %{count} 个参数 · %{millis} ms"
+        many: "列出 · %{count} 个参数 · %{millis} ms"
       describe_timing: "描述 · %{millis} ms"
       retrieve_timing: "获取值 · %{millis} ms"
       duration_tooltip: "上次存储调用的客户端耗时"
+    date:
+      short: "%{month}%{day}日 %{time}"
+      short_with_year: "%{year}年%{month}%{day}日 %{time}"
+      months:
+        jan: "1月"
+        feb: "2月"
+        mar: "3月"
+        apr: "4月"
+        may: "5月"
+        jun: "6月"
+        jul: "7月"
+        aug: "8月"
+        sep: "9月"
+        oct: "10月"
+        nov: "11月"
+        dec: "12月"
     rotation:
       off: "关闭"
       enabled: "已启用"
       disabled: "已禁用"
       every_days: "每 %{count} 天"
       every_hours: "每 %{count} 小时"
+      on_schedule: "按计划"
+      window: "时间窗口"
       schedule_with_window: "%{schedule} · 时间窗口 %{window}（%{expression}）"
       title: "轮换"
       status: "状态"
@@ -3470,6 +3543,7 @@ document:
       last: "上次轮换"
     details:
       none: "选择一个密钥以查看其详细信息"
+      close: "关闭"
       loading: "正在加载详细信息…"
       failed: "无法加载详细信息"
       title: "密钥详细信息"
@@ -3484,7 +3558,29 @@ document:
       created: "创建时间"
       last_changed: "上次更改"
       last_retrieved: "上次获取"
-      versions: "版本"
+      open_in_tab: "在标签页中打开"
+      resize: "调整详情面板大小"
+    versions:
+      title: "版本"
+      history_title: "历史记录"
+      count:
+        one: "%{count} 个版本"
+        many: "%{count} 个版本"
+      column:
+        version: "版本"
+        labels: "暂存标签"
+        created: "创建时间"
+      no_labels: "无标签"
+      history_version: "v%{id}"
+      loading: "正在加载版本…"
+      failed: "无法加载版本"
+      scheduled_for_deletion: "已计划删除；恢复后即可查看其版本"
+      not_connected: "未连接；连接后即可查看版本"
+      retrieve: "获取版本 %{version}"
+      back_to_current: "返回当前版本"
+      shown: "正在显示版本 %{version}"
+      not_current: "这不是当前版本。获取操作会被审计，值不会。"
+      current_unknown: "当前版本暂时未知。获取操作会被审计，值不会。"
     tags:
       title: "标签"
       none: "无标签"
@@ -3493,10 +3589,19 @@ document:
       body: "%{name} 属于 %{service}。%{service} 负责轮换和更新它，因此 DBFlux 以只读方式显示。"
     action:
       copy_resource_id: "复制 ARN"
+    context_menu:
+      copy_name: "复制名称"
+      copy_path: "复制路径"
+      arn_loading: "ARN 将随详情一起加载…"
+      arn_missing: "存储未报告资源标识符"
+      arn_failed: "无法加载详情：%{error}"
+      open_in_tab: "在标签页中打开"
     toast:
       value_copied: "已将值复制到剪贴板"
       resource_id_copied: "已将 ARN 复制到剪贴板"
       error_copied: "已将错误复制到剪贴板"
+      name_copied: "已将名称复制到剪贴板"
+      path_copied: "已将路径复制到剪贴板"
     value:
       title: "值"
       not_loaded: "值未加载"
@@ -3509,7 +3614,21 @@ document:
       view:
         key_value: "键/值"
         plaintext: "纯文本"
-      plaintext_only: "仅当值可解析为只含标量值的单层 JSON 对象时才会打开键/值视图。嵌套 JSON、数组和其他任何文本都以纯文本打开。"
+        key_value_unavailable: "键/值视图不可用：该值不是只含标量值的单层 JSON 对象。"
+      kind:
+        dotenv:
+          one: "dotenv · %{count} 行"
+          many: "dotenv · %{count} 行"
+        json_keys:
+          one: "JSON · %{count} 个键"
+          many: "JSON · %{count} 个键"
+        json_items:
+          one: "JSON · %{count} 项"
+          many: "JSON · %{count} 项"
+        text:
+          one: "文本 · %{count} 行"
+          many: "文本 · %{count} 行"
+        binary: "二进制"
       binary_size: "二进制 · %{size}"
       read_only: "只读"
       binary_note: "二进制值由其他工具写入。DBFlux 以 base64 显示且不会编辑它们。"
@@ -3529,6 +3648,155 @@ document:
       metadata_loaded: "元数据已加载 · 仅值获取失败"
       deletion_scheduled: "计划于 %{date} 删除"
       deletion_scheduled_body: "在恢复之前无法获取其值。"
+      deletion_scheduled_unknown: "已计划删除"
+
+    edit:
+      open: "编辑值"
+      save: "保存为新版本"
+      discard: "放弃"
+      hint: "保存会写入一个新版本并将其设为当前版本。文本将按此处的内容原样保存。"
+      invalid_json: "存储的值是 JSON，而编辑后的文本不是有效的 JSON：%{error}"
+      unsaved_block: "%{name} 有未保存的编辑。请先保存或放弃。"
+      connection_replaced: "编辑该值时连接已被替换。请放弃编辑器，并在保存前重新获取该值。"
+      refused_managed: "%{name} 的值由 %{service} 管理，因此无法编辑。"
+      refused_deletion: "%{name} 已安排删除，在恢复之前无法编辑其值。"
+      change_summary: "未保存的值编辑"
+      find: "查找"
+      modified: "已修改"
+      footer:
+        version: "版本 %{version}"
+        summary_unversioned: "UTF-8 · %{size}"
+        changed_one: "已更改 1 行"
+        changed_other: "已更改 %{count} 行"
+        saving_note: "保存会创建新版本并将其设为当前版本"
+        caret: "第 %{line} 行，第 %{column} 列"
+      changed_elsewhere: "此密钥已在别处更改。保存会在其上写入新版本。"
+      hint_formatted: "保存会写入新版本并将其设为当前版本。格式化视图会把原本为单行的值还原为单行，把原本为多行的值按此处文本保存；原始视图按此处文本原样保存。"
+      mode:
+        formatted: "格式化"
+        raw: "原始"
+        toggle: "在格式化与原始之间切换"
+    dialog:
+      cancel: "取消"
+    write:
+      refused_managed: "%{name} 由 %{service} 管理，因此无法在此更改。"
+      refused_deletion: "%{name} 已安排删除。请先恢复再更改。"
+      region_switching: "正在切换区域。请等连接稳定后重试；未写入任何内容。"
+      connection_replaced: "此对话框打开期间连接已被替换。未写入任何内容。请从当前连接重新打开。"
+      details_stale: "显示的详情来自之前的连接，正在重新读取；请稍后再试。"
+      in_progress: "另一项更改仍在写入。请等待其完成。"
+      landed_on_previous_session: "连接被替换后有一项更改完成。它写入的是之前的连接，此文档未更新；请刷新以查看当前状态。"
+    rollback:
+      button: "回滚"
+      action: "回滚到版本 %{version}"
+      footnote: "回滚会把所选版本设为当前版本，并把原来的当前版本保留为上一版本。不会重写任何值。"
+      title: "回滚 %{name}"
+      lead: "要把版本 %{version} 设为 %{name} 的当前版本吗？"
+      effect: "读取当前版本的应用将收到所选版本的值。目前的版本 %{current} 仍作为上一版本保留。"
+      confirm: "回滚"
+      done: "%{name} 现在使用版本 %{version}"
+      no_earlier_version: "%{name} 没有可回滚的更早版本。"
+      history_loading: "版本仍在加载。请稍后再试。"
+      pending_reason: "此版本由未完成的轮换暂存，因此无法回滚到它。"
+      only_pending: "所有较早版本都由未完成的轮换暂存，无法回滚。"
+    delete:
+      button: "删除"
+      title:
+        secret: "删除密钥"
+        parameter: "删除参数"
+      lead_scheduled: "要删除 %{name} 吗？读取它的应用会立即开始失败：在恢复之前该密钥不可用。恢复期只限制可恢复的时长。"
+      lead_irreversible: "要删除 %{name} 吗？此操作无法撤销。参数会立即被移除，读取它的应用将立刻开始失败。"
+      window_label: "恢复期"
+      window_option: "%{count} 天"
+      window_hint: "在此期间内可以恢复该密钥。"
+      confirm_label:
+        secret: "输入密钥名称以确认"
+        parameter: "输入参数名称以确认"
+      confirm_placeholder: "名称"
+      confirm_aria: "输入 %{name} 以确认删除"
+      confirm_scheduled: "安排删除"
+      confirm_irreversible: "永久删除"
+      done: "已删除 %{name}"
+      done_scheduled: "%{name} 已安排在 %{date} 删除"
+      done_scheduled_undated: "%{name} 已安排删除"
+      scheduled_detail: "%{name} 已于 %{deleted} 删除，恢复期为 %{days} 天。恢复之前无法获取其值。"
+      row_deleted: "删除时间"
+      row_deletes_on: "将于以下时间删除"
+    restore:
+      button: "恢复密钥"
+      done: "已恢复 %{name}"
+    rotate:
+      button: "立即轮换"
+      immediately: "立即轮换"
+      refused_off: "%{name} 的轮换已关闭。请先在“编辑轮换”中开启，再进行轮换。"
+      done: "已开始轮换 %{name}"
+      done_version: "已开始轮换 %{name}；版本 %{version} 将在轮换完成后成为当前版本"
+      title: "立即轮换 %{name}"
+      lead: "要立即轮换 %{name} 吗？"
+      effect: "这会立即运行该密钥的轮换函数并创建一个在轮换完成后成为当前版本的新版本。在此之前，读取该密钥的应用仍会收到旧值。"
+      confirm: "立即轮换"
+    rotation_edit:
+      button: "编辑轮换"
+      title: "编辑 %{name} 的轮换"
+      enabled: "自动轮换此密钥"
+      schedule: "计划"
+      schedule_hint: "rate(30 days)、rate(12 hours) 或六个字段的 cron(...) 表达式。"
+      schedule_placeholder: "rate(30 days)"
+      window: "轮换时间窗口"
+      window_hint: "整数小时，从 1h 到 24h。留空则保留当前窗口。"
+      window_placeholder: "4h"
+      function: "轮换函数"
+      function_hint: "负责轮换该密钥的函数，使用其 ARN。留空则保留当前函数。"
+      function_placeholder: "函数 ARN"
+      already_off: "轮换已经关闭。"
+      confirm: "保存轮换"
+      done: "已更新 %{name} 的轮换"
+      unfinished: "轮换已关闭，但版本 %{version} 仍保留着一次未完成轮换的待定阶段。"
+      unfinished_title: "已取消的轮换让版本 %{version} 处于待定状态"
+      unfinished_body: "请检查版本 %{version} 背后的凭据，然后移动或删除它的待定阶段。在此之前，之后的轮换可能会被拒绝。"
+    tags_edit:
+      button: "编辑标签"
+      title: "编辑 %{name} 的标签"
+      lead: "更改标签不会触及值或任何版本。"
+      key_placeholder: "键"
+      value_placeholder: "值"
+      key_label: "标签 %{row} 的键"
+      value_label: "标签 %{row} 的值"
+      remove: "移除标签"
+      add: "添加标签"
+      confirm: "保存标签"
+      done: "已更新 %{name} 的标签"
+      no_change: "没有任何标签与该密钥现有的标签不同。"
+      duplicate: "键 %{key} 出现在多于一行中。"
+    description_edit:
+      button: "编辑描述"
+      title: "编辑 %{name} 的描述"
+      label: "描述"
+      placeholder: "无描述"
+      confirm: "保存描述"
+      confirm_version: "另存为新版本"
+      done: "已更新 %{name} 的描述"
+      done_version: "已更新 %{name} 的描述；版本 %{version} 包含新的描述"
+      rewrites_title: "这会把值重新写成一个新版本"
+      rewrites_body: "此存储只能通过重新写入值来更改描述，因此保存会创建新版本。值、类型和键保持不变。"
+    create:
+      button_secret: "新建密钥"
+      button_parameter: "新建参数"
+      title_secret: "新建密钥"
+      title_parameter: "新建参数"
+      name: "名称"
+      name_placeholder: "名称"
+      type: "类型"
+      value: "值"
+      description: "描述"
+      description_placeholder: "可选"
+      tier: "层级"
+      key: "加密密钥"
+      key_placeholder: "默认密钥"
+      tags: "标签"
+      confirm: "创建"
+      done: "已创建 %{name}"
+      exists: "%{name} 已存在。请换一个名称；创建绝不会替换已有的密钥。"
 document_tree:
   search_placeholder: 搜索…
   view:
@@ -3935,6 +4203,14 @@ palette:
       name: 聚焦任务面板
     toggle_sidebar:
       name: 切换侧边栏
+    toggle_full_screen:
+      name: 切换全屏
+    increase_interface_size:
+      name: "增大界面尺寸"
+    decrease_interface_size:
+      name: "减小界面尺寸"
+    reset_interface_size:
+      name: "重置界面尺寸"
     toggle_editor:
       name: 切换编辑器面板
     toggle_results:
@@ -4054,6 +4330,13 @@ settings:
       option:
         default: "默认"
         compact: "紧凑"
+    scrollbars:
+      help: "应用于所有窗口。"
+      label: "显示滚动条"
+      option:
+        while_scrolling: "滚动时"
+        on_hover: "悬停时"
+        always: "始终"
     language:
       label: 语言
       option:
@@ -4347,6 +4630,10 @@ settings:
       cancel_task: 取消任务
       clear_finished_tasks: 清除已完成任务
       toggle_sidebar: 切换侧边栏
+      toggle_full_screen: 切换全屏
+      increase_interface_size: "增大界面尺寸"
+      decrease_interface_size: "减小界面尺寸"
+      reset_interface_size: "重置界面尺寸"
       open_settings: 打开设置
       open_login_modal: 打开认证配置文件登录
       open_sso_wizard: 打开 AWS SSO 向导
@@ -4406,6 +4693,8 @@ settings:
       toggle_console: 显示或隐藏控制台
       load_more: 加载更多
       edit_expiry: 编辑过期时间…
+      edit_value: 编辑值
+      roll_back_version: "回滚到上一版本"
       copy_preview: 复制预览
       import_items: "导入…"
       import_from_client: "从其他客户端导入…"
@@ -4895,6 +5184,7 @@ settings:
     kind:
       driver: 驱动
       auth_provider: 认证提供程序
+      secret_provider: 密钥提供程序
     action:
       add_variable: "添加变量"
       add_argument: "添加参数"
@@ -5138,6 +5428,8 @@ sidebar:
     new_script_folder: 新建文件夹
     reveal_file_manager: 在文件管理器中显示
     copy_path: 复制路径
+    copy_column_name: 复制列名
+    copy_field_name: 复制字段名
     schema_diff_unsupported: Schema 差异仅适用于关系型连接。
     new_dashboard: 新建仪表盘…
     import_dashboard: 从 JSON 导入仪表盘…
@@ -5179,6 +5471,11 @@ sidebar:
     dashboards: "仪表板"
     connections: 连接
     scripts: 脚本
+  root_section:
+    confirm_message: "要对“%{item}”执行“%{action}”吗？"
+    action:
+      delete_bucket: "删除存储桶"
+      delete_bucket_description: "删除该存储桶。只能删除空存储桶，且此操作无法撤销。"
   task:
     connecting: "正在连接 %{name}"
     disconnecting: "正在断开 %{name}"
@@ -5187,7 +5484,7 @@ sidebar:
     disconnect_hook_cancelled: 断开 Hook 已取消
     post_disconnect_hook_cancelled: 断开后 Hook 已取消
     loading_event_streams: "正在加载事件流：%{name}"
-    listing_buckets: "正在列出存储桶：%{name}"
+    listing_root_section: "正在列出%{section}：%{name}"
     loading_database_schema: "正在加载 Schema：%{name}"
     connecting_to_database: "正在连接数据库：%{name}"
     refreshing_database: "正在刷新数据库：%{name}"
@@ -5235,7 +5532,16 @@ sidebar:
       indexes: "加载索引失败：%{error}"
       foreign_keys: "加载外键失败：%{error}"
       routines: "加载例程失败：%{error}"
-    list_buckets_failed: "列出存储桶失败：%{error}"
+    list_root_section_failed: "列出%{section}失败：%{error}"
+    root_section_action_failed: "对 %{item} 执行%{action}失败：%{error}"
+    root_section_action_audit_failed: "已对 %{item} 执行%{action}，但未能记录其审计事件：%{error}"
+    root_section_action_connection_changed: "未对 %{item} 执行%{action}：请求操作后连接已更改。"
+    root_section_action_refused:
+      read_only: "未执行%{action}：此连接为只读。"
+      read_only_profile: "未执行%{action}：此连接的配置文件设置为只读。"
+      read_only_server: "未执行%{action}：服务器拒绝了此连接的修改。"
+      approval_unavailable: "未执行%{action}：此连接需要审批，而侧边栏操作暂不支持审批。"
+    root_section_invalid_id: "已跳过驱动声明的根分区 \"%{section}\"：分区 ID 必须唯一，且不能包含 \"|\"。"
     code_generation_failed: "代码生成失败：%{error}"
     loading_event_streams: 正在加载事件流…
     load_schema_failed: "加载 Schema 失败：%{error}"
@@ -5307,6 +5613,7 @@ sidebar:
       error_retry: "错误：%{error} — 点击重试"
       connect_failed: "连接失败：%{error}"
       remote_listing_count: "%{label}（%{count}）"
+      load_more: "加载更多"
       remote_dashboards_error_retry: "错误：%{error} — 折叠再展开以重试"
       used_by_objects:
         one: 被 1 个对象使用

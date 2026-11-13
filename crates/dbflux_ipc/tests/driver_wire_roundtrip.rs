@@ -9,7 +9,7 @@
 //! `Value` payloads can be written but never read back.
 //!
 //! These tests round-trip every request and response variant with the
-//! version-1.8 envelope and assert that the decoded value re-encodes to the
+//! version-1.9 envelope and assert that the decoded value re-encodes to the
 //! exact bytes it came from, which catches both truncation and field
 //! omission. Targeted tests cover the payload shapes that regressed: JSON documents
 //! carried as `JsonText`, and every formerly-skipped field on a wire-crossing
@@ -25,12 +25,14 @@ use dbflux_core::{
     CollectionCountRequest, CollectionRef, ColumnInfo, ColumnKind, ColumnMeta, CrudResult,
     CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbKind, DbSchemaInfo,
     DescribeRequest, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, DriverFormDef,
-    DriverMetadata, DriverMetadataBuilder, ExecutionContext, ExecutionSourceContext,
-    ExplainRequest, FormSection, FormTab, HashDeleteRequest, HashSetRequest, KeyBulkGetRequest,
-    KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult,
-    KeyLoadState, KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest,
-    KeyTtlRequest, KeyType, KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest,
-    ListSetRequest, PlannedQuery, QueryLanguage, QueryRequest, QueryResult, RelationalSchema,
+    DriverMetadata, DriverMetadataBuilder, ExecutionClassification, ExecutionContext,
+    ExecutionSourceContext, ExplainRequest, FormSection, FormTab, HashDeleteRequest,
+    HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest,
+    KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyLoadState, KeyPersistRequest,
+    KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType,
+    KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, LocalizedText,
+    PlannedQuery, QueryLanguage, QueryRequest, QueryResult, RelationalSchema, RootItemPresentation,
+    RootSectionAction, RootSectionDef, RootSectionItem, RootSectionPage, RootSectionPresentation,
     RowDelete, RowIdentity, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
     SemanticPlanKind, SemanticRequest, SetAddRequest, SetRemoveRequest, StreamAddRequest,
@@ -697,6 +699,22 @@ fn request_variants() -> Vec<(&'static str, DriverRequestBody)> {
             "KvKeyCount",
             DriverRequestBody::KvKeyCount { keyspace: Some(2) },
         ),
+        ("RootSections", DriverRequestBody::RootSections),
+        (
+            "RootSectionItems",
+            DriverRequestBody::RootSectionItems {
+                section_id: "buckets".to_string(),
+                page_token: Some("page-2".to_string()),
+            },
+        ),
+        (
+            "ExecuteRootSectionAction",
+            DriverRequestBody::ExecuteRootSectionAction {
+                section_id: "buckets".to_string(),
+                item_id: "logs".to_string(),
+                action_id: "delete".to_string(),
+            },
+        ),
     ]
 }
 
@@ -957,7 +975,71 @@ fn response_variants() -> Vec<(&'static str, DriverResponseBody)> {
                 results: query_result_sets_dto(),
             },
         ),
+        (
+            "RootSections",
+            DriverResponseBody::RootSections {
+                sections: vec![full_root_section(), bare_root_section()],
+            },
+        ),
+        (
+            "RootSectionPage",
+            DriverResponseBody::RootSectionPage {
+                page: root_section_page(),
+            },
+        ),
+        (
+            "RootSectionActionDone",
+            DriverResponseBody::RootSectionActionDone,
+        ),
     ]
+}
+
+/// A section with every optional field set.
+fn full_root_section() -> RootSectionDef {
+    RootSectionDef {
+        id: "buckets".to_string(),
+        label: LocalizedText::keyed("sidebar.buckets", "Buckets"),
+        counted_label_key: Some("sidebar.buckets_count".to_string()),
+        empty_label: LocalizedText::keyed("sidebar.no_buckets", "No buckets"),
+        presentation: Some(RootSectionPresentation::ObjectContainerTable),
+        item_presentation: RootItemPresentation::ObjectBrowser,
+        opens_on_profile_activation: true,
+        item_actions: vec![RootSectionAction {
+            id: "delete".to_string(),
+            label: LocalizedText::keyed("sidebar.delete_bucket", "Delete bucket"),
+            description: Some(LocalizedText::plain("Deletes the bucket")),
+            classification: ExecutionClassification::AdminDestructive,
+        }],
+    }
+}
+
+/// A section with every optional field unset.
+fn bare_root_section() -> RootSectionDef {
+    RootSectionDef {
+        id: "topics".to_string(),
+        label: LocalizedText::plain("Topics"),
+        counted_label_key: None,
+        empty_label: LocalizedText::plain("No topics"),
+        presentation: None,
+        item_presentation: RootItemPresentation::ObjectBrowser,
+        opens_on_profile_activation: false,
+        item_actions: vec![RootSectionAction {
+            id: "inspect".to_string(),
+            label: LocalizedText::plain("Inspect"),
+            description: None,
+            classification: ExecutionClassification::Read,
+        }],
+    }
+}
+
+fn root_section_page() -> RootSectionPage {
+    RootSectionPage {
+        items: vec![RootSectionItem {
+            id: "logs".to_string(),
+            label: "logs".to_string(),
+        }],
+        next_page_token: Some("page-2".to_string()),
+    }
 }
 
 /// Names a request variant. The match has no wildcard arm, so adding a
@@ -1023,6 +1105,9 @@ fn request_variant_name(body: &DriverRequestBody) -> &'static str {
         DriverRequestBody::GenerateCode { .. } => "GenerateCode",
         DriverRequestBody::SchemaColumns { .. } => "SchemaColumns",
         DriverRequestBody::KvKeyCount { .. } => "KvKeyCount",
+        DriverRequestBody::RootSections => "RootSections",
+        DriverRequestBody::RootSectionItems { .. } => "RootSectionItems",
+        DriverRequestBody::ExecuteRootSectionAction { .. } => "ExecuteRootSectionAction",
     }
 }
 
@@ -1071,6 +1156,9 @@ fn response_variant_name(body: &DriverResponseBody) -> &'static str {
         DriverResponseBody::ExecuteResultSets { .. } => "ExecuteResultSets",
         DriverResponseBody::ExecuteWithHandleResultSets { .. } => "ExecuteWithHandleResultSets",
         DriverResponseBody::BrowseResultSets { .. } => "BrowseResultSets",
+        DriverResponseBody::RootSections { .. } => "RootSections",
+        DriverResponseBody::RootSectionPage { .. } => "RootSectionPage",
+        DriverResponseBody::RootSectionActionDone => "RootSectionActionDone",
     }
 }
 
@@ -1151,6 +1239,32 @@ fn every_request_variant_round_trips() {
 fn every_response_variant_round_trips() {
     for (name, body) in response_variants() {
         assert_postcard_roundtrip_named(name, &response_envelope(body));
+    }
+}
+
+#[test]
+fn root_section_def_round_trips_with_optional_fields_set_and_unset() {
+    for section in [full_root_section(), bare_root_section()] {
+        assert_postcard_roundtrip(&section);
+
+        let encoded = postcard::to_allocvec(&section).expect("encode");
+        let decoded: RootSectionDef = postcard::from_bytes(&encoded).expect("decode");
+        assert_eq!(decoded, section);
+    }
+}
+
+#[test]
+fn root_section_page_round_trips_on_the_last_page() {
+    for page in [
+        root_section_page(),
+        RootSectionPage {
+            items: Vec::new(),
+            next_page_token: None,
+        },
+    ] {
+        let encoded = postcard::to_allocvec(&page).expect("encode");
+        let decoded: RootSectionPage = postcard::from_bytes(&encoded).expect("decode");
+        assert_eq!(decoded, page);
     }
 }
 

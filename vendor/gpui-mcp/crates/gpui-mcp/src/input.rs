@@ -212,7 +212,7 @@ fn invalid(message: &'static str) -> BridgeError {
     BridgeError::new(ErrorCode::InvalidRequest, message)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod tests {
     use std::cell::Cell;
     use std::rc::Rc;

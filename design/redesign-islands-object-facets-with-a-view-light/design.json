@@ -1,0 +1,20 @@
+{
+  "title": "DBFlux redesign: Object facets with a view (spec S2) · light",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Tables, files and facets, row \"Object facets with a view (spec S2) · light\".",
+  "artboards": [
+    {
+      "file": "01-isl-light-facet-document.html",
+      "title": "Facets: jsonb column opens as documents",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-light-facet-series.html",
+      "title": "Facets: hypertable opens as a time series",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}

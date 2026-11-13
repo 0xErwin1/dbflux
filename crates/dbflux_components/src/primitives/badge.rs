@@ -1,118 +1,28 @@
+//! Connection-environment extensions over bolt's generic [`Badge`].
+//!
+//! The generic badge primitive lives in `bolt`; the environment semantics —
+//! the `ConnectionEnvironment` type and the translated labels — are product
+//! concerns and stay here.
+
 use dbflux_core::ConnectionEnvironment;
 use gpui::prelude::*;
-use gpui::{App, FontWeight, Hsla, SharedString, Window, div};
+use gpui::{App, FontWeight, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 
-use crate::icons::AppIcon;
-use crate::primitives::{Chamfer, Icon};
-use crate::tokens::{ChamferCut, ChromeColors, Feedback, SyntaxColors};
+use crate::tokens::{ChamferCut, Feedback};
+use bolt::primitives::Chamfer;
 
-/// Semantic tone shared by [`Badge`] and [`EnvTag`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BadgeTone {
-    Neutral,
-    Accent,
-    Info,
-    Success,
-    Warning,
-    Danger,
-    /// The NULL violet, for kinds that are neither state nor risk (a trigger
-    /// among dependent objects).
-    Violet,
-}
+// The generic badge moved to `bolt`; re-exported at this path so call sites
+// keep compiling.
+pub use bolt::primitives::{Badge, BadgeTone};
 
-impl BadgeTone {
-    /// Label color for the tone. Accent resolves to the tint so it stays
-    /// readable on the dark ground.
-    pub fn text_color(self, theme: &gpui_component::Theme) -> Hsla {
-        match self {
-            Self::Neutral => theme.muted_foreground,
-            Self::Accent => ChromeColors::tint(theme),
-            Self::Info => theme.info,
-            Self::Success => theme.success,
-            Self::Warning => theme.warning,
-            Self::Danger => theme.danger,
-            Self::Violet => {
-                if theme.mode.is_dark() {
-                    SyntaxColors::dark().number
-                } else {
-                    SyntaxColors::light().number
-                }
-            }
-        }
-    }
-
-    /// Tone of a connection environment: Production reads as danger, Staging
-    /// as warning and Development as info.
-    pub fn for_environment(environment: ConnectionEnvironment) -> Self {
-        match environment {
-            ConnectionEnvironment::Production => Self::Danger,
-            ConnectionEnvironment::Staging => Self::Warning,
-            ConnectionEnvironment::Development => Self::Info,
-        }
-    }
-
-    /// Fill behind the label: the raised surface for Neutral, a wash of the
-    /// label color at `alpha` for every other tone.
-    fn fill(self, theme: &gpui_component::Theme, alpha: f32) -> Hsla {
-        match self {
-            Self::Neutral => theme.secondary,
-            _ => self.text_color(theme).opacity(alpha),
-        }
-    }
-}
-
-/// Stateless badge: a short label on a 4 px chamfer, 20 px tall, with an
-/// optional 11 px icon before it.
-#[derive(IntoElement)]
-pub struct Badge {
-    tone: BadgeTone,
-    label: SharedString,
-    icon: Option<AppIcon>,
-}
-
-impl Badge {
-    pub fn new(label: impl Into<SharedString>, tone: BadgeTone) -> Self {
-        Self {
-            tone,
-            label: label.into(),
-            icon: None,
-        }
-    }
-
-    /// Draws `icon` in the label color before the label.
-    pub fn icon(mut self, icon: AppIcon) -> Self {
-        self.icon = Some(icon);
-        self
-    }
-}
-
-impl RenderOnce for Badge {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = cx.theme();
-        let fill = self.tone.fill(theme, Feedback::BADGE_FILL_ALPHA);
-        let text_color = self.tone.text_color(theme);
-
-        div()
-            .relative()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(Feedback::BADGE_GAP)
-            .h(Feedback::BADGE_HEIGHT)
-            .px(Feedback::BADGE_PADDING_X)
-            .child(Chamfer::new(ChamferCut::KEYCAP).fill(fill))
-            .when_some(self.icon, |badge, icon| {
-                badge.child(Icon::new(icon).size(Feedback::BADGE_ICON).color(text_color))
-            })
-            .child(
-                div()
-                    .whitespace_nowrap()
-                    .text_size(Feedback::BADGE_FONT)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(text_color)
-                    .child(self.label),
-            )
+/// Tone of a connection environment: Production reads as danger, Staging
+/// as warning and Development as info.
+pub fn environment_badge_tone(environment: ConnectionEnvironment) -> BadgeTone {
+    match environment {
+        ConnectionEnvironment::Production => BadgeTone::Danger,
+        ConnectionEnvironment::Staging => BadgeTone::Warning,
+        ConnectionEnvironment::Development => BadgeTone::Info,
     }
 }
 
@@ -137,8 +47,7 @@ impl EnvTag {
     /// The tag of a connection environment: its short label (PROD, STAGING,
     /// DEV) in the environment's tone.
     pub fn for_environment(environment: ConnectionEnvironment) -> Self {
-        Self::new(environment_short_label(environment))
-            .tone(BadgeTone::for_environment(environment))
+        Self::new(environment_short_label(environment)).tone(environment_badge_tone(environment))
     }
 
     pub fn tone(mut self, tone: BadgeTone) -> Self {
@@ -202,44 +111,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn neutral_badge_uses_the_raised_surface() {
-        let theme = gpui_component::Theme::default();
-
-        assert_eq!(BadgeTone::Neutral.fill(&theme, 0.14), theme.secondary);
-        assert_eq!(
-            BadgeTone::Neutral.text_color(&theme),
-            theme.muted_foreground
-        );
-    }
-
-    #[test]
-    fn colored_tones_wash_their_label_color() {
-        let theme = gpui_component::Theme::default();
-
-        for tone in [
-            BadgeTone::Accent,
-            BadgeTone::Info,
-            BadgeTone::Success,
-            BadgeTone::Warning,
-            BadgeTone::Danger,
-        ] {
-            let text = tone.text_color(&theme);
-            assert_eq!(tone.fill(&theme, 0.14), text.opacity(0.14));
-        }
-    }
-
-    #[test]
     fn environments_map_to_their_tones() {
         assert_eq!(
-            BadgeTone::for_environment(ConnectionEnvironment::Production),
+            environment_badge_tone(ConnectionEnvironment::Production),
             BadgeTone::Danger
         );
         assert_eq!(
-            BadgeTone::for_environment(ConnectionEnvironment::Staging),
+            environment_badge_tone(ConnectionEnvironment::Staging),
             BadgeTone::Warning
         );
         assert_eq!(
-            BadgeTone::for_environment(ConnectionEnvironment::Development),
+            environment_badge_tone(ConnectionEnvironment::Development),
             BadgeTone::Info
         );
         assert_eq!(

@@ -162,7 +162,7 @@ fn empty_state() -> AppStateEntity {
 struct Surroundings {
     pending_databases: Vec<&'static str>,
     metric_fetch_errors: HashMap<String, String>,
-    bucket_cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
+    root_sections: crate::root_sections::RootSectionCache,
 }
 
 fn render_profile(connected: ConnectedProfile, surroundings: Surroundings) -> String {
@@ -181,7 +181,7 @@ fn render_profile(connected: ConnectedProfile, surroundings: Surroundings) -> St
         &surroundings.metric_fetch_errors,
         &HashMap::new(),
         &HashMap::new(),
-        &surroundings.bucket_cache,
+        &surroundings.root_sections,
         &HashMap::new(),
     );
 
@@ -854,38 +854,100 @@ fn object_storage_lists_its_buckets() {
     let object_storage = || {
         connected_profile(
             DatabaseCategory::ObjectStorage,
-            DriverCapabilities::empty(),
+            DriverCapabilities::ROOT_SECTIONS,
             SchemaLoadingStrategy::SingleDatabase,
             SchemaSnapshot::default(),
         )
     };
+    let declared = || crate::root_sections::ProfileRootSections {
+        sections: vec![crate::root_sections::tests::buckets_section()],
+        listings: HashMap::new(),
+        ..crate::root_sections::ProfileRootSections::default()
+    };
 
     assert_shape!(
-        &render_profile(object_storage(), Surroundings::default()),
+        &render_profile(
+            object_storage(),
+            Surroundings {
+                root_sections: HashMap::from([(PROFILE_ID, declared())]).into(),
+                ..Surroundings::default()
+            },
+        ),
         "object_storage_loading",
+    );
+
+    let mut loaded = declared();
+    loaded.listings.insert(
+        "buckets".to_string(),
+        crate::root_sections::RootSectionListing {
+            items: crate::root_sections::tests::items(&["assets", "backups"]),
+            next_page_token: None,
+        },
     );
 
     assert_shape!(
         &render_profile(
             object_storage(),
             Surroundings {
-                bucket_cache: HashMap::from([(
-                    PROFILE_ID,
-                    vec![
-                        dbflux_core::BucketInfo {
-                            name: "assets".to_string(),
-                            created_at: None,
-                        },
-                        dbflux_core::BucketInfo {
-                            name: "backups".to_string(),
-                            created_at: None,
-                        },
-                    ],
-                )]),
+                root_sections: HashMap::from([(PROFILE_ID, loaded)]).into(),
                 ..Surroundings::default()
             },
         ),
         "object_storage_loaded",
+    );
+}
+
+/// Root sections do not come from the schema, so a connection that has no
+/// schema snapshot still shows them.
+#[test]
+fn object_storage_lists_its_buckets_without_a_schema() {
+    let mut object_storage = connected_profile(
+        DatabaseCategory::ObjectStorage,
+        DriverCapabilities::ROOT_SECTIONS,
+        SchemaLoadingStrategy::SingleDatabase,
+        SchemaSnapshot::default(),
+    );
+    object_storage.schema = None;
+
+    let mut loaded = crate::root_sections::ProfileRootSections {
+        sections: vec![crate::root_sections::tests::buckets_section()],
+        listings: HashMap::new(),
+        ..crate::root_sections::ProfileRootSections::default()
+    };
+    loaded.listings.insert(
+        "buckets".to_string(),
+        crate::root_sections::RootSectionListing {
+            items: crate::root_sections::tests::items(&["assets", "backups"]),
+            next_page_token: None,
+        },
+    );
+
+    assert_shape!(
+        &render_profile(
+            object_storage,
+            Surroundings {
+                root_sections: HashMap::from([(PROFILE_ID, loaded)]).into(),
+                ..Surroundings::default()
+            },
+        ),
+        "object_storage_loaded",
+    );
+}
+
+/// Until the declarations arrive the connection shows a loading row, not
+/// an empty profile.
+#[test]
+fn object_storage_shows_a_loading_row_until_its_sections_are_declared() {
+    let object_storage = connected_profile(
+        DatabaseCategory::ObjectStorage,
+        DriverCapabilities::ROOT_SECTIONS,
+        SchemaLoadingStrategy::SingleDatabase,
+        SchemaSnapshot::default(),
+    );
+
+    assert_shape!(
+        &render_profile(object_storage, Surroundings::default()),
+        "object_storage_declaring",
     );
 }
 

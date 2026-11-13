@@ -1,0 +1,266 @@
+---
+/**
+ * The DBFlux window the home live demo drives, rebuilt as DOM from the Islands
+ * boards (IslTable, IslBuilder, IslChart, IslAudit). Copy inside it stays in
+ * English, as in the app. It renders the state where the orders table has just
+ * opened; the page script moves it through the rest of the story.
+ *
+ * `data-ld-*` attributes are the script's handles and `data-ld-anchor` marks the
+ * boxes the cursor and camera aim at. The window is decorative: no element in
+ * it is focusable.
+ */
+import Glyph from '../../Glyph.astro';
+import DemoTable from './DemoTable.astro';
+import DemoBuilder from './DemoBuilder.astro';
+import DemoChart from './DemoChart.astro';
+import DemoAudit from './DemoAudit.astro';
+import './live-demo.css';
+
+interface TreeRow {
+  depth: number;
+  label: string;
+  icon: string;
+  tone?: 'link' | 'success' | 'danger' | 'violet';
+  chevron?: 'open' | 'closed';
+  /** Which expansion step reveals the row; rows without one are always shown. */
+  level?: 1 | 2 | 3 | 4;
+  /** The chevron the script turns while this row's children appear. */
+  turns?: 1 | 2 | 3 | 4;
+  meta?: string;
+  metaTone?: 'success' | 'muted';
+  top?: boolean;
+  selectable?: boolean;
+}
+
+const tree: TreeRow[] = [
+  { depth: 0, label: 'Local', icon: 'folder', chevron: 'open', top: true },
+  {
+    depth: 1,
+    label: 'shop-pg',
+    icon: 'brand/postgresql',
+    tone: 'link',
+    chevron: 'open',
+    turns: 1,
+    meta: '4 ms',
+    metaTone: 'success',
+    top: true,
+  },
+  { depth: 2, label: 'shop', icon: 'database', chevron: 'open', level: 1, turns: 2 },
+  { depth: 3, label: 'public', icon: 'layers', chevron: 'open', level: 2, turns: 3 },
+  {
+    depth: 4,
+    label: 'Tables',
+    icon: 'table',
+    chevron: 'open',
+    level: 3,
+    turns: 4,
+    meta: '6',
+    metaTone: 'muted',
+  },
+  { depth: 5, label: 'customers', icon: 'table', level: 4 },
+  { depth: 5, label: 'order_items', icon: 'table', level: 4 },
+  { depth: 5, label: 'orders', icon: 'table', level: 4, selectable: true },
+  { depth: 5, label: 'payments', icon: 'table', level: 4 },
+  { depth: 5, label: 'products', icon: 'table', level: 4 },
+  { depth: 5, label: 'refunds', icon: 'table', level: 4 },
+  {
+    depth: 4,
+    label: 'Views',
+    icon: 'eye',
+    chevron: 'closed',
+    level: 3,
+    meta: '2',
+    metaTone: 'muted',
+  },
+  {
+    depth: 1,
+    label: 'shop-prod',
+    icon: 'brand/postgresql',
+    tone: 'link',
+    chevron: 'closed',
+    meta: '31 ms',
+    metaTone: 'success',
+    top: true,
+  },
+  {
+    depth: 1,
+    label: 'notes.sqlite',
+    icon: 'brand/sqlite',
+    tone: 'link',
+    chevron: 'closed',
+    top: true,
+  },
+  {
+    depth: 1,
+    label: 'catalog-mongo',
+    icon: 'brand/mongodb',
+    tone: 'success',
+    chevron: 'closed',
+    top: true,
+  },
+  {
+    depth: 1,
+    label: 'cache-redis',
+    icon: 'brand/redis',
+    tone: 'danger',
+    chevron: 'closed',
+    top: true,
+  },
+  {
+    depth: 1,
+    label: 'metrics-influx',
+    icon: 'brand/influxdb',
+    tone: 'violet',
+    chevron: 'closed',
+    top: true,
+  },
+];
+
+const rail = [
+  { label: 'Connections', icon: 'database', hook: 'connections', on: true },
+  { label: 'Scripts', icon: 'square-terminal' },
+  { label: 'Dashboards', icon: 'chart-column-big' },
+  { label: 'MCP approvals', icon: 'bot' },
+  { label: 'Audit', icon: 'fingerprint-pattern', hook: 'audit' },
+];
+---
+
+<div class="ld-app" data-ld-app>
+  <div class="ld-top">
+    <span></span>
+    <div class="ld-command c6">
+      <Glyph name="search" size={14} class="ld-muted" />
+      <span class="ld-grow ld-muted">Search or run a command</span>
+      <span class="ld-key c4">Ctrl Shift P</span>
+    </div>
+    <span class="ld-bell">
+      <span class="ld-bell__button c6"><Glyph name="bell" size={16} /></span>
+      <span class="ld-bell__badge c4">2</span>
+    </span>
+  </div>
+
+  <div class="ld-main">
+    <div class="ld-rail">
+      {
+        rail.map((item) => (
+          <span
+            class:list={['ld-rail__item c6', { 'is-on': item.on }]}
+            data-ld-rail={item.hook}
+            data-ld-anchor={item.hook === 'audit' ? 'rail-audit' : undefined}
+          >
+            <Glyph name={item.icon} size={19} />
+          </span>
+        ))
+      }
+      <span class="ld-grow"></span>
+      <span class="ld-rail__item"><Glyph name="settings" size={19} /></span>
+    </div>
+
+    <div class="ld-island ld-sidebar c14">
+      <div class="ld-pane">
+        <div class="ld-pane__head">
+          <span class="ld-label">Connections</span>
+          <span class="ld-grow"></span>
+          <span class="ld-icon-button c6"><Glyph name="plus" size={14} /></span>
+          <span class="ld-icon-button c6"><Glyph name="list-filter" size={14} /></span>
+        </div>
+        <div class="ld-sidebar__filter">
+          <div class="ld-field c6">
+            <Glyph name="search" size={14} class="ld-muted" />
+            <span class="ld-grow ld-muted">Filter connections and schema</span>
+            <span class="ld-key c4">/</span>
+          </div>
+        </div>
+        <div class="ld-tree" data-ld-anchor="tree">
+          {
+            tree.map((row) => {
+              const line = (
+                <div
+                  class:list={[
+                    'ld-tree__row',
+                    { 'ld-tree__row--top': row.top, 'is-selected': row.selectable },
+                  ]}
+                  style={`--depth: ${row.depth}`}
+                  data-ld-orders={row.selectable ? '' : undefined}
+                >
+                  {Array.from({ length: row.depth }, (_, index) => (
+                    <span class="ld-tree__guide" style={`left: ${19 + index * 14}px`} />
+                  ))}
+                  {row.chevron ? (
+                    <span
+                      class:list={['ld-tree__chevron', { 'is-open': row.chevron === 'open' }]}
+                      data-ld-chevron={row.turns}
+                    >
+                      <Glyph name="chevron-right" size={12} />
+                    </span>
+                  ) : (
+                    <span class="ld-tree__spacer" />
+                  )}
+                  <Glyph
+                    name={row.icon}
+                    size={15}
+                    class={`ld-tree__icon${row.tone ? ` ld-${row.tone}` : ''}`}
+                  />
+                  <span class="ld-tree__label">{row.label}</span>
+                  {row.meta && (
+                    <span
+                      class:list={[
+                        'ld-tree__meta',
+                        row.metaTone === 'success' ? 'ld-success' : 'ld-muted ld-mono',
+                      ]}
+                    >
+                      {row.metaTone === 'success' && <span class="ld-diamond" />}
+                      {row.meta}
+                    </span>
+                  )}
+                </div>
+              );
+              return row.level ? (
+                <div class="ld-tree__group" data-ld-level={row.level}>
+                  {line}
+                </div>
+              ) : (
+                line
+              );
+            })
+          }
+        </div>
+        <div class="ld-sidebar__foot">
+          <span class="ld-outcome ld-success"><span class="ld-diamond"></span>2 connected</span>
+          <span>·</span>
+          <span>6 idle</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ld-documents">
+      <DemoTable />
+      <div class="ld-overlay" data-ld-chart hidden>
+        <DemoChart />
+      </div>
+      <div class="ld-overlay" data-ld-audit hidden>
+        <DemoAudit />
+      </div>
+    </div>
+
+    <DemoBuilder />
+  </div>
+
+  <div class="ld-status">
+    <span class="ld-pill ld-pill--connection c6">
+      <Glyph name="brand/postgresql" size={13} />shop-pg
+    </span>
+    <span class="ld-pill c6">
+      <Glyph name="check" size={13} class="ld-success" />
+      <span class="ld-mono" style="color: var(--text)" data-ld-status-query
+        >SELECT · 100 rows · 42 ms</span
+      >
+    </span>
+    <span class="ld-grow"></span>
+    <span class="ld-pill c6"><Glyph name="loader" size={13} />0 background tasks</span>
+    <span class="ld-pill c6">
+      <Glyph name="bot" size={13} class="ld-accent" />
+      <span class="ld-accent">2 approvals</span>
+    </span>
+  </div>
+</div>

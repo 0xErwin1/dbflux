@@ -26,12 +26,16 @@ pub(crate) struct Segment {
     /// True for the segment holding the values, false for the validity mask.
     pub values: bool,
     pub compression: String,
-    pub stats: String,
     pub count: u64,
+    pub min: Option<String>,
+    pub max: Option<String>,
+    /// Whether the segment saw a null; `None` when its statistics omit it.
+    pub has_null: Option<bool>,
     pub row_group: u64,
 }
 
-/// The `pragma_storage_info` rows of a table, keeping only the top-level
+/// The `pragma_storage_info` rows of a table (row group, column id, path,
+/// compression, count, min, max, has-null), keeping only the top-level
 /// value segments (`[i]`) and their validity masks (`[i, 0]`). Nested
 /// children of lists and structs are dropped.
 pub(crate) fn segments_from_rows(rows: &[Vec<Value>]) -> Vec<Segment> {
@@ -41,8 +45,13 @@ pub(crate) fn segments_from_rows(rows: &[Vec<Value>]) -> Vec<Segment> {
             let column_id = u32::try_from(integer(row.get(1)?)?).ok()?;
             let path = text(row.get(2)?)?;
             let compression = text(row.get(3)?)?.to_string();
-            let stats = text(row.get(4)?).unwrap_or("").to_string();
-            let count = integer(row.get(5)?)?;
+            let count = integer(row.get(4)?)?;
+            let min = row.get(5).and_then(text).map(str::to_string);
+            let max = row.get(6).and_then(text).map(str::to_string);
+            let has_null = match row.get(7) {
+                Some(Value::Bool(flag)) => Some(*flag),
+                _ => None,
+            };
 
             let parts: Vec<&str> = path
                 .trim_matches(['[', ']'])
@@ -60,8 +69,10 @@ pub(crate) fn segments_from_rows(rows: &[Vec<Value>]) -> Vec<Segment> {
                 column_id,
                 values,
                 compression,
-                stats,
                 count,
+                min,
+                max,
+                has_null,
                 row_group,
             })
         })
@@ -166,7 +177,7 @@ fn column_profile(name: &str, type_name: &str, segments: &[&Segment]) -> ColumnP
     let null_count = (!validity.is_empty()
         && validity
             .iter()
-            .all(|segment| segment.stats.contains("Has Null: false")))
+            .all(|segment| segment.has_null == Some(false)))
     .then_some(0);
 
     ColumnProfile {
@@ -183,7 +194,7 @@ fn combined_range(segments: &[&Segment], numeric: bool, exact: bool) -> Option<V
     let mut high: Option<String> = None;
 
     for segment in segments {
-        let Some((min, max)) = parse_min_max(&segment.stats) else {
+        let (Some(min), Some(max)) = (segment.min.clone(), segment.max.clone()) else {
             continue;
         };
 
@@ -207,21 +218,6 @@ fn combined_range(segments: &[&Segment], numeric: bool, exact: bool) -> Option<V
         max: high?.into(),
         exact,
     })
-}
-
-/// `Min` and `Max` of a segment's statistics text, such as
-/// `[Min: 0, Max: 6][Has Null: true, Has No Null: true]`. A segment whose
-/// values are all null reports an inverted range, which is dropped.
-pub(crate) fn parse_min_max(stats: &str) -> Option<(String, String)> {
-    let start = stats.find("[Min: ")? + "[Min: ".len();
-    let rest = &stats[start..];
-    let separator = rest.find(", Max: ")?;
-    let min = &rest[..separator];
-    let after = &rest[separator + ", Max: ".len()..];
-    let end = after.find([']', ',']).unwrap_or(after.len());
-    let max = &after[..end];
-
-    Some((min.to_string(), max.to_string()))
 }
 
 fn compare(left: &str, right: &str, numeric: bool) -> Ordering {
@@ -400,16 +396,22 @@ mod tests {
         column: i64,
         path: &str,
         compression: &str,
-        stats: &str,
         count: i64,
+        range: Option<(&str, &str)>,
+        has_null: Option<bool>,
     ) -> Vec<Value> {
+        let bound =
+            |value: Option<&str>| value.map_or(Value::Null, |text| Value::Text(text.into()));
+
         vec![
             Value::Int(row_group),
             Value::Int(column),
             Value::Text(path.to_string()),
             Value::Text(compression.to_string()),
-            Value::Text(stats.to_string()),
             Value::Int(count),
+            bound(range.map(|(min, _)| min)),
+            bound(range.map(|(_, max)| max)),
+            has_null.map_or(Value::Null, Value::Bool),
         ]
     }
 
@@ -432,82 +434,60 @@ mod tests {
                 0,
                 "[0]",
                 "BitPacking",
-                "[Min: 0, Max: 122879][Has Null: false, Has No Null: true]",
                 122_880,
+                Some(("0", "122879")),
+                Some(false),
             ),
-            row(
-                0,
-                0,
-                "[0, 0]",
-                "Constant",
-                "[Has Null: false, Has No Null: true]",
-                122_880,
-            ),
+            row(0, 0, "[0, 0]", "Constant", 122_880, None, Some(false)),
             row(
                 1,
                 0,
                 "[0]",
                 "BitPacking",
-                "[Min: 122880, Max: 299999][Has Null: false, Has No Null: true]",
                 177_120,
+                Some(("122880", "299999")),
+                Some(false),
             ),
-            row(
-                1,
-                0,
-                "[0, 0]",
-                "Constant",
-                "[Has Null: false, Has No Null: true]",
-                177_120,
-            ),
+            row(1, 0, "[0, 0]", "Constant", 177_120, None, Some(false)),
             row(
                 0,
                 1,
                 "[1]",
                 "Dictionary",
-                "[Min: path0, Max: path9, Has Unicode: false, Max String Length: 6][Has Null: false, Has No Null: true]",
                 122_880,
+                Some(("path0", "path9")),
+                Some(false),
             ),
             row(
                 1,
                 1,
                 "[1]",
                 "FSST",
-                "[Min: path1, Max: path8, Has Unicode: false, Max String Length: 6][Has Null: false, Has No Null: true]",
                 177_120,
+                Some(("path1", "path8")),
+                Some(false),
             ),
             row(
                 0,
                 2,
                 "[2]",
                 "BitPacking",
-                "[Min: 0, Max: 6][Has Null: true, Has No Null: true]",
                 122_880,
+                Some(("0", "6")),
+                Some(true),
             ),
-            row(
-                0,
-                2,
-                "[2, 0]",
-                "Uncompressed",
-                "[Has Null: true, Has No Null: true]",
-                122_880,
-            ),
-            row(0, 3, "[3]", "BitPacking", "[[Min: 1, Max: 2]]", 122_880),
+            row(0, 2, "[2, 0]", "Uncompressed", 122_880, None, Some(true)),
+            row(0, 3, "[3]", "BitPacking", 122_880, None, Some(false)),
             row(
                 0,
                 3,
                 "[3, 1]",
                 "BitPacking",
-                "[Min: 0, Max: 122880]",
                 245_760,
+                Some(("0", "122880")),
+                Some(false),
             ),
-            row(
-                0,
-                3,
-                "[3, 1, 0]",
-                "Constant",
-                "[Has Null: false, Has No Null: true]",
-                245_760,
-            ),
+            row(0, 3, "[3, 1, 0]", "Constant", 245_760, None, Some(false)),
         ]
     }
 
@@ -568,16 +548,20 @@ mod tests {
                 column_id: 0,
                 values: true,
                 compression: "RLE".into(),
-                stats: "[Min: 9, Max: 10]".into(),
                 count: 1,
+                min: Some("9".into()),
+                max: Some("10".into()),
+                has_null: Some(false),
                 row_group: 0,
             },
             Segment {
                 column_id: 0,
                 values: true,
                 compression: "RLE".into(),
-                stats: "[Min: 100, Max: 1000]".into(),
                 count: 1,
+                min: Some("100".into()),
+                max: Some("1000".into()),
+                has_null: Some(false),
                 row_group: 1,
             },
         ];
@@ -592,19 +576,37 @@ mod tests {
     }
 
     #[test]
-    fn min_max_parse_from_statistics_text() {
-        assert_eq!(
-            parse_min_max("[Min: 2026-01-01 00:00:00, Max: 2026-01-02 10:07:59][Has Null: false]"),
-            Some((
-                "2026-01-01 00:00:00".to_string(),
-                "2026-01-02 10:07:59".to_string()
-            ))
+    fn string_bounds_are_kept_verbatim_and_missing_statistics_are_skipped() {
+        let rows = vec![
+            row(
+                0,
+                0,
+                "[0]",
+                "FSST",
+                10,
+                Some(("a, Max: b", "z]")),
+                Some(false),
+            ),
+            row(1, 0, "[0]", "FSST", 10, None, None),
+            row(1, 0, "[0, 0]", "Constant", 10, None, None),
+        ];
+        let profile = build_profile(
+            &[("s".to_string(), "VARCHAR".to_string())],
+            &segments_from_rows(&rows),
+            Utc::now(),
         );
+        let column = &profile.columns[0];
+        let range = column.range.as_ref().unwrap();
+
         assert_eq!(
-            parse_min_max("[Min: a, Max: z, Has Unicode: false]"),
-            Some(("a".to_string(), "z".to_string()))
+            (range.min.as_ref(), range.max.as_ref()),
+            ("a, Max: b", "z]")
         );
-        assert_eq!(parse_min_max("[Has Null: true]"), None);
+        assert_eq!(profile.row_count, Some(20));
+        assert_eq!(
+            column.null_count, None,
+            "an unknown null flag proves nothing"
+        );
     }
 
     #[test]

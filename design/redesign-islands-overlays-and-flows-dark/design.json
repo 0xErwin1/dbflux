@@ -1,0 +1,41 @@
+{
+  "title": "DBFlux redesign: Overlays and flows · dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Overlays, windows and settings, row \"Overlays and flows · dark\".",
+  "artboards": [
+    {
+      "file": "01-isl-palette.html",
+      "title": "Command palette",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-approvals.html",
+      "title": "MCP approvals",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-modals.html",
+      "title": "Modals and toasts",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 960
+    },
+    {
+      "file": "04-isl-sidebar.html",
+      "title": "Sidebar states and menus",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 760
+    },
+    {
+      "file": "05-isl-flows.html",
+      "title": "Sign-in, wizards and editors",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1360,
+      "height": 960
+    }
+  ]
+}

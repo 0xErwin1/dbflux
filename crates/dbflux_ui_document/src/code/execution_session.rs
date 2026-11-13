@@ -1,6 +1,6 @@
 use dbflux_core::{
-    Connection, DbError, ExecutionSession, QueryRequest, QueryResult, TransactionControl,
-    classify_sql_transaction_control,
+    CancelToken, Connection, DbError, ExecutionSession, QueryRequest, QueryResult,
+    TransactionControl, classify_sql_transaction_control,
 };
 use std::sync::{
     Arc, Mutex, Weak,
@@ -64,27 +64,50 @@ impl ExecutionSessionBinding {
         database: Option<String>,
         request: &QueryRequest,
     ) -> SessionExecution {
+        self.execute_unless_cancelled(root, database, request, &CancelToken::new())
+            .unwrap_or_else(|| failure("editor statement was cancelled", false))
+    }
+
+    /// Runs `request` unless `cancel_token` is cancelled before it reaches the
+    /// driver, in which case it returns `None` without running it.
+    ///
+    /// The statement can wait here for the slot (another statement of the same
+    /// document is still running) or for the session to open. The editor is
+    /// released as soon as its task is cancelled, so the token is checked
+    /// after each wait and right before the driver call. A session opened
+    /// during the wait stays installed for the next statement.
+    pub(crate) fn execute_unless_cancelled(
+        &self,
+        root: Arc<dyn Connection>,
+        database: Option<String>,
+        request: &QueryRequest,
+        cancel_token: &CancelToken,
+    ) -> Option<SessionExecution> {
         let generation = self.generation.load(Ordering::Acquire);
         let mut slot = match self.slot.lock() {
             Ok(slot) => slot,
-            Err(_) => return failure("editor session state is unavailable", false),
+            Err(_) => return Some(failure("editor session state is unavailable", false)),
         };
 
+        if cancel_token.is_cancelled() {
+            return None;
+        }
+
         let Some(factory) = root.execution_session_factory() else {
-            return SessionExecution {
+            return Some(SessionExecution {
                 result: root.execute(request),
                 isolated: false,
-            };
+            });
         };
 
         if matches!(
             classify_sql_transaction_control(&request.sql),
             TransactionControl::Unsupported
         ) {
-            return failure(
+            return Some(failure(
                 "unsupported or multiple transaction-control statements in the editor",
                 true,
-            );
+            ));
         }
 
         let matches_context = matches!(
@@ -108,7 +131,10 @@ impl ExecutionSessionBinding {
                 generation: failed_generation
             } if *failed_generation == generation
         ) {
-            return failure("editor session is closed or previously failed", true);
+            return Some(failure(
+                "editor session is closed or previously failed",
+                true,
+            ));
         }
 
         if !matches_context {
@@ -116,26 +142,26 @@ impl ExecutionSessionBinding {
                 std::mem::replace(&mut *slot, SessionSlot::Empty)
                 && let Err(error) = session.close()
             {
-                return SessionExecution {
+                return Some(SessionExecution {
                     result: Err(error),
                     isolated: true,
-                };
+                });
             }
 
             let session = match factory.open() {
                 Ok(session) => session,
                 Err(error) => {
                     *slot = SessionSlot::Failed { generation };
-                    return SessionExecution {
+                    return Some(SessionExecution {
                         result: Err(error),
                         isolated: true,
-                    };
+                    });
                 }
             };
             if generation != self.generation.load(Ordering::Acquire) {
                 let cleanup = session.close();
                 *slot = SessionSlot::Closed { generation };
-                return SessionExecution {
+                return Some(SessionExecution {
                     result: combine_cleanup(
                         Err(DbError::query_failed(
                             "editor session became stale while opening",
@@ -144,7 +170,7 @@ impl ExecutionSessionBinding {
                         "editor session became stale while opening",
                     ),
                     isolated: true,
-                };
+                });
             }
             *slot = SessionSlot::Ready {
                 generation,
@@ -155,26 +181,32 @@ impl ExecutionSessionBinding {
         }
 
         let SessionSlot::Ready { session, .. } = &*slot else {
-            return failure("editor session was not installed", true);
+            return Some(failure("editor session was not installed", true));
         };
+        if cancel_token.is_cancelled() {
+            return None;
+        }
+
         let result = session.connection().execute(request);
 
         if generation != self.generation.load(Ordering::Acquire) || session.is_closed() {
             let stale = match std::mem::replace(&mut *slot, SessionSlot::Closed { generation }) {
                 SessionSlot::Ready { session, .. } => session,
-                _ => return failure("editor session state changed unexpectedly", true),
+                _ => {
+                    return Some(failure("editor session state changed unexpectedly", true));
+                }
             };
             let cleanup = stale.close();
-            return SessionExecution {
+            return Some(SessionExecution {
                 result: combine_cleanup(result, cleanup, "editor session became stale"),
                 isolated: true,
-            };
+            });
         }
 
-        SessionExecution {
+        Some(SessionExecution {
             result,
             isolated: true,
-        }
+        })
     }
 
     /// Closes the session only after prior serialized execution has completed.
@@ -264,6 +296,7 @@ mod tests {
         factory: Option<Arc<FakeFactory>>,
         queries: AtomicUsize,
         cancels: AtomicUsize,
+        cleanups: AtomicUsize,
         databases: Mutex<Vec<Option<String>>>,
         request_limits: Mutex<Vec<(Option<u32>, Option<std::time::Duration>)>>,
         execute_gate: Option<Arc<ExecuteGate>>,
@@ -281,6 +314,7 @@ mod tests {
                 factory: Some(factory),
                 queries: AtomicUsize::new(0),
                 cancels: AtomicUsize::new(0),
+                cleanups: AtomicUsize::new(0),
                 databases: Mutex::new(Vec::new()),
                 request_limits: Mutex::new(Vec::new()),
                 execute_gate: None,
@@ -300,6 +334,7 @@ mod tests {
                 factory: None,
                 queries: AtomicUsize::new(0),
                 cancels: AtomicUsize::new(0),
+                cleanups: AtomicUsize::new(0),
                 databases: Mutex::new(Vec::new()),
                 request_limits: Mutex::new(Vec::new()),
                 execute_gate: None,
@@ -313,6 +348,7 @@ mod tests {
                 factory: None,
                 queries: AtomicUsize::new(0),
                 cancels: AtomicUsize::new(0),
+                cleanups: AtomicUsize::new(0),
                 databases: Mutex::new(Vec::new()),
                 request_limits: Mutex::new(Vec::new()),
                 execute_gate,
@@ -390,6 +426,11 @@ mod tests {
 
         fn cancel_active(&self) -> Result<(), DbError> {
             self.cancels.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn cleanup_after_cancel(&self) -> Result<(), DbError> {
+            self.cleanups.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
@@ -639,6 +680,88 @@ mod tests {
         assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
         assert_eq!(isolated.queries.load(Ordering::SeqCst), 0);
         assert_eq!(factory.session.closes.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn cancel_during_session_open_skips_the_statement_and_keeps_the_session() {
+        let gate = Arc::new(OpenGate {
+            opened: AtomicBool::new(false),
+            release: AtomicBool::new(false),
+        });
+        let (root, factory, isolated) = factory_backed_root_with_open_gate(Some(gate.clone()));
+        let binding = ExecutionSessionBinding::new();
+        let cancel_token = dbflux_core::CancelToken::new();
+        let task = std::thread::spawn({
+            let binding = binding.clone();
+            let root = root.clone();
+            let cancel_token = cancel_token.clone();
+            move || {
+                binding.execute_unless_cancelled(
+                    root,
+                    None,
+                    &QueryRequest::new("SELECT 1"),
+                    &cancel_token,
+                )
+            }
+        });
+
+        while !gate.opened.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        cancel_token.cancel();
+        gate.release.store(true, Ordering::SeqCst);
+
+        assert!(task.join().expect("background execution").is_none());
+        assert_eq!(isolated.queries.load(Ordering::SeqCst), 0);
+        assert_eq!(factory.session.closes.load(Ordering::SeqCst), 0);
+
+        assert!(
+            binding
+                .execute(root, None, &QueryRequest::new("SELECT 1"))
+                .result
+                .is_ok()
+        );
+        assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(isolated.queries.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn cancel_while_waiting_for_the_session_skips_the_statement() {
+        let gate = Arc::new(OpenGate {
+            opened: AtomicBool::new(false),
+            release: AtomicBool::new(false),
+        });
+        let (root, factory, isolated) = factory_backed_root_with_open_gate(Some(gate.clone()));
+        let binding = ExecutionSessionBinding::new();
+        let running = std::thread::spawn({
+            let binding = binding.clone();
+            let root = root.clone();
+            move || binding.execute(root, None, &QueryRequest::new("SELECT 1"))
+        });
+        while !gate.opened.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+
+        let cancel_token = dbflux_core::CancelToken::new();
+        let waiting = std::thread::spawn({
+            let binding = binding.clone();
+            let cancel_token = cancel_token.clone();
+            move || {
+                binding.execute_unless_cancelled(
+                    root,
+                    None,
+                    &QueryRequest::new("SELECT 2"),
+                    &cancel_token,
+                )
+            }
+        });
+        cancel_token.cancel();
+        gate.release.store(true, Ordering::SeqCst);
+
+        assert!(running.join().expect("running execution").result.is_ok());
+        assert!(waiting.join().expect("waiting execution").is_none());
+        assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(isolated.queries.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -970,6 +1093,103 @@ mod tests {
                         && document.execution.active_query_task.is_none()
                 }
             }
+        }));
+    }
+
+    /// A query cancelled from the Background tasks panel releases the editor
+    /// at once, even while the driver call has not returned yet.
+    #[gpui::test]
+    fn cancelling_the_query_task_outside_the_editor_releases_the_editor(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app_state = initialized_app_state(cx);
+        let root = FakeConnection::isolated();
+        let profile_id = add_test_profile(cx, &app_state, root.clone());
+        let document = Rc::new(RefCell::new(None));
+        let document_ref = document.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    Some(profile_id),
+                    dbflux_core::QueryLanguage::Sql,
+                    window,
+                    cx,
+                );
+                document.set_content("SELECT 1", window, cx);
+                document
+            });
+            document_ref.replace(Some(document.clone()));
+            Root::new(document, window, cx)
+        });
+        let document = document.borrow().clone().expect("document created");
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        for _ in 0..128 {
+            if window.update(|_, cx| document.read(cx).execution.active_query_task.is_some()) {
+                break;
+            }
+            window.dispatcher.tick(false);
+        }
+        let task_id = window
+            .update(|_, cx| {
+                document
+                    .read(cx)
+                    .execution
+                    .active_query_task
+                    .as_ref()
+                    .map(|task| task.task_id)
+            })
+            .expect("query task started");
+        assert_eq!(root.queries.load(Ordering::SeqCst), 0);
+        assert!(
+            window
+                .update(|_, cx| document.read(cx).state == crate::types::DocumentState::Executing)
+        );
+
+        window.update(|_, cx| {
+            app_state.update(cx, |state, cx| {
+                state.tasks_mut().cancel(task_id);
+                cx.emit(dbflux_ui_base::AppStateChanged);
+            });
+        });
+
+        assert_eq!(
+            root.queries.load(Ordering::SeqCst),
+            0,
+            "the driver call has not returned yet"
+        );
+        assert!(window.update(|_, cx| {
+            let document = document.read(cx);
+            document.state == crate::types::DocumentState::Clean
+                && !document.runner.is_primary_active()
+                && document
+                    .execution
+                    .execution_history
+                    .last()
+                    .is_some_and(|record| record.finished_at.is_some())
+        }));
+
+        window.run_until_parked();
+
+        assert_eq!(
+            root.queries.load(Ordering::SeqCst),
+            0,
+            "a query cancelled before dispatch never reaches the driver"
+        );
+        assert_eq!(
+            root.cleanups.load(Ordering::SeqCst),
+            0,
+            "a query that never reached the driver must not trigger its cancel cleanup"
+        );
+        assert!(window.update(|_, cx| {
+            let document = document.read(cx);
+            document.state == crate::types::DocumentState::Clean
+                && document.execution.active_query_task.is_none()
         }));
     }
 

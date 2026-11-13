@@ -22,8 +22,8 @@ use dbflux_core::{
     DriverFormDef, DriverMetadata, FormFieldKind, FormSection, FormTab, FormValues, Icon,
     KeyValueConnection, ObjectListingPage, ObjectMetadata, ObjectStoreConnection, ObjectSummary,
     ObjectVersionSummary, PresignMethod, PublicAccessStatus, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, RelationalConnection, SchemaLoadingStrategy, SchemaSnapshot,
-    SqlDialect, TransferFamily, VersioningStatus, field, field_required,
+    QueryRequest, QueryResult, RelationalConnection, RootSectionSource, SchemaLoadingStrategy,
+    SchemaSnapshot, SqlDialect, TransferFamily, VersioningStatus, field, field_required,
 };
 
 use crate::error_formatter::{
@@ -41,7 +41,8 @@ pub static S3_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetada
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::AUTHENTICATION.bits()
             | DriverCapabilities::OBJECT_STORAGE.bits()
-            | DriverCapabilities::OBJECT_PREFIX_DELETE.bits(),
+            | DriverCapabilities::OBJECT_PREFIX_DELETE.bits()
+            | DriverCapabilities::ROOT_SECTIONS.bits(),
     ),
     default_port: None,
     uri_scheme: "s3".into(),
@@ -476,6 +477,10 @@ impl Connection for S3Connection {
     }
 
     fn object_store_api(&self) -> Option<&dyn ObjectStoreConnection> {
+        Some(self)
+    }
+
+    fn root_section_source(&self) -> Option<&dyn RootSectionSource> {
         Some(self)
     }
 }

@@ -8,6 +8,8 @@ members = [
     "crates/dbflux_ui_windows",
     "crates/dbflux_ui_sidebar",
     "crates/dbflux_components",
+    "crates/bolt",
+    "crates/bolt_keys",
     "crates/dbflux_core",
     "crates/dbflux_lua",
     "crates/dbflux_js",
@@ -65,7 +67,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.88"
-version = "0.10.0-dev.0"
+version = "0.11.0-dev.0"
 authors = ["Ignacio Perez <ignacio@feuer.me>"]
 description = "A fast, keyboard-first database client"
 repository = "https://github.com/0xErwin1/dbflux"
@@ -115,6 +117,8 @@ dbflux_driver_s3 = { path = "crates/dbflux_driver_s3" }
 dbflux_driver_aws_secrets = { path = "crates/dbflux_driver_aws_secrets" }
 dbflux_app = { path = "crates/dbflux_app" }
 dbflux_components = { path = "crates/dbflux_components" }
+bolt = { path = "crates/bolt" }
+bolt_keys = { path = "crates/bolt_keys" }
 dbflux_ui_base = { path = "crates/dbflux_ui_base" }
 dbflux_ui_document = { path = "crates/dbflux_ui_document" }
 dbflux_ui_windows = { path = "crates/dbflux_ui_windows" }
@@ -127,6 +131,8 @@ mysql = "28"
 petgraph = "0.7"
 
 gpui = { package = "gpui-pre", version = "=0.3.9" }
+# The same crate under the name gpui-mcp's `gpui-pre` backend expects; keep both in step.
+gpui_pre = { package = "gpui-pre", version = "=0.3.9" }
 gpui-component = { version = "=0.7.3", features = ["tree-sitter"] }
 gpui-pre-platform = { version = "=0.3.9", default-features = false, features = ["font-kit", "wayland", "x11"] }
 gpui-mcp = { path = "vendor/gpui-mcp/crates/gpui-mcp" }
@@ -143,6 +149,9 @@ tree-sitter-lua = "0.4.1"
 tree-sitter-python = "0.23.6"
 tree-sitter-bash = "0.23.3"
 tree-sitter-json = "0.24.8"
+# Bundled by bolt behind its opt-in `syntax-xml` and `syntax-html` features.
+tree-sitter-xml = "0.7.0"
+tree-sitter-html = "0.23.2"
 core-text = ">=21.0.0, <21.1.0"
 smallvec = "1.13.2"
 rfd = "0.17"
@@ -216,12 +225,12 @@ parquet = { version = "59.3", default-features = false, features = [
 ] }
 arrow-array = "59.3"
 arrow-schema = "59.3"
-# Spreadsheet reading. `zip` matches calamine's own zip dependency, so format
-# detection adds no second copy; `rust_xlsxwriter` writes xls values into a new
-# xlsx and builds test fixtures.
-calamine = "0.36"
-zip = { version = "8.6", default-features = false, features = ["deflate"] }
-rust_xlsxwriter = "0.99"
+# Spreadsheet reading. `zip` matches calamine's and `rust_xlsxwriter`'s own zip
+# dependency, so format detection and xlsx writing add no second copy;
+# `rust_xlsxwriter` writes xls values into a new xlsx and builds test fixtures.
+calamine = "0.37"
+zip = { version = "9.0", default-features = false, features = ["deflate"] }
+rust_xlsxwriter = "0.102"
 bytes = "1"
 snap = "1"
 lz4_flex = "0.14"

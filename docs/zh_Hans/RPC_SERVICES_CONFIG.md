@@ -6,6 +6,7 @@ DBFlux 现已通过 `RpcServiceKind` 持久化一套一等的 RPC 服务基础�
 
 - `Driver` — 适配为运行时数据库驱动
 - `AuthProvider` — 适配为应用与 MCP 服务器中的运行时认证提供程序注册表
+- `SecretProvider` — 适配为运行时密钥提供程序，并注册到每个连接的值解析器中；参见 [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md)
 
 ## 存储
 
@@ -61,7 +62,7 @@ CREATE TABLE cfg_service_env (
 添加或修改服务的步骤：
 1. 打开设置 → RPC 服务
 2. 新建服务，或选择已有服务
-3. 选择服务类型（**驱动**或**认证提供程序**）
+3. 选择服务类型（**驱动**、**认证提供程序**或**密钥提供程序**）
 4. 配置 Socket ID、命令路径、参数、环境变量与超时时间
 5. 保存更改
 
@@ -72,7 +73,9 @@ CREATE TABLE cfg_service_env (
 - DBFlux 保持驱动注册 ID 为 `rpc:<socket_id>` 的兼容性。
 - 若已有驱动记录缺少 API 元数据，DBFlux 会将其默认设为当前 `driver_rpc` 契约的 `1.1` 版本。
 - 若已有认证提供程序记录缺少 API 元数据，DBFlux 会将其默认设为当前 `auth_provider_rpc` 契约的 `1.2` 版本。
-- 在 DBFlux 探测 Socket 之前，`api_family` / `api_major` 用作认证提供程序的启动前预检。
+- 若密钥提供程序记录缺少 API 元数据，DBFlux 会将其默认设为 `secret_provider_rpc` 契约的 `1.0` 版本。
+- **密钥提供程序**类型的服务（存储值 `secret_provider`）仅作为连接、代理、SSH 隧道与认证配置字段的值来源生效，不会作为驱动或认证提供程序出现。
+- 在 DBFlux 探测 Socket 之前，`api_family` / `api_major` 用作认证提供程序与密钥提供程序的启动前预检。
 
 ## 语义
 
@@ -84,6 +87,7 @@ CREATE TABLE cfg_service_env (
 - `service_kind='auth_provider'` 的服务在通过兼容性检查且探测成功后，会被载入认证提供程序注册表
 - 驱动路径的协商会在 `Hello` 阶段选择双方均支持的最高兼容次版本号，此后要求每条后续消息信封（envelope）都使用这一协商确定的版本
 - 认证提供程序的协商在 `auth_provider_rpc` 下遵循同样的 family/major/minor 规则；family 或 major 版本不兼容的服务会在注册前被跳过
+- `service_kind='secret_provider'` 的服务在 `secret_provider_rpc` 下协商，必须在 `Hello` 中声明有效的清单（manifest）；若其 `provider_id` 为保留值（`aws-secrets-manager`、`aws-ssm`）或已被注册，则会被跳过
 
 ## 字段
 
@@ -94,7 +98,7 @@ CREATE TABLE cfg_service_env (
 - `command`（可选）：DBFlux 需要启动服务时运行的可执行文件。
   - 若省略该项且 `args` 也为空，DBFlux 会认为服务已在运行，不会启动任何进程。
   - 对于 `driver`，若省略该项而 `args` 非空，DBFlux 会启动 `dbflux-driver-host`。
-  - 对于 `auth_provider`，若需由 DBFlux 启动服务，则必须显式设置 `command`。
+  - 对于 `auth_provider` 与 `secret_provider`，若需由 DBFlux 启动服务，则必须显式设置 `command`。
 - `args`（可选）：进程参数。
 - `env`（可选）：传给所启动进程的环境变量。
 - `startup_timeout_ms`（可选）：启动进程后等待 Socket 就绪的最长时间。

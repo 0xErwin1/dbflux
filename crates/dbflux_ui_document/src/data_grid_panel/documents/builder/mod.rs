@@ -857,4 +857,4 @@ fn saved_query_audit_event(
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::data_grid_panel) mod tests;

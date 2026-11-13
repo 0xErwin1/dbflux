@@ -34,6 +34,11 @@ library_policy() {
     libGL*.so.* | libEGL*.so.* | libOpenGL.so.* | libvulkan*.so.* | libdrm*.so.* | libgbm.so.* | libnvidia*.so.*)
       echo host
       ;;
+    # The host's Mesa drivers load the C++ runtime into our process. A bundled
+    # copy shadows it, and drivers built by a newer GCC then fail to initialize.
+    libstdc++.so.* | libgcc_s.so.*)
+      echo host
+      ;;
     *) echo bundle ;;
   esac
 }

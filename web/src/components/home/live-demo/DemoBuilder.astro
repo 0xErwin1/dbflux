@@ -1,0 +1,131 @@
+---
+/**
+ * The visual query builder island from the IslBuilder board, filled with the
+ * demo's own query: the orders columns and the `status = 'paid'` filter.
+ */
+import Glyph from '../../Glyph.astro';
+
+const columns = ['id', 'customer_id', 'status', 'currency', 'total', 'placed_at'];
+
+const sql = [
+  '<b>SELECT</b> id, customer_id, status, currency,',
+  '       total, placed_at',
+  '<b>FROM</b> public.orders',
+  '<b>WHERE</b> status = <span class="ld-success">\'paid\'</span>',
+  '<b>ORDER BY</b> placed_at <b>DESC LIMIT</b> <span class="ld-violet">100</span>;',
+].join('\n');
+---
+
+<div class="ld-builder" data-ld-builder>
+  <div class="ld-builder__frame">
+    <div class="ld-island ld-builder__pane c14">
+      <div class="ld-pane">
+        <div class="ld-builder__head">
+          <Glyph name="square-function" size={15} class="ld-accent" />
+          <span class="ld-strong" style="font-weight: 700">Paid orders</span>
+          <span class="ld-grow"></span>
+          <span class="ld-icon-button c6"><Glyph name="save" size={14} /></span>
+          <span class="ld-icon-button c6"><Glyph name="rotate-ccw" size={14} /></span>
+          <span class="ld-icon-button c6"><Glyph name="x" size={14} /></span>
+        </div>
+
+        <div style="padding: 10px 14px">
+          <span
+            class="ld-segments ld-segments--tall c6"
+            style="align-self: flex-start; width: max-content"
+          >
+            <span class="ld-segment is-on c4">SELECT</span>
+            <span class="ld-segment">UPDATE</span>
+            <span class="ld-segment">DELETE</span>
+          </span>
+        </div>
+
+        <div class="ld-builder__body">
+          <div class="ld-card c8">
+            <div class="ld-card__head">
+              <Glyph name="columns-3" size={14} class="ld-muted" />
+              <span class="ld-label">Columns</span>
+              <span class="ld-grow"></span>
+              <span class="ld-chip c4">6 of 6</span>
+            </div>
+            <div class="ld-chips">
+              {columns.map((column) => <span class="ld-chip ld-chip--column c4">{column}</span>)}
+              <span class="ld-chip ld-chip--accent c4">+ column</span>
+            </div>
+          </div>
+
+          <div class="ld-card c8">
+            <div class="ld-card__head">
+              <Glyph name="list-filter" size={14} class="ld-muted" />
+              <span class="ld-label">Filters</span>
+              <span class="ld-grow"></span>
+              <span class="ld-chip ld-chip--accent c4">1</span>
+            </div>
+            <div style="display: flex; gap: 6px; align-items: center">
+              <span class="ld-select c6" style="width: 120px">
+                <span class="ld-grow">status</span><Glyph
+                  name="chevron-down"
+                  size={12}
+                  class="ld-muted"
+                />
+              </span>
+              <span class="ld-select c6" style="width: 64px">
+                <span class="ld-grow">=</span><Glyph
+                  name="chevron-down"
+                  size={12}
+                  class="ld-muted"
+                />
+              </span>
+              <span class="ld-field ld-mono ld-grow c6"><span class="ld-strong">'paid'</span></span>
+              <Glyph name="circle-x" size={14} class="ld-muted" />
+            </div>
+            <span class="ld-accent" style="font-size: 12px">+ Filter · + Group</span>
+          </div>
+
+          <div class="ld-card c8">
+            <div class="ld-card__head">
+              <Glyph name="arrow-up-down" size={14} class="ld-muted" />
+              <span class="ld-label">Sort and limit</span>
+            </div>
+            <div style="display: flex; gap: 6px; align-items: center">
+              <span class="ld-select c6" style="width: 150px">
+                <span class="ld-grow">placed_at</span><Glyph
+                  name="chevron-down"
+                  size={12}
+                  class="ld-muted"
+                />
+              </span>
+              <span class="ld-segments c6">
+                <span class="ld-segment">ASC</span>
+                <span class="ld-segment is-on c4">DESC</span>
+              </span>
+              <span class="ld-field ld-mono c6" style="width: 70px"
+                ><span class="ld-strong">100</span></span
+              >
+            </div>
+          </div>
+
+          <div class="ld-card c8" data-ld-anchor="builder-sql">
+            <div class="ld-card__head">
+              <Glyph name="code" size={14} class="ld-muted" />
+              <span class="ld-label">SQL preview</span>
+              <span class="ld-grow"></span>
+              <span class="ld-outcome ld-success" style="font-size: 11.5px">
+                <Glyph name="circle-check" size={13} />valid
+              </span>
+            </div>
+            <div class="ld-sql" set:html={sql} />
+          </div>
+        </div>
+
+        <div class="ld-builder__foot">
+          <span class="ld-button c6"><Glyph name="external-link" size={15} />Open in editor</span>
+          <span class="ld-grow"></span>
+          <span class="ld-button ld-button--primary c6">
+            <Glyph name="play" size={15} />Run<span class="ld-key ld-key--on-fill">Ctrl ↵</span>
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

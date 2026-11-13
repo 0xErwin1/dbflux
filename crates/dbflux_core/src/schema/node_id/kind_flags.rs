@@ -49,8 +49,9 @@ impl SchemaNodeKind {
                 | Self::InstanceFolder
                 | Self::InstanceInspectorLeaf
                 | Self::InstanceOverviewLeaf
-                | Self::Bucket
-                | Self::BucketsFolder
+                | Self::RootSection
+                | Self::RootSectionItem
+                | Self::RootSectionLoadMore
                 | Self::SecretStore
                 | Self::SecretPath
         )
@@ -89,7 +90,7 @@ impl SchemaNodeKind {
                 | Self::InstanceMetricsFolder
                 | Self::InstanceInspectorsFolder
                 | Self::InstanceFolder
-                | Self::BucketsFolder
+                | Self::RootSection
                 | Self::SecretStore
                 | Self::SecretPath
         )
@@ -112,8 +113,9 @@ impl SchemaNodeKind {
                 | Self::InstanceMetricLeaf
                 | Self::InstanceInspectorLeaf
                 | Self::InstanceOverviewLeaf
-                | Self::Bucket
-                | Self::BucketsFolder
+                | Self::RootSection
+                | Self::RootSectionItem
+                | Self::RootSectionLoadMore
                 | Self::SecretStore
                 | Self::SecretPath
         )

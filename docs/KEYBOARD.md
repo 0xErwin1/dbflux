@@ -39,6 +39,10 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+Shift+4` | Focus background tasks |
 | `Ctrl+Shift+A` / `Cmd+Shift+A` | Open audit viewer |
 | `Ctrl+b` / `Cmd+b` | Toggle sidebar |
+| `F11` / `Ctrl+Cmd+F` | Toggle full screen |
+| `Ctrl+=` / `Cmd+=` | Make the interface, editor and data grid text larger (also `Ctrl+Shift+=` and `Ctrl++`) |
+| `Ctrl+-` / `Cmd+-` | Make the interface, editor and data grid text smaller |
+| `Ctrl+0` / `Cmd+0` | Reset the interface, editor and data grid text to the default sizes |
 | `Ctrl+m` | Open tab context menu |
 | `` Ctrl+` `` | Show or hide the console docked under the active table, collection or key-value browser, where its connection has one; in a console tab, return the keyboard to its input |
 | `Ctrl+,` / `Cmd+,` | Open settings |
@@ -117,6 +121,13 @@ While text is being typed, `Tab` indents and `Shift+Tab` outdents, so use
 `Ctrl+h` / `Ctrl+j` / `Ctrl+k` to leave the editor. In the find panel, `Tab` /
 `Shift+Tab` move between the query and replace fields while the replace field is
 shown; otherwise they cycle focus between panels, as they do outside the editor.
+
+While a completion menu is open, `Tab` writes the highlighted suggestion in
+place of the word being completed, and each further `Tab` / `Shift+Tab` replaces
+it with the next / previous one, wrapping at either end. Once `Tab` has inserted
+a suggestion, the arrow keys also update the text. `Enter`, or typing any other
+character, keeps the inserted suggestion and closes the menu; `Escape` restores
+the word you typed. The whole cycle is one undo step.
 
 The action strip on the editor's left edge is also a menu. `Shift+F10` opens the **pane actions** menu
 from the editor text, in every Vim mode and without Vim. `Ctrl+k` moves focus to
@@ -391,6 +402,9 @@ A read-only delete does not change the clipboard.
 | `/` | Focus search/filter |
 | `x` | Delete row |
 | `r` | Rename / edit |
+| `e` | Edit the value of the selected secret in the AWS Secrets document: retrieves the value first when it is not loaded (the retrieval is audited when auditing is on; with auditing off, or when the audit write fails, it can succeed without a record), then opens the editor; only when it can be edited (plaintext, not managed by another service, not scheduled for deletion, in a store that accepts writes) |
+| `b` | Roll the selected secret back to its most recent earlier version in the AWS Secrets document (asks first; only in a store with staging labels, for a secret not managed by another service and not scheduled for deletion) |
+| `m` → Open in tab | Open the selected secret of the AWS Secrets document in its own tab (also the expand button of the details pane and the row menu's Open in tab). In that tab `e`, `b`, `x` and `F5` act on its one secret as they do in the listing. A tab whose region differs from the connection's, or whose secret was deleted, starts no read or write and says why (a save already in flight is not cancelled and may still land on the previous region). Edit value (`e`) in the listing opens that tab with the editor active, retrieving the value first when it is not loaded (audited when auditing is on). |
 | `o` | Add row |
 | `y` | Copy row |
 | `i` | Toggle the record view (one row, field per line) |
@@ -825,11 +839,11 @@ The keys are listed under the Migrate Wizard context in Settings > Keybindings.
 | `Ctrl+Shift+z` | Redo (Linux and Windows; macOS uses `Cmd+Shift+z`) |
 
 While you type in a text field outside a dialog, such as the sidebar search or
-the execution context bar, the global shortcuts that hold `Ctrl` or `Cmd` keep
-working: `Ctrl+Tab`, `Ctrl+1` .. `Ctrl+9`, `Ctrl+w`, `Ctrl+Shift+P` and the
-others in [Global](#global-available-regardless-of-focus). Keys without those
-modifiers, including `Tab`, `Escape`, `Enter` and the arrows, stay with the
-field. A shortcut the field binds itself, such as `Ctrl+a` or `Ctrl+c`, wins
+the execution context bar, the global shortcuts that hold `Ctrl` or `Cmd`, or
+that start with a function key such as `F11`, keep working: `Ctrl+Tab`,
+`Ctrl+1` .. `Ctrl+9`, `Ctrl+w`, `Ctrl+Shift+P` and the others in
+[Global](#global-available-regardless-of-focus). Other keys, including `Tab`,
+`Escape`, `Enter` and the arrows, stay with the field. A shortcut the field binds itself, such as `Ctrl+a` or `Ctrl+c`, wins
 over the global one. Inside a dialog, a menu, a dropdown or a picker the global
 shortcuts wait until it closes.
 

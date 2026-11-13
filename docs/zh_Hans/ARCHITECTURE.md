@@ -98,7 +98,7 @@ flowchart TB
     start["从连接管理器 / 侧边栏<br/>发起连接"] --> prep["AppState::prepare_pipeline_input<br/>（与提供程序无关的输入）"]
     prep --> pre{{"连接前 Hook"}}
     pre --> auth["流水线：认证<br/>（DynAuthProvider，例如 AWS SSO）"]
-    auth --> values["流水线：解析取值<br/>（ValueRef → env/secret/param/auth）"]
+    auth --> values["流水线：解析取值<br/>（ValueRef → env/dotenv/secret/param/auth）"]
     values --> access["流水线：开通访问"]
     access --> tunnel{"访问方式？"}
     tunnel -->|Direct| connect
@@ -115,7 +115,7 @@ flowchart TB
 - 界面：`gpui`、`gpui-component`（Cargo.toml）。
 - 数据库：`tokio-postgres`（PostgreSQL）、`rusqlite`（SQLite）、`mysql`（MySQL/MariaDB）、`mongodb`（MongoDB）、`redis`（Redis）、`aws-sdk-dynamodb`（DynamoDB），以及基于 `reqwest` 的 HTTP（ClickHouse）（Cargo.toml）。
 - AWS 认证/集成：`aws-config`、`aws-sdk-sso`、`aws-sdk-ssooidc`、`aws-sdk-sts`、`aws-sdk-secretsmanager`、`aws-sdk-ssm`（`dbflux_aws`）。
-- IPC/RPC：`interprocess` 本地 Socket + `bincode` 消息分帧（`dbflux_ipc`、`dbflux_driver_ipc`、`dbflux_driver_host`）。
+- IPC/RPC：`interprocess` 本地 Socket + `postcard` 消息分帧（`dbflux_ipc`、`dbflux_driver_ipc`、`dbflux_driver_host`）。
 - SSH：经由 `dbflux_ssh` 使用 `ssh2`（crates/dbflux_ssh/src/lib.rs）。
 - 导出：经由 `dbflux_export` 使用 `csv` + `hex` + `base64` + `serde_json`（crates/dbflux_export/src/lib.rs）。
 - 序列化/配置：`serde`、`serde_json`、`dirs`（Cargo.toml）。
@@ -439,7 +439,7 @@ crates/
     src/envelope.rs         # ProtocolVersion + 应用/驱动程序协议常量
     src/protocol.rs         # 单实例应用控制消息
     src/driver_protocol.rs  # 驱动程序 RPC 请求/响应结构（DTO + 错误）
-    src/framing.rs          # 长度前缀的 bincode 传输分帧
+    src/framing.rs          # 长度前缀的 postcard 传输分帧
     src/socket.rs           # 跨平台 Socket 命名辅助函数
   dbflux_driver_ipc/        # 面向外部 RPC 服务的 DbDriver 适配器
     src/driver.rs           # IpcDriver + 受管宿主进程生命周期
@@ -697,7 +697,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 - 由驱动程序拥有的、位于集合/容器之下的子资源，通过通用的 `CollectionChildInfo` 元数据发布。侧边栏不得根据名称、字段类型或驱动程序 ID 去推断驱动程序特有的子项。
 - 例程（函数、存储过程、聚合函数、窗口函数）会在驱动程序设置了 `ROUTINES` 能力并填充 `schema_routines` 接缝时，显示为一个按 Schema 划分的「例程」文件夹。界面通用地渲染该文件夹，不会为任何驱动程序做特殊处理。
 - 侧边栏 dock：`crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` 仍可通过 ToggleSidebar（Ctrl+B）折叠和调整大小，同时将临时展开与明确的折叠选择分开管理。
-- 连接树只遍历一个投影：`SchemaSnapshot::database_layout`（`crates/dbflux_core/src/schema/listing.rs`）说明每个数据库是把表和视图归入 schema、把对象列在一个 `ObjectFolder`（集合或度量）中，还是一个 keyspace。侧边栏（`tree_builder/object_folder.rs`）根据该描述构建每个数据库的内容，其上下文菜单读取对象的 facet 和同一布局。树中仅剩的类别检查是对象存储连接的存储桶列表，它通过自己的路径获取，而不是从快照读取。
+- 连接树只遍历一个投影：`SchemaSnapshot::database_layout`（`crates/dbflux_core/src/schema/listing.rs`）说明每个数据库是把表和视图归入 schema、把对象列在一个 `ObjectFolder`（集合或度量）中，还是一个 keyspace。侧边栏（`tree_builder/object_folder.rs`）根据该描述构建每个数据库的内容，其上下文菜单读取对象的 facet 和同一布局。驱动程序在连接根部显示的对象类型（例如 S3 存储桶）不在快照中，而是来自驱动程序的根分区（参见驱动程序系统）。
 - `dbflux_ui_base::object_tree` 提供通用的延迟加载层级结构，每个 `AppStateEntity` 配备一个协调器。core/app 边界按会话及目标槽位限定结果的应用；侧边栏和向导适配器保留兼容的 ID，同时各自管理交互状态。并非所有侧边栏特有类别都已迁移。
 - 连接树：`crates/dbflux_core/src/connection/tree.rs` 把文件夹与连接建模为树结构；`tree_manager.rs` 负责内存中的管理。
 
@@ -723,6 +723,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
   - `EventStreamTarget` 为工作区/审计提供一个通用标识符，指向由驱动程序支撑的事件流。
   - `SourceContextSpec` 让驱动程序可以声明额外的查询上下文控件，而无需在 `dbflux_ui` 中硬编码驱动程序名。
   - `ObjectStoreConnection`（`crates/dbflux_core/src/core/traits.rs`，经由 `Connection::object_store_api()` 抵达）是对象存储接缝（存储桶/对象列举、CRUD、预签名、复制、版本）；`CollectionPresentation::ObjectBrowser` 与 `PaneHandle::status_segments()` 让界面能够打开对象存储文档并为其添加框架，而无需依据驱动程序 ID 做分支。
+  - `RootSectionSource`（`crates/dbflux_core/src/connection/root_section/mod.rs`，经由 `Connection::root_section_source()` 抵达，受 `DriverCapabilities::ROOT_SECTIONS` 门控）声明侧边栏中连接根部显示的对象类型。每个 `RootSectionDef` 携带稳定的 id、标签、空状态标签、可选的文件夹 `RootSectionPresentation`、其条目打开时使用的 `RootItemPresentation`、激活连接行时是否打开该分区，以及条目操作。`list_items` 返回带 `next_page_token` 的 `RootSectionItem` 分页 `RootSectionPage`。节点 id `SchemaNodeId::RootSection`、`RootSectionItem` 与 `RootSectionLoadMore` 携带分区 id，因此新的对象类型无需新增 `SchemaNodeKind` 变体。一个通用渲染器（`crates/dbflux_ui_sidebar/src/root_sections/`）构建文件夹、按配置文件缓存列表并按需加载后续页面。声明或首页获取失败时显示重试行，且不会被缓存为空。分区 id 不能包含 `|`，因为节点 id 会嵌入它；侧边栏会拒绝并报告此类声明。文件夹或条目呈现方式需要 `Connection::object_store_api` 的分区，在不提供它的连接上会被隐藏。工作区按声明的呈现方式路由激活（`ObjectContainerTable` 打开容器表，`ObjectBrowser` 打开对象浏览器）。标签为 `LocalizedText`：宿主 i18n 目录中的可选键加上必填的英文回退文本，通过 `dbflux_i18n::try_translate` 解析。每个 `RootSectionAction` 携带一个 `ExecutionClassification`：`Destructive`、`Admin` 与 `AdminDestructive` 需要确认，每次运行无论成功与否都会记录一条 `Governance` 审计行。操作只会在发起请求时的连接上运行，且配置文件的 `MutationPolicy` 会管控所有高于 `Read` 的操作：`ReadOnly` 会拒绝它们，在审批流程覆盖这些操作之前 `ApprovalRequired` 也会拒绝。操作成功后会重新列出该分区，并重新加载显示它的已打开文档。外部驱动程序通过驱动程序 RPC 1.9（`RootSections`、`RootSectionItems`、`ExecuteRootSectionAction`）使用该接缝。S3 是参考实现：一个 `buckets` 分区，其条目在对象浏览器中打开，并带有分类为 `AdminDestructive` 的 Delete bucket 操作。
   - `TableViewFeatures`（`crates/dbflux_core/src/data/column_profile.rs`，由 `Connection::table_view_features()` 报告）控制表的“列”与“分区”视图、读取量估算、样本分析和列选择器。数据来自 `table_profile`、`table_partitions`、`estimate_table_read` 与 `sample_table_profile`，`TableBrowseRequest::columns` 携带投影。界面（`crates/dbflux_ui_document/src/data_grid_panel/table_views.rs`）使用 `dbflux_components` 中共享的 `ColumnProfileView`、`PartitionListView`、`ColumnProjectionPicker` 与 `ReadEstimateBar` 渲染它们。Parquet 文档使用同样的分析视图、列选择器与估算栏，CSV 文档使用分析视图。
   - 如果界面需要新行为，请先添加一个通用的核心抽象；不要在 `dbflux_ui` 或面向应用的工作流代码里写 `if driver_id == ...`。
 
@@ -890,7 +891,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
   - 存储桶发现（连接根处的 `BucketsTableDocument`）与按层级分页的对象导航（`ObjectBrowserDocument`），并可切换到不分页的树形模式
   - `ObjectStoreConnection` 实现覆盖上传、删除、递归前缀/存储桶删除（批量 `DeleteObjects`）、复制、预签名、存储桶详情/版本控制与对象版本
   - 界面提供完整 CRUD：上传、需输入确认的递归删除、创建文件夹/存储桶（按端点优雅降级）、重命名（先复制后删除）、预签名 URL
-  - 每次变更都在 `EventCategory::ObjectStorage` 下审计；凭据与预签名 URL 从不被记录到日志或持久化
+  - 启用审计时，在存储桶表格或对象浏览器中进行的每次变更都在 `EventCategory::ObjectStorage` 下审计；审计写入失败时只记录一条警告，变更依然生效，且不会写入替代记录；侧边栏的 Delete bucket 操作属于根分区操作，在 `EventCategory::Governance` 下审计。凭据与预签名 URL 从不被记录到日志或持久化
 - **AWS Secrets**：`crates/dbflux_driver_aws_secrets/` —— `aws-sdk-secretsmanager` + `aws-sdk-ssm` 驱动程序（`DatabaseCategory::SecretStore`）：
   - 通过 `Connection::secret_stores()` 与提供方无关的 `SecretStoreSource` 接缝（`dbflux_core/src/connection/secret_store/`）暴露两个存储库，由 `DriverCapabilities::SECRET_STORE` 门控；各存储库的 `SecretStoreCapabilities` 门控 UI 行为
   - 列表（`ListSecrets`、`DescribeParameters`）从不读取值；Parameter Store 路径在客户端分组为直接条目与子路径
@@ -1007,7 +1008,7 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 - Amazon S3：`aws-sdk-s3` 驱动程序，支持 AWS 配置/SSO 或静态凭据，对兼容 S3 的端点（Cloudflare R2、MinIO）支持端点覆盖与路径风格寻址，并支持存储桶/对象 CRUD、预签名 URL 与复制/版本（crates/dbflux_driver_s3/src/driver.rs）。
 - AWS Secrets：`aws-sdk-secretsmanager` 与 `aws-sdk-ssm` 驱动程序，支持 AWS 配置/SSO 或静态凭据与端点覆盖、分页的密钥与参数列表、详情以及显式读取值（crates/dbflux_driver_aws_secrets/src/driver/mod.rs）。
 - AWS 认证栈：`dbflux_aws` 提供 AWS SSO/共享/静态认证提供程序、SSO 登录编排、账户/角色发现，以及新保存认证配置对 `~/.aws/config` 的回写。
-- 本地 IPC/RPC：`interprocess` Socket + 带版本号的消息信封，用于应用控制与 RPC 服务通信（`crates/dbflux_ipc/`、`crates/dbflux_driver_ipc/`、`crates/dbflux_driver_host/`）。`dbflux_app::rpc_services` 发现已持久化的服务描述符，把 `RpcServiceKind::Driver` 适配为运行时 `DbDriver`，并把 `RpcServiceKind::AuthProvider` 接入 `RpcAuthProvider`（它实现 `DynAuthProvider`）。保持 `rpc:<socket_id>` 的兼容性。认证提供程序的 IPC 协议为 v1.2：新增 `FetchDynamicOptions` / `DynamicOptions` 变体与 `secret_dependency_opt_in` 清单标志。认证令牌由 `dbflux_ipc/src/auth.rs` 管理。
+- 本地 IPC/RPC：`interprocess` Socket + 带版本号的消息信封，用于应用控制与 RPC 服务通信（`crates/dbflux_ipc/`、`crates/dbflux_driver_ipc/`、`crates/dbflux_driver_host/`）。`dbflux_app::rpc_services` 发现已持久化的服务描述符，把 `RpcServiceKind::Driver` 适配为运行时 `DbDriver`，并把 `RpcServiceKind::AuthProvider` 接入 `RpcAuthProvider`（它实现 `DynAuthProvider`），并把 `RpcServiceKind::SecretProvider` 接入 `RpcSecretProvider`（它实现 `DynSecretProvider`；参见 [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md)）。保持 `rpc:<socket_id>` 的兼容性。认证提供程序的 IPC 协议为 v1.2：新增 `FetchDynamicOptions` / `DynamicOptions` 变体与 `secret_dependency_opt_in` 清单标志。认证令牌由 `dbflux_ipc/src/auth.rs` 管理。
 - 代理：经由 `dbflux_tunnel_core::Tunnel` 的 SOCKS5/HTTP CONNECT 隧道（crates/dbflux_proxy/src/lib.rs）。
 - SSH：`ssh2` 会话，经由 `dbflux_tunnel_core::Tunnel` 做本地 TCP 转发（crates/dbflux_ssh/src/lib.rs）。
 - 操作系统密钥环：为密码、SSH 口令与代理凭据提供可选的密钥存储（crates/dbflux_core/src/storage/secrets.rs）。
@@ -1023,7 +1024,7 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
   - `cfg_ssh_tunnel_profiles`、`cfg_proxy_profiles`
   - `cfg_hooks`、`cfg_hook_bindings`
   - `cfg_script_roots`（在原位置列出的外部脚本文件夹；删除一行绝不会触碰该文件夹）
-  - `cfg_services`、`cfg_service_args`、`cfg_service_env`（RPC 服务描述符；`cfg_services.service_kind` 记录 `driver` 与 `auth_provider`）
+  - `cfg_services`、`cfg_service_args`、`cfg_service_env`（RPC 服务描述符；`cfg_services.service_kind` 记录 `driver`、`auth_provider` 或 `secret_provider`）
   - `cfg_governance_*` 表（角色、策略、受信客户端）
   - `cfg_drivers`（各驱动程序的设置覆盖项）
   - `cfg_folders`（连接树组织）

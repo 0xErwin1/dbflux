@@ -1,0 +1,41 @@
+{
+  "title": "DBFlux redesign: Windows · dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Overlays, windows and settings, row \"Windows · dark\".",
+  "artboards": [
+    {
+      "file": "01-isl-settings-general.html",
+      "title": "Settings: general",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1320,
+      "height": 900
+    },
+    {
+      "file": "02-isl-settings-ssh.html",
+      "title": "Settings: SSH tunnels",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1320,
+      "height": 900
+    },
+    {
+      "file": "03-isl-driver-picker.html",
+      "title": "Connection Manager: driver picker",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1180,
+      "height": 920
+    },
+    {
+      "file": "04-isl-conn-form.html",
+      "title": "Connection Manager: PostgreSQL form",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1040,
+      "height": 1000
+    },
+    {
+      "file": "05-isl-conn-form-sources.html",
+      "title": "Connection Manager: environment and dotenv sources",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1040,
+      "height": 1000
+    }
+  ]
+}

@@ -350,6 +350,11 @@ pub struct PaneHandle {
     pub take_pending_open_object_editor:
         Option<Box<dyn Fn(&mut App) -> Option<ObjectEditorRequest>>>,
 
+    /// Drains an open-this-secret-in-its-own-tab intent, same convention as
+    /// `take_pending_open_bucket`. Only `SecretStoreDocument` populates it.
+    pub take_pending_open_secret:
+        Option<Box<dyn Fn(&mut App) -> Option<crate::secret_store::SecretOpenRequest>>>,
+
     /// Opens `path` of a hierarchical secret store in its existing tab, so a
     /// path activated in the sidebar navigates the store's one tab. Only
     /// `SecretStoreDocument` populates it.
@@ -484,6 +489,7 @@ impl PaneHandle {
             tab_tooltip: None,
             take_pending_open_bucket: None,
             take_pending_open_object_editor: None,
+            take_pending_open_secret: None,
             navigate_secret_path: None,
             side_panels: None,
             pane_actions: None,

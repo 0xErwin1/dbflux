@@ -1,0 +1,27 @@
+{
+  "title": "DBFlux redesign: Welcome and updates · dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Overlays, windows and settings, row \"Welcome and updates · dark\".",
+  "artboards": [
+    {
+      "file": "01-isl-welcome.html",
+      "title": "Welcome, first run",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-whats-new.html",
+      "title": "What is new and update notice",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1360,
+      "height": 900
+    },
+    {
+      "file": "03-isl-settings-updates.html",
+      "title": "Settings: updates and privacy",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1320,
+      "height": 900
+    }
+  ]
+}

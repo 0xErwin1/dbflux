@@ -139,6 +139,7 @@ fn build_state_with_role(connection_id: &str, role_id: &str) -> ServerState {
         auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
         driver_registry: Arc::new(HashMap::new()),
         auth_provider_registry: Arc::new(HashMap::new()),
+        secret_provider_registry: Arc::new(HashMap::new()),
         driver_settings: Arc::new(HashMap::new()),
         connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
         connection_setup_lock: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),

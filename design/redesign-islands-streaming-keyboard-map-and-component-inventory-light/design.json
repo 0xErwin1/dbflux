@@ -1,0 +1,20 @@
+{
+  "title": "DBFlux redesign: Streaming: keyboard map and component inventory · light",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Streaming, row \"Streaming: keyboard map and component inventory · light\".",
+  "artboards": [
+    {
+      "file": "01-isl-light-str-keys.html",
+      "title": "Streaming: keyboard map",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1420
+    },
+    {
+      "file": "02-isl-light-str-inventory.html",
+      "title": "Streaming: component inventory and localization",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1300
+    }
+  ]
+}

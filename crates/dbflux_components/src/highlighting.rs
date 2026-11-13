@@ -4,9 +4,11 @@
 //! grammars, but DBFlux only ever opens the editor with the modes
 //! `QueryLanguage::editor_mode()` can return, plus `json` for the document
 //! tree, cell editor, document preview, and dashboard import modals.
-//! Registering those individually with `LanguageRegistry::register` keeps
-//! the release binary from linking grammars nothing in the app requests.
+//! Registering those individually through `bolt::syntax` keeps the release
+//! binary from linking grammars nothing in the app requests.
 
+use bolt::syntax::{Grammar, bundled};
+#[cfg(test)]
 use gpui_component::highlighter::{LanguageConfig, LanguageRegistry};
 
 /// Every language name the code editor is asked to highlight: the modes
@@ -27,79 +29,22 @@ const REGISTERED_LANGUAGES: &[&str] = &[
 /// before any `InputState::code_editor(...)` call — call alongside
 /// `gpui_component::init`.
 pub fn register_languages() {
-    let registry = LanguageRegistry::singleton();
-
-    registry.register(
-        "sql",
-        &LanguageConfig::new(
-            "sql",
-            tree_sitter::Language::new(tree_sitter_sequel::LANGUAGE),
-            vec![],
-            &sql_highlights_query(),
-            "",
-            "",
-        ),
-    );
-
-    registry.register(
-        "javascript",
-        &LanguageConfig::new(
-            "javascript",
-            tree_sitter::Language::new(tree_sitter_javascript::LANGUAGE),
-            vec![],
-            tree_sitter_javascript::HIGHLIGHT_QUERY,
-            "",
-            "",
-        ),
-    );
-
-    registry.register(
+    Grammar::new("sql", tree_sitter_sequel::LANGUAGE, sql_highlights_query()).register();
+    Grammar::new(
         "cypher",
-        &LanguageConfig::new(
-            "cypher",
-            tree_sitter::Language::new(tree_sitter_cypher::LANGUAGE),
-            vec![],
-            tree_sitter_cypher::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        ),
-    );
-
-    registry.register(
+        tree_sitter_cypher::LANGUAGE,
+        tree_sitter_cypher::HIGHLIGHTS_QUERY,
+    )
+    .register();
+    Grammar::new(
         "lua",
-        &LanguageConfig::new(
-            "lua",
-            tree_sitter::Language::new(tree_sitter_lua::LANGUAGE),
-            vec![],
-            tree_sitter_lua::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        ),
-    );
-
-    registry.register(
-        "python",
-        &LanguageConfig::new(
-            "python",
-            tree_sitter::Language::new(tree_sitter_python::LANGUAGE),
-            vec![],
-            tree_sitter_python::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        ),
-    );
-
-    registry.register(
-        "bash",
-        &LanguageConfig::new(
-            "bash",
-            tree_sitter::Language::new(tree_sitter_bash::LANGUAGE),
-            vec![],
-            tree_sitter_bash::HIGHLIGHT_QUERY,
-            "",
-            "",
-        ),
-    );
+        tree_sitter_lua::LANGUAGE,
+        tree_sitter_lua::HIGHLIGHTS_QUERY,
+    )
+    .register();
+    for grammar in [bundled::javascript(), bundled::python(), bundled::bash()] {
+        grammar.register();
+    }
 
     // Empty highlight query: parses with the JSON grammar but emits no
     // highlight spans, matching gpui-component's own `Language::Plain`,
@@ -107,16 +52,9 @@ pub fn register_languages() {
     // longer enable. Registered under both names because the object-store
     // text editor's unknown-extension fallback (`object_text::editor_language`)
     // resolves to "text", while `QueryLanguage::editor_mode()` uses "plaintext".
-    let plaintext = LanguageConfig::new(
-        "plaintext",
-        tree_sitter::Language::new(tree_sitter_json::LANGUAGE),
-        vec![],
-        "",
-        "",
-        "",
-    );
-    registry.register("plaintext", &plaintext);
-    registry.register("text", &plaintext);
+    let plaintext = Grammar::new("plaintext", tree_sitter_json::LANGUAGE, "");
+    plaintext.register();
+    plaintext.register_as("text");
 }
 
 /// SQL captures that correct the grammar's own query. They come first
@@ -239,6 +177,83 @@ mod tests {
             QueryLanguage::Custom("custom".to_string()),
         ]
     }
+    /// Each grammar registers the same configuration it had before the
+    /// registrations moved onto `bolt::syntax`.
+    #[test]
+    fn registrations_keep_their_grammar_and_queries() {
+        register_languages();
+        let registry = LanguageRegistry::singleton();
+        fn config(
+            name: &str,
+            language: impl Into<bolt::syntax::tree_sitter::Language>,
+            highlights: &str,
+        ) -> LanguageConfig {
+            LanguageConfig::new(
+                name.to_string(),
+                language.into(),
+                vec![],
+                highlights,
+                "",
+                "",
+            )
+        }
+
+        let expected = [
+            (
+                "sql",
+                config("sql", tree_sitter_sequel::LANGUAGE, &sql_highlights_query()),
+            ),
+            (
+                "javascript",
+                config(
+                    "javascript",
+                    tree_sitter_javascript::LANGUAGE,
+                    tree_sitter_javascript::HIGHLIGHT_QUERY,
+                ),
+            ),
+            (
+                "cypher",
+                config(
+                    "cypher",
+                    tree_sitter_cypher::LANGUAGE,
+                    tree_sitter_cypher::HIGHLIGHTS_QUERY,
+                ),
+            ),
+            (
+                "lua",
+                config(
+                    "lua",
+                    tree_sitter_lua::LANGUAGE,
+                    tree_sitter_lua::HIGHLIGHTS_QUERY,
+                ),
+            ),
+            (
+                "python",
+                config(
+                    "python",
+                    tree_sitter_python::LANGUAGE,
+                    tree_sitter_python::HIGHLIGHTS_QUERY,
+                ),
+            ),
+            (
+                "bash",
+                config(
+                    "bash",
+                    tree_sitter_bash::LANGUAGE,
+                    tree_sitter_bash::HIGHLIGHT_QUERY,
+                ),
+            ),
+            (
+                "plaintext",
+                config("plaintext", tree_sitter_json::LANGUAGE, ""),
+            ),
+            ("text", config("plaintext", tree_sitter_json::LANGUAGE, "")),
+        ];
+        for (name, config) in expected {
+            assert_eq!(registry.language(name), Some(config), "{name}");
+        }
+    }
+
     /// Highlight roles of each token in `source`, by capture name.
     fn sql_roles(source: &str) -> Vec<(String, String)> {
         use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};

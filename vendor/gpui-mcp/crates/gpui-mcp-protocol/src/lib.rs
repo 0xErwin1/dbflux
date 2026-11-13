@@ -10,11 +10,24 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use directories::BaseDirs;
+
+mod annotation;
+mod message;
+
+pub use annotation::{
+    Annotation, AnnotationSource, AnnotationSpec, AnnotationStyle, AnnotationTarget,
+    DEFAULT_ANNOTATION_COLOR, MAX_ANNOTATION_ID_BYTES, MAX_ANNOTATION_LABEL_BYTES,
+    MAX_ANNOTATION_TTL_MS, MAX_ANNOTATIONS, is_valid_annotation_name, parse_rgba,
+};
+pub use message::{
+    MAX_MESSAGE_DATA_BYTES, MAX_MESSAGE_KIND_BYTES, MAX_MESSAGE_PAGE, MAX_MESSAGE_TEXT_BYTES,
+    MAX_RETAINED_MESSAGES, MAX_UNREAD_MESSAGES, Message, MessagePage, MessageSender, NewMessage,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Current wire protocol version.
-pub const PROTOCOL_VERSION: u16 = 12;
+pub const PROTOCOL_VERSION: u16 = 14;
 /// Maximum accepted request frame, including its four-byte length prefix.
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// Maximum accepted response frame. Screenshots are base64 encoded inside it.
@@ -53,6 +66,10 @@ pub const MAX_APPLICATION_COMMAND_SCHEMA_BYTES: usize = 32 * 1024;
 pub const MAX_APPLICATION_COMMAND_OUTPUT_BYTES: usize = 256 * 1024;
 /// Maximum key events accepted in one foreground input operation.
 pub const MAX_KEY_SEQUENCE: usize = 1_024;
+/// Maximum completed frames the bridge retains for per-frame reports.
+pub const MAX_FRAME_SAMPLES: usize = 512;
+/// Maximum views itemized for one retained frame. Counts stay exact beyond it.
+pub const MAX_FRAME_VIEWS: usize = 256;
 
 /// A syntactically valid application identifier used for local discovery.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, JsonSchema)]
@@ -422,11 +439,12 @@ pub struct NodeState {
     pub visible: bool,
     /// Whether the node accepts input.
     pub enabled: bool,
-    /// Whether an editable node rejects changes to its value. Absent means `false`.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub read_only: bool,
     /// Whether the node owns keyboard focus.
     pub focused: bool,
+    /// Read-only state reported by AccessKit; absent without an accessibility node.
+    /// This does not infer state that the control has not published.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<bool>,
     /// Optional checked state.
     pub checked: Option<bool>,
     /// Optional selected state.
@@ -440,8 +458,8 @@ impl Default for NodeState {
         Self {
             visible: true,
             enabled: true,
-            read_only: false,
             focused: false,
+            read_only: None,
             checked: None,
             selected: None,
             expanded: None,
@@ -632,6 +650,10 @@ pub enum ScreenshotTarget {
 }
 
 /// Highlight description rendered by the GPUI integration.
+///
+/// The bridge shows each highlight as an [`Annotation`] on a fixed rectangle in
+/// the `highlights` group. Prefer [`Operation::UpsertAnnotations`], whose node
+/// targets follow the element as the layout changes.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Highlight {
     /// Logical-pixel rectangle.
@@ -654,29 +676,214 @@ pub struct LogEntry {
 }
 
 /// Frame timing summary produced by the application integration.
+///
+/// Averages and maxima cover at most the last 240 frames completed after the most recent
+/// [`Operation::MarkFrames`], or since the bridge started when no mark was set.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct FrameStats {
-    /// Monotonic token of the most recently completed root-paint frame.
+    /// Monotonic token of the most recently completed frame.
     pub frame_count: u64,
     /// Number of retained interval samples.
     pub sample_count: u32,
-    /// Mean time between semantic-root prepaint starts.
+    /// Mean time between frame starts.
     pub frame_interval_average_ms: f64,
-    /// Longest retained time between semantic-root prepaint starts.
+    /// Longest retained time between frame starts.
     pub frame_interval_max_ms: f64,
-    /// Mean elapsed prepaint phase from the semantic root through deferred prepaint.
+    /// Mean time from the start of a frame to its finished accessibility tree: rendering,
+    /// layout, and prepaint, including deferred draws and GPUI finishing that tree.
     pub prepaint_average_ms: f64,
-    /// Longest retained semantic prepaint phase.
+    /// Longest retained prepaint phase.
     pub prepaint_max_ms: f64,
-    /// Mean time spent painting the semantic root subtree.
+    /// Mean time spent painting the frame, including deferred draws and overlays.
     pub root_paint_average_ms: f64,
-    /// Longest retained semantic root-subtree paint time.
+    /// Longest retained paint time.
     pub root_paint_max_ms: f64,
+    /// Mean wall time of GPUI's whole `Window::draw`: render, layout, prepaint, and paint.
+    ///
+    /// This is the interval GPUI's profiler records as `FrameTiming::draw_duration`.
+    #[serde(default)]
+    pub draw_average_ms: f64,
+    /// Longest retained `Window::draw`.
+    #[serde(default)]
+    pub draw_max_ms: f64,
+    /// Mean part of each draw spent only because the bridge observes the window.
+    ///
+    /// See [`FrameSample::bridge_ms`] for what is and is not included.
+    #[serde(default)]
+    pub bridge_average_ms: f64,
+    /// Longest retained bridge observation overhead.
+    #[serde(default)]
+    pub bridge_max_ms: f64,
+    /// Completed-frame token of the most recent mark; statistics cover later frames.
+    #[serde(default)]
+    pub mark_frame_count: u64,
     /// Observed repaint cadence from retained frame intervals.
     ///
     /// This is not rendering capacity for an event-driven UI: an idle application intentionally
     /// has a low value because it does not continuously request frames.
     pub estimated_fps: f64,
+}
+
+/// Why a view called `render` in a frame instead of replaying its previous output.
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewRenderCause {
+    /// The view is not embedded with `cached`, so it renders whenever the element tree
+    /// containing it is built.
+    Uncached,
+    /// GPUI's inspector was picking, which disables view caching.
+    CachingDisabled,
+    /// `Window::refresh` was pending, which renders every cached view.
+    Refresh,
+    /// The view had no output from the previous frame to replay.
+    FirstDraw,
+    /// The view, or a view drawn inside it, was notified.
+    Notified,
+    /// A containing cached view rendered, which renders every cached view inside it.
+    AncestorRendered,
+    /// The view's bounds, content mask, or text style changed.
+    LayoutChanged,
+    /// The containing element's observation redaction boundary changed.
+    ObservationChanged,
+}
+
+/// Whether a view rendered or replayed its previous output from cache.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewOutcome {
+    /// The view called `render`.
+    Rendered,
+    /// The view replayed its previous prepaint and paint without calling `render`.
+    Reused,
+}
+
+/// One view drawn in one frame.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ViewDraw {
+    /// GPUI entity that backs the view.
+    pub entity_id: u64,
+    /// The view's `Render` type name, empty when it has not rendered since observation began.
+    pub type_name: String,
+    /// Whether the view rendered or replayed from cache.
+    pub outcome: ViewOutcome,
+    /// Why the view rendered; absent when it was reused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<ViewRenderCause>,
+}
+
+/// Cost and view-cache activity of one completed frame.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct FrameSample {
+    /// Completed-frame token of this frame.
+    pub frame_count: u64,
+    /// Time since the previous frame began, when one was observed.
+    pub interval_ms: Option<f64>,
+    /// Wall time of GPUI's whole `Window::draw`: render, layout, prepaint, and paint.
+    pub draw_ms: f64,
+    /// `draw_ms` less `bridge_ms`.
+    pub app_draw_ms: f64,
+    /// Time from the start of the frame to its finished accessibility tree.
+    pub prepaint_ms: f64,
+    /// Time spent painting.
+    pub root_paint_ms: f64,
+    /// Part of the draw spent only because the bridge observes the window: finishing the
+    /// accessibility tree when no platform adapter wanted it, building the observed frame, and
+    /// the bridge's own callbacks, including painting highlights. Recording each element's
+    /// accessibility node during prepaint is interleaved with the application's own work and
+    /// stays in `app_draw_ms`. The semantic tree is converted when a client reads it, off the
+    /// UI thread, so that cost is in neither.
+    pub bridge_ms: f64,
+    /// Views that called `render`.
+    pub views_rendered: u32,
+    /// Cached views that replayed their previous output.
+    pub views_reused: u32,
+    /// Views that rendered, in draw order, up to the per-frame itemization bound.
+    pub rendered_views: Vec<ViewDraw>,
+}
+
+/// Mean, median, 95th percentile, and maximum of one per-frame quantity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Distribution {
+    /// Number of frames that contributed a value.
+    pub count: u32,
+    /// Arithmetic mean.
+    pub mean: f64,
+    /// Nearest-rank median.
+    pub p50: f64,
+    /// Nearest-rank 95th percentile.
+    pub p95: f64,
+    /// Largest value.
+    pub max: f64,
+}
+
+/// Aggregate of every frame in a [`FrameReport`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct FrameSummary {
+    /// Frames summarized.
+    pub frames: u32,
+    /// Distribution of [`FrameSample::draw_ms`].
+    pub draw_ms: Distribution,
+    /// Distribution of [`FrameSample::app_draw_ms`].
+    pub app_draw_ms: Distribution,
+    /// Distribution of [`FrameSample::prepaint_ms`].
+    pub prepaint_ms: Distribution,
+    /// Distribution of [`FrameSample::root_paint_ms`].
+    pub root_paint_ms: Distribution,
+    /// Distribution of [`FrameSample::bridge_ms`].
+    pub bridge_ms: Distribution,
+    /// Distribution of [`FrameSample::interval_ms`] over frames that have one.
+    pub interval_ms: Distribution,
+    /// Total view renders across the summarized frames.
+    pub views_rendered: u64,
+    /// Total cached view replays across the summarized frames.
+    pub views_reused: u64,
+}
+
+/// What one view did across the frames of a [`FrameReport`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ViewActivity {
+    /// GPUI entity that backs the view.
+    pub entity_id: u64,
+    /// The view's `Render` type name, empty when it never rendered in the report.
+    pub type_name: String,
+    /// Frames in which the view rendered.
+    pub rendered: u32,
+    /// Frames in which the view replayed its previous output from cache.
+    pub reused: u32,
+    /// Render counts by cause.
+    pub causes: BTreeMap<ViewRenderCause, u32>,
+}
+
+/// Per-frame samples, percentiles, and view-cache activity after one completed frame.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct FrameReport {
+    /// Frames completed after this token are reported.
+    pub after_frame_count: u64,
+    /// Most recent completed-frame token.
+    pub latest_frame_count: u64,
+    /// Whether frames after `after_frame_count` had already left the bounded history, so the
+    /// report covers only the most recent of them.
+    pub truncated: bool,
+    /// Aggregate over every reported frame.
+    pub summary: FrameSummary,
+    /// Per-frame samples, oldest first. When more frames were retained than requested, these
+    /// are the most recent; the summary still covers them all.
+    pub frames: Vec<FrameSample>,
+    /// Activity of every view drawn in the reported frames, busiest first.
+    pub views: Vec<ViewActivity>,
+    /// Every view drawn in the most recent reported frame, in draw order.
+    pub last_frame_views: Vec<ViewDraw>,
+}
+
+/// Whether a window will draw another frame without further invalidation.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PendingFrame {
+    /// The window is invalidated and GPUI will draw it.
+    pub pending: bool,
+    /// Last completed frame when the question was answered.
+    pub completed: FrameStats,
 }
 
 /// Current GPUI client-area geometry needed to map logical regions into a native window capture.
@@ -737,6 +944,10 @@ pub enum Capability {
     ContextResources,
     /// Bounded application-owned structured commands.
     ApplicationCommands,
+    /// Annotations that track semantic nodes.
+    Annotations,
+    /// An application that reads messages the agent sends it.
+    Messages,
 }
 
 /// Discoverable application command exposed as a generic MCP mutation tool.
@@ -971,15 +1182,40 @@ pub enum Operation {
         /// Maximum wait duration from one through 30,000 milliseconds.
         timeout_ms: u64,
         /// Wait until a newer frame has also been presented to the platform window, not only
-        /// painted. Only [`Operation::Refresh`] advances the presented-frame token, so send one
-        /// before waiting. Absent means `false`, which keeps the root-paint behavior.
+        /// painted. Only [`Operation::Refresh`] and [`Operation::RequestFrame`] advance the
+        /// presented-frame token, so send one before waiting. Absent means `false`, which keeps the root-paint behavior.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         presented: bool,
     },
-    /// Request a new GPUI frame and return the last completed-frame token observed before the
-    /// refresh was scheduled. Once the refreshed frame has been presented, the presented-frame
-    /// token that [`Operation::WaitForFrame`] waits on with `presented` passes that value.
+    /// Invalidate every cached view, request a new GPUI frame, and return the last
+    /// completed-frame token observed before the refresh was scheduled. Once the refreshed
+    /// frame has been presented, the presented-frame token that [`Operation::WaitForFrame`]
+    /// waits on with `presented` passes that value.
+    ///
+    /// The frame renders every view, so it costs far more than an ordinary update. Use
+    /// [`Operation::RequestFrame`] to settle a frame without that cost.
     Refresh,
+    /// Request a new GPUI frame that replays every cached view that was not notified, and
+    /// return the last completed-frame token observed before the frame was scheduled. Once
+    /// that frame has been presented, the presented-frame token that
+    /// [`Operation::WaitForFrame`] waits on with `presented` passes that value.
+    RequestFrame,
+    /// Report whether the window is invalidated, so GPUI will draw another frame without
+    /// further invalidation, together with the last completed-frame token.
+    GetPendingFrame,
+    /// Start a frame measurement window at the most recently completed frame.
+    ///
+    /// Frame statistics and reports then cover only frames completed afterwards. Returns the
+    /// reset statistics.
+    MarkFrames,
+    /// Return per-frame samples, percentiles, and view-cache activity.
+    GetFrameReport {
+        /// Report frames completed after this token, or after the most recent mark when absent.
+        after_frame_count: Option<u64>,
+        /// Maximum per-frame samples returned, from 1 through 512; the summary covers every
+        /// retained frame regardless.
+        frame_limit: u16,
+    },
     /// Return current GPUI client-area geometry for native region capture.
     GetWindowGeometry,
     /// Replace the current highlight set.
@@ -989,6 +1225,45 @@ pub enum Operation {
     },
     /// Clear visual highlights.
     ClearHighlights,
+    /// Add or replace annotations by id, atomically.
+    UpsertAnnotations {
+        /// Annotations to add or replace.
+        annotations: Vec<AnnotationSpec>,
+        /// Remove every annotation in this group first, in the same step.
+        replace_group: Option<String>,
+    },
+    /// Remove annotations by id. Unknown ids are ignored.
+    RemoveAnnotations {
+        /// Identifiers to remove.
+        ids: Vec<String>,
+    },
+    /// Remove every annotation, or every annotation in one group.
+    ClearAnnotations {
+        /// Group to clear; all annotations when absent.
+        group: Option<String>,
+    },
+    /// Return the current annotations with their most recently drawn bounds.
+    ListAnnotations,
+    /// Append a message from the agent to the application.
+    SendMessage {
+        /// The message.
+        message: NewMessage,
+    },
+    /// Read messages after an id, optionally waiting for one to arrive.
+    ReadMessages {
+        /// Return messages with a greater id.
+        after: u64,
+        /// Only messages from this side.
+        from: Option<MessageSender>,
+        /// Maximum messages, from 1 through 128.
+        limit: u16,
+        /// Wait up to this many milliseconds for a matching message when none is
+        /// available yet; zero returns at once. A wait that times out returns an
+        /// empty page rather than an error.
+        wait_ms: u64,
+        /// Count the app's messages in this page as read by the agent.
+        mark_read: bool,
+    },
     /// Return current frame timing statistics.
     GetFrameStats,
     /// Return the current window-relative logical pointer position from GPUI's input pipeline.
@@ -1050,6 +1325,10 @@ pub enum BridgeResult {
     WindowGeometry(WindowGeometry),
     /// Frame timing statistics.
     FrameStats(FrameStats),
+    /// Whether another frame is pending.
+    PendingFrame(PendingFrame),
+    /// Per-frame samples and view-cache activity.
+    FrameReport(FrameReport),
     /// Current window-relative logical pointer position.
     PointerLocation(Point),
     /// Retained log entries.
@@ -1066,6 +1345,12 @@ pub enum BridgeResult {
     ApplicationCommands(Vec<ApplicationCommandDescriptor>),
     /// Structured application command outcome.
     ApplicationCommand(ApplicationCommandResult),
+    /// Current or changed annotations.
+    Annotations(Vec<Annotation>),
+    /// One accepted message.
+    Message(Message),
+    /// A page of messages.
+    Messages(MessagePage),
 }
 
 /// Stable error code safe to expose to MCP clients.
@@ -1153,7 +1438,7 @@ impl WireResponse {
 mod tests {
     use super::{
         AppId, Capabilities, EndpointDescriptor, InstanceId, LocalEndpoint, NativeWindowId,
-        NodeState, Operation, PROTOCOL_VERSION, Point, ProcessId, Rect, RequestId, WireResponse,
+        Operation, PROTOCOL_VERSION, Point, ProcessId, Rect, RequestId, WireResponse,
     };
 
     #[test]
@@ -1185,6 +1470,28 @@ mod tests {
             }
             .is_valid()
         );
+    }
+
+    #[test]
+    fn read_only_state_accepts_legacy_payloads_and_preserves_known_false()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let legacy = serde_json::json!({
+            "visible": true, "enabled": true, "focused": false,
+            "checked": null, "selected": null, "expanded": null
+        });
+        let mut state: super::NodeState = serde_json::from_value(legacy.clone())?;
+        assert_eq!(state.read_only, None);
+        assert_eq!(serde_json::to_value(&state)?, legacy);
+        for expected in [true, false] {
+            state.read_only = Some(expected);
+            let json = serde_json::to_value(&state)?;
+            assert_eq!(json["read_only"], expected);
+            assert_eq!(
+                serde_json::from_value::<super::NodeState>(json)?.read_only,
+                Some(expected)
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -1262,32 +1569,6 @@ mod tests {
             presented.get("presented"),
             Some(&serde_json::Value::Bool(true))
         );
-        Ok(())
-    }
-
-    #[test]
-    fn read_only_state_is_serialized_only_when_set() -> Result<(), serde_json::Error> {
-        let writable = serde_json::to_value(NodeState::default())?;
-        assert!(writable.get("read_only").is_none());
-
-        let read_only = serde_json::to_value(NodeState {
-            read_only: true,
-            ..NodeState::default()
-        })?;
-        assert_eq!(
-            read_only.get("read_only"),
-            Some(&serde_json::Value::Bool(true))
-        );
-
-        let legacy = serde_json::from_value::<NodeState>(serde_json::json!({
-            "visible": true,
-            "enabled": true,
-            "focused": false,
-            "checked": null,
-            "selected": null,
-            "expanded": null
-        }))?;
-        assert!(!legacy.read_only);
         Ok(())
     }
 

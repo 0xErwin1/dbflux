@@ -1390,8 +1390,12 @@ impl McpConnectionFactory {
         // profile that routes through the pipeline (auth profile, access kind, value
         // refs) but stores its password in the OS keyring would otherwise connect
         // with no password at all. The GUI applies the same fallback.
-        let keyring_password =
-            DbFluxServer::resolve_profile_secrets(&self.state, &profile)?.password;
+        let keyring_password = DbFluxServer::resolve_profile_secrets(
+            &self.state,
+            &profile,
+            driver.requires_password(),
+        )?
+        .password;
         let pipeline_input = self.build_pipeline_input(profile).await?;
         let cancel = pipeline_input.cancel.clone();
         let (state_tx, state_rx) = dbflux_core::pipeline_state_channel();
@@ -1479,7 +1483,11 @@ impl McpConnectionFactory {
         driver: Arc<dyn dbflux_core::DbDriver>,
         profile: dbflux_core::ConnectionProfile,
     ) -> Result<Arc<CachedConnection>, String> {
-        let resolved_secrets = DbFluxServer::resolve_profile_secrets(&self.state, &profile)?;
+        let resolved_secrets = DbFluxServer::resolve_profile_secrets(
+            &self.state,
+            &profile,
+            driver.requires_password(),
+        )?;
         let password = resolved_secrets.password;
         let ssh_secret = resolved_secrets.ssh_secret;
         let connection_key_for_error = connection_key.clone();
@@ -1620,9 +1628,12 @@ impl McpConnectionFactory {
             (None, None)
         };
 
-        let resolver = CompositeValueResolver::new(Arc::new(ValueCache::new(
+        let mut resolver = CompositeValueResolver::new(Arc::new(ValueCache::new(
             std::time::Duration::from_secs(300),
         )));
+        for provider in self.state.secret_provider_registry.values() {
+            resolver.register_secret_provider(Arc::clone(provider));
+        }
 
         #[cfg(feature = "aws")]
         let aws_profile_name = auth_profile
@@ -1804,9 +1815,16 @@ impl DbFluxServer {
     fn resolve_profile_secrets(
         state: &ServerState,
         profile: &dbflux_core::ConnectionProfile,
+        driver_requires_password: bool,
     ) -> Result<ResolvedSecrets, String> {
         let password = if profile.save_password {
-            match state.secret_manager.get_password(profile) {
+            let stored = dbflux_core::keyring_password_for_connect(
+                profile,
+                driver_requires_password,
+                state.secret_manager.get_password(profile),
+            )
+            .map_err(|error| format!("Profile '{}': {error}", profile.name))?;
+            match stored {
                 Some(pw) => {
                     log::debug!(
                         "Resolved password from keyring for profile '{}' (id={})",
@@ -2484,6 +2502,7 @@ mod tests {
             auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
             driver_registry: Arc::new(HashMap::from([(driver_id.to_string(), driver)])),
             auth_provider_registry: Arc::new(HashMap::new()),
+            secret_provider_registry: Arc::new(HashMap::new()),
             driver_settings: Arc::new(HashMap::new()),
             connection_cache: Arc::new(
                 RwLock::new(crate::connection_cache::ConnectionCache::new()),

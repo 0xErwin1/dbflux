@@ -384,6 +384,21 @@ impl DriverIconTone {
         }
     }
 
+    /// The same tone as a row or badge tone, which resolves its own color
+    /// against the theme when it draws. Use it where a color is stored and
+    /// drawn later, so a light and dark switch does not leave a stale hue.
+    pub const fn badge_tone(self) -> crate::primitives::BadgeTone {
+        use crate::primitives::BadgeTone;
+
+        match self {
+            Self::Info => BadgeTone::Info,
+            Self::Success => BadgeTone::Success,
+            Self::Danger => BadgeTone::Danger,
+            Self::Violet => BadgeTone::Violet,
+            Self::Warning => BadgeTone::Warning,
+        }
+    }
+
     /// The color of this tone in the active theme.
     pub fn resolve(self, cx: &gpui::App) -> gpui::Hsla {
         use gpui_component::ActiveTheme;

@@ -1,8 +1,8 @@
 diff --git a/crates/gpui-mcp-protocol/src/lib.rs b/crates/gpui-mcp-protocol/src/lib.rs
-index 9d22cd15..6b4eca0a 100644
+index c26ecdc..7e967a5 100644
 --- a/crates/gpui-mcp-protocol/src/lib.rs
 +++ b/crates/gpui-mcp-protocol/src/lib.rs
-@@ -945,6 +945,14 @@ pub enum Operation {
+@@ -1160,6 +1160,14 @@ pub enum Operation {
          /// Stable semantic node identifier.
          node_id: String,
      },
@@ -18,10 +18,10 @@ index 9d22cd15..6b4eca0a 100644
      WaitForTree {
          /// Return immediately when the current generation is newer than this value.
 diff --git a/crates/gpui-mcp-server/src/tools.rs b/crates/gpui-mcp-server/src/tools.rs
-index 2640c919..8443c9b1 100644
+index 9ecf114..c867e54 100644
 --- a/crates/gpui-mcp-server/src/tools.rs
 +++ b/crates/gpui-mcp-server/src/tools.rs
-@@ -590,15 +590,18 @@ impl GpuiMcp {
+@@ -632,15 +632,18 @@ impl GpuiMcp {
      async fn element_with_action(&self, id: &str, action: NodeAction) -> Result<UiNode, String> {
          let tree = self.tree().await?;
          let node = get_node(&tree, id)?;
@@ -43,7 +43,7 @@ index 2640c919..8443c9b1 100644
      async fn wait_for_tree(&self, generation: u64, wait: Duration) -> Result<UiTree, String> {
          let timeout_ms = u64::try_from(wait.as_millis())
              .unwrap_or(MAX_WAIT_MS)
-@@ -948,6 +951,31 @@ fn get_node<'a>(tree: &'a UiTree, id: &str) -> Result<&'a UiNode, String> {
+@@ -1243,6 +1246,31 @@ fn get_node<'a>(tree: &'a UiTree, id: &str) -> Result<&'a UiNode, String> {
          .ok_or_else(|| format!("semantic element {id:?} was not found"))
  }
  
@@ -75,20 +75,23 @@ index 2640c919..8443c9b1 100644
  fn require_bounds(node: &UiNode) -> Result<Rect, String> {
      node.bounds
          .filter(|bounds| bounds.is_valid())
-@@ -1197,14 +1225,61 @@ mod tests {
+@@ -1506,15 +1534,63 @@ mod tests {
      use std::sync::{Arc, Mutex};
      use std::time::Duration;
  
--    use gpui_mcp_protocol::{BridgeResult, FrameStats, NodeState, Operation, UiNode};
+-    use gpui_mcp_protocol::{BridgeResult, FrameStats, NodeState, Operation, PendingFrame, UiNode};
 +    use gpui_mcp_protocol::{
-+        BridgeResult, FrameStats, NodeAction, NodeState, Operation, Point, Rect, UiNode,
++        BridgeResult, FrameStats, NodeAction, NodeState, Operation, PendingFrame, Point, Rect,
++        UiNode,
 +    };
      use serde_json::json;
  
      use super::{
--        FindArgs, Role, StartVideoRecordingArgs, UiTree, WaitStateArgs,
-+        FindArgs, Role, StartVideoRecordingArgs, UiTree, WaitStateArgs, click_point,
-         default_result_limit_for_test, find_nodes, settle_refresh_frames, state_matches, tree_diff,
+         FindArgs, MAX_SETTLE_FRAMES, Role, StartVideoRecordingArgs, UiTree, WaitStateArgs,
+-        default_result_limit_for_test, find_nodes, settle_pending_frames, settle_requested_frames,
+-        state_matches, tree_diff,
++        click_point, default_result_limit_for_test, find_nodes, settle_pending_frames,
++        settle_requested_frames, state_matches, tree_diff,
      };
  
 +    fn node_with_actions(role: Role, actions: Vec<NodeAction>) -> UiNode {
@@ -136,11 +139,11 @@ index 2640c919..8443c9b1 100644
 +        assert!(click_point(&disabled).is_err());
 +    }
 +
-     #[tokio::test]
-     async fn mutation_settlement_waits_from_each_refresh_token() -> Result<(), String> {
-         let operations = Arc::new(Mutex::new(Vec::new()));
+     fn stats(frame_count: u64) -> BridgeResult {
+         BridgeResult::FrameStats(FrameStats {
+             frame_count,
 diff --git a/crates/gpui-mcp-server/src/tools/input.rs b/crates/gpui-mcp-server/src/tools/input.rs
-index 2ae5d88f..9e17348b 100644
+index 2ae5d88..9e17348 100644
 --- a/crates/gpui-mcp-server/src/tools/input.rs
 +++ b/crates/gpui-mcp-server/src/tools/input.rs
 @@ -2,8 +2,9 @@ use super::{
@@ -243,7 +246,7 @@ index 2ae5d88f..9e17348b 100644
          &self,
          id: &str,
 diff --git a/crates/gpui-mcp/src/input.rs b/crates/gpui-mcp/src/input.rs
-index aee8bace..259f6f58 100644
+index 827e961..7472208 100644
 --- a/crates/gpui-mcp/src/input.rs
 +++ b/crates/gpui-mcp/src/input.rs
 @@ -139,18 +139,22 @@ pub(crate) fn dispatch_keyboard(
@@ -335,10 +338,10 @@ index aee8bace..259f6f58 100644
      struct DragValue;
  
 diff --git a/crates/gpui-mcp/src/service.rs b/crates/gpui-mcp/src/service.rs
-index 49e3d781..06791283 100644
+index 4ccea60..2ccc388 100644
 --- a/crates/gpui-mcp/src/service.rs
 +++ b/crates/gpui-mcp/src/service.rs
-@@ -606,6 +606,16 @@ fn handle_ui_operation(
+@@ -802,6 +802,16 @@ fn handle_ui_operation(
              }
              Ok(BridgeResult::Ack)
          }
@@ -355,15 +358,15 @@ index 49e3d781..06791283 100644
          Operation::Refresh => {
              let completed = state.frame_stats();
              window.refresh();
-@@ -917,6 +927,7 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
+@@ -1200,6 +1210,7 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
          operation @ (Operation::Input { .. }
          | Operation::PointerInput { .. }
          | Operation::Focus { .. }
 +        | Operation::SetValue { .. }
          | Operation::Refresh
-         | Operation::GetLiveDocument
-         | Operation::PreviewLiveDocument { .. }
-@@ -968,18 +979,21 @@ async fn dispatch_to_ui(
+         | Operation::RequestFrame
+         | Operation::GetPendingFrame
+@@ -1254,19 +1265,22 @@ async fn dispatch_to_ui(
          .map_err(|_| BridgeError::new(ErrorCode::Internal, "UI command pump stopped"))?
  }
  
@@ -374,6 +377,7 @@ index 49e3d781..06791283 100644
 +    Ok(())
 +}
 +
+ #[allow(clippy::too_many_lines)]
  fn validate_operation(operation: &Operation) -> Result<(), BridgeError> {
      match operation {
          Operation::Input { command } => input::validate(command),
@@ -393,7 +397,7 @@ index 49e3d781..06791283 100644
          }
          Operation::WaitForTree { timeout_ms, .. }
              if *timeout_ms == 0 || *timeout_ms > MAX_WAIT_MS =>
-@@ -1422,12 +1436,31 @@ fn invalid(message: &'static str) -> BridgeError {
+@@ -1758,12 +1772,31 @@ fn invalid(message: &'static str) -> BridgeError {
  
  #[cfg(test)]
  mod tests {

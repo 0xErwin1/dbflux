@@ -1,17 +1,25 @@
 //! Driver-agnostic line-chart engine for DBFlux.
 //!
 //! The chart module owns the full pipeline from query-result introspection to
-//! GPUI rendering:
+//! GPUI rendering. The product-neutral half lives in `bolt::chart` — the
+//! column contract, decimation, axis ticks, the legend, the axis bar, the
+//! point inspector, the spec value types and the readout formatting — and is
+//! re-exported here at its historical paths. What stays product-side is what
+//! reads a `dbflux_core` type or carries a product name:
 //!
-//! 1. **`detect`** — auto-detects suitable columns from a `QueryResult`
-//!    using `ColumnKind` semantics only (never type names or driver IDs).
-//! 2. **`spec`** — chart and series specification types; constructors for
-//!    detection-driven and manual column selection.
-//! 3. **`decimate`** — LTTB downsampling to keep paint fast on large datasets.
-//! 4. **`axis`** — tick generation and label formatting for numeric and time axes.
-//! 5. **`legend`** — pure element factory for the legend pill row.
-//! 6. **`engine`** — `ChartView`, the GPUI entity that owns state and renders
-//!    the canvas.
+//! - **`data_source`** — the chart data-source seam: the concrete sources
+//!   (query, collection, metric, instance metric, audit) and the plans that
+//!   carry `QueryRequest`s.
+//! - **`spec`** — the persisted `ChartSpec` composite and its constructors,
+//!   which bind to `dbflux_core::ColumnMeta` columns and split series from a
+//!   `QueryResult`'s group cells.
+//! - **`engine`** — `ChartView`, the GPUI entity, whose `build` interprets
+//!   `Value` cells (series construction) and owns the render model, the
+//!   hover/keyboard interaction and the canvas painting.
+//! - the adapters (`axis_bar`, `point_inspector`, `detect`, `stats`) — thin
+//!   wrappers that convert `dbflux_core` columns to `bolt::chart::ChartColumn`
+//!   and answer the product's translated labels, so call sites keep compiling
+//!   untouched.
 
 pub mod axis;
 pub mod axis_bar;
@@ -23,6 +31,8 @@ pub mod legend;
 pub mod point_inspector;
 pub mod spec;
 pub mod stats;
+
+mod compat;
 
 pub use axis_bar::{AxisPickerOption, AxisPill, axis_bar_element, axis_picker_options};
 pub use data_source::{

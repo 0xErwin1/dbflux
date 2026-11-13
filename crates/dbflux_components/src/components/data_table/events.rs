@@ -108,6 +108,8 @@ pub enum ContextMenuAction {
     Order(SortDirection),
     /// Remove ordering.
     RemoveOrdering,
+    /// Copy the name of the column the header menu was opened on.
+    CopyColumnName,
     /// Open the row inspector panel for the selected row.
     InspectRow,
     /// Open a new ChartDocument seeded with the current query and result columns.

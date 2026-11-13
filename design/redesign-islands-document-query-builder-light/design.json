@@ -1,0 +1,27 @@
+{
+  "title": "DBFlux redesign: Document query builder (DBF-316) · light",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Key-value, documents and series, row \"Document query builder (DBF-316) · light\".",
+  "artboards": [
+    {
+      "file": "01-isl-light-doc-builder.html",
+      "title": "Document builder: find, editable results",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-light-doc-builder-aggregate.html",
+      "title": "Document builder: group stage, read-only aggregate",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-isl-light-doc-builder-states.html",
+      "title": "Document builder: field picker, operators, values, states",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 930
+    }
+  ]
+}

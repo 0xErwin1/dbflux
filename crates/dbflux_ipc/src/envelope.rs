@@ -27,20 +27,25 @@ pub const DRIVER_RPC_V1_5: ProtocolVersion = ProtocolVersion::new(1, 5);
 pub const DRIVER_RPC_V1_6: ProtocolVersion = ProtocolVersion::new(1, 6);
 pub const DRIVER_RPC_V1_7: ProtocolVersion = ProtocolVersion::new(1, 7);
 pub const DRIVER_RPC_V1_8: ProtocolVersion = ProtocolVersion::new(1, 8);
+pub const DRIVER_RPC_V1_9: ProtocolVersion = ProtocolVersion::new(1, 9);
 /// Current highest driver protocol version.
-pub const DRIVER_RPC_VERSION: ProtocolVersion = DRIVER_RPC_V1_8;
+pub const DRIVER_RPC_VERSION: ProtocolVersion = DRIVER_RPC_V1_9;
 pub const AUTH_PROVIDER_RPC_V1_0: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const AUTH_PROVIDER_RPC_V1_1: ProtocolVersion = ProtocolVersion::new(1, 1);
 pub const AUTH_PROVIDER_RPC_V1_2: ProtocolVersion = ProtocolVersion::new(1, 2);
 pub const AUTH_PROVIDER_RPC_V1_3: ProtocolVersion = ProtocolVersion::new(1, 3);
 /// Current highest auth-provider protocol version.
 pub const AUTH_PROVIDER_RPC_VERSION: ProtocolVersion = AUTH_PROVIDER_RPC_V1_3;
+pub const SECRET_PROVIDER_RPC_V1_0: ProtocolVersion = ProtocolVersion::new(1, 0);
+/// Current highest secret-provider protocol version.
+pub const SECRET_PROVIDER_RPC_VERSION: ProtocolVersion = SECRET_PROVIDER_RPC_V1_0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RpcApiFamily {
     DriverRpc,
     AuthProviderRpc,
+    SecretProviderRpc,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,7 +70,10 @@ pub const DRIVER_RPC_API_CONTRACT: RpcApiContract =
 pub const AUTH_PROVIDER_RPC_API_CONTRACT: RpcApiContract =
     RpcApiContract::new(RpcApiFamily::AuthProviderRpc, AUTH_PROVIDER_RPC_VERSION);
 
-pub const DRIVER_RPC_SUPPORTED_VERSIONS: [ProtocolVersion; 9] = [
+pub const SECRET_PROVIDER_RPC_API_CONTRACT: RpcApiContract =
+    RpcApiContract::new(RpcApiFamily::SecretProviderRpc, SECRET_PROVIDER_RPC_VERSION);
+
+pub const DRIVER_RPC_SUPPORTED_VERSIONS: [ProtocolVersion; 10] = [
     DRIVER_RPC_V1_0,
     DRIVER_RPC_V1_1,
     DRIVER_RPC_V1_2,
@@ -75,6 +83,7 @@ pub const DRIVER_RPC_SUPPORTED_VERSIONS: [ProtocolVersion; 9] = [
     DRIVER_RPC_V1_6,
     DRIVER_RPC_V1_7,
     DRIVER_RPC_V1_8,
+    DRIVER_RPC_V1_9,
 ];
 
 pub const AUTH_PROVIDER_RPC_SUPPORTED_VERSIONS: [ProtocolVersion; 4] = [
@@ -84,12 +93,18 @@ pub const AUTH_PROVIDER_RPC_SUPPORTED_VERSIONS: [ProtocolVersion; 4] = [
     AUTH_PROVIDER_RPC_V1_0,
 ];
 
+pub const SECRET_PROVIDER_RPC_SUPPORTED_VERSIONS: [ProtocolVersion; 1] = [SECRET_PROVIDER_RPC_V1_0];
+
 pub const fn driver_rpc_supported_versions() -> &'static [ProtocolVersion] {
     &DRIVER_RPC_SUPPORTED_VERSIONS
 }
 
 pub const fn auth_provider_rpc_supported_versions() -> &'static [ProtocolVersion] {
     &AUTH_PROVIDER_RPC_SUPPORTED_VERSIONS
+}
+
+pub const fn secret_provider_rpc_supported_versions() -> &'static [ProtocolVersion] {
+    &SECRET_PROVIDER_RPC_SUPPORTED_VERSIONS
 }
 
 pub fn negotiate_highest_mutual_version(
@@ -111,8 +126,8 @@ mod tests {
     use super::{
         AUTH_PROVIDER_RPC_V1_3, DRIVER_RPC_SUPPORTED_VERSIONS, DRIVER_RPC_V1_1, DRIVER_RPC_V1_2,
         DRIVER_RPC_V1_3, DRIVER_RPC_V1_4, DRIVER_RPC_V1_5, DRIVER_RPC_V1_6, DRIVER_RPC_V1_7,
-        DRIVER_RPC_V1_8, DRIVER_RPC_VERSION, ProtocolVersion, RpcApiContract, RpcApiFamily,
-        negotiate_highest_mutual_version,
+        DRIVER_RPC_V1_8, DRIVER_RPC_V1_9, DRIVER_RPC_VERSION, ProtocolVersion, RpcApiContract,
+        RpcApiFamily, negotiate_highest_mutual_version,
     };
 
     #[test]
@@ -159,7 +174,7 @@ mod tests {
 
     #[test]
     fn test_driver_rpc_version_constants() {
-        assert_eq!(DRIVER_RPC_VERSION, ProtocolVersion::new(1, 8));
+        assert_eq!(DRIVER_RPC_VERSION, ProtocolVersion::new(1, 9));
         assert_eq!(DRIVER_RPC_V1_1, ProtocolVersion::new(1, 1));
         assert_eq!(DRIVER_RPC_V1_2, ProtocolVersion::new(1, 2));
         assert_eq!(DRIVER_RPC_V1_3, ProtocolVersion::new(1, 3));
@@ -168,17 +183,18 @@ mod tests {
         assert_eq!(DRIVER_RPC_V1_6, ProtocolVersion::new(1, 6));
         assert_eq!(DRIVER_RPC_V1_7, ProtocolVersion::new(1, 7));
         assert_eq!(DRIVER_RPC_V1_8, ProtocolVersion::new(1, 8));
+        assert_eq!(DRIVER_RPC_V1_9, ProtocolVersion::new(1, 9));
     }
 
     #[test]
-    fn a_v1_7_peer_negotiates_v1_7_with_a_v1_8_host() {
+    fn a_v1_8_peer_negotiates_v1_8_with_a_v1_9_host() {
         let selected = negotiate_highest_mutual_version(
             RpcApiFamily::DriverRpc,
             &DRIVER_RPC_SUPPORTED_VERSIONS,
             &DRIVER_RPC_SUPPORTED_VERSIONS[..DRIVER_RPC_SUPPORTED_VERSIONS.len() - 1],
         );
 
-        assert_eq!(selected, Some(DRIVER_RPC_V1_7));
+        assert_eq!(selected, Some(DRIVER_RPC_V1_8));
         assert_eq!(
             DRIVER_RPC_SUPPORTED_VERSIONS.last(),
             Some(&DRIVER_RPC_VERSION)

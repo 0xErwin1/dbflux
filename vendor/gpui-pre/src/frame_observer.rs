@@ -3,11 +3,18 @@
 //! GPUI's accessibility tree is the canonical description of a rendered UI.
 //! This module exposes completed copies of that tree without activating an OS
 //! accessibility adapter, and provides a final overlay pass for visual tools.
+//! Each observed draw also reports what it cost and which views rendered or
+//! replayed their previous output from cache.
 
-use crate::{App, Bounds, GlobalElementId, Pixels, Window};
+use crate::{App, Bounds, EntityId, GlobalElementId, Pixels, Window};
 use accesskit::{Node, NodeId, Role, TreeUpdate};
 use collections::{FxHashMap, FxHashSet};
-use std::{collections::BTreeMap, fmt::Write as _, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    fmt::Write as _,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 /// Interaction details that are meaningful to visual tooling but are not
 /// represented by an AccessKit action.
@@ -126,11 +133,18 @@ impl FrameNode {
 pub struct AccessibilityFrame {
     tree: TreeUpdate,
     nodes: FxHashMap<NodeId, FrameNode>,
+    /// Position of each node in `tree.nodes`, built on the first lookup rather
+    /// than during the draw, so an observer that never looks pays nothing.
+    positions: OnceLock<FxHashMap<NodeId, usize>>,
 }
 
 impl AccessibilityFrame {
     pub(crate) fn new(tree: TreeUpdate, nodes: FxHashMap<NodeId, FrameNode>) -> Self {
-        Self { tree, nodes }
+        Self {
+            tree,
+            nodes,
+            positions: OnceLock::new(),
+        }
     }
 
     /// Return the canonical AccessKit update for this frame.
@@ -151,10 +165,108 @@ impl AccessibilityFrame {
     /// Return the canonical AccessKit node for a rendered GPUI node, when one
     /// was explicitly included in the accessibility tree.
     pub fn accessibility_node(&self, node: &FrameNode) -> Option<&Node> {
-        self.tree
-            .nodes
-            .iter()
-            .find_map(|(id, value)| (*id == node.accessibility_id).then_some(value))
+        let positions = self.positions.get_or_init(|| {
+            let mut positions = FxHashMap::default();
+            for (position, (id, _)) in self.tree.nodes.iter().enumerate() {
+                positions.entry(*id).or_insert(position);
+            }
+            positions
+        });
+        positions
+            .get(&node.accessibility_id)
+            .map(|position| &self.tree.nodes[*position].1)
+    }
+}
+
+/// Why a view called `render` in a frame instead of replaying its previous
+/// output.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ViewRenderCause {
+    /// The view is not embedded with `cached`, so it renders whenever the
+    /// element tree containing it is built.
+    Uncached,
+    /// Inspector picking disables view caching.
+    CachingDisabled,
+    /// [`Window::refresh`] was pending, which renders every cached view.
+    Refresh,
+    /// The view had no output from the previous frame to replay.
+    FirstDraw,
+    /// The view, or a view drawn inside it, was notified.
+    Notified,
+    /// A containing cached view rendered. GPUI renders every cached view
+    /// inside a cached view that renders.
+    AncestorRendered,
+    /// The view's bounds, content mask, or text style changed.
+    LayoutChanged,
+    /// The containing element's observation redaction boundary changed.
+    ObservationChanged,
+}
+
+/// How a view produced its output for one frame.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ViewDrawOutcome {
+    /// The previous frame's prepaint and paint were replayed without calling
+    /// `render`.
+    Reused,
+    /// The view called `render`.
+    Rendered(ViewRenderCause),
+}
+
+/// One view drawn in an observed frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ViewDraw {
+    entity_id: EntityId,
+    type_name: &'static str,
+    outcome: ViewDrawOutcome,
+}
+
+impl ViewDraw {
+    /// Return the entity that backs the view.
+    pub fn entity_id(&self) -> EntityId {
+        self.entity_id
+    }
+
+    /// Return the view's `Render` type name, or an empty string when the view
+    /// has not rendered since observation began.
+    pub fn type_name(&self) -> &'static str {
+        self.type_name
+    }
+
+    /// Return whether the view rendered or replayed its previous output.
+    pub fn outcome(&self) -> ViewDrawOutcome {
+        self.outcome
+    }
+}
+
+/// Cost and view-cache activity of one completed observed draw.
+#[derive(Debug)]
+pub struct DrawnFrame<'a> {
+    draw: Duration,
+    observation: Duration,
+    views: &'a [ViewDraw],
+}
+
+impl DrawnFrame<'_> {
+    /// Return the wall time of the whole `Window::draw`: rendering, layout,
+    /// prepaint, and paint. This is the interval GPUI's profiler records as
+    /// `FrameTiming::draw_duration` when that feature is enabled.
+    pub fn draw_duration(&self) -> Duration {
+        self.draw
+    }
+
+    /// Return the part of [`Self::draw_duration`] spent only because the frame
+    /// was observed: finishing the accessibility tree when no platform adapter
+    /// wanted it, building the [`AccessibilityFrame`], and running observer
+    /// callbacks. Recording each element's accessibility node during prepaint
+    /// is interleaved with the application's own work and is not included.
+    pub fn observation_duration(&self) -> Duration {
+        self.observation
+    }
+
+    /// Return every view drawn in the frame, in draw order, with whether it
+    /// rendered or replayed its previous output.
+    pub fn views(&self) -> &[ViewDraw] {
+        self.views
     }
 }
 
@@ -169,6 +281,17 @@ pub trait FrameObserver: Send + Sync + 'static {
     /// Called after prepaint has completed with the canonical accessibility tree.
     fn accessibility_updated(&self, _frame: &AccessibilityFrame) {}
 
+    /// Called after prepaint has completed with a shared handle to the
+    /// canonical accessibility tree.
+    ///
+    /// An observer that keeps the frame, for example to convert it later off
+    /// the UI thread, overrides this instead of [`Self::accessibility_updated`]
+    /// and retains the handle rather than copying the tree during the draw. The
+    /// default forwards to [`Self::accessibility_updated`].
+    fn accessibility_frame(&self, frame: &Arc<AccessibilityFrame>) {
+        self.accessibility_updated(frame);
+    }
+
     /// Called immediately before the normal paint pass.
     fn paint_started(&self) {}
 
@@ -177,6 +300,10 @@ pub trait FrameObserver: Send + Sync + 'static {
 
     /// Called after normal paint and observer overlays have completed.
     fn frame_finished(&self) {}
+
+    /// Called when `Window::draw` returns with what the draw cost and which
+    /// views rendered or replayed from cache.
+    fn frame_drawn(&self, _frame: &DrawnFrame<'_>) {}
 }
 
 #[doc(hidden)]
@@ -221,17 +348,35 @@ pub(crate) struct FrameBuilder {
     nodes: Vec<FrameNode>,
     parents: Vec<FrameParent>,
     enabled: bool,
+    /// Whether [`Window::refresh`] was pending when this frame began.
+    window_refresh: bool,
+    views: Vec<ViewDraw>,
+    /// `Render` type name of every view drawn in this frame. A view that
+    /// replays its previous output does not render, so its name is carried
+    /// forward from the frame it was last rendered in.
+    view_types: FxHashMap<EntityId, &'static str>,
+    observation: Duration,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct FrameParent {
     path: String,
+    /// Position of the parent's node in the builder that entered it. A
+    /// rolled-back transaction can truncate that node, so every use checks the
+    /// path before trusting it.
+    index: usize,
 }
 
+/// The builder's state at one point in prepaint.
+///
+/// Only a node that is open can collect text, so the open nodes are the only
+/// ones that existed at the checkpoint and can change after it. Recording just
+/// those keeps a checkpoint proportional to the element depth rather than to
+/// every node drawn so far, which matters because each cached view takes two.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FrameCheckpoint {
     node_count: usize,
-    content: Vec<(String, String)>,
+    open: Vec<(usize, String, String)>,
 }
 
 impl FrameBuilder {
@@ -239,10 +384,74 @@ impl FrameBuilder {
         self.nodes.clear();
         self.parents.clear();
         self.enabled = enabled;
+        self.window_refresh = false;
+        self.views.clear();
+        self.view_types.clear();
+        self.observation = Duration::ZERO;
     }
 
     pub(crate) fn enable(&mut self) {
         self.enabled = true;
+    }
+
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub(crate) fn set_window_refresh(&mut self, window_refresh: bool) {
+        self.window_refresh = window_refresh;
+    }
+
+    pub(crate) fn window_refresh(&self) -> bool {
+        self.window_refresh
+    }
+
+    /// Record the `Render` type of a view that is rendering.
+    pub(crate) fn note_view_type(&mut self, entity_id: EntityId, type_name: &'static str) {
+        if self.enabled {
+            self.view_types.insert(entity_id, type_name);
+        }
+    }
+
+    /// Record how a view produced its output. `previous` is the last rendered
+    /// frame, which names a view that replays without rendering.
+    pub(crate) fn view_drawn(
+        &mut self,
+        entity_id: EntityId,
+        outcome: ViewDrawOutcome,
+        previous: &FrameBuilder,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        if outcome == ViewDrawOutcome::Reused
+            && let Some(type_name) = previous.view_types.get(&entity_id)
+        {
+            self.view_types.entry(entity_id).or_insert(type_name);
+        }
+        self.views.push(ViewDraw {
+            entity_id,
+            type_name: "",
+            outcome,
+        });
+    }
+
+    pub(crate) fn add_observation(&mut self, duration: Duration) {
+        self.observation += duration;
+    }
+
+    /// Name every view drawn in the finished frame and describe its cost.
+    pub(crate) fn drawn(&mut self, draw: Duration) -> DrawnFrame<'_> {
+        for view in &mut self.views {
+            if let Some(type_name) = self.view_types.get(&view.entity_id) {
+                view.type_name = type_name;
+            }
+        }
+        DrawnFrame {
+            draw,
+            observation: self.observation,
+            views: &self.views,
+        }
     }
 
     pub(crate) fn enter(
@@ -281,10 +490,59 @@ impl FrameBuilder {
         };
         let parent = FrameParent {
             path: node.path.clone(),
+            index: self.nodes.len(),
         };
         self.nodes.push(node);
         self.parents.push(parent);
         true
+    }
+
+    /// Keep interaction provenance when an external wrapper forwards a Div's
+    /// prepaint but does not know about Element::frame_node. Its accessibility
+    /// hooks registered the node; the inner Interactivity supplies these facts
+    /// before children contribute text. Only the same open node may be refined.
+    pub(crate) fn refine_interactivity(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        data: FrameNodeData,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        let Some(id) = global_id.map(GlobalElementId::accesskit_node_id) else {
+            return;
+        };
+        let Some(node) = self
+            .parents
+            .last()
+            .and_then(|parent| self.nodes.get_mut(parent.index))
+        else {
+            return;
+        };
+        if node.accessibility_id != id {
+            return;
+        }
+        node.redacted |= data.redacted;
+        for action in data.actions {
+            if !node.actions.contains(&action) {
+                node.actions.push(action);
+            }
+        }
+        for (key, value) in data.metadata {
+            node.metadata.entry(key).or_insert(value);
+        }
+    }
+
+    /// Return the index of `parent`'s node in this builder, when it is still
+    /// there.
+    fn parent_index(nodes: &[FrameNode], parent: &FrameParent) -> Option<usize> {
+        if nodes
+            .get(parent.index)
+            .is_some_and(|node| node.path == parent.path)
+        {
+            return Some(parent.index);
+        }
+        nodes.iter().rposition(|node| node.path == parent.path)
     }
 
     pub(crate) fn exit(&mut self, entered: bool) {
@@ -293,8 +551,16 @@ impl FrameBuilder {
         }
     }
 
+    /// Text inside a redacted element must not contribute to any ancestor.
+    pub(crate) fn text_is_redacted(&self) -> bool {
+        self.parents.iter().any(|parent| {
+            Self::parent_index(&self.nodes, parent)
+                .is_some_and(|index| self.nodes[index].redacted)
+        })
+    }
+
     pub(crate) fn add_text(&mut self, text: &str) {
-        if !self.enabled {
+        if !self.enabled || self.text_is_redacted() {
             return;
         }
         let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -302,12 +568,8 @@ impl FrameBuilder {
             return;
         }
         for parent in &self.parents {
-            if let Some(node) = self
-                .nodes
-                .iter_mut()
-                .rev()
-                .find(|node| node.path == parent.path)
-            {
+            if let Some(index) = Self::parent_index(&self.nodes, parent) {
+                let node = &mut self.nodes[index];
                 if node.redacted {
                     continue;
                 }
@@ -332,20 +594,34 @@ impl FrameBuilder {
     }
 
     pub(crate) fn checkpoint(&self) -> FrameCheckpoint {
+        if !self.enabled {
+            return FrameCheckpoint {
+                node_count: self.nodes.len(),
+                open: Vec::new(),
+            };
+        }
         FrameCheckpoint {
             node_count: self.nodes.len(),
-            content: self
-                .nodes
+            open: self
+                .parents
                 .iter()
-                .map(|node| (node.path.clone(), node.content_text.clone()))
+                .filter_map(|parent| {
+                    let index = Self::parent_index(&self.nodes, parent)?;
+                    let node = &self.nodes[index];
+                    Some((index, node.path.clone(), node.content_text.clone()))
+                })
                 .collect(),
         }
     }
 
     pub(crate) fn restore(&mut self, checkpoint: &FrameCheckpoint) {
         self.nodes.truncate(checkpoint.node_count);
-        for (node, (_, content)) in self.nodes.iter_mut().zip(&checkpoint.content) {
-            node.content_text.clone_from(content);
+        for (index, path, content) in &checkpoint.open {
+            if let Some(node) = self.nodes.get_mut(*index)
+                && node.path == *path
+            {
+                node.content_text.clone_from(content);
+            }
         }
     }
 
@@ -355,12 +631,23 @@ impl FrameBuilder {
         start: &FrameCheckpoint,
         end: &FrameCheckpoint,
     ) {
-        for (path, before) in &start.content {
-            if let Some((_, after)) = end.content.iter().find(|(candidate, _)| candidate == path)
-                && let Some(delta) = after.strip_prefix(before)
+        // The replayed range added text to the nodes open around it. Those
+        // nodes are open around the replay too, found by the same path.
+        let text_is_redacted = self.text_is_redacted();
+        for (_, path, before) in &start.open {
+            if !text_is_redacted
+                && let Some((_, _, after)) = end.open.iter().find(|(_, candidate, _)| candidate == path)
+                && let Some(delta) = after.strip_prefix(before.as_str())
                 && !delta.is_empty()
-                && let Some(node) = self.nodes.iter_mut().find(|node| node.path == *path)
+                && let Some(index) = self
+                    .parents
+                    .iter()
+                    .rev()
+                    .find(|parent| parent.path == *path)
+                    .and_then(|parent| Self::parent_index(&self.nodes, parent))
+                    .or_else(|| self.nodes.iter().position(|node| node.path == *path))
             {
+                let node = &mut self.nodes[index];
                 if !node.content_text.is_empty() {
                     node.content_text.push(' ');
                 }

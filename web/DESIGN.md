@@ -133,6 +133,12 @@ Controls and cards are chamfered, not rounded: the `.c4` to `.c18` classes cut t
 
 Entrances rise 14px over 700ms. The driver band scrolls continuously, the audit log tails, and the demos replay rows when their state changes. Everything stops under `prefers-reduced-motion`.
 
+The home live demo is a DOM recreation of the DBFlux window from the Islands boards of the design canvas: rail, connection tree, table document, Builder island, chart document, audit viewer and status bar, at their board sizes and with the board's own data. It is laid out at 1532 × 900 and scaled as a whole, so the text stays sharp at any zoom, and it takes its colors from these tokens, which are the boards' dark and light values; only the amber of a pending edit is local to the component. Copy inside the window stays in English, as in the app; the six captions around it are localized.
+
+Above 1180px, when reduced motion is not requested, the section pins for fifteen viewport heights, about two and a half per step, and GSAP ScrollTrigger maps native scroll to one number, T from 0 to 600. The window follows that number with a 220ms ease, so a fast flick plays the steps instead of skipping them, and it always comes to rest on the frame for the current position. The cursor, typing, row changes, panels, chart drawing and camera are pure functions of T (`src/lib/live-demo.ts`), so the same position in either direction gives the same frame. The camera is one transform on the live DOM, never a zoomed image. Chapter links scroll to each step, and `#governance` and `#keyboard` remain document anchors.
+
+At 1180px and below, under `prefers-reduced-motion: reduce`, or if the animation modules cannot load, the section is an ordinary list of the six steps, each with a still of the window framed on its action. Without JavaScript the list is text only and the window is not shown. The window is `aria-hidden`; the captions are its text alternative.
+
 ## Responsive
 
 Above 1180px the layouts follow the 1440px boards. Between 640px and 1180px two-column sections stack and the nav collapses into a sheet. At 640px and below the home page follows the phone board: the keyboard, audit and rules sections are left out, the comparison becomes a five-row table against DBeaver Community, and install shows the one-line Linux command.

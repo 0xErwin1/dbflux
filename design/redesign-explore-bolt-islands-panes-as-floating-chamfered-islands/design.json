@@ -1,0 +1,34 @@
+{
+  "title": "DBFlux redesign: Bolt islands: panes as floating chamfered islands",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Explorations, row \"Bolt islands: panes as floating chamfered islands\".",
+  "artboards": [
+    {
+      "file": "01-x-island-table.html",
+      "title": "Islands: table view + row inspector",
+      "tradeoff": "Bolt islands, dark: panes float as chamfered islands on a dark desk; clear separation, more visual noise.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-x-island-light-table.html",
+      "title": "Islands: table view + row inspector (light)",
+      "tradeoff": "Bolt islands, light: panes float as chamfered islands on a light desk; clear separation, more visual noise.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "03-x-island-editor.html",
+      "title": "Islands: query editor + results",
+      "tradeoff": "Bolt islands, dark: panes float as chamfered islands on a dark desk; clear separation, more visual noise.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "04-x-island-light-editor.html",
+      "title": "Islands: query editor + results (light)",
+      "tradeoff": "Bolt islands, light: panes float as chamfered islands on a light desk; clear separation, more visual noise.",
+      "width": 1920,
+      "height": 1040
+    }
+  ]
+}

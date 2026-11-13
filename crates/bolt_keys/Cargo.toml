@@ -1,0 +1,20 @@
+[package]
+name = "bolt_keys"
+description = "Bolt's keyboard engine: key chords, keymap layers, user overrides, conflict detection and shortcut recording, over a product-supplied context vocabulary."
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+
+[features]
+default = []
+
+[dependencies]
+log.workspace = true

@@ -8,8 +8,18 @@ use dbflux_storage::error::StorageError;
 use dbflux_ui_base::hook_phase_runner::{DetachedHookScope, HookPhaseState, run_hook_phase};
 use dbflux_ui_base::schema_snapshot_manager::CaptureOutcome;
 use dbflux_ui_base::toast::PendingToast;
-use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
 use std::sync::Arc;
+
+/// Why a pipeline connect stopped before it started.
+enum PrepareStop {
+    /// A benign concurrency skip, logged only.
+    Skipped(String),
+    /// A preparation failure the caller still has to show.
+    Failed(String),
+    /// A failure already reported through `report_error`.
+    Reported,
+}
 
 fn discover_capture_tables(
     connection: &dyn Connection,
@@ -216,18 +226,16 @@ impl Sidebar {
             pre_connect_hooks,
             post_connect_hooks,
             hook_context,
-        ) = match self.app_state.update(cx, |state, _cx| {
+        ) = match self.app_state.update(cx, |state, cx| {
             if state.is_operation_pending(profile_id, None) {
-                return Err((
+                return Err(PrepareStop::Skipped(
                     crate::labels::connection_already_pending_toast_label(),
-                    false,
                 ));
             }
 
             if !state.start_pending_operation(profile_id, None) {
-                return Err((
+                return Err(PrepareStop::Skipped(
                     crate::labels::operation_started_elsewhere_toast_label(),
-                    false,
                 ));
             }
 
@@ -235,7 +243,29 @@ impl Sidebar {
 
             match state.prepare_pipeline_input(profile_id, cancel) {
                 Ok((input, profile_name, driver)) => {
-                    let keyring_password = password.or_else(|| state.get_password(&input.profile));
+                    let keyring_password = match password {
+                        Some(password) => Some(password),
+                        None => match dbflux_core::keyring_password_for_connect(
+                            &input.profile,
+                            driver.requires_password(),
+                            state.get_password(&input.profile),
+                        ) {
+                            Ok(password) => password,
+                            Err(error) => {
+                                state.finish_pending_operation(profile_id, None);
+                                state.record_connect_failure(profile_id, error.clone());
+                                report_error(
+                                    UserFacingError::new(
+                                        ErrorKind::Storage,
+                                        "Could not read the connection password from the system keyring",
+                                    )
+                                    .with_cause(error),
+                                    cx,
+                                );
+                                return Err(PrepareStop::Reported);
+                            }
+                        },
+                    };
                     let hooks = state.resolve_profile_hooks(&input.profile);
                     let hook_context = HookContext::from_profile(&input.profile);
 
@@ -252,25 +282,32 @@ impl Sidebar {
                 Err(error) => {
                     state.finish_pending_operation(profile_id, None);
                     state.record_connect_failure(profile_id, error.clone());
-                    Err((error, true))
+                    Err(PrepareStop::Failed(error))
                 }
             }
         }) {
             Ok(values) => values,
-            Err((message, is_user_error)) => {
+            Err(stop) => {
                 // Benign concurrency skips (already pending / raced start) stay
                 // info-only. A real preparation failure is actionable (e.g. a
                 // missing auth profile) and must reach the user, not just logs.
-                if is_user_error {
-                    log::warn!("Pipeline connect failed: {}", message);
-                    self.pending_toast = Some(PendingToast {
-                        message,
-                        is_error: true,
-                    });
-                    self.refresh_tree(cx);
-                    cx.notify();
-                } else {
-                    log::info!("Pipeline connect skipped: {}", message);
+                match stop {
+                    PrepareStop::Failed(message) => {
+                        log::warn!("Pipeline connect failed: {}", message);
+                        self.pending_toast = Some(PendingToast {
+                            message,
+                            is_error: true,
+                        });
+                        self.refresh_tree(cx);
+                        cx.notify();
+                    }
+                    PrepareStop::Reported => {
+                        self.refresh_tree(cx);
+                        cx.notify();
+                    }
+                    PrepareStop::Skipped(message) => {
+                        log::info!("Pipeline connect skipped: {}", message);
+                    }
                 }
                 return;
             }

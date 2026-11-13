@@ -1,0 +1,20 @@
+{
+  "title": "DBFlux redesign: Notifications center · dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Migrate, AI, notifications, secrets, row \"Notifications center · dark\".",
+  "artboards": [
+    {
+      "file": "01-isl-notifications.html",
+      "title": "Notifications center: open over a table",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-notification-states.html",
+      "title": "Notifications center: bell states, empty state, behavior",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1920,
+      "height": 600
+    }
+  ]
+}

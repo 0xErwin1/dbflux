@@ -1,6 +1,7 @@
 use super::{
     DataGridEvent, DataGridPanel, DataSource, EditState, GridFocusMode, LocalSortState,
-    PendingRequery, ReferencedRowTarget, ResultViewMode, TableReload, ToolbarFocus, row_inspector,
+    PendingRequery, QueryInput, ReferencedRowTarget, ResultViewMode, TableReload, ToolbarFocus,
+    row_inspector,
 };
 use dbflux_app::keymap::Command;
 use dbflux_components::components::data_table::{Direction, Edge, SortState as TableSortState};
@@ -613,6 +614,20 @@ impl DataGridPanel {
                 self.request_refresh(window, cx);
                 self.focus_table(window, cx);
             }
+        }
+    }
+
+    pub(super) fn query_input_focused(&mut self, input: QueryInput, cx: &mut Context<Self>) {
+        self.focus.focused_query_input = Some(input);
+        cx.notify();
+    }
+
+    /// Clears the field only if it still holds the keyboard: moving between
+    /// two fields can deliver the new field's focus before the old one's blur.
+    pub(super) fn query_input_blurred(&mut self, input: QueryInput, cx: &mut Context<Self>) {
+        if self.focus.focused_query_input == Some(input) {
+            self.focus.focused_query_input = None;
+            cx.notify();
         }
     }
 

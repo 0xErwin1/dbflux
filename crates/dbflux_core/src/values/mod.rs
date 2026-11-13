@@ -1,5 +1,8 @@
 mod cache;
+mod dotenv;
 mod resolver;
+mod secret_file;
+mod source_file;
 
 use std::fmt;
 use std::future::Future;
@@ -11,7 +14,11 @@ use crate::DbError;
 use crate::auth::ResolvedCredentials;
 
 pub use cache::{CacheKey as ValueCacheKey, CachedValue, ValueCache};
+pub use dotenv::{
+    MAX_ENTRIES as DOTENV_MAX_ENTRIES, MAX_FILE_BYTES as DOTENV_MAX_FILE_BYTES, read_dotenv_value,
+};
 pub use resolver::CompositeValueResolver;
+pub use secret_file::{MAX_FILE_BYTES as SECRET_FILE_MAX_FILE_BYTES, read_secret_file};
 
 /// Structured error from a value provider (Secrets Manager, SSM, etc.)
 /// with enough context to display actionable diagnostics in the UI.
@@ -24,6 +31,7 @@ pub struct ProviderError {
     pub message: String,
     pub recovery_hint: Option<String>,
     pub retriable: bool,
+    pub correlation_id: Option<String>,
 }
 
 impl fmt::Display for ProviderError {
@@ -36,6 +44,10 @@ impl fmt::Display for ProviderError {
 
         if let Some(hint) = &self.recovery_hint {
             write!(f, " — {}", hint)?;
+        }
+
+        if let Some(correlation_id) = &self.correlation_id {
+            write!(f, " [correlation id: {}]", correlation_id)?;
         }
 
         Ok(())
@@ -74,24 +86,40 @@ pub trait ParameterProvider: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait DynSecretProvider: Send + Sync {
-    fn provider_id(&self) -> &'static str;
+    fn provider_id(&self) -> &str;
 
-    fn display_name(&self) -> &'static str;
+    fn display_name(&self) -> &str;
+
+    /// `None` defers to the resolver cache TTL; `Some(Duration::ZERO)` disables caching.
+    fn cache_ttl(&self) -> Option<std::time::Duration> {
+        None
+    }
 
     async fn get_secret(
         &self,
         locator: &str,
         json_key: Option<&str>,
     ) -> Result<secrecy::SecretString, DbError>;
+
+    /// Resolves a secret with the connection's resolution context; providers that depend on
+    /// auth-profile credentials override this, the rest fall back to `get_secret`.
+    async fn get_secret_in_context(
+        &self,
+        locator: &str,
+        json_key: Option<&str>,
+        _context: &ResolveContext<'_>,
+    ) -> Result<secrecy::SecretString, DbError> {
+        self.get_secret(locator, json_key).await
+    }
 }
 
 #[async_trait::async_trait]
 impl<T: SecretProvider> DynSecretProvider for T {
-    fn provider_id(&self) -> &'static str {
+    fn provider_id(&self) -> &str {
         SecretProvider::provider_id(self)
     }
 
-    fn display_name(&self) -> &'static str {
+    fn display_name(&self) -> &str {
         SecretProvider::display_name(self)
     }
 
@@ -144,6 +172,20 @@ pub enum ValueRef {
     Env {
         key: String,
     },
+    /// One key of a user-owned dotenv file, read each time the value is used.
+    Dotenv {
+        path: String,
+        key: String,
+    },
+    /// A secret file owned by another tool (sops-nix, secretspec, systemd
+    /// credentials), read each time the value is used. `json_key` selects one
+    /// top-level field of a JSON object; without it the whole file minus one
+    /// trailing newline is the value.
+    File {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        json_key: Option<String>,
+    },
     Secret {
         provider: String,
         locator: String,
@@ -170,6 +212,20 @@ impl ValueRef {
 
     pub fn env(key: impl Into<String>) -> Self {
         Self::Env { key: key.into() }
+    }
+
+    pub fn dotenv(path: impl Into<String>, key: impl Into<String>) -> Self {
+        Self::Dotenv {
+            path: path.into(),
+            key: key.into(),
+        }
+    }
+
+    pub fn file(path: impl Into<String>, json_key: Option<String>) -> Self {
+        Self::File {
+            path: path.into(),
+            json_key,
+        }
     }
 
     pub fn secret(
@@ -263,6 +319,13 @@ pub enum ValueOrigin {
     EnvVar {
         name: String,
     },
+    DotenvFile {
+        path: String,
+        key: String,
+    },
+    SecretFile {
+        path: String,
+    },
     SecretProvider {
         provider: String,
         locator_summary: String,
@@ -335,6 +398,42 @@ mod tests {
     }
 
     #[test]
+    fn dotenv_ref_round_trips_through_serde() {
+        let json = r#"{"source":"dotenv","path":"~/.config/app.env","key":"DB_PASSWORD"}"#;
+        let fv: FieldValue = serde_json::from_str(json).expect("deserialize dotenv ref");
+
+        assert!(matches!(
+            &fv.0,
+            ValueRef::Dotenv { path, key } if path == "~/.config/app.env" && key == "DB_PASSWORD"
+        ));
+        assert!(fv.0.needs_resolution());
+        assert_eq!(serde_json::to_string(&fv.0).expect("serialize"), json);
+    }
+
+    #[test]
+    fn file_ref_round_trips_through_serde() {
+        let json = r#"{"source":"file","path":"/run/secrets/db"}"#;
+        let fv: FieldValue = serde_json::from_str(json).expect("deserialize file ref");
+
+        assert!(matches!(
+            &fv.0,
+            ValueRef::File { path, json_key: None } if path == "/run/secrets/db"
+        ));
+        assert!(fv.0.needs_resolution());
+        assert_eq!(serde_json::to_string(&fv.0).expect("serialize"), json);
+
+        let json = r#"{"source":"file","path":"~/.config/db.json","json_key":"password"}"#;
+        let fv: FieldValue = serde_json::from_str(json).expect("deserialize keyed file ref");
+
+        assert!(matches!(
+            &fv.0,
+            ValueRef::File { path, json_key: Some(key) }
+                if path == "~/.config/db.json" && key == "password"
+        ));
+        assert_eq!(serde_json::to_string(&fv.0).expect("serialize"), json);
+    }
+
+    #[test]
     fn field_value_from_tagged_object() {
         let json = r#"{"source":"env","key":"DB_HOST"}"#;
         let fv: FieldValue = serde_json::from_str(json).expect("deserialize object");
@@ -362,6 +461,7 @@ mod tests {
             message: "Secret not found".to_string(),
             recovery_hint: Some("Check the secret name or ARN".to_string()),
             retriable: false,
+            correlation_id: None,
         };
 
         let display = err.to_string();
@@ -383,6 +483,7 @@ mod tests {
             message: "Parameter does not exist".to_string(),
             recovery_hint: None,
             retriable: false,
+            correlation_id: None,
         };
 
         let db_err: DbError = err.into();
@@ -404,9 +505,45 @@ mod tests {
             message: "Internal server error".to_string(),
             recovery_hint: None,
             retriable: true,
+            correlation_id: None,
         };
 
         let display = err.to_string();
         assert!(!display.contains("—"));
+    }
+
+    #[test]
+    fn provider_error_display_includes_correlation_id() {
+        let err = ProviderError {
+            provider: "vault".to_string(),
+            service: "rpc".to_string(),
+            operation: "GetSecret".to_string(),
+            code: "Locked".to_string(),
+            message: "Provider is locked".to_string(),
+            recovery_hint: None,
+            retriable: false,
+            correlation_id: Some("0192-abcd".to_string()),
+        };
+
+        assert_eq!(
+            err.to_string(),
+            "[vault/rpc] GetSecret (Locked): Provider is locked [correlation id: 0192-abcd]"
+        );
+    }
+
+    #[test]
+    fn provider_error_display_omits_missing_correlation_id() {
+        let err = ProviderError {
+            provider: "aws".to_string(),
+            service: "ssm".to_string(),
+            operation: "GetParameter".to_string(),
+            code: "InternalError".to_string(),
+            message: "Internal server error".to_string(),
+            recovery_hint: None,
+            retriable: true,
+            correlation_id: None,
+        };
+
+        assert!(!err.to_string().contains("correlation id"));
     }
 }

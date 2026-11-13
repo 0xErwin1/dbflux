@@ -1,0 +1,27 @@
+{
+  "title": "DBFlux redesign: Welcome and updates · light",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Overlays, windows and settings, row \"Welcome and updates · light\".",
+  "artboards": [
+    {
+      "file": "01-isl-light-welcome.html",
+      "title": "Welcome, first run",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1920,
+      "height": 1040
+    },
+    {
+      "file": "02-isl-light-whats-new.html",
+      "title": "What is new and update notice",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1360,
+      "height": 900
+    },
+    {
+      "file": "03-isl-light-settings-updates.html",
+      "title": "Settings: updates and privacy",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1320,
+      "height": 900
+    }
+  ]
+}

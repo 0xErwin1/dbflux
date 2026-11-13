@@ -134,7 +134,12 @@ impl SettingsCoordinator {
 
                 expanded.insert(SharedString::from(group_id));
 
-                Some(TreeNavNode::group(group_id, group_label, None, leaves))
+                Some(TreeNavNode::group(
+                    group_id,
+                    group_label,
+                    None::<AppIcon>,
+                    leaves,
+                ))
             })
             .collect();
 

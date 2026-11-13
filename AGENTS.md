@@ -424,6 +424,7 @@ Key abstractions for UI adaptation:
 - `ObjectFacet` (via `Connection::object_facets` for tables and `Connection::collection_facets` for collections, both default `[Tabular]`): Determines the view modes, gates, filter wording and grid actions inside the data document, per object. A table can carry several (PostgreSQL adds `Document` for a `jsonb` column, `TimeSeries` for a hypertable and `Vector` for each `vector(n)` column). Never derive them from `DatabaseCategory` in the UI; only the RPC adapter uses `category_collection_facets`
 - `CollectionChildInfo`: Declares driver-owned child sources that appear in the sidebar without the UI inferring them from driver-specific conventions
 - `EventStreamTarget`: Lets the workspace/audit viewer open driver-backed event streams without embedding driver-specific routing
+- `RootSectionSource` (via `Connection::root_section_source`, gated by `DriverCapabilities::ROOT_SECTIONS`): Declares driver-owned object kinds at the connection root (S3 buckets), with their paginated listing, presentation and classified item actions. The sidebar renders them through one generic builder keyed by section id
 - `SourceContextSpec`: Lets drivers declare extra query-context controls while the UI stays generic
 - `FormFieldKind::AuthProfileRef { provider_id: Option<String> }`: Drives the connection-manager auth-profile dropdown. Drivers that need the picker declare a `profile` field as `AuthProfileRef { provider_id: None }`; the UI renders and field-syncs this arm generically instead of matching driver ids (DEC-1). A `None` filter enumerates built-in and external RPC-backed providers alike.
 
@@ -444,6 +445,7 @@ Key abstractions for UI adaptation:
 - RPC services are first-class persisted descriptors with `RpcServiceKind` (`Driver`, `AuthProvider`).
 - Both `Driver` and `AuthProvider` services are active. `AuthProvider` services connect through `RpcAuthProvider` in `dbflux_ipc`, which implements `DynAuthProvider` from `dbflux_core`.
 - The runtime seam for service discovery/classification lives in `dbflux_app::rpc_services`; extend that boundary for future RPC capabilities instead of hardcoding new driver-only bootstrap logic in `app_state.rs`.
+- `SecretProvider` services connect through `RpcSecretProvider` in `dbflux_ipc` (implements `DynSecretProvider`) and are registered into every connection's value resolver; see `docs/SECRET_PROVIDER_RPC_PROTOCOL.md`.
 - Preserve compatibility for external driver registration IDs as `rpc:<socket_id>`.
 - `DynAuthProvider::fetch_dynamic_options` is a real trait method (default implementation returns `Permanent("not supported")`); `RpcAuthProvider` implements it by dispatching `FetchDynamicOptions` requests over IPC.
 - The auth-provider IPC protocol is at v1.3. v1.2 added the `FetchDynamicOptions` request / `DynamicOptions` response variants plus the `secret_dependency_opt_in` manifest flag; v1.3 added the `audit_emit_opt_in` manifest flag and audit event emission (`EmitAuditEvent`). Providers advertising v1.2+ have `fetch_dynamic_options` available; older providers get `Permanent("not supported")`.
@@ -480,6 +482,7 @@ Key abstractions for UI adaptation:
 11. **Set `ColumnMeta::kind` on every column** using the `ColumnKind` enum (Timestamp, Float, Integer, Text, Unknown). The chart engine uses `ColumnKind` exclusively — it never inspects `type_name` strings or driver identifiers. Columns with `kind = Unknown` are excluded from chart auto-detection. Use `ColumnKind::Timestamp` for time columns, `ColumnKind::Float`/`Integer` for numeric columns, and `ColumnKind::Text` for string columns.
 12. Optional: implement `DashboardSource` and/or `DashboardImporter` and advertise `DriverCapabilities::DASHBOARD_SYNC` / `DASHBOARD_IMPORT` to let the UI browse/import upstream dashboards (see `docs/DASHBOARDS.md`).
 13. Optional: implement `InstanceCatalog` (`dbflux_core/src/connection/instance_catalog.rs`) and advertise `DriverCapabilities::INSTANCE_METRICS` (time-series) and/or `INSTANCE_INSPECTOR` (tabular snapshots). The catalog exposes metrics, inspectors, a `DefaultInstanceDashboard` descriptor for the read-only Instance Overview, and optional `InspectorRowAction`s gated by per-driver privilege probes. See `docs/DASHBOARDS.md` § Instance Overview and inspectors.
+14. Optional: implement `RootSectionSource` (`dbflux_core/src/connection/root_section/mod.rs`) and advertise `DriverCapabilities::ROOT_SECTIONS` for driver-owned object kinds at the connection root. Give each item action its `ExecutionClassification`. Never add a `SchemaNodeKind` per object kind.
 
 For external RPC-backed drivers, keep discovery/adaptation in `dbflux_app::rpc_services` rather than adding a parallel bootstrap path.
 

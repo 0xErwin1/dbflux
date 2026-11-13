@@ -2,7 +2,7 @@ use crate::{
     AnyElement, AnyEntity, AnyWeakEntity, App, AvailableSpace, Bounds, ContentMask, Context,
     Element, ElementId, Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement,
     LayoutId, PaintIndex, Pixels, PrepaintStateIndex, Render, RenderOnce, Size, Style,
-    StyleRefinement, TextStyle, TransformationMatrix, WeakEntity,
+    StyleRefinement, TextStyle, TransformationMatrix, ViewDrawOutcome, ViewRenderCause, WeakEntity,
 };
 use crate::{Empty, Window};
 use anyhow::Result;
@@ -234,6 +234,10 @@ mod any_view {
             .a11y
             .view_type_names
             .insert(view.entity_id(), std::any::type_name::<V>());
+        window
+            .next_frame
+            .observed
+            .note_view_type(view.entity_id(), std::any::type_name::<V>());
         view.update(cx, |view, cx| view.render(window, cx).into_any_element())
     }
 }
@@ -284,6 +288,10 @@ impl<T: Render> View for Entity<T> {
 
     #[inline]
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        window
+            .next_frame
+            .observed
+            .note_view_type(Entity::entity_id(&self), type_name::<T>());
         self.update(cx, |this, cx| {
             Render::render(this, window, cx).into_any_element()
         })
@@ -377,6 +385,7 @@ struct ViewElementCacheKey {
     content_mask: ContentMask<Pixels>,
     text_style: TextStyle,
     transform: TransformationMatrix,
+    text_redacted: bool,
 }
 
 impl<V: View> Element for ViewElement<V> {
@@ -536,12 +545,60 @@ fn request_layout_view(
                 (layout_id, None)
             }
             _ => {
+                let cause = if cached_style.is_some() {
+                    ViewRenderCause::CachingDisabled
+                } else {
+                    ViewRenderCause::Uncached
+                };
+                window.next_frame.observed.view_drawn(
+                    entity_id,
+                    ViewDrawOutcome::Rendered(cause),
+                    &window.rendered_frame.observed,
+                );
                 let mut element = render(window, cx);
                 let layout_id = element.request_layout(window, cx);
                 (layout_id, Some(element))
             }
         }
     })
+}
+
+/// Return why a cached view cannot replay its previous output, or `None` when
+/// it can.
+fn view_cache_miss(
+    entity_id: EntityId,
+    element_state: Option<&ViewElementState>,
+    bounds: Bounds<Pixels>,
+    content_mask: &ContentMask<Pixels>,
+    text_style: &TextStyle,
+    transform: &TransformationMatrix,
+    window: &Window,
+) -> Option<ViewRenderCause> {
+    if window.refreshing && window.next_frame.observed.window_refresh() {
+        return Some(ViewRenderCause::Refresh);
+    }
+    let Some(element_state) = element_state else {
+        return Some(ViewRenderCause::FirstDraw);
+    };
+    if window.dirty_views.contains(&entity_id) {
+        return Some(ViewRenderCause::Notified);
+    }
+    if window.refreshing {
+        return Some(ViewRenderCause::AncestorRendered);
+    }
+    // Rebuild observation checkpoints when the surrounding redaction boundary
+    // changes: replaying withheld text cannot restore it after unredaction.
+    if element_state.cache_key.text_redacted != window.next_frame.observed.text_is_redacted() {
+        return Some(ViewRenderCause::ObservationChanged);
+    }
+    if element_state.cache_key.bounds != bounds
+        || element_state.cache_key.content_mask != *content_mask
+        || element_state.cache_key.text_style != *text_style
+        || element_state.cache_key.transform != *transform
+    {
+        return Some(ViewRenderCause::LayoutChanged);
+    }
+    None
 }
 
 #[inline(never)]
@@ -582,14 +639,21 @@ fn prepaint_view(
                 let text_style = window.text_style();
                 let transform = window.current_transform();
 
-                if let Some(mut element_state) = element_state
-                    && element_state.cache_key.bounds == bounds
-                    && element_state.cache_key.content_mask == content_mask
-                    && element_state.cache_key.text_style == text_style
-                    && element_state.cache_key.transform == transform
-                    && !window.dirty_views.contains(&entity_id)
-                    && !window.refreshing
-                {
+                let miss = view_cache_miss(
+                    entity_id,
+                    element_state.as_ref(),
+                    bounds,
+                    &content_mask,
+                    &text_style,
+                    &transform,
+                    window,
+                );
+                if let (None, Some(mut element_state)) = (miss, element_state) {
+                    window.next_frame.observed.view_drawn(
+                        entity_id,
+                        ViewDrawOutcome::Reused,
+                        &window.rendered_frame.observed,
+                    );
                     let prepaint_start = window.prepaint_index();
                     window.reuse_prepaint(element_state.prepaint_range.clone());
                     cx.entities
@@ -600,6 +664,11 @@ fn prepaint_view(
                     return (None, element_state);
                 }
 
+                window.next_frame.observed.view_drawn(
+                    entity_id,
+                    ViewDrawOutcome::Rendered(miss.unwrap_or(ViewRenderCause::FirstDraw)),
+                    &window.rendered_frame.observed,
+                );
                 let refreshing = mem::replace(&mut window.refreshing, true);
                 let prepaint_start = window.prepaint_index();
                 let (element, accessed_entities) = cx.detect_accessed_entities(|cx| {
@@ -623,6 +692,7 @@ fn prepaint_view(
                             content_mask,
                             text_style,
                             transform,
+                            text_redacted: window.next_frame.observed.text_is_redacted(),
                         },
                     },
                 )

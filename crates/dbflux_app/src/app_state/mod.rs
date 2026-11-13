@@ -118,6 +118,7 @@ pub struct AppState {
     protected_hook_rows: Vec<crate::config_loader::ProtectedHookRow>,
     detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
     auth_provider_registry: AuthProviderRegistry,
+    secret_provider_registry: crate::secret_provider_registry::SecretProviderRegistry,
     history_manager: crate::history_manager_sqlite::HistoryManager,
     scripts_directory: Option<ScriptsDirectory>,
     storage_runtime: StorageRuntime,
@@ -818,6 +819,35 @@ impl AppState {
         );
     }
 
+    pub fn prepare_switch_region(
+        &self,
+        profile_id: Uuid,
+        region: &str,
+    ) -> Result<dbflux_core::connection_manager::SwitchRegionParams, String> {
+        self.facade.connections.prepare_switch_region(
+            profile_id,
+            region,
+            &self.facade.secrets.secret_store_arc(),
+        )
+    }
+
+    pub fn apply_switch_region(
+        &mut self,
+        profile_id: Uuid,
+        original_profile: ConnectionProfile,
+        connection: Arc<dyn Connection>,
+        schema: Option<SchemaSnapshot>,
+        session_generation: u64,
+    ) -> bool {
+        self.facade.connections.apply_switch_region(
+            profile_id,
+            original_profile,
+            connection,
+            schema,
+            session_generation,
+        )
+    }
+
     pub fn add_database_connection(
         &mut self,
         profile_id: Uuid,
@@ -1167,7 +1197,11 @@ impl AppState {
         self.facade.secrets.delete_password(profile);
     }
 
-    pub fn get_password(&self, profile: &ConnectionProfile) -> Option<SecretString> {
+    #[allow(clippy::result_large_err)]
+    pub fn get_password(
+        &self,
+        profile: &ConnectionProfile,
+    ) -> Result<Option<SecretString>, dbflux_core::DbError> {
         self.facade.secrets.get_password(profile)
     }
 
@@ -2941,6 +2975,11 @@ impl AppState {
 }
 
 impl AppState {
+    /// External secret providers as `(provider id, display name)`, sorted by display name.
+    pub fn secret_providers(&self) -> Vec<(String, String)> {
+        self.secret_provider_registry.list()
+    }
+
     pub fn auth_provider_registry(&self) -> &AuthProviderRegistry {
         &self.auth_provider_registry
     }
@@ -3121,7 +3160,8 @@ impl AppState {
         let cache = Arc::new(dbflux_core::values::ValueCache::new(
             std::time::Duration::from_secs(300),
         ));
-        let resolver = dbflux_core::values::CompositeValueResolver::new(cache);
+        let mut resolver = dbflux_core::values::CompositeValueResolver::new(cache);
+        self.secret_provider_registry.register_into(&mut resolver);
 
         #[cfg(feature = "aws")]
         let aws_profile_name = auth_profile

@@ -8,25 +8,29 @@ use crate::types::{DocumentIcon, DocumentKind, DocumentMetaSnapshot};
 use gpui::{App, Entity, IntoElement};
 
 impl SecretStoreDocument {
-    /// Status-bar segments: the connection, how many secrets are listed and
+    /// Status-bar segments: the connection, what the listing holds and
     /// the timing of the last store call.
     pub fn status_segments(&self, cx: &App) -> Vec<StatusSegment> {
         let mut segments = Vec::new();
 
         if let Some(connected) = self.app_state.read(cx).connections().get(&self.profile_id) {
+            // The region is not repeated here: the breadcrumb of the document
+            // already carries it, and two places showing it can disagree for
+            // the moment a switch lands.
+            let text = format!(
+                "{} · {}",
+                connected.profile.name,
+                connected.connection.metadata().display_name
+            );
+
             segments.push(StatusSegment {
-                text: format!(
-                    "{} · {}",
-                    connected.profile.name,
-                    connected.connection.metadata().display_name
-                )
-                .into(),
+                text: text.into(),
                 tooltip: None,
             });
         }
 
         segments.push(StatusSegment {
-            text: super::render::loaded_label(self.listing.entries.len()).into(),
+            text: self.loaded_summary().into(),
             tooltip: None,
         });
 
@@ -75,7 +79,7 @@ impl SecretStoreDocument {
                         kind: DocumentKind::SecretStore,
                         title: d.title(),
                         icon: DocumentIcon::SecretStore,
-                        state: d.state(),
+                        state: d.state(cx),
                         closable: true,
                         connection_id: d.connection_id(),
                     }
@@ -99,10 +103,15 @@ impl SecretStoreDocument {
             // active_context
             {
                 let e = entity.clone();
-                Box::new(move |cx| e.read(cx).active_context())
+                Box::new(move |cx| e.read(cx).active_context(cx))
             },
-            // change_summary — the document never holds unsaved changes
-            Box::new(|_cx| None),
+            // change_summary — the open editor holds unsaved value edits
+            // while it differs from the stored text, and the tab's dirty dot
+            // and the close prompt read it from here.
+            {
+                let e = entity.clone();
+                Box::new(move |cx| e.read(cx).view.read(cx).unsaved_change_summary(cx))
+            },
             // refresh_policy
             {
                 let e = entity.clone();
@@ -142,12 +151,17 @@ impl SecretStoreDocument {
 
         pane.pane_actions = Some({
             let e = entity.clone();
-            Box::new(move |cx| e.read(cx).pane_actions(&e))
+            Box::new(move |cx| e.read(cx).pane_actions(&e, cx))
         });
 
         pane.status_segments = Some({
             let e = entity.clone();
             Box::new(move |cx| e.read(cx).status_segments(cx))
+        });
+
+        pane.take_pending_open_secret = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.update(cx, |d, _cx| d.take_pending_open_secret()))
         });
 
         pane.navigate_secret_path = Some({
@@ -160,8 +174,9 @@ impl SecretStoreDocument {
         pane.on_close = Some({
             let e = entity.clone();
             Box::new(move |cx| {
-                e.update(cx, |d, cx| {
-                    d.clear_value();
+                let view = e.read(cx).view.clone();
+                view.update(cx, |view, cx| {
+                    view.clear_value();
                     cx.notify();
                 })
             })

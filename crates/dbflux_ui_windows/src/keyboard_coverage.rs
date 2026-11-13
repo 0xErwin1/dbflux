@@ -40,6 +40,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::ColumnRight),
         ),
         (
+            "segmented-scrollbars-*",
+            KeyboardPath::Command(Command::ColumnRight),
+        ),
+        (
             "segmented-focus-on-launch-*",
             KeyboardPath::Command(Command::ColumnRight),
         ),
@@ -105,6 +109,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
         ),
         (
             "seg-ctl-item-auth_provider",
+            KeyboardPath::Command(Command::ColumnRight),
+        ),
+        (
+            "seg-ctl-item-secret_provider",
             KeyboardPath::Command(Command::ColumnRight),
         ),
         (

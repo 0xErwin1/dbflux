@@ -1,0 +1,67 @@
+[package]
+name = "bolt"
+description = "Bolt, the product-agnostic design system: tokens, theme and generic GPUI components."
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+
+[features]
+default = []
+# Enables the `test-support` feature of gpui, which the accessibility checks a
+# rendered-surface test runs against a captured frame require.
+test-support = ["gpui/test-support"]
+# Bundled tree-sitter grammars a product registers with
+# `bolt::syntax::register_bundled`; each one is opt-in so a product links only
+# the grammars it asks for.
+syntax-json = ["dep:tree-sitter-json"]
+syntax-javascript = ["dep:tree-sitter-javascript"]
+syntax-bash = ["dep:tree-sitter-bash"]
+syntax-python = ["dep:tree-sitter-python"]
+syntax-xml = ["dep:tree-sitter-xml"]
+syntax-html = ["dep:tree-sitter-html"]
+
+[dependencies]
+bolt_keys.workspace = true
+gpui.workspace = true
+gpui-component.workspace = true
+gpui-base = { path = "../../vendor/gpui-base" }
+fuzzy-matcher.workspace = true
+log.workspace = true
+# The chart module's time-axis tick generation and label formatting work in
+# wall-clock time; chrono is the shared time vocabulary, not a product fact.
+chrono.workspace = true
+# The chart specification types are persisted by the products as JSON; the
+# serde contracts (field names, defaults) are part of the component's surface.
+serde = { workspace = true, features = ["derive"] }
+# The syntax-recoloring helpers restyle gpui-component's private style fields
+# through their serde representation.
+serde_json.workspace = true
+# The grammar seam (`bolt::syntax`) registers tree-sitter grammars with
+# gpui-component's highlighter, which is built on this crate.
+tree-sitter.workspace = true
+tree-sitter-json = { workspace = true, optional = true }
+tree-sitter-javascript = { workspace = true, optional = true }
+tree-sitter-bash = { workspace = true, optional = true }
+tree-sitter-python = { workspace = true, optional = true }
+tree-sitter-xml = { workspace = true, optional = true }
+tree-sitter-html = { workspace = true, optional = true }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+# The syntax tests exercise every bundled grammar.
+bolt = { path = ".", features = [
+    "syntax-json",
+    "syntax-javascript",
+    "syntax-bash",
+    "syntax-python",
+    "syntax-xml",
+    "syntax-html",
+] }

@@ -90,6 +90,11 @@ language to the website is two changes:
 2. Add `web/src/i18n/<locale>.ts` exporting a `Dictionary` object. The type
    is exhaustive: a missing key is a compile error, caught by `pnpm check`.
 
+A registered locale also joins the language detection at the site root: a
+visit to `/` opens in the first browser language the site translates, unless
+the reader picked a language in the switcher. Only `/` is redirected, so a
+link that names a locale always opens as written.
+
 If TypeScript is not your thing, open an issue with your language and we will
 wire the code side — the catalog and documentation translations are where
 native-speaker time actually matters.

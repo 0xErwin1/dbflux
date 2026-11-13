@@ -3230,66 +3230,10 @@ fn nearest_sample(points: &[(f64, f64)], target_x: f64) -> (f64, f64) {
     }
 }
 
-pub fn format_x_value(x: f64, is_time: bool) -> String {
-    if is_time {
-        let secs = (x / 1000.0).trunc() as i64;
-        let nsecs = ((x.rem_euclid(1000.0)) * 1_000_000.0) as u32;
-        match dbflux_core::chrono::DateTime::from_timestamp(secs, nsecs) {
-            Some(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
-            None => format!("{:.3}", x),
-        }
-    } else {
-        format!("{:.3}", x)
-    }
-}
-
-/// Format a Y readout value for tooltips and hover overlays.
-///
-/// Magnitudes `>= 1e3` collapse to SI suffixes (`K`, `M`, `G`, `T`, `P`) so
-/// the readout matches the axis-tick formatter and dashboards like CloudWatch
-/// (`2.5G`, not `2.500e9`). Very small non-zero magnitudes (`< 1e-3`) keep
-/// scientific notation — SI sub-unit suffixes would clash with axis glyphs.
-/// Other values keep up to three decimals without trailing zeros, so integer
-/// values read `21`, not `21.000`.
-pub fn format_y_value(y: f64) -> String {
-    if y == 0.0 {
-        return "0".to_string();
-    }
-    let abs = y.abs();
-
-    if abs < 1e-3 {
-        return format!("{:.3e}", y);
-    }
-
-    if abs >= 1e3 {
-        const SUFFIXES: &[(f64, &str)] =
-            &[(1e15, "P"), (1e12, "T"), (1e9, "G"), (1e6, "M"), (1e3, "K")];
-
-        for &(threshold, suffix) in SUFFIXES {
-            if abs >= threshold {
-                let scaled = y / threshold;
-                let abs_scaled = scaled.abs();
-                let formatted = if abs_scaled >= 100.0 {
-                    format!("{:.0}", scaled)
-                } else if abs_scaled >= 10.0 {
-                    format!("{:.1}", scaled)
-                } else {
-                    format!("{:.2}", scaled)
-                };
-                let trimmed = formatted
-                    .trim_end_matches('0')
-                    .trim_end_matches('.')
-                    .to_string();
-                return format!("{trimmed}{suffix}");
-            }
-        }
-    }
-
-    format!("{:.3}", y)
-        .trim_end_matches('0')
-        .trim_end_matches('.')
-        .to_string()
-}
+// The readout formatters moved to `bolt::chart::format` (product-neutral);
+// re-exported so `chart::engine::format_*` and the flat chart re-exports keep
+// resolving.
+pub use bolt::chart::format::{format_x_value, format_y_value};
 
 /// Build the absolute-positioned overlay div that shows the multi-series readout.
 ///
@@ -3529,12 +3473,6 @@ mod tests {
     }
 
     #[test]
-    fn format_x_value_time_formats_unix_ms() {
-        let s = format_x_value(0.0, true);
-        assert!(s.starts_with("1970-01-01"), "got: {s}");
-    }
-
-    #[test]
     fn extract_f64_parses_decimal_string() {
         assert_eq!(
             extract_f64(&Value::Decimal("123.45".into()), false),
@@ -3593,22 +3531,6 @@ mod tests {
         let t = NaiveTime::from_hms_opt(10, 30, 0).unwrap();
         assert_eq!(extract_f64(&Value::Time(t), true), None);
         assert_eq!(extract_f64(&Value::Time(t), false), None);
-    }
-
-    #[test]
-    fn format_y_value_uses_si_suffix_for_large_magnitudes() {
-        // SI suffixes for values >= 1e3
-        assert_eq!(format_y_value(1234.0), "1.23K");
-        assert_eq!(format_y_value(2_500_000_000.0), "2.5G");
-        assert_eq!(format_y_value(98_790_000_000.0), "98.8G");
-        assert_eq!(format_y_value(4.936e10), "49.4G");
-
-        // Scientific notation kept only for very small magnitudes.
-        assert!(format_y_value(0.0001).contains('e'));
-
-        // Pass-through formatting for the readable range.
-        assert_eq!(format_y_value(0.0), "0");
-        assert_eq!(format_y_value(1.5), "1.5");
     }
 
     #[test]

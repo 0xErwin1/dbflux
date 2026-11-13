@@ -596,6 +596,7 @@ mod tests {
             auth_profile_manager: Arc::new(RwLock::new(dbflux_core::AuthProfileManager::default())),
             driver_registry: Arc::new(std::collections::HashMap::new()),
             auth_provider_registry: Arc::new(std::collections::HashMap::new()),
+            secret_provider_registry: Arc::new(std::collections::HashMap::new()),
             driver_settings: Arc::new(std::collections::HashMap::new()),
             connection_cache: Arc::new(
                 RwLock::new(crate::connection_cache::ConnectionCache::new()),

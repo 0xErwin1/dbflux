@@ -16,9 +16,8 @@ pub const ROW_NUMBER_WIDTH: Pixels = GridMetrics::ROW_NUMBER_WIDTH;
 #[allow(dead_code)]
 pub(super) const CELL_PADDING_Y: Pixels = px(4.0); // guardrail-allow: domain const, do not fold into Spacing
 
-/// Minimum width for a column.
-#[allow(dead_code)]
-pub(super) const MIN_COLUMN_WIDTH: f32 = 50.0;
+// The minimum column width is the drag-to-resize floor owned by bolt.
+pub(super) use bolt::components::grid::MIN_COLUMN_WIDTH;
 
 /// Widest a column opens to fit its values. A longer value is cut, and the
 /// column can still be dragged wider.

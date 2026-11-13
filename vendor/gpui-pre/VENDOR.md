@@ -52,7 +52,28 @@ which needs hooks upstream gpui does not have:
   no other role reports `Role::Group`;
 - pointer ownership, so a stale native mouse position does not cancel a programmatic hover
   before the physical mouse moves. `Window::dispatch_event` is treated as programmatic
-  input; events from the platform go through a separate internal path.
+  input; events from the platform go through a separate internal path;
+- frame cost and view-cache observation: `FrameObserver::frame_drawn` receives a
+  `DrawnFrame` when `Window::draw` returns, with the draw's wall time, the part of it spent
+  only because the frame was observed, and a `ViewDraw` per view (rendered or replayed, and
+  the `ViewRenderCause` of a render). `FrameObserver::accessibility_frame` hands observers a
+  shared `Arc<AccessibilityFrame>` instead of a borrowed frame;
+- `Window::request_frame`, which schedules a frame without the view-cache invalidation of
+  `Window::refresh`, and `Window::frame_pending`, which reports whether the window is
+  invalidated;
+- `Window::focus_observed_element` runs a node's AccessKit `Focus` listener when it has one,
+  so a composite control can move focus to its inner editor, and falls back to the node's
+  own focus handle otherwise. A wrapped `div` contributes its interaction provenance
+  (actions, metadata, redaction) during prepaint, and text inside a redacted element no
+  longer reaches ancestor labels.
+
+  The `Focus` redirect changed one observable result with the refresh to `eb248ccf`: focusing
+  gpui-component's `Input` frame by its element id now runs the frame's `Focus` listener,
+  which focuses the inner editor, so `Window::has_input_handler` is true afterwards and
+  `Window::replace_input_text` succeeds. Before, the frame's own focus handle took focus and
+  no input handler was installed. Only the automation bridge calls
+  `focus_observed_element`, so the app itself behaves as before. `bolt`'s
+  `controls::input::tests` pins the new result.
 
 These come from [themixednuts/gpui-mcp](https://github.com/themixednuts/gpui-mcp), which
 carries them as a patched copy of Zed's `crates/gpui` and lists them for removal as soon as
@@ -187,10 +208,15 @@ delta to this directory.
   `feature/53306-gpui-transforms`) against Zed's `main` at its merge base — 14 commits over
   seven files, rebased onto gpui-pre 0.3.9, 2532 diff lines.
 - Patch 2: `frame-observer.patch`, the GPUI delta of
-  `themixednuts/gpui-mcp@7b834c1705cb3353650dfc681f29eaa29e4cf308` (`vendor/gpui`, licensed
-  Apache-2.0 like the rest of this crate) against the Zed commit it snapshots,
+  `themixednuts/gpui-mcp@eb248ccf43847797b9067c47eeef1dd188dc03a6` (2026-10-09; `vendor/gpui`,
+  licensed Apache-2.0 like the rest of this crate) against the Zed commit it snapshots,
   `zed@16c9aa7ea6d897a8044d9501cde1b295256722f2`, rebased onto this directory with patch 1
-  already applied — eight files, 1596 diff lines.
+  already applied — nine files, 2152 diff lines. Refreshed on 2026-10-31 from `7b834c17`
+  (2026-09-22, eight files, 1596 diff lines) together with `vendor/gpui-mcp`; the refresh
+  added frame cost and view-cache observation, `request_frame` / `frame_pending`, the
+  AccessKit `Focus` redirect in `focus_observed_element`, wrapper interaction provenance and
+  redaction of text inside redacted elements, and touched `src/view.rs` for the first time.
+  Patches 3 to 7 apply on top of it unchanged.
 - Patch 3: `subscription-drop-log.patch`, written for DBFlux against this directory with
   patches 1 and 2 applied — three files, 168 diff lines. It has no upstream counterpart.
 - Patch 4: `text-input-automation.patch`, written for DBFlux against this directory with
@@ -225,10 +251,15 @@ next refresh starts clean again.
    on top of patch 1, but if patch 1 changes that loop, patch 2 rejects there and needs the
    same merge again.
 3. `Window::draw`, where patch 2 moves the AccessKit `end_frame` before painting so frame
-   observers receive the tree, and sends the platform update only when the platform
-   accessibility flag was active for the whole frame. Upstream edits that block often (0.3.9
-   added draw-phase profiling around it), so its hunks are ported by hand.
-4. The activation-key branch of `Window::dispatch_key_event` (patch 7). It calls
+   observers receive the tree, sends the platform update only when the platform
+   accessibility flag was active for the whole frame, and times the draw for
+   `FrameObserver::frame_drawn`. Upstream edits that block often (0.3.9 added draw-phase
+   profiling around it, and `draw_duration` is computed outside the `profiler` block), so
+   its hunks are ported by hand.
+4. `prepaint_view` in `src/view.rs`, whose cache check patch 1 extends with the transform.
+   Patch 2 replaces that check with `view_cache_miss`, so the transform comparison is merged
+   into it by hand.
+5. The activation-key branch of `Window::dispatch_key_event` (patch 7). It calls
    `finish_dispatch_key_event`, whose signature follows upstream: 0.3.9 added
    `recognized_keystroke` and `input_preference`, which the branch passes as the other
    early returns there do.
@@ -241,13 +272,23 @@ dropping the `ShapedGlyph` and `ShapedRun` that upstream's current code no longe
 Without that trim the crate builds with an `unused_imports` warning, and a path dependency
 is linted as first-party code, so `cargo clippy --workspace -- -D warnings` would fail.
 
-Patch 2 leaves out two parts of gpui-mcp's GPUI delta:
+Patch 2 leaves out three parts of gpui-mcp's GPUI delta:
 
 - Its font-family fallback change in `src/text_system.rs`, which makes a fallback family
   keep the requested weight, style and OpenType features. It has nothing to do with
   automation and would change how text renders in every window of the app, so it does not
   ride along with a feature that is off by default. Nothing in the patch depends on it.
 - Its whitespace-only cleanup of two doc comments in `src/_accessibility.rs`.
+- Its view-scoped redraws in `src/elements/div.rs`: pressing and releasing an element with
+  click or drag handlers, its active state, and showing a tooltip notify the view that
+  painted the element instead of refreshing the window, and hiding a tooltip calls
+  `request_frame`. Upstream calls it the one change that alters GPUI's behavior rather than
+  adding to it. The bridge does not depend on it, and DBFlux keeps upstream gpui's redraws,
+  so it stays out of a patch that only ships with the automation feature in mind.
+
+The ported `view_cache_miss` also compares the view's `transform`, which patch 1 added to
+the view cache key: a view drawn under a new element transform renders again, as it did
+before the refresh, and reports `ViewRenderCause::LayoutChanged`.
 
 The manifest also carries a `[package.metadata.cargo-machete]` exemption for `tracing`,
 which the published crate does not declare: CI runs `cargo machete` over the whole

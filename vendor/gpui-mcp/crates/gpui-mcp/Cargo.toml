@@ -3,19 +3,25 @@ name = "gpui-mcp"
 description = "A hardened, cross-platform MCP automation bridge for GPUI applications"
 version = "0.1.0"
 edition = "2024"
+# Apps link this crate, so it builds on an older Rust than the rest of the
+# workspace. The `msrv` CI job keeps it that way.
 rust-version = "1.95"
 license = "Apache-2.0"
 repository = "https://github.com/themixednuts/gpui-mcp"
 homepage = "https://github.com/themixednuts/gpui-mcp"
 publish = false
 
+# Only the `gpui-pre` backend is vendored: it builds against DBFlux's patched
+# gpui-pre. Upstream's `zed` and `gpui-ce` backends are left out, so their
+# dependencies never enter DBFlux's lock file. See vendor/gpui-mcp/VENDOR.md.
 [features]
-default = []
-test-support = []
+default = ["gpui-pre"]
+gpui-pre = ["dep:gpui_pre"]
+test-support = ["gpui_pre?/test-support"]
 
 [dependencies]
 async-channel = "2.5.0"
-gpui.workspace = true
+gpui_pre = { workspace = true, optional = true }
 gpui-mcp-protocol = { path = "../gpui-mcp-protocol" }
 interprocess = { version = "2.4.2", features = ["tokio"] }
 rand = "0.9.2"
@@ -34,7 +40,7 @@ widestring = "1.2.1"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSResponder", "NSView", "NSWindow"] }
 
 [dev-dependencies]
-gpui = { workspace = true, features = ["test-support"] }
+gpui_pre = { workspace = true, features = ["test-support"] }
 tempfile = "3.23.0"
 tokio = { version = "1.52.3", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 
@@ -45,6 +51,8 @@ tokio = { version = "1.52.3", features = ["io-std", "io-util", "macros", "net", 
 unsafe_code = "warn"
 unused_must_use = "warn"
 unreachable_pub = "warn"
+# The source still names upstream's other backends in its cfg checks.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("zed", "gpui-ce"))'] }
 
 [lints.clippy]
 unwrap_used = "warn"

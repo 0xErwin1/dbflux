@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 uuid = { workspace = true }
 thiserror = "2"
 dirs = { workspace = true }
@@ -56,6 +56,9 @@ tracing-bridge = [
 dbflux_test_support.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 rusqlite = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }

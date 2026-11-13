@@ -1,72 +1,8 @@
-diff --git a/crates/gpui-mcp-protocol/src/lib.rs b/crates/gpui-mcp-protocol/src/lib.rs
-index 41ae0b0a..ac0e2bec 100644
---- a/crates/gpui-mcp-protocol/src/lib.rs
-+++ b/crates/gpui-mcp-protocol/src/lib.rs
-@@ -422,6 +422,9 @@ pub struct NodeState {
-     pub visible: bool,
-     /// Whether the node accepts input.
-     pub enabled: bool,
-+    /// Whether an editable node rejects changes to its value. Absent means `false`.
-+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-+    pub read_only: bool,
-     /// Whether the node owns keyboard focus.
-     pub focused: bool,
-     /// Optional checked state.
-@@ -437,6 +440,7 @@ impl Default for NodeState {
-         Self {
-             visible: true,
-             enabled: true,
-+            read_only: false,
-             focused: false,
-             checked: None,
-             selected: None,
-@@ -1149,7 +1153,7 @@ impl WireResponse {
- mod tests {
-     use super::{
-         AppId, Capabilities, EndpointDescriptor, InstanceId, LocalEndpoint, NativeWindowId,
--        Operation, PROTOCOL_VERSION, Point, ProcessId, Rect, RequestId, WireResponse,
-+        NodeState, Operation, PROTOCOL_VERSION, Point, ProcessId, Rect, RequestId, WireResponse,
-     };
- 
-     #[test]
-@@ -1261,6 +1265,32 @@ mod tests {
-         Ok(())
-     }
- 
-+    #[test]
-+    fn read_only_state_is_serialized_only_when_set() -> Result<(), serde_json::Error> {
-+        let writable = serde_json::to_value(NodeState::default())?;
-+        assert!(writable.get("read_only").is_none());
-+
-+        let read_only = serde_json::to_value(NodeState {
-+            read_only: true,
-+            ..NodeState::default()
-+        })?;
-+        assert_eq!(
-+            read_only.get("read_only"),
-+            Some(&serde_json::Value::Bool(true))
-+        );
-+
-+        let legacy = serde_json::from_value::<NodeState>(serde_json::json!({
-+            "visible": true,
-+            "enabled": true,
-+            "focused": false,
-+            "checked": null,
-+            "selected": null,
-+            "expanded": null
-+        }))?;
-+        assert!(!legacy.read_only);
-+        Ok(())
-+    }
-+
-     #[test]
-     fn endpoint_identity_rejects_zero_ids() {
-         let value = serde_json::json!({
 diff --git a/crates/gpui-mcp-server/src/tools.rs b/crates/gpui-mcp-server/src/tools.rs
-index 521023fe..640da52f 100644
+index 0eb691d..a558ed3 100644
 --- a/crates/gpui-mcp-server/src/tools.rs
 +++ b/crates/gpui-mcp-server/src/tools.rs
-@@ -1069,15 +1069,18 @@ fn require_visible_and_enabled(node: &UiNode) -> Result<(), String> {
+@@ -1366,15 +1366,18 @@ fn require_visible_and_enabled(node: &UiNode) -> Result<(), String> {
      Ok(())
  }
  
@@ -91,7 +27,7 @@ index 521023fe..640da52f 100644
          return Err(format!(
              "element {:?} does not support {:?}",
              node.id,
-@@ -1087,6 +1090,56 @@ fn click_point(node: &UiNode) -> Result<Point, String> {
+@@ -1384,6 +1387,56 @@ fn click_point(node: &UiNode) -> Result<Point, String> {
      Ok(require_bounds(node)?.center())
  }
  
@@ -136,7 +72,7 @@ index 521023fe..640da52f 100644
 +
 +/// Fail when `node` reports that it rejects changes to its value.
 +fn require_writable(node: &UiNode) -> Result<(), String> {
-+    if node.state.read_only {
++    if node.state.read_only == Some(true) {
 +        return Err(format!(
 +            "element {:?} is read-only and does not accept a new value",
 +            node.id
@@ -148,19 +84,21 @@ index 521023fe..640da52f 100644
  fn require_bounds(node: &UiNode) -> Result<Rect, String> {
      node.bounds
          .filter(|bounds| bounds.is_valid())
-@@ -1343,8 +1396,9 @@ mod tests {
+@@ -1655,9 +1708,10 @@ mod tests {
  
      use super::{
-         FindArgs, IDLE_CHECK_INTERVAL_MS, IDLE_INTERVALS, IdleSample, MIN_IDLE_TIMEOUT_MS, Role,
--        StartVideoRecordingArgs, UiTree, WaitIdleArgs, WaitStateArgs, click_point,
--        default_result_limit_for_test, find_nodes, settle_refresh_frames, state_matches, tree_diff,
-+        StartVideoRecordingArgs, TEXT_AREA_MAX_OFFSET, UiTree, WaitIdleArgs, WaitStateArgs,
-+        click_point, default_result_limit_for_test, find_nodes, focus_click_point,
-+        require_writable, settle_refresh_frames, state_matches, text_area_point, tree_diff,
-         wait_until_idle,
+         FindArgs, IDLE_CHECK_INTERVAL_MS, IDLE_INTERVALS, IdleSample, MAX_SETTLE_FRAMES,
+-        MIN_IDLE_TIMEOUT_MS, Role, StartVideoRecordingArgs, UiTree, WaitIdleArgs, WaitStateArgs,
+-        click_point, default_result_limit_for_test, find_nodes, settle_pending_frames,
+-        settle_requested_frames, state_matches, tree_diff, wait_until_idle,
++        MIN_IDLE_TIMEOUT_MS, Role, StartVideoRecordingArgs, TEXT_AREA_MAX_OFFSET, UiTree,
++        WaitIdleArgs, WaitStateArgs, click_point, default_result_limit_for_test, find_nodes,
++        focus_click_point, require_writable, settle_pending_frames, settle_requested_frames,
++        state_matches, text_area_point, tree_diff, wait_until_idle,
      };
  
-@@ -1493,7 +1547,86 @@ mod tests {
+     fn sample(frame_count: u64, generation: u64) -> IdleSample {
+@@ -1805,7 +1859,88 @@ mod tests {
              vec![NodeAction::Focus, NodeAction::SetText, NodeAction::SetValue],
          );
  
@@ -237,8 +175,10 @@ index 521023fe..640da52f 100644
 +            vec![NodeAction::Focus, NodeAction::SetText, NodeAction::SetValue],
 +        );
 +        assert_eq!(require_writable(&input), Ok(()));
++        input.state.read_only = Some(false);
++        assert_eq!(require_writable(&input), Ok(()));
 +
-+        input.state.read_only = true;
++        input.state.read_only = Some(true);
 +        assert_eq!(
 +            require_writable(&input),
 +            Err(
@@ -249,7 +189,7 @@ index 521023fe..640da52f 100644
  
      #[test]
 diff --git a/crates/gpui-mcp-server/src/tools/input.rs b/crates/gpui-mcp-server/src/tools/input.rs
-index 9e17348b..aeea298d 100644
+index 9e17348..aeea298 100644
 --- a/crates/gpui-mcp-server/src/tools/input.rs
 +++ b/crates/gpui-mcp-server/src/tools/input.rs
 @@ -3,8 +3,8 @@ use super::{
@@ -342,88 +282,11 @@ index 9e17348b..aeea298d 100644
          if node.actions.contains(&NodeAction::SetValue) {
              return self
                  .ack_after_frame(Operation::SetValue {
-diff --git a/crates/gpui-mcp/src/observer.rs b/crates/gpui-mcp/src/observer.rs
-index 024cecc1..23018f19 100644
---- a/crates/gpui-mcp/src/observer.rs
-+++ b/crates/gpui-mcp/src/observer.rs
-@@ -147,6 +147,7 @@ fn to_node(frame: &AccessibilityFrame, rendered: &FrameNode) -> UiNode {
-             visible: !rendered.bounds().is_empty()
-                 && !accessible.is_some_and(accesskit::Node::is_hidden),
-             enabled: !accessible.is_some_and(accesskit::Node::is_disabled),
-+            read_only: accessible.is_some_and(accesskit::Node::is_read_only),
-             focused,
-             checked: accessible.and_then(|node| match node.toggled() {
-                 Some(Toggled::True) => Some(true),
-@@ -355,9 +356,9 @@ mod tests {
-     use std::rc::Rc;
- 
-     use gpui::{
--        AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
--        Render, Role, SharedString, StatefulInteractiveElement as _, Styled as _, StyledText,
--        TestAppContext, Window, div, px,
-+        AccessibleAction, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-+        ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _,
-+        Styled as _, StyledText, TestAppContext, Window, div, px,
-     };
-     use gpui_mcp_protocol::{MouseButton, NodeAction, Point, PointerCommand, Role as McpRole};
- 
-@@ -529,6 +530,51 @@ mod tests {
-         );
-     }
- 
-+    struct EditableFixture;
-+
-+    impl Render for EditableFixture {
-+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-+            div()
-+                .id("root")
-+                .role(Role::Application)
-+                .size_full()
-+                .child(
-+                    div()
-+                        .id("writable")
-+                        .role(Role::TextInput)
-+                        .w(px(100.))
-+                        .h(px(30.))
-+                        .on_a11y_action(AccessibleAction::SetValue, |_, _, _| {}),
-+                )
-+                .child(
-+                    div()
-+                        .id("locked")
-+                        .role(Role::TextInput)
-+                        .aria_read_only(true)
-+                        .w(px(100.))
-+                        .h(px(30.))
-+                        .on_a11y_action(AccessibleAction::SetValue, |_, _, _| {}),
-+                )
-+        }
-+    }
-+
-+    #[gpui::test]
-+    fn read_only_inputs_are_reported_read_only(cx: &mut TestAppContext) {
-+        let automation = Automation::isolated();
-+        let automation_for_window = automation.clone();
-+        let (_view, visual) = cx.add_window_view(move |window, _| {
-+            automation_for_window.attach(window);
-+            EditableFixture
-+        });
-+        visual.run_until_parked();
-+
-+        let tree = automation.snapshot();
-+        assert!(!tree.nodes["writable"].state.read_only);
-+        assert!(tree.nodes["locked"].state.read_only);
-+        assert!(tree.nodes["locked"].state.enabled);
-+        assert!(tree.nodes["locked"].actions.contains(&NodeAction::SetText));
-+    }
-+
-     /// One dock panel, rendered as its own view exactly as
-     /// `gpui_component::dock::TabPanel` is. Every instance renders the same
-     /// element ids, so the instances are distinguished only by the view segment
 diff --git a/crates/gpui-mcp/src/service.rs b/crates/gpui-mcp/src/service.rs
-index 5249f72f..7d0d1e1f 100644
+index 55dc8a8..f14dc79 100644
 --- a/crates/gpui-mcp/src/service.rs
 +++ b/crates/gpui-mcp/src/service.rs
-@@ -610,7 +610,8 @@ fn handle_ui_operation(
+@@ -806,7 +806,8 @@ fn handle_ui_operation(
              if !window.set_observed_element_value(&node_id, &value, cx) {
                  return Err(BridgeError::new(
                      ErrorCode::Unsupported,
@@ -433,3 +296,13 @@ index 5249f72f..7d0d1e1f 100644
                  ));
              }
              window.refresh();
+@@ -1824,7 +1825,8 @@ mod tests {
+     };
+ 
+     use super::{
+-        BridgeConfig, encode_hex, refresh_and_track_presentation, validate_context_resource,
++        BridgeConfig, encode_hex, refresh_and_track_presentation,
++        request_frame_and_track_presentation, validate_context_resource,
+         validate_context_resource_list, validate_operation,
+     };
+     use crate::Automation;

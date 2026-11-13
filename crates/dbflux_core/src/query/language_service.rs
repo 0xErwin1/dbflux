@@ -846,7 +846,7 @@ fn sql_editor_diagnostics(query: &str) -> Vec<EditorDiagnostic> {
         return vec![];
     }
 
-    let parse_source = mask_on_commit_clauses(query);
+    let parse_source = mask_unparsed_clauses(query);
 
     let Some(tree) = parser.parse(parse_source.as_ref(), None) else {
         return vec![];
@@ -926,15 +926,33 @@ fn should_skip_sql_parse_diagnostics(query: &str) -> bool {
 
 const ON_COMMIT_ACTIONS: [&[&str]; 3] = [&["DROP"], &["DELETE", "ROWS"], &["PRESERVE", "ROWS"]];
 
-/// Blank out PostgreSQL `ON COMMIT { DROP | DELETE ROWS | PRESERVE ROWS }`
-/// clauses before the query reaches the tree-sitter grammar.
+/// Clauses that can follow a bare `GROUP BY ALL`.
+const CLAUSES_AFTER_GROUP_BY: [&str; 10] = [
+    "HAVING",
+    "WINDOW",
+    "QUALIFY",
+    "ORDER",
+    "LIMIT",
+    "OFFSET",
+    "FETCH",
+    "UNION",
+    "EXCEPT",
+    "INTERSECT",
+];
+
+/// Rewrite clauses the tree-sitter grammar cannot parse before the query
+/// reaches it:
 ///
-/// The bundled grammar has no rule for the clause and reports it as an ERROR
-/// node, even though the rest of the `CREATE TEMP TABLE` statement parses.
-/// Only the clause is replaced, byte for byte, with spaces (newlines are
-/// kept), so every other error keeps its row and column and the rest of the
-/// script is still validated. Text inside quoted strings, quoted identifiers,
-/// and comments is never touched.
+/// - PostgreSQL `ON COMMIT { DROP | DELETE ROWS | PRESERVE ROWS }` has no rule
+///   in the grammar and is blanked out with spaces.
+/// - DuckDB's bare `GROUP BY ALL` is read by the grammar as the `ALL` set
+///   quantifier, which then takes the next clause keyword as its grouping
+///   expression. `ALL` becomes the positional `1`, which parses the same way.
+///
+/// Rewrites keep every byte offset (newlines are kept), so every other error
+/// keeps its row and column and the rest of the script is still validated.
+/// Text inside quoted strings, quoted identifiers, and comments is never
+/// touched.
 ///
 /// Bounds proof: `bytes[index]` is read under `while index < bytes.len()` and
 /// `bytes[index - 1]` behind `index == 0 ||` short-circuit; the `buffer`
@@ -944,7 +962,7 @@ const ON_COMMIT_ACTIONS: [&[&str]; 3] = [&["DROP"], &["DELETE", "ROWS"], &["PRES
     clippy::indexing_slicing,
     reason = "bytes[index] under `while index < bytes.len()` with index - 1 behind the index == 0 short-circuit; buffer[index..end] bounded by on_commit_clause_end, whose returned positions are verified via bytes.get(..)"
 )]
-fn mask_on_commit_clauses(query: &str) -> Cow<'_, str> {
+fn mask_unparsed_clauses(query: &str) -> Cow<'_, str> {
     let bytes = query.as_bytes();
     let mut masked: Option<Vec<u8>> = None;
     let mut index = 0;
@@ -968,26 +986,41 @@ fn mask_on_commit_clauses(query: &str) -> Cow<'_, str> {
 
         let starts_word = index == 0 || !is_identifier_byte(bytes[index - 1]);
 
-        if let Some(end) = starts_word
-            .then(|| on_commit_clause_end(bytes, index))
-            .flatten()
-        {
+        let blanked_range = starts_word
+            .then(|| {
+                on_commit_clause_end(bytes, index)
+                    .map(|end| index..end)
+                    .or_else(|| on_conflict_target_range(bytes, index))
+            })
+            .flatten();
+
+        if let Some(range) = blanked_range {
             let buffer = masked.get_or_insert_with(|| bytes.to_vec());
 
-            for byte in &mut buffer[index..end] {
+            for byte in &mut buffer[range.clone()] {
                 if *byte != b'\n' && *byte != b'\r' {
                     *byte = b' ';
                 }
             }
 
-            index = end;
+            index = range.end;
+            continue;
+        }
+
+        if let Some(all_start) = starts_word
+            .then(|| bare_group_by_all_start(bytes, index))
+            .flatten()
+        {
+            let buffer = masked.get_or_insert_with(|| bytes.to_vec());
+            buffer[all_start..all_start + 3].copy_from_slice(b"1  ");
+            index = all_start + 3;
             continue;
         }
 
         index += 1;
     }
 
-    // Only ASCII keyword and whitespace bytes were replaced with ASCII spaces,
+    // Only ASCII keyword and whitespace bytes were replaced with ASCII bytes,
     // so the buffer is still valid UTF-8.
     match masked.map(String::from_utf8) {
         Some(Ok(text)) => Cow::Owned(text),
@@ -1003,6 +1036,74 @@ fn on_commit_clause_end(bytes: &[u8], start: usize) -> Option<usize> {
     ON_COMMIT_ACTIONS
         .iter()
         .find_map(|action| match_words(bytes, action_start, action))
+}
+
+/// Returns the conflict target of an `ON CONFLICT <target> DO` clause starting
+/// at `start`: the column list, index expression, index predicate or
+/// `ON CONSTRAINT name` between `CONFLICT` and `DO`. The grammar only accepts
+/// `ON CONFLICT DO ...`, so the target is blanked out. A clause without a
+/// top-level `DO` before the statement ends is left alone so the grammar still
+/// reports it.
+fn on_conflict_target_range(bytes: &[u8], start: usize) -> Option<std::ops::Range<usize>> {
+    let after_conflict = match_words(bytes, start, &["ON", "CONFLICT"])?;
+    let target_start = skip_whitespace_and_comments(bytes, after_conflict);
+
+    // PostgreSQL accepts only a parenthesized index target or `ON CONSTRAINT
+    // name` here; anything else stays visible so the grammar reports it.
+    if bytes.get(target_start) != Some(&b'(')
+        && match_words(bytes, target_start, &["ON", "CONSTRAINT"]).is_none()
+    {
+        return None;
+    }
+
+    let mut index = after_conflict;
+    let mut depth = 0usize;
+
+    while let Some(&byte) = bytes.get(index) {
+        match (byte, bytes.get(index + 1)) {
+            (quote @ (b'\'' | b'"'), _) => {
+                index = skip_quoted(bytes, index, quote);
+                continue;
+            }
+            (b'-', Some(b'-')) | (b'/', Some(b'*')) => {
+                index = skip_whitespace_and_comments(bytes, index);
+                continue;
+            }
+            (b'(', _) => depth += 1,
+            (b')', _) => depth = depth.checked_sub(1)?,
+            (b';', _) => return None,
+            _ => {}
+        }
+
+        let starts_word = !bytes
+            .get(index.wrapping_sub(1))
+            .is_some_and(|previous| is_identifier_byte(*previous));
+
+        if depth == 0 && starts_word && match_words(bytes, index, &["DO"]).is_some() {
+            return bytes
+                .get(after_conflict..index)?
+                .iter()
+                .any(|byte| !byte.is_ascii_whitespace())
+                .then_some(after_conflict..index);
+        }
+
+        index += 1;
+    }
+
+    None
+}
+
+/// Returns where `ALL` starts in a `GROUP BY ALL` starting at `start` when
+/// another clause, not a grouping expression, follows it. Comments may sit
+/// between `ALL` and that clause.
+fn bare_group_by_all_start(bytes: &[u8], start: usize) -> Option<usize> {
+    let after_all = match_words(bytes, start, &["GROUP", "BY", "ALL"])?;
+    let next_word = skip_whitespace_and_comments(bytes, after_all);
+
+    CLAUSES_AFTER_GROUP_BY
+        .iter()
+        .any(|clause| match_words(bytes, next_word, &[clause]).is_some())
+        .then_some(after_all - 3)
 }
 
 /// Matches `words` case-insensitively, separated by whitespace, and returns
@@ -1043,9 +1144,34 @@ fn skip_separator(bytes: &[u8], start: usize) -> Option<usize> {
     (whitespace > 0).then_some(start + whitespace)
 }
 
+/// Skips whitespace, `--` line comments and `/* */` block comments.
+fn skip_whitespace_and_comments(bytes: &[u8], start: usize) -> usize {
+    let mut index = start;
+
+    loop {
+        match (bytes.get(index), bytes.get(index + 1)) {
+            (Some(byte), _) if byte.is_ascii_whitespace() => index += 1,
+            (Some(b'-'), Some(b'-')) => {
+                index = find_from(bytes, index, b"\n").map_or(bytes.len(), |end| end + 1);
+            }
+            (Some(b'/'), Some(b'*')) => {
+                index = find_from(bytes, index + 2, b"*/").map_or(bytes.len(), |end| end + 2);
+            }
+            _ => return index,
+        }
+    }
+}
+
 /// Returns the position after the quoted run opened at `start`. A doubled
-/// quote is an escaped quote; an unterminated run extends to the end.
+/// quote is an escaped quote; an unterminated run extends to the end. In a
+/// PostgreSQL escape string (`E'...'`) a backslash also escapes the next
+/// byte, so `\'` does not close it; in a standard string a backslash is an
+/// ordinary character.
 fn skip_quoted(bytes: &[u8], start: usize, quote: u8) -> usize {
+    if quote == b'\'' && is_escape_string_prefix(bytes, start) {
+        return skip_escape_string(bytes, start);
+    }
+
     let mut index = start + 1;
 
     while let Some(offset) = bytes
@@ -1060,6 +1186,37 @@ fn skip_quoted(bytes: &[u8], start: usize, quote: u8) -> usize {
         }
 
         return closing + 1;
+    }
+
+    bytes.len()
+}
+
+/// Whether the quote at `quote_index` opens an escape string: it follows an
+/// `E` or `e` that does not end a longer identifier.
+fn is_escape_string_prefix(bytes: &[u8], quote_index: usize) -> bool {
+    let Some(prefix_index) = quote_index.checked_sub(1) else {
+        return false;
+    };
+
+    bytes
+        .get(prefix_index)
+        .is_some_and(|prefix| matches!(prefix, b'E' | b'e'))
+        && !prefix_index
+            .checked_sub(1)
+            .and_then(|before| bytes.get(before))
+            .is_some_and(|before| is_identifier_byte(*before))
+}
+
+fn skip_escape_string(bytes: &[u8], start: usize) -> usize {
+    let mut index = start + 1;
+
+    while let Some(&byte) = bytes.get(index) {
+        match byte {
+            b'\\' => index += 2,
+            b'\'' if bytes.get(index + 1) == Some(&b'\'') => index += 2,
+            b'\'' => return index + 1,
+            _ => index += 1,
+        }
     }
 
     bytes.len()
@@ -1876,7 +2033,7 @@ mod tests {
     #[test]
     fn mask_on_commit_clauses_preserves_length_and_newlines() {
         let query = "CREATE TEMP TABLE t ON\nCOMMIT DROP AS SELECT 1";
-        let masked = mask_on_commit_clauses(query);
+        let masked = mask_unparsed_clauses(query);
 
         assert_eq!(masked.len(), query.len());
         assert_eq!(masked, "CREATE TEMP TABLE t   \n            AS SELECT 1");
@@ -1895,7 +2052,148 @@ mod tests {
 
         for query in queries {
             assert!(
-                matches!(mask_on_commit_clauses(query), Cow::Borrowed(_)),
+                matches!(mask_unparsed_clauses(query), Cow::Borrowed(_)),
+                "{query:?} was masked"
+            );
+        }
+    }
+
+    #[test]
+    fn postgres_on_conflict_targets_have_no_diagnostics() {
+        let queries = [
+            "INSERT INTO commercial_plan (commercial_plan_id, plan_product_name, tea_rate, cft_rate, is_active, process_id, loaded_at)\nVALUES ('PLAN-1', 'Plan', 10.5000, NULL, true, 'manual_qa', NOW())\nON CONFLICT (commercial_plan_id) DO NOTHING;",
+            "INSERT INTO t (a, b) VALUES (1, 2) ON CONFLICT (a, b) DO NOTHING;",
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT (a) DO UPDATE SET a = EXCLUDED.a;",
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT (lower(a)) DO NOTHING;",
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT (a) WHERE a > 0 DO NOTHING;",
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT ON CONSTRAINT t_pkey DO NOTHING;",
+            "insert into t (a) values (1)\non conflict\n  (a)\ndo nothing;",
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT DO NOTHING;",
+        ];
+
+        for query in queries {
+            let diagnostics = sql_editor_diagnostics(query);
+            assert!(diagnostics.is_empty(), "{query:?} produced {diagnostics:?}");
+        }
+    }
+
+    #[test]
+    fn on_conflict_without_an_action_is_still_reported() {
+        let diagnostics = sql_editor_diagnostics("INSERT INTO t (a) VALUES (1) ON CONFLICT (a);");
+        assert!(!diagnostics.is_empty());
+    }
+
+    #[test]
+    fn malformed_on_conflict_target_is_still_reported() {
+        for query in [
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT bogus DO NOTHING;",
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT ON t_pkey DO NOTHING;",
+        ] {
+            assert!(
+                !sql_editor_diagnostics(query).is_empty(),
+                "{query:?} reported no diagnostic"
+            );
+            assert!(
+                matches!(mask_unparsed_clauses(query), Cow::Borrowed(_)),
+                "{query:?} was masked"
+            );
+        }
+    }
+
+    #[test]
+    fn escape_strings_with_backslash_quotes_stay_one_literal() {
+        let queries = [
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT (a) WHERE a <> E'it\\'s do' DO NOTHING;",
+            "INSERT INTO t (a) VALUES (E'x\\' on conflict') ON CONFLICT (a) DO NOTHING;",
+        ];
+
+        for query in queries {
+            let diagnostics = sql_editor_diagnostics(query);
+            assert!(diagnostics.is_empty(), "{query:?} produced {diagnostics:?}");
+        }
+
+        assert!(matches!(
+            mask_unparsed_clauses("SELECT E'\\' on commit drop' FROM t"),
+            Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn backslash_in_a_standard_string_is_an_ordinary_character() {
+        let query = "SELECT 'C:\\' AS path FROM t GROUP BY ALL ORDER BY path";
+        assert_eq!(
+            mask_unparsed_clauses(query),
+            "SELECT 'C:\\' AS path FROM t GROUP BY 1   ORDER BY path"
+        );
+    }
+
+    #[test]
+    fn mask_on_conflict_target_preserves_length_and_newlines() {
+        let query = "INSERT INTO t (a) VALUES (1) ON CONFLICT (a,\nb) DO NOTHING";
+        let masked = mask_unparsed_clauses(query);
+
+        assert_eq!(masked.len(), query.len());
+        assert_eq!(
+            masked,
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT    \n   DO NOTHING"
+        );
+    }
+
+    #[test]
+    fn mask_on_conflict_target_ignores_strings_and_comments() {
+        let queries = [
+            "SELECT 'on conflict (a) do nothing' FROM t",
+            "SELECT 1 -- on conflict (a) do nothing",
+            "SELECT \"on conflict (a) do\" FROM t",
+        ];
+
+        for query in queries {
+            assert!(
+                matches!(mask_unparsed_clauses(query), Cow::Borrowed(_)),
+                "{query:?} was masked"
+            );
+        }
+    }
+
+    #[test]
+    fn duckdb_group_by_all_before_another_clause_has_no_diagnostics() {
+        let queries = [
+            "SELECT a, count(*) FROM t GROUP BY ALL ORDER BY a, b;",
+            "select a, count(*) from t\ngroup by all\norder by a;",
+            "SELECT a FROM t GROUP BY ALL HAVING count(*) > 1;",
+            "SELECT a FROM t GROUP BY ALL LIMIT 5;",
+            "SELECT a FROM t GROUP BY ALL;",
+            "SELECT a FROM t GROUP BY ALL a, b ORDER BY a;",
+            "SELECT a FROM t GROUP BY ALL -- note\nORDER BY a;",
+            "SELECT a FROM t GROUP BY ALL /* note */ ORDER BY a;",
+            "SELECT a FROM t GROUP BY ALL/* note */ORDER BY a;",
+            "(SELECT a FROM t GROUP BY ALL)",
+            "SELECT * FROM (SELECT a FROM t GROUP BY ALL) s ORDER BY a;",
+        ];
+
+        for query in queries {
+            assert!(
+                sql_editor_diagnostics(query).is_empty(),
+                "{query:?} reported a diagnostic"
+            );
+        }
+    }
+
+    #[test]
+    fn mask_unparsed_clauses_rewrites_only_a_bare_group_by_all() {
+        let query = "SELECT a FROM t GROUP BY ALL ORDER BY a";
+        assert_eq!(
+            mask_unparsed_clauses(query),
+            "SELECT a FROM t GROUP BY 1   ORDER BY a"
+        );
+
+        for query in [
+            "SELECT a FROM t GROUP BY ALL a, b",
+            "SELECT 'group by all order' FROM t",
+            "SELECT a FROM t GROUP BY all_rows ORDER BY a",
+        ] {
+            assert!(
+                matches!(mask_unparsed_clauses(query), Cow::Borrowed(_)),
                 "{query:?} was masked"
             );
         }

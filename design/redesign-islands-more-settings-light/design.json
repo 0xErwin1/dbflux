@@ -1,0 +1,41 @@
+{
+  "title": "DBFlux redesign: More settings · light",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Overlays, windows and settings, row \"More settings · light\".",
+  "artboards": [
+    {
+      "file": "01-isl-light-settings-keys.html",
+      "title": "Settings: keybindings",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1320,
+      "height": 900
+    },
+    {
+      "file": "02-isl-light-settings-hooks.html",
+      "title": "Settings: hooks",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1320,
+      "height": 900
+    },
+    {
+      "file": "03-isl-light-settings-drivers.html",
+      "title": "Settings: drivers",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1320,
+      "height": 900
+    },
+    {
+      "file": "04-isl-light-settings-mcp.html",
+      "title": "Settings: MCP policies",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1320,
+      "height": 900
+    },
+    {
+      "file": "05-isl-light-settings-auth.html",
+      "title": "Settings: auth profiles",
+      "tradeoff": "Islands, light: floating panes on a light desk; readable in bright rooms, more glare in long night sessions.",
+      "width": 1320,
+      "height": 900
+    }
+  ]
+}

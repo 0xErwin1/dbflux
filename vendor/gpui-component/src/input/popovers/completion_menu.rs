@@ -294,6 +294,18 @@ impl CompletionMenu {
         self.dismiss(cx);
     }
 
+    /// The highlighted item of an open menu.
+    pub(crate) fn selected_item(&self, cx: &App) -> Option<CompletionItem> {
+        if !self.open {
+            return None;
+        }
+        self.list
+            .read(cx)
+            .delegate()
+            .selected_item()
+            .map(|item| CompletionItem::clone(item))
+    }
+
     pub(crate) fn handle_action(
         &mut self,
         action: Box<dyn Action>,

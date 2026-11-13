@@ -59,24 +59,21 @@ pub(crate) fn assert_entries_unchanged(original: &[u8], patched: &[u8], changed:
     for index in 0..before_archive.len() {
         let mut before = before_archive.by_index_raw(index).unwrap();
         let mut after = after_archive.by_index_raw(index).unwrap();
-        assert_eq!(before.name(), after.name(), "entry order");
+        let before_name = before.name().unwrap().into_owned();
+        let after_name = after.name().unwrap().into_owned();
+        assert_eq!(before_name, after_name, "entry order");
 
-        if changed.contains(&before.name()) {
+        if changed.contains(&before_name.as_str()) {
             continue;
         }
 
-        assert_eq!(
-            before.compression(),
-            after.compression(),
-            "{}",
-            before.name()
-        );
-        assert_eq!(before.crc32(), after.crc32(), "{}", before.name());
+        assert_eq!(before.compression(), after.compression(), "{before_name}");
+        assert_eq!(before.crc32(), after.crc32(), "{before_name}");
 
         let mut before_raw = Vec::new();
         let mut after_raw = Vec::new();
         before.read_to_end(&mut before_raw).unwrap();
         after.read_to_end(&mut after_raw).unwrap();
-        assert_eq!(before_raw, after_raw, "{}", before.name());
+        assert_eq!(before_raw, after_raw, "{before_name}");
     }
 }

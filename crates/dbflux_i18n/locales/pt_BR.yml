@@ -175,10 +175,22 @@ components:
   value_source:
     literal: Literal
     env: Variável de ambiente
+    dotenv: "Arquivo dotenv"
+    file: "Arquivo de segredo"
     secret: Secret Manager
     parameter: Parameter Store
     auth: Campo da sessão de autenticação
     json_key_placeholder: Chave JSON (opcional)
+    placeholder:
+      env: "NOME_DA_VARIAVEL"
+      dotenv: "~/.config/dbflux/prod.env#DB_PASSWORD"
+      file: "/run/secrets/db_password"
+    hint:
+      env: "Lido da variável de ambiente %{name} sempre que o DBFlux se conecta. O DBFlux não guarda o valor."
+      dotenv: "Lido de %{key} em %{path} sempre que o DBFlux se conecta. Somente você deve poder ler o arquivo."
+      dotenv_missing_key: "Adicione a chave depois do caminho: ~/caminho/do/arquivo.env#CHAVE"
+      file: "Lido de %{path} sempre que o DBFlux se conecta. Somente você deve poder ler o arquivo."
+      file_with_key: "Lido de %{key} no arquivo JSON %{path} sempre que o DBFlux se conecta. Somente você deve poder ler o arquivo."
   file_picker:
     browse: "Procurar…"
   column_projection:
@@ -325,6 +337,7 @@ connection_manager:
     seconds: segundos
     connection_name: Nome da conexão
     password: Senha
+    password_unreadable: "Não foi possível ler a senha salva: o chaveiro do sistema pode estar bloqueado"
     key_passphrase_optional: Senha da chave (opcional)
     ssh_password: Senha SSH
     ca_cert_path: Caminho do certificado da CA
@@ -1587,6 +1600,7 @@ document:
       header: "%{column} · linha %{row}"
       item:
         copy: Copiar
+        copy_column_name: Copiar nome da coluna
         view_document: Ver documento
         add_document: Adicionar documento
         duplicate_document: Duplicar documento
@@ -3405,6 +3419,31 @@ document:
     new: Nova aba
     close_named: "Fechar %{title}"
     unsaved_changes: Alterações não salvas
+  secret:
+    subtitle: "%{store} · %{connection} · %{region}"
+    subtitle_no_region: "%{store} · %{connection}"
+    close: "Fechar aba"
+    retry: "Tentar novamente"
+    removed:
+      title: "Este segredo foi excluído"
+      body: "%{name} não está mais no armazenamento. Esta aba não lê nem grava nada. Feche-a e abra o segredo novamente se ele for recriado."
+      draft_title: "Excluído — seu texto não salvo foi mantido"
+      draft_body: "%{name} foi excluído, então nada pode ser salvo. O texto abaixo é somente leitura; copie o que precisar e depois descarte-o."
+    scheduled:
+      draft_title: "Exclusão agendada — seu texto não salvo foi mantido"
+      draft_body: "%{name} está com a exclusão agendada, então nada pode ser salvo. O texto abaixo é somente leitura. Restaure o segredo para editá-lo de novo, ou descarte o texto."
+    region_mismatch:
+      title: "Esta conexão está em outra região"
+      body: "%{name} pertence a %{region} e a conexão está em %{live}. Esta aba não lê nem grava nada até a conexão voltar para %{region}."
+    footer:
+      value_scope: "Valor visível apenas nesta aba, apagado ao fechar"
+      hint:
+        reveal: "revelar"
+        edit: "editar"
+        roll_back: "reverter"
+    rotation_badge:
+      on: "Rotação ativa"
+      off: "Rotação desativada"
   secret_store:
     title: "%{store} · %{connection}"
     search_placeholder: "A busca roda no cofre; os valores nunca são listados"
@@ -3412,6 +3451,9 @@ document:
       refresh: "Atualizar"
     load_more: "Carregar a próxima página"
     loading_more: "Carregando a próxima página…"
+    region:
+      label: "Região"
+      switch_failed: "Não foi possível mudar para a região %{region}: %{error}"
     columns:
       name: "Nome"
       description: "Descrição"
@@ -3438,29 +3480,60 @@ document:
     error:
       connection_unavailable: "A conexão não está disponível"
       store_unavailable: "A conexão não tem o cofre %{store}"
+      may_have_landed: "O serviço pode ter aplicado a alteração antes de falhar. Verifique o segredo antes de tentar novamente."
+      audit_unrecorded: "Não foi possível registrar a falha na auditoria."
     footer:
       loaded:
         one: "%{count} segredo carregado"
         many: "%{count} segredos carregados"
+      paths:
+        one: "%{count} caminho"
+        many: "%{count} caminhos"
+      parameters:
+        one: "%{count} parâmetro"
+        many: "%{count} parâmetros"
+      tree_summary: "%{paths} · %{parameters} carregados em %{path}"
+      flat_summary: "%{parameters} em %{path}"
       hint:
         open: "abrir"
         retrieve: "obter valor"
-        copy_id: "copiar ID"
+        copy_arn: "copiar ARN"
         filter: "filtrar"
         up: "subir"
     status:
       list_timing:
         one: "Listagem · %{count} segredo · %{millis} ms"
         many: "Listagem · %{count} segredos · %{millis} ms"
+      list_timing_parameters:
+        one: "Listagem · %{count} parâmetro · %{millis} ms"
+        many: "Listagem · %{count} parâmetros · %{millis} ms"
       describe_timing: "Descrição · %{millis} ms"
       retrieve_timing: "Obter valor · %{millis} ms"
       duration_tooltip: "Duração no cliente da última chamada ao cofre"
+    date:
+      short: "%{day} %{month}, %{time}"
+      short_with_year: "%{day} %{month} %{year}, %{time}"
+      months:
+        jan: "jan"
+        feb: "fev"
+        mar: "mar"
+        apr: "abr"
+        may: "mai"
+        jun: "jun"
+        jul: "jul"
+        aug: "ago"
+        sep: "set"
+        oct: "out"
+        nov: "nov"
+        dec: "dez"
     rotation:
       off: "Desativada"
       enabled: "Ativada"
       disabled: "Desativada"
       every_days: "A cada %{count} dias"
       every_hours: "A cada %{count} horas"
+      on_schedule: "Em agenda"
+      window: "Janela"
       schedule_with_window: "%{schedule} · janela %{window} (%{expression})"
       title: "Rotação"
       status: "Status"
@@ -3470,6 +3543,7 @@ document:
       last: "Última rotação"
     details:
       none: "Selecione um segredo para ver os detalhes"
+      close: "Fechar"
       loading: "Carregando os detalhes…"
       failed: "Não foi possível carregar os detalhes"
       title: "Detalhes do segredo"
@@ -3484,7 +3558,29 @@ document:
       created: "Criado"
       last_changed: "Última alteração"
       last_retrieved: "Última obtenção"
-      versions: "Versões"
+      open_in_tab: "Abrir em uma aba"
+      resize: "Redimensionar o painel de detalhes"
+    versions:
+      title: "Versões"
+      history_title: "Histórico"
+      count:
+        one: "%{count} versão"
+        many: "%{count} versões"
+      column:
+        version: "Versão"
+        labels: "Rótulos de preparo"
+        created: "Criada"
+      no_labels: "sem rótulos"
+      history_version: "v%{id}"
+      loading: "Carregando as versões…"
+      failed: "Não foi possível carregar as versões"
+      scheduled_for_deletion: "Agendado para exclusão; restaure-o para ver as versões"
+      not_connected: "Sem conexão; conecte-se para ver as versões"
+      retrieve: "Recuperar a versão %{version}"
+      back_to_current: "Voltar para a atual"
+      shown: "Exibindo a versão %{version}"
+      not_current: "Não é a versão atual. A recuperação é auditada, o valor não."
+      current_unknown: "A versão atual não é conhecida no momento. A recuperação é auditada, o valor não."
     tags:
       title: "Tags"
       none: "Sem tags"
@@ -3493,10 +3589,19 @@ document:
       body: "%{name} pertence a %{service}. %{service} faz a rotação e a atualização, então o DBFlux o mostra somente leitura."
     action:
       copy_resource_id: "Copiar ARN"
+    context_menu:
+      copy_name: "Copiar nome"
+      copy_path: "Copiar caminho"
+      arn_loading: "O ARN chega com os detalhes…"
+      arn_missing: "O armazenamento não informa um identificador de recurso"
+      arn_failed: "Não foi possível carregar os detalhes: %{error}"
+      open_in_tab: "Abrir em uma aba"
     toast:
       value_copied: "Valor copiado para a área de transferência"
       resource_id_copied: "ARN copiado para a área de transferência"
       error_copied: "Erro copiado para a área de transferência"
+      name_copied: "Nome copiado para a área de transferência"
+      path_copied: "Caminho copiado para a área de transferência"
     value:
       title: "Valor"
       not_loaded: "Valor não carregado"
@@ -3509,7 +3614,21 @@ document:
       view:
         key_value: "Chave/valor"
         plaintext: "Texto simples"
-      plaintext_only: "Chave/valor só abre quando o valor é um objeto JSON de um nível com valores escalares. JSON aninhado, arrays e qualquer outro texto abrem como texto simples."
+        key_value_unavailable: "Chave/valor não está disponível: o valor não é um objeto JSON de um nível com valores escalares."
+      kind:
+        dotenv:
+          one: "dotenv · %{count} linha"
+          many: "dotenv · %{count} linhas"
+        json_keys:
+          one: "JSON · %{count} chave"
+          many: "JSON · %{count} chaves"
+        json_items:
+          one: "JSON · %{count} item"
+          many: "JSON · %{count} itens"
+        text:
+          one: "texto · %{count} linha"
+          many: "texto · %{count} linhas"
+        binary: "binário"
       binary_size: "Binário · %{size}"
       read_only: "Somente leitura"
       binary_note: "Valores binários são gravados por outras ferramentas. O DBFlux os mostra em base64 e não os edita."
@@ -3529,6 +3648,155 @@ document:
       metadata_loaded: "Metadados carregados · só o valor falhou"
       deletion_scheduled: "Exclusão agendada para %{date}"
       deletion_scheduled_body: "O valor não pode ser obtido até que seja restaurado."
+      deletion_scheduled_unknown: "Exclusão agendada"
+
+    edit:
+      open: "Editar valor"
+      save: "Salvar como nova versão"
+      discard: "Descartar"
+      hint: "Salvar grava uma nova versão e a torna atual. O texto é salvo exatamente como está aqui."
+      invalid_json: "O valor armazenado era JSON e o texto editado não é um JSON válido: %{error}"
+      unsaved_block: "%{name} tem edições não salvas. Salve ou descarte-as primeiro."
+      connection_replaced: "A conexão foi substituída enquanto o valor era editado. Descarte o editor e obtenha o valor novamente antes de salvar."
+      refused_managed: "O valor de %{name} é gerenciado por %{service}, portanto não pode ser editado."
+      refused_deletion: "A exclusão de %{name} está agendada, então seu valor não pode ser editado até ser restaurado."
+      change_summary: "Edições de valor não salvas"
+      find: "Localizar"
+      modified: "modificado"
+      footer:
+        version: "versão %{version}"
+        summary_unversioned: "UTF-8 · %{size}"
+        changed_one: "1 linha alterada"
+        changed_other: "%{count} linhas alteradas"
+        saving_note: "Salvar cria uma nova versão e a torna atual"
+        caret: "Ln %{line}, Col %{column}"
+      changed_elsewhere: "Este segredo mudou em outra visão. Salvar grava uma nova versão sobre ele."
+      hint_formatted: "Salvar grava uma nova versão e a torna a atual. Formatado grava de volta em uma única linha um valor armazenado em uma linha, e um valor armazenado em várias linhas como está aqui; Bruto salva o texto exatamente como está aqui."
+      mode:
+        formatted: "Formatado"
+        raw: "Bruto"
+        toggle: "Alternar entre Formatado e Bruto"
+    dialog:
+      cancel: "Cancelar"
+    write:
+      refused_managed: "%{name} é gerenciado por %{service}, então não pode ser alterado aqui."
+      refused_deletion: "A exclusão de %{name} está agendada. Restaure-o antes de alterá-lo."
+      region_switching: "A região está sendo trocada. Aguarde a conexão se estabilizar e tente novamente; nada foi gravado."
+      connection_replaced: "A conexão foi substituída enquanto este diálogo estava aberto. Nada foi gravado. Abra-o novamente a partir da conexão atual."
+      details_stale: "Os detalhes exibidos foram lidos de uma conexão anterior. Estão sendo lidos novamente; tente de novo em instantes."
+      in_progress: "Outra alteração ainda está sendo gravada. Aguarde o término."
+      landed_on_previous_session: "Uma alteração terminou depois que a conexão foi substituída. Ela foi gravada na conexão anterior e este documento não foi atualizado; atualize-o para ver o estado atual."
+    rollback:
+      button: "Reverter"
+      action: "Reverter para a versão %{version}"
+      footnote: "Reverter torna a versão escolhida a atual e mantém como anterior a versão que era a atual. Nenhum valor é regravado."
+      title: "Reverter %{name}"
+      lead: "Tornar a versão %{version} a versão atual de %{name}?"
+      effect: "Os aplicativos que leem a versão atual receberão o valor da versão escolhida. A versão %{current}, atual agora, continua disponível como versão anterior."
+      confirm: "Reverter"
+      done: "%{name} agora usa a versão %{version}"
+      no_earlier_version: "%{name} não tem uma versão anterior para a qual reverter."
+      history_loading: "As versões ainda estão sendo carregadas. Tente novamente em instantes."
+      pending_reason: "Esta versão está em etapa por uma rotação inacabada, então não é possível reverter para ela."
+      only_pending: "Todas as versões anteriores estão em etapa por uma rotação inacabada e não é possível reverter para elas."
+    delete:
+      button: "Excluir"
+      title:
+        secret: "Excluir segredo"
+        parameter: "Excluir parâmetro"
+      lead_scheduled: "Excluir %{name}? Os aplicativos que o leem começarão a falhar imediatamente: o segredo fica indisponível até ser restaurado. O período de recuperação só limita por quanto tempo ele pode ser restaurado."
+      lead_irreversible: "Excluir %{name}? Isso não pode ser desfeito. O parâmetro é removido imediatamente, e os aplicativos que o leem começarão a falhar logo em seguida."
+      window_label: "Período de recuperação"
+      window_option: "%{count} dias"
+      window_hint: "Você pode restaurar o segredo durante este período."
+      confirm_label:
+        secret: "Digite o nome do segredo para confirmar"
+        parameter: "Digite o nome do parâmetro para confirmar"
+      confirm_placeholder: "Nome"
+      confirm_aria: "Digite %{name} para confirmar a exclusão"
+      confirm_scheduled: "Agendar exclusão"
+      confirm_irreversible: "Excluir permanentemente"
+      done: "%{name} foi excluído"
+      done_scheduled: "A exclusão de %{name} está agendada para %{date}"
+      done_scheduled_undated: "A exclusão de %{name} está agendada"
+      scheduled_detail: "%{name} foi excluído em %{deleted} com um período de recuperação de %{days} dias. Seu valor não pode ser obtido até que seja restaurado."
+      row_deleted: "Excluído"
+      row_deletes_on: "Será excluído em"
+    restore:
+      button: "Restaurar segredo"
+      done: "%{name} foi restaurado"
+    rotate:
+      button: "Rotacionar agora"
+      immediately: "Rotacionar imediatamente"
+      refused_off: "A rotação está desativada para %{name}. Ative-a em Editar rotação antes de rotacionar."
+      done: "Uma rotação de %{name} foi iniciada"
+      done_version: "Uma rotação de %{name} foi iniciada; a versão %{version} será a atual quando a rotação terminar"
+      title: "Rotacionar %{name} agora"
+      lead: "Rotacionar %{name} agora?"
+      effect: "Isso executa agora a função de rotação do segredo e cria uma nova versão que passa a ser a atual quando a rotação termina. Até lá, os aplicativos que leem o segredo continuam recebendo o valor anterior."
+      confirm: "Rotacionar agora"
+    rotation_edit:
+      button: "Editar rotação"
+      title: "Editar a rotação de %{name}"
+      enabled: "Rotacionar este segredo automaticamente"
+      schedule: "Agendamento"
+      schedule_hint: "rate(30 days), rate(12 hours) ou uma expressão cron(...) de seis campos."
+      schedule_placeholder: "rate(30 days)"
+      window: "Janela de rotação"
+      window_hint: "Horas inteiras, de 1h a 24h. Vazio mantém a janela atual."
+      window_placeholder: "4h"
+      function: "Função de rotação"
+      function_hint: "A função que rotaciona o segredo, como seu ARN. Vazio mantém a função atual."
+      function_placeholder: "ARN da função"
+      already_off: "A rotação já está desativada."
+      confirm: "Salvar rotação"
+      done: "A rotação de %{name} foi atualizada"
+      unfinished: "A rotação está desativada, mas a versão %{version} ainda mantém a etapa pendente de uma rotação que nunca terminou."
+      unfinished_title: "Uma rotação cancelada deixou a versão %{version} pendente"
+      unfinished_body: "Verifique as credenciais da versão %{version} e depois mova ou remova sua etapa pendente. Até lá, uma rotação posterior pode ser recusada."
+    tags_edit:
+      button: "Editar tags"
+      title: "Editar as tags de %{name}"
+      lead: "Alterar uma tag não toca no valor nem em nenhuma versão."
+      key_placeholder: "chave"
+      value_placeholder: "valor"
+      key_label: "Chave da tag %{row}"
+      value_label: "Valor da tag %{row}"
+      remove: "Remover tag"
+      add: "Adicionar tag"
+      confirm: "Salvar tags"
+      done: "As tags de %{name} foram atualizadas"
+      no_change: "Nenhuma tag difere das que o segredo tem."
+      duplicate: "A chave %{key} aparece em mais de uma linha."
+    description_edit:
+      button: "Editar descrição"
+      title: "Editar a descrição de %{name}"
+      label: "Descrição"
+      placeholder: "Sem descrição"
+      confirm: "Salvar descrição"
+      confirm_version: "Salvar como nova versão"
+      done: "A descrição de %{name} foi atualizada"
+      done_version: "A descrição de %{name} foi atualizada; a versão %{version} contém a nova descrição"
+      rewrites_title: "Isso grava o valor novamente como uma nova versão"
+      rewrites_body: "Este armazenamento só altera uma descrição gravando o valor novamente, então salvar cria uma nova versão. O valor, seu tipo e sua chave permanecem como estão."
+    create:
+      button_secret: "Novo segredo"
+      button_parameter: "Novo parâmetro"
+      title_secret: "Novo segredo"
+      title_parameter: "Novo parâmetro"
+      name: "Nome"
+      name_placeholder: "Nome"
+      type: "Tipo"
+      value: "Valor"
+      description: "Descrição"
+      description_placeholder: "Opcional"
+      tier: "Nível"
+      key: "Chave de criptografia"
+      key_placeholder: "Chave padrão"
+      tags: "Tags"
+      confirm: "Criar"
+      done: "%{name} foi criado"
+      exists: "%{name} já existe. Escolha outro nome; criar nunca substitui um segredo."
 document_tree:
   search_placeholder: Buscar…
   view:
@@ -3935,6 +4203,14 @@ palette:
       name: Focar no painel de tarefas
     toggle_sidebar:
       name: Alternar barra lateral
+    toggle_full_screen:
+      name: Alternar tela cheia
+    increase_interface_size:
+      name: "Aumentar tamanho da interface"
+    decrease_interface_size:
+      name: "Diminuir tamanho da interface"
+    reset_interface_size:
+      name: "Redefinir tamanho da interface"
     toggle_editor:
       name: Alternar painel do editor
     toggle_results:
@@ -4054,6 +4330,13 @@ settings:
       option:
         default: "Padrão"
         compact: "Compacto"
+    scrollbars:
+      help: "Vale para todas as janelas."
+      label: "Mostrar barras de rolagem"
+      option:
+        while_scrolling: "Ao rolar"
+        on_hover: "Ao passar o cursor"
+        always: "Sempre"
     language:
       label: Idioma
       option:
@@ -4347,6 +4630,10 @@ settings:
       cancel_task: Cancelar tarefa
       clear_finished_tasks: Limpar tarefas concluídas
       toggle_sidebar: Alternar barra lateral
+      toggle_full_screen: Alternar tela cheia
+      increase_interface_size: "Aumentar tamanho da interface"
+      decrease_interface_size: "Diminuir tamanho da interface"
+      reset_interface_size: "Redefinir tamanho da interface"
       open_settings: Abrir configurações
       open_login_modal: Abrir login do perfil de autenticação
       open_sso_wizard: Abrir assistente AWS SSO
@@ -4406,6 +4693,8 @@ settings:
       toggle_console: Alternar console
       load_more: Carregar mais
       edit_expiry: Editar expiração…
+      edit_value: Editar valor
+      roll_back_version: "Reverter para a versão anterior"
       copy_preview: Copiar pré-visualização
       import_items: "Importar…"
       import_from_client: "Importar de outro cliente…"
@@ -4895,6 +5184,7 @@ settings:
     kind:
       driver: Driver
       auth_provider: Provedor de autenticação
+      secret_provider: Provedor de segredos
     action:
       add_variable: "Adicionar variável"
       add_argument: "Adicionar argumento"
@@ -5140,6 +5430,8 @@ sidebar:
     new_script_folder: Nova pasta
     reveal_file_manager: Mostrar no gerenciador de arquivos
     copy_path: Copiar caminho
+    copy_column_name: Copiar nome da coluna
+    copy_field_name: Copiar nome do campo
     schema_diff_unsupported: A comparação de schema só está disponível para conexões relacionais.
     new_dashboard: Novo dashboard…
     import_dashboard: Importar dashboard de JSON…
@@ -5181,6 +5473,11 @@ sidebar:
     dashboards: "Dashboards"
     connections: CONEXÕES
     scripts: SCRIPTS
+  root_section:
+    confirm_message: "Executar \"%{action}\" em \"%{item}\"?"
+    action:
+      delete_bucket: "Excluir bucket"
+      delete_bucket_description: "Exclui o bucket. Apenas um bucket vazio pode ser excluído, e isso não pode ser desfeito."
   task:
     connecting: "Conectando a %{name}"
     disconnecting: "Desconectando %{name}"
@@ -5189,7 +5486,7 @@ sidebar:
     disconnect_hook_cancelled: Hook de desconexão cancelado
     post_disconnect_hook_cancelled: Hook de pós-desconexão cancelado
     loading_event_streams: "Carregando fluxos de eventos: %{name}"
-    listing_buckets: "Listando buckets: %{name}"
+    listing_root_section: "Listando %{section}: %{name}"
     loading_database_schema: "Carregando schema: %{name}"
     connecting_to_database: "Conectando ao banco de dados: %{name}"
     refreshing_database: "Atualizando o banco de dados: %{name}"
@@ -5237,7 +5534,16 @@ sidebar:
       indexes: "Falha ao carregar os índices: %{error}"
       foreign_keys: "Falha ao carregar as chaves estrangeiras: %{error}"
       routines: "Falha ao carregar as rotinas: %{error}"
-    list_buckets_failed: "Falha ao listar os buckets: %{error}"
+    list_root_section_failed: "Falha ao listar %{section}: %{error}"
+    root_section_action_failed: "%{action} falhou para %{item}: %{error}"
+    root_section_action_audit_failed: "%{action} em %{item} foi concluída, mas o evento de auditoria não foi registrado: %{error}"
+    root_section_action_connection_changed: "%{action} não foi executada em %{item}: a conexão mudou depois que a ação foi solicitada."
+    root_section_action_refused:
+      read_only: "%{action} não foi executada: esta conexão é somente leitura."
+      read_only_profile: "%{action} não foi executada: o perfil desta conexão está configurado como somente leitura."
+      read_only_server: "%{action} não foi executada: o servidor rejeitou alterações para esta conexão."
+      approval_unavailable: "%{action} não foi executada: esta conexão exige aprovação, que ainda não está disponível para ações da barra lateral."
+    root_section_invalid_id: "O driver declarou a seção raiz \"%{section}\", que foi ignorada: ids de seção devem ser únicos e não podem conter \"|\"."
     code_generation_failed: "Falha na geração de código: %{error}"
     loading_event_streams: Carregando fluxos de eventos…
     load_schema_failed: "Falha ao carregar o schema: %{error}"
@@ -5309,6 +5615,7 @@ sidebar:
       error_retry: "Erro: %{error} — clique para tentar novamente"
       connect_failed: "Falha na conexão: %{error}"
       remote_listing_count: "%{label} (%{count})"
+      load_more: "Carregar mais"
       remote_dashboards_error_retry: "Erro: %{error} — recolha e expanda para tentar novamente"
       used_by_objects:
         one: Usado por 1 objeto

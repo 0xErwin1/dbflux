@@ -120,7 +120,7 @@ flowchart TB
     start["Conectar desde<br/>Connection Manager / sidebar"] --> prep["AppState::prepare_pipeline_input<br/>(input agnóstico del provider)"]
     prep --> pre{{"PreConnect hooks"}}
     pre --> auth["Pipeline: Authenticating<br/>(DynAuthProvider, p. ej. AWS SSO)"]
-    auth --> values["Pipeline: ResolvingValues<br/>(ValueRef → env/secret/param/auth)"]
+    auth --> values["Pipeline: ResolvingValues<br/>(ValueRef → env/dotenv/secret/param/auth)"]
     values --> access["Pipeline: OpeningAccess"]
     access --> tunnel{"¿Tipo de access?"}
     tunnel -->|Direct| connect
@@ -140,7 +140,7 @@ flowchart TB
   (DynamoDB), y HTTP vía `reqwest` (ClickHouse) (Cargo.toml).
 - Auth/integración AWS: `aws-config`, `aws-sdk-sso`, `aws-sdk-ssooidc`,
   `aws-sdk-sts`, `aws-sdk-secretsmanager`, `aws-sdk-ssm` (`dbflux_aws`).
-- IPC/RPC: sockets locales `interprocess` + framing de mensajes `bincode`
+- IPC/RPC: sockets locales `interprocess` + framing de mensajes `postcard`
   (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
 - SSH: `ssh2` vía `dbflux_ssh` (crates/dbflux_ssh/src/lib.rs).
 - Export: `csv` + `hex` + `base64` + `serde_json` vía `dbflux_export`
@@ -466,7 +466,7 @@ crates/
     src/envelope.rs         # ProtocolVersion + app/driver protocol constants
     src/protocol.rs         # Single-instance app-control messages
     src/driver_protocol.rs  # Driver RPC request/response schema (DTOs + errors)
-    src/framing.rs          # Length-prefixed bincode transport framing
+    src/framing.rs          # Length-prefixed postcard transport framing
     src/socket.rs           # Cross-platform socket naming helpers
   dbflux_driver_ipc/        # DbDriver adapter for external RPC services
     src/driver.rs           # IpcDriver + managed host lifecycle
@@ -1064,9 +1064,9 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
   (colecciones o mediciones) o es un keyspace. El sidebar
   (`tree_builder/object_folder.rs`) construye el contenido de cada base de datos a
   partir de esa descripción, y su menú contextual lee las facetas del objeto y el
-  mismo layout. El único chequeo de categoría que queda en el árbol es la lista
-  de buckets de una conexión de almacenamiento de objetos, que se obtiene por su
-  propio camino en lugar de leerse de un snapshot.
+  mismo layout. Los tipos de objeto que un driver muestra en la raíz de la
+  conexión, como los buckets de S3, no están en el snapshot; vienen de las
+  secciones raíz del driver (ver Sistema de drivers).
 - `dbflux_ui_base::object_tree` proporciona una jerarquía genérica de carga
   diferida con un coordinador por `AppStateEntity`. Los límites de core/app
   delimitan la aplicación por sesión y slot de conexión de destino; los adaptadores del
@@ -1164,6 +1164,42 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
     `CollectionPresentation::ObjectBrowser` y `PaneHandle::status_segments()`
     permiten que la UI abra y decore documents de object-storage sin bifurcar
     según driver ID.
+  - `RootSectionSource` (`crates/dbflux_core/src/connection/root_section/mod.rs`),
+    alcanzado vía `Connection::root_section_source()` y habilitado por
+    `DriverCapabilities::ROOT_SECTIONS`, declara los tipos de objeto que se
+    muestran en la raíz de una conexión en el sidebar. Cada `RootSectionDef`
+    lleva un id estable, una etiqueta, una etiqueta para el estado vacío, una
+    `RootSectionPresentation` opcional para la carpeta, la
+    `RootItemPresentation` en la que se abren sus items, si activar la fila de
+    la conexión abre la sección, y sus acciones por item. `list_items` devuelve
+    `RootSectionPage`s de `RootSectionItem`s con un `next_page_token`. Los ids
+    de nodo `SchemaNodeId::RootSection`, `RootSectionItem` y
+    `RootSectionLoadMore` llevan el id de la sección, así que un tipo de objeto
+    nuevo no necesita una variante de `SchemaNodeKind`. Un único renderer
+    genérico (`crates/dbflux_ui_sidebar/src/root_sections/`) construye las
+    carpetas, cachea los listados por perfil y carga más páginas bajo demanda.
+    Una obtención fallida de las declaraciones o de la primera página muestra
+    una fila para reintentar y nunca se guarda como vacía. Un id de sección no
+    puede contener `|`, porque los ids de nodo lo incluyen; el sidebar rechaza
+    e informa esa declaración. Una sección cuya presentación de carpeta o de
+    item necesita `Connection::object_store_api` se oculta en una conexión que
+    no lo tiene. El workspace enruta la activación según la presentación declarada
+    (`ObjectContainerTable` abre la tabla de contenedores, `ObjectBrowser` el
+    explorador de objetos). Las etiquetas son `LocalizedText`: una clave
+    opcional del catálogo i18n del host más un fallback en inglés obligatorio,
+    resueltos con `dbflux_i18n::try_translate`. Cada `RootSectionAction` lleva
+    una `ExecutionClassification`: `Destructive`, `Admin` y `AdminDestructive`
+    piden confirmación, y cada ejecución, exitosa o no, registra una fila de
+    auditoría `Governance`. Una acción solo se ejecuta en la conexión en la que
+    se solicitó, y la `MutationPolicy` del perfil controla toda acción por
+    encima de `Read`: `ReadOnly` la rechaza, y también `ApprovalRequired`
+    mientras el flujo de aprobación no cubra estas acciones. Una acción exitosa
+    vuelve a listar la sección y recarga el documento abierto que la muestra.
+    Los drivers externos alcanzan el seam por driver
+    RPC 1.9 (`RootSections`, `RootSectionItems`, `ExecuteRootSectionAction`).
+    S3 es la implementación de referencia: una sección `buckets` cuyos items se
+    abren en el explorador de objetos, con una acción Delete bucket clasificada
+    `AdminDestructive`.
   - `TableViewFeatures` (`crates/dbflux_core/src/data/column_profile.rs`),
     informado por `Connection::table_view_features()`, habilita las vistas
     Columnas y Particiones de una tabla, la estimación de lectura, el perfil de
@@ -1575,8 +1611,13 @@ flujo de release/nightly en sí está documentado en `docs/RELEASE.md`.
   - CRUD completo desde la UI: upload, delete recursivo con confirmación por
     escritura, creación de folder/bucket con degradación graceful por endpoint,
     rename (copy-then-delete), URLs presignadas
-  - Cada mutation se audita bajo `EventCategory::ObjectStorage`; las
-    credenciales y URLs presignadas nunca se registran ni persisten
+  - Cada mutation hecha desde la tabla de buckets o el explorador de objetos
+    se audita bajo `EventCategory::ObjectStorage` cuando la auditoría está
+    activada; si la escritura de auditoría falla, se registra una advertencia
+    y la mutation se mantiene, sin registro alternativo; la acción Delete bucket del
+    sidebar es una acción de root section y se audita bajo
+    `EventCategory::Governance`. Las credenciales y URLs presignadas nunca se
+    registran ni persisten
 - **AWS Secrets**: `crates/dbflux_driver_aws_secrets/` — driver
   `aws-sdk-secretsmanager` + `aws-sdk-ssm` (`DatabaseCategory::SecretStore`):
   - Expone dos almacenes con `Connection::secret_stores()` y el seam neutral al
@@ -1904,7 +1945,10 @@ IA con una capa completa de gobernanza:
   `dbflux_app::rpc_services` descubre los service descriptors persistidos,
   adapta `RpcServiceKind::Driver` en `DbDriver`s de runtime, y conecta
   `RpcServiceKind::AuthProvider` a `RpcAuthProvider` (que implementa
-  `DynAuthProvider`). Preserva la compatibilidad con `rpc:<socket_id>`. El
+  `DynAuthProvider`), y `RpcServiceKind::SecretProvider` a `RpcSecretProvider`
+  (que implementa `DynSecretProvider`; ver
+  [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md)). Preserva
+  la compatibilidad con `rpc:<socket_id>`. El
   protocolo IPC de auth-provider está en v1.2: agrega las variantes
   `FetchDynamicOptions` / `DynamicOptions` y el manifest flag
   `secret_dependency_opt_in`. Los auth tokens los gestiona
@@ -1936,8 +1980,8 @@ IA con una capa completa de gobernanza:
   - `cfg_hooks`, `cfg_hook_bindings`
   - `cfg_script_roots` (carpetas externas de scripts listadas en su lugar; quitar una fila nunca toca la carpeta)
   - `cfg_services`, `cfg_service_args`, `cfg_service_env` (descriptores de
-    servicio RPC; `cfg_services.service_kind` registra `driver` vs
-    `auth_provider`)
+    servicio RPC; `cfg_services.service_kind` registra `driver`,
+    `auth_provider` o `secret_provider`)
   - tablas `cfg_governance_*` (roles, policies, trusted clients)
   - `cfg_drivers` (overrides de settings por driver)
   - `cfg_folders` (organización del connection tree)

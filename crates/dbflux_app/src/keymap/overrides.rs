@@ -5,15 +5,24 @@
 //! context predicate. Bindings without an override keep their defaults, so a
 //! new default added by a later release reaches users who customized other
 //! bindings.
+//!
+//! The merging and the conflict detection live in `bolt_keys`, over the
+//! engine's id-string slots; this module adapts the product's typed slots
+//! (`ContextId`, `Command`) and keeps the storage half: reading and writing
+//! the persisted rows through `dbflux_storage`.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 
+use bolt_keys::OverrideRow;
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_storage::error::StorageError;
 use dbflux_storage::repositories::keybinding_overrides::KeybindingOverrideDto;
 
-use super::{Command, ContextId, KeySequence, KeymapLayer, KeymapStack};
+use super::keymap_layer::KeymapStack;
+use super::vocabulary::{command_for, context_for, vocabulary};
+use super::{Command, ContextId, KeySequence};
+
+pub use bolt_keys::PredicateOverlap;
 
 /// One binding of the default keymap: the context whose layer declares it,
 /// the command it runs, the keys it has by default and the context predicate
@@ -43,93 +52,30 @@ impl BindingSlot {
         self
     }
 
-    /// The row key: context id, command id and default keys in their stored
-    /// text forms.
-    fn storage_key(&self) -> (String, String, String) {
-        (
-            self.context.id().to_string(),
-            self.command.id().to_string(),
-            self.default_keys.to_storage_string(),
+    /// The engine slot: the same binding with its persisted identifiers.
+    pub(super) fn engine(&self) -> bolt_keys::BindingSlot {
+        bolt_keys::BindingSlot::new(
+            vocabulary(),
+            self.context.id(),
+            self.command.action_id(),
+            self.default_keys.clone(),
         )
+        .with_predicate(self.default_predicate)
     }
-}
 
-/// What the user changed about one default binding.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BindingOverride {
-    /// The keys of the binding; `None` removes its shortcut.
-    pub keys: Option<KeySequence>,
-    /// The context predicate of the binding; `None` keeps the default one.
-    pub predicate: Option<String>,
-}
-
-/// Decides whether two context predicates can hold for the same key press,
-/// so that bindings with the same keys under them collide.
-///
-/// Evaluating predicates needs GPUI's predicate language, which this crate
-/// does not depend on; `dbflux_ui_base::keymap` supplies the real
-/// implementation. [`ContextTreeOverlap`] covers default predicates only.
-pub trait PredicateOverlap {
-    fn overlaps(&self, first: &str, second: &str) -> bool;
-}
-
-/// Overlap from the context tree: two contexts' default predicates overlap
-/// when the contexts are the same or one inherits from the other. Any other
-/// predicate overlaps only with an identical one.
-pub struct ContextTreeOverlap;
-
-impl PredicateOverlap for ContextTreeOverlap {
-    fn overlaps(&self, first: &str, second: &str) -> bool {
-        match (
-            context_for_default_predicate(first),
-            context_for_default_predicate(second),
-        ) {
-            (Some(first), Some(second)) => contexts_overlap(first, second),
-            _ => first == second,
-        }
-    }
-}
-
-fn context_for_default_predicate(predicate: &str) -> Option<ContextId> {
-    ContextId::all_variants()
-        .iter()
-        .copied()
-        .find(|context| context.default_predicate() == predicate)
-}
-
-/// Every binding of `defaults`, layer by layer in [`ContextId::all_variants`]
-/// order and, inside a layer, in declaration order.
-pub fn default_slots(defaults: &KeymapStack) -> Vec<BindingSlot> {
-    ContextId::all_variants()
-        .iter()
-        .filter_map(|context| defaults.layer(*context))
-        .flat_map(|layer| {
-            layer.ordered_bindings().map(|(keys, command)| {
-                BindingSlot::new(layer.context(), command, keys.clone())
-                    .with_predicate(layer.predicate_for(keys))
-            })
+    /// The typed slot for an engine slot, or `None` (logged) when an id does
+    /// not name a product context or command.
+    pub(super) fn from_engine(slot: &bolt_keys::BindingSlot) -> Option<Self> {
+        Some(Self {
+            context: context_for(slot.context),
+            command: command_for(&slot.command)?,
+            default_keys: slot.default_keys.clone(),
+            default_predicate: slot.default_predicate,
         })
-        .collect()
-}
-
-/// Whether a key pressed in one of the two contexts can reach bindings of the
-/// other: they are the same context, or one inherits from the other.
-pub fn contexts_overlap(first: ContextId, second: ContextId) -> bool {
-    first == second || is_ancestor(first, second) || is_ancestor(second, first)
-}
-
-fn is_ancestor(ancestor: ContextId, context: ContextId) -> bool {
-    let mut current = context.parent();
-
-    while let Some(parent) = current {
-        if parent == ancestor {
-            return true;
-        }
-        current = parent.parent();
     }
-
-    false
 }
+
+pub use bolt_keys::BindingOverride;
 
 /// One binding of the keymap in force: a default binding with its overrides
 /// applied.
@@ -145,15 +91,38 @@ pub struct EffectiveBinding {
     pub is_user: bool,
 }
 
+/// Overlap from the context tree: two contexts' default predicates overlap
+/// when the contexts are the same or one inherits from the other. Any other
+/// predicate overlaps only with an identical one.
+pub struct ContextTreeOverlap;
+
+impl PredicateOverlap for ContextTreeOverlap {
+    fn overlaps(&self, first: &str, second: &str) -> bool {
+        let vocabulary = vocabulary();
+
+        match (
+            vocabulary.context_for_default_predicate(first),
+            vocabulary.context_for_default_predicate(second),
+        ) {
+            (Some(first), Some(second)) => vocabulary.contexts_overlap(first, second),
+            _ => first == second,
+        }
+    }
+}
+
+/// Whether a key pressed in one of the two contexts can reach bindings of the
+/// other: they are the same context, or one inherits from the other.
+pub fn contexts_overlap(first: ContextId, second: ContextId) -> bool {
+    vocabulary().contexts_overlap(first.id(), second.id())
+}
+
 /// The set of user overrides, keyed by the default binding each replaces.
 ///
 /// An override that would restore the default keys and predicate is not
 /// stored, so [`KeymapOverrides::len`] counts only bindings that really
 /// differ.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct KeymapOverrides {
-    entries: HashMap<BindingSlot, BindingOverride>,
-}
+pub struct KeymapOverrides(bolt_keys::KeymapOverrides);
 
 impl KeymapOverrides {
     pub fn new() -> Self {
@@ -161,89 +130,67 @@ impl KeymapOverrides {
     }
 
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.0.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.0.is_empty()
     }
 
     pub fn is_overridden(&self, slot: &BindingSlot) -> bool {
-        self.entries.contains_key(slot)
+        self.0.is_overridden(&slot.engine())
     }
 
     /// The keys the binding has once overrides apply, `None` when unbound.
     pub fn effective_keys(&self, slot: &BindingSlot) -> Option<KeySequence> {
-        match self.entries.get(slot) {
-            Some(binding_override) => binding_override.keys.clone(),
-            None => Some(slot.default_keys.clone()),
-        }
+        self.0.effective_keys(&slot.engine())
     }
 
     /// The context predicate the binding has once overrides apply.
     pub fn effective_predicate<'a>(&'a self, slot: &BindingSlot) -> Cow<'a, str> {
-        match self
-            .entries
-            .get(slot)
-            .and_then(|binding_override| binding_override.predicate.as_deref())
-        {
-            Some(predicate) => Cow::Borrowed(predicate),
-            None => Cow::Borrowed(slot.default_predicate),
-        }
+        self.0.effective_predicate(&slot.engine())
     }
 
     /// The predicate the user gave the binding, `None` when it keeps the
     /// default one.
     pub fn custom_predicate(&self, slot: &BindingSlot) -> Option<&str> {
-        self.entries
-            .get(slot)
-            .and_then(|binding_override| binding_override.predicate.as_deref())
-    }
-
-    fn store(&mut self, slot: BindingSlot, binding_override: BindingOverride) {
-        let is_default = binding_override.keys.as_ref() == Some(&slot.default_keys)
-            && binding_override.predicate.is_none();
-
-        if is_default {
-            self.entries.remove(&slot);
-        } else {
-            self.entries.insert(slot, binding_override);
-        }
+        self.0.custom_predicate(&slot.engine())
     }
 
     /// Gives `slot` the keys `keys`, or removes its shortcut with `None`,
     /// keeping its predicate.
     pub fn set(&mut self, slot: BindingSlot, keys: Option<KeySequence>) {
-        let predicate = self.custom_predicate(&slot).map(str::to_string);
-        self.store(slot, BindingOverride { keys, predicate });
+        self.0.set(slot.engine(), keys);
     }
 
     /// Moves `slot` to the context predicate `predicate`, keeping its keys.
     /// The default predicate, or `None`, restores the default context.
     pub fn set_predicate(&mut self, slot: BindingSlot, predicate: Option<String>) {
-        let keys = self.effective_keys(&slot);
-        let predicate = predicate.filter(|predicate| predicate != slot.default_predicate);
-        self.store(slot, BindingOverride { keys, predicate });
+        self.0.set_predicate(slot.engine(), predicate);
     }
 
     /// Moves `slot` to `keys` and removes the shortcut of every binding in
     /// `replaced`, the bindings that held the keys before. Each of them gets
     /// its keys back with [`KeymapOverrides::reset`].
     pub fn rebind(&mut self, slot: BindingSlot, keys: KeySequence, replaced: &[BindingSlot]) {
-        for other in replaced {
-            self.set(other.clone(), None);
-        }
-        self.set(slot, Some(keys));
+        let replaced: Vec<bolt_keys::BindingSlot> =
+            replaced.iter().map(BindingSlot::engine).collect();
+        self.0.rebind(slot.engine(), keys, &replaced);
     }
 
     /// Restores the default keys and predicate of `slot`.
     pub fn reset(&mut self, slot: &BindingSlot) {
-        self.entries.remove(slot);
+        self.0.reset(&slot.engine());
     }
 
     /// Restores the default keymap.
     pub fn reset_all(&mut self) {
-        self.entries.clear();
+        self.0.reset_all();
+    }
+
+    /// The engine overrides: the same entries with id-string slots.
+    pub(super) fn engine(&self) -> &bolt_keys::KeymapOverrides {
+        &self.0
     }
 
     /// Builds the effective keymap: `defaults` with every override applied.
@@ -254,38 +201,7 @@ impl KeymapOverrides {
     /// bound after the untouched ones of their layer, so a stored override
     /// wins over a default that uses the same keys.
     pub fn apply(&self, defaults: &KeymapStack) -> KeymapStack {
-        let mut stack = KeymapStack::new();
-
-        for context in ContextId::all_variants() {
-            let Some(default_layer) = defaults.layer(*context) else {
-                continue;
-            };
-
-            let mut layer = KeymapLayer::new(*context);
-            let mut moved = Vec::new();
-
-            for (keys, command) in default_layer.ordered_bindings() {
-                let slot = BindingSlot::new(*context, command, keys.clone())
-                    .with_predicate(default_layer.predicate_for(keys));
-
-                match self.entries.get(&slot) {
-                    None => layer.bind(keys.clone(), command),
-                    Some(binding_override) => {
-                        if let Some(new_keys) = &binding_override.keys {
-                            moved.push((new_keys.clone(), command));
-                        }
-                    }
-                }
-            }
-
-            for (keys, command) in moved {
-                layer.bind(keys, command);
-            }
-
-            stack.add_layer(layer);
-        }
-
-        stack
+        KeymapStack::from_engine_stack(self.0.apply(vocabulary(), defaults.engine()))
     }
 
     /// Every bound binding of the keymap in force, in registration order:
@@ -298,25 +214,15 @@ impl KeymapOverrides {
     /// waiting for its next key over an earlier single-key binding, so the
     /// element bindings (`d d` in a table) must follow the root ones (`d`).
     pub fn effective_bindings(&self, defaults: &KeymapStack) -> Vec<EffectiveBinding> {
-        let mut slots = default_slots(defaults);
-        slots.sort_by_key(|slot| slot.context.is_element_context());
-
-        let (user, untouched): (Vec<BindingSlot>, Vec<BindingSlot>) =
-            slots.into_iter().partition(|slot| self.is_overridden(slot));
-
-        untouched
+        self.0
+            .effective_bindings(vocabulary(), defaults.engine())
             .into_iter()
-            .chain(user)
-            .filter_map(|slot| {
-                let keys = self.effective_keys(&slot)?;
-                let predicate = self.effective_predicate(&slot).into_owned();
-                let is_user = self.is_overridden(&slot);
-
+            .filter_map(|binding| {
                 Some(EffectiveBinding {
-                    slot,
-                    keys,
-                    predicate,
-                    is_user,
+                    slot: BindingSlot::from_engine(&binding.slot)?,
+                    keys: binding.keys,
+                    predicate: binding.predicate,
+                    is_user: binding.is_user,
                 })
             })
             .collect()
@@ -333,11 +239,17 @@ impl KeymapOverrides {
         predicate: &str,
         overlap: &dyn PredicateOverlap,
     ) -> Vec<BindingSlot> {
-        default_slots(defaults)
-            .into_iter()
-            .filter(|other| other != slot && other.command != slot.command)
-            .filter(|other| self.effective_keys(other).as_ref() == Some(keys))
-            .filter(|other| overlap.overlaps(predicate, &self.effective_predicate(other)))
+        self.0
+            .conflicts_for(
+                vocabulary(),
+                defaults.engine(),
+                &slot.engine(),
+                keys,
+                predicate,
+                overlap,
+            )
+            .iter()
+            .filter_map(BindingSlot::from_engine)
             .collect()
     }
 
@@ -352,15 +264,17 @@ impl KeymapOverrides {
         predicate: &str,
         overlap: &dyn PredicateOverlap,
     ) -> Vec<BindingSlot> {
-        default_slots(defaults)
-            .into_iter()
-            .filter(|other| other != slot)
-            .filter(|other| {
-                self.effective_keys(other).is_some_and(|other_keys| {
-                    keys.is_prefix_of(&other_keys) || other_keys.is_prefix_of(keys)
-                })
-            })
-            .filter(|other| overlap.overlaps(predicate, &self.effective_predicate(other)))
+        self.0
+            .prefix_conflicts_for(
+                vocabulary(),
+                defaults.engine(),
+                &slot.engine(),
+                keys,
+                predicate,
+                overlap,
+            )
+            .iter()
+            .filter_map(BindingSlot::from_engine)
             .collect()
     }
 
@@ -374,61 +288,30 @@ impl KeymapOverrides {
         defaults: &KeymapStack,
         overlap: &dyn PredicateOverlap,
     ) -> Vec<(BindingSlot, Vec<BindingSlot>)> {
-        let slots = default_slots(defaults);
-
-        slots
-            .iter()
-            .filter_map(|slot| {
-                let keys = self.effective_keys(slot)?;
-                let predicate = self.effective_predicate(slot);
-
-                let others: Vec<BindingSlot> = slots
-                    .iter()
-                    .filter(|other| {
-                        *other != slot
-                            && other.command != slot.command
-                            && (self.is_overridden(slot) || self.is_overridden(other))
-                            && self.effective_keys(other).as_ref() == Some(&keys)
-                            && overlap.overlaps(&predicate, &self.effective_predicate(other))
-                    })
-                    .cloned()
-                    .collect();
-
-                (!others.is_empty()).then(|| (slot.clone(), others))
+        self.0
+            .existing_conflicts(vocabulary(), defaults.engine(), overlap)
+            .into_iter()
+            .filter_map(|(slot, others)| {
+                let others: Vec<BindingSlot> =
+                    others.iter().filter_map(BindingSlot::from_engine).collect();
+                Some((BindingSlot::from_engine(&slot)?, others))
             })
             .collect()
     }
 
     /// Rows to persist, sorted so the stored order is stable.
     pub fn to_dtos(&self) -> Vec<KeybindingOverrideDto> {
-        let mut dtos: Vec<KeybindingOverrideDto> = self
-            .entries
-            .iter()
-            .map(|(slot, binding_override)| {
-                let (context, command_id, default_keys) = slot.storage_key();
-
-                KeybindingOverrideDto {
-                    context,
-                    command_id,
-                    default_keys,
-                    keys: binding_override
-                        .keys
-                        .as_ref()
-                        .map(KeySequence::to_storage_string),
-                    predicate: binding_override.predicate.clone(),
-                }
+        self.0
+            .to_rows(vocabulary())
+            .into_iter()
+            .map(|row| KeybindingOverrideDto {
+                context: row.context,
+                command_id: row.command_id,
+                default_keys: row.default_keys,
+                keys: row.keys,
+                predicate: row.predicate,
             })
-            .collect();
-
-        dtos.sort_by(|first, second| {
-            (&first.context, &first.command_id, &first.default_keys).cmp(&(
-                &second.context,
-                &second.command_id,
-                &second.default_keys,
-            ))
-        });
-
-        dtos
+            .collect()
     }
 
     /// Rebuilds the overrides from stored rows.
@@ -438,53 +321,32 @@ impl KeymapOverrides {
     /// and that binding keeps its current default. Predicates are stored
     /// only after they parse, so they are taken as they are.
     pub fn from_dtos(defaults: &KeymapStack, dtos: &[KeybindingOverrideDto]) -> Self {
-        let slots_by_key: HashMap<(String, String, String), BindingSlot> = default_slots(defaults)
-            .into_iter()
-            .map(|slot| (slot.storage_key(), slot))
+        let rows: Vec<OverrideRow> = dtos
+            .iter()
+            .map(|dto| OverrideRow {
+                context: dto.context.clone(),
+                command_id: dto.command_id.clone(),
+                default_keys: dto.default_keys.clone(),
+                keys: dto.keys.clone(),
+                predicate: dto.predicate.clone(),
+            })
             .collect();
 
-        let mut overrides = Self::new();
-
-        for dto in dtos {
-            let key = (
-                dto.context.clone(),
-                dto.command_id.clone(),
-                dto.default_keys.clone(),
-            );
-
-            let Some(slot) = slots_by_key.get(&key) else {
-                log::warn!(
-                    "Ignoring keybinding override for {}/{} ({}): the default binding no longer exists",
-                    dto.context,
-                    dto.command_id,
-                    dto.default_keys
-                );
-                continue;
-            };
-
-            let keys = match dto.keys.as_deref().map(KeySequence::from_storage_string) {
-                None => None,
-                Some(Ok(keys)) => Some(keys),
-                Some(Err(error)) => {
-                    log::warn!(
-                        "Ignoring keybinding override for {}/{}: invalid keys: {error}",
-                        dto.context,
-                        dto.command_id
-                    );
-                    continue;
-                }
-            };
-
-            let predicate = dto
-                .predicate
-                .clone()
-                .filter(|predicate| !predicate.trim().is_empty());
-
-            overrides.store(slot.clone(), BindingOverride { keys, predicate });
-        }
-
-        overrides
+        Self(bolt_keys::KeymapOverrides::from_rows(
+            vocabulary(),
+            defaults.engine(),
+            &rows,
+        ))
     }
+}
+
+/// Every binding of `defaults`, layer by layer in [`ContextId::all_variants`]
+/// order and, inside a layer, in declaration order.
+pub fn default_slots(defaults: &KeymapStack) -> Vec<BindingSlot> {
+    bolt_keys::default_slots(vocabulary(), defaults.engine())
+        .iter()
+        .filter_map(BindingSlot::from_engine)
+        .collect()
 }
 
 /// Reads the stored overrides and matches them against `defaults`. A read
@@ -512,7 +374,8 @@ pub fn save_keymap_overrides(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keymap::{KeyChord, Modifiers};
+    use crate::keymap::{KeyChord, KeymapLayer};
+    use bolt_keys::Modifiers;
 
     fn chord(key: &str, modifiers: Modifiers) -> KeyChord {
         KeyChord::new(key, modifiers)
@@ -522,42 +385,8 @@ mod tests {
         KeySequence::from(chord)
     }
 
-    fn defaults() -> KeymapStack {
-        let mut global = KeymapLayer::new(ContextId::Global);
-        global.bind(
-            chord("p", Modifiers::ctrl_shift()),
-            Command::ToggleCommandPalette,
-        );
-        global.bind(chord("n", Modifiers::ctrl()), Command::NewQueryTab);
-
-        let mut editor = KeymapLayer::new(ContextId::Editor);
-        editor.bind(chord("s", Modifiers::ctrl()), Command::SaveQuery);
-        editor.bind(chord("p", Modifiers::ctrl()), Command::OpenSavedQueries);
-
-        let mut sidebar = KeymapLayer::new(ContextId::Sidebar);
-        sidebar.bind(chord("j", Modifiers::none()), Command::SelectNext);
-        sidebar.bind(chord("down", Modifiers::none()), Command::SelectNext);
-
-        let mut tree = KeymapLayer::new(ContextId::DocumentTree);
-        tree.bind(
-            KeySequence::parse("d d").expect("valid sequence"),
-            Command::Delete,
-        );
-
-        let mut stack = KeymapStack::new();
-        stack.add_layer(global);
-        stack.add_layer(editor);
-        stack.add_layer(sidebar);
-        stack.add_layer(tree);
-        stack
-    }
-
-    fn slot(context: ContextId, command: Command, default_chord: KeyChord) -> BindingSlot {
-        BindingSlot::new(context, command, default_chord)
-    }
-
     fn new_query_tab() -> BindingSlot {
-        slot(
+        BindingSlot::new(
             ContextId::Global,
             Command::NewQueryTab,
             chord("n", Modifiers::ctrl()),
@@ -565,359 +394,45 @@ mod tests {
     }
 
     fn save_query() -> BindingSlot {
-        slot(
+        BindingSlot::new(
             ContextId::Editor,
             Command::SaveQuery,
             chord("s", Modifiers::ctrl()),
         )
     }
 
-    fn select_next_j() -> BindingSlot {
-        slot(
-            ContextId::Sidebar,
-            Command::SelectNext,
-            chord("j", Modifiers::none()),
+    #[test]
+    fn typed_slots_round_trip_through_the_engine_with_their_identifiers() {
+        let slot = BindingSlot::new(
+            ContextId::Editor,
+            Command::SaveQuery,
+            chord("s", Modifiers::ctrl()),
         )
-    }
+        .with_predicate("Editor && vim_mode == normal");
 
-    #[test]
-    fn default_slots_follow_context_and_declaration_order() {
-        let slots = default_slots(&defaults());
-
-        assert_eq!(slots.len(), 7);
-        assert_eq!(slots[0].command, Command::ToggleCommandPalette);
-        assert_eq!(slots[1].command, Command::NewQueryTab);
-        assert_eq!(slots[2].context, ContextId::Sidebar);
-        assert_eq!(slots[2].default_keys, keys(chord("j", Modifiers::none())));
-        assert_eq!(slots[4].context, ContextId::Editor);
-        assert_eq!(slots[6].context, ContextId::DocumentTree);
-    }
-
-    #[test]
-    fn apply_moves_rebound_bindings_and_drops_unbound_ones() {
-        let defaults = defaults();
-        let mut overrides = KeymapOverrides::new();
-        overrides.set(new_query_tab(), Some(keys(chord("t", Modifiers::ctrl()))));
-        overrides.set(save_query(), None);
-
-        let effective = overrides.apply(&defaults);
-
+        let engine_slot = slot.engine();
+        assert_eq!(engine_slot.context, "editor");
+        assert_eq!(engine_slot.command, "save_query");
+        assert_eq!(engine_slot.default_keys.to_storage_string(), "ctrl+s");
         assert_eq!(
-            effective.resolve(ContextId::Global, &chord("t", Modifiers::ctrl())),
-            Some(Command::NewQueryTab)
-        );
-        assert_eq!(
-            effective.resolve(ContextId::Global, &chord("n", Modifiers::ctrl())),
-            None
-        );
-        assert_eq!(
-            effective.resolve(ContextId::Editor, &chord("s", Modifiers::ctrl())),
-            None
-        );
-        assert_eq!(
-            effective.resolve(ContextId::Editor, &chord("t", Modifiers::ctrl())),
-            Some(Command::NewQueryTab),
-            "the editor still inherits the moved global binding"
-        );
-        assert_eq!(
-            effective.resolve(ContextId::Sidebar, &chord("down", Modifiers::none())),
-            Some(Command::SelectNext),
-            "bindings without an override keep their default"
-        );
-    }
-
-    #[test]
-    fn sequences_can_replace_single_chords() {
-        let defaults = defaults();
-        let mut overrides = KeymapOverrides::new();
-        let sequence = KeySequence::parse("ctrl+k ctrl+s").expect("valid sequence");
-        overrides.set(save_query(), Some(sequence.clone()));
-
-        let effective = overrides.apply(&defaults);
-
-        assert_eq!(
-            effective.resolve_sequence(ContextId::Editor, &sequence),
-            Some(Command::SaveQuery)
-        );
-        assert_eq!(
-            effective.keys_for_command(ContextId::Editor, Command::SaveQuery),
-            Some(&sequence)
-        );
-    }
-
-    #[test]
-    fn setting_the_default_keys_is_not_an_override() {
-        let mut overrides = KeymapOverrides::new();
-        overrides.set(new_query_tab(), Some(keys(chord("t", Modifiers::ctrl()))));
-        assert_eq!(overrides.len(), 1);
-
-        overrides.set(new_query_tab(), Some(keys(chord("n", Modifiers::ctrl()))));
-        assert!(overrides.is_empty());
-    }
-
-    #[test]
-    fn predicates_override_and_restore_the_default_context() {
-        let mut overrides = KeymapOverrides::new();
-        let slot = save_query();
-
-        assert_eq!(
-            overrides.effective_predicate(&slot),
-            ContextId::Editor.default_predicate()
-        );
-
-        overrides.set_predicate(
-            slot.clone(),
-            Some("Editor && vim_mode == normal".to_string()),
-        );
-        assert_eq!(
-            overrides.effective_predicate(&slot),
+            engine_slot.default_predicate,
             "Editor && vim_mode == normal"
         );
-        assert_eq!(
-            overrides.effective_keys(&slot),
-            Some(slot.default_keys.clone()),
-            "moving the predicate keeps the keys"
-        );
 
-        overrides.set(slot.clone(), Some(keys(chord("r", Modifiers::ctrl()))));
-        assert_eq!(
-            overrides.effective_predicate(&slot),
-            "Editor && vim_mode == normal",
-            "changing the keys keeps the predicate"
-        );
-
-        overrides.set(slot.clone(), Some(slot.default_keys.clone()));
-        overrides.set_predicate(
-            slot.clone(),
-            Some(ContextId::Editor.default_predicate().to_string()),
-        );
-        assert!(overrides.is_empty(), "the defaults are not an override");
-    }
-
-    #[test]
-    fn effective_bindings_put_user_and_element_bindings_last() {
-        let defaults = defaults();
-        let mut overrides = KeymapOverrides::new();
-        overrides.set(new_query_tab(), Some(keys(chord("t", Modifiers::ctrl()))));
-        overrides.set(save_query(), None);
-
-        let bindings = overrides.effective_bindings(&defaults);
-        let commands: Vec<(Command, bool)> = bindings
-            .iter()
-            .map(|binding| (binding.slot.command, binding.is_user))
-            .collect();
-
-        assert_eq!(
-            commands,
-            vec![
-                (Command::ToggleCommandPalette, false),
-                (Command::SelectNext, false),
-                (Command::SelectNext, false),
-                (Command::OpenSavedQueries, false),
-                (Command::Delete, false),
-                (Command::NewQueryTab, true),
-            ],
-            "unbound SaveQuery is dropped, the tree comes after the root contexts"
-        );
-        assert_eq!(bindings[4].predicate, "DocumentTree");
-        assert_eq!(bindings[0].predicate, ContextId::Global.default_predicate());
-    }
-
-    #[test]
-    fn conflicts_cover_the_same_and_inherited_contexts_only() {
-        let defaults = defaults();
-        let overrides = KeymapOverrides::new();
-
-        let same_context = overrides.conflicts_for(
-            &defaults,
-            &new_query_tab(),
-            &keys(chord("p", Modifiers::ctrl_shift())),
-            ContextId::Global.default_predicate(),
-            &ContextTreeOverlap,
-        );
-        assert_eq!(same_context.len(), 1);
-        assert_eq!(same_context[0].command, Command::ToggleCommandPalette);
-
-        let child_context = overrides.conflicts_for(
-            &defaults,
-            &new_query_tab(),
-            &keys(chord("s", Modifiers::ctrl())),
-            ContextId::Global.default_predicate(),
-            &ContextTreeOverlap,
-        );
-        assert_eq!(child_context, vec![save_query()]);
-
-        let sibling_context = overrides.conflicts_for(
-            &defaults,
-            &save_query(),
-            &keys(chord("j", Modifiers::none())),
-            ContextId::Editor.default_predicate(),
-            &ContextTreeOverlap,
-        );
-        assert!(
-            sibling_context.is_empty(),
-            "the sidebar and the editor never see each other's keys"
-        );
-
-        let own_keys = overrides.conflicts_for(
-            &defaults,
-            &save_query(),
-            &keys(chord("s", Modifiers::ctrl())),
-            ContextId::Editor.default_predicate(),
-            &ContextTreeOverlap,
-        );
-        assert!(own_keys.is_empty());
-    }
-
-    #[test]
-    fn a_moved_predicate_changes_what_the_binding_conflicts_with() {
-        let defaults = defaults();
-        let mut overrides = KeymapOverrides::new();
-        overrides.set_predicate(
-            select_next_j(),
-            Some(ContextId::Editor.default_predicate().to_string()),
-        );
-
-        let conflicts = overrides.conflicts_for(
-            &defaults,
-            &save_query(),
-            &keys(chord("j", Modifiers::none())),
-            ContextId::Editor.default_predicate(),
-            &ContextTreeOverlap,
-        );
-        assert_eq!(conflicts, vec![select_next_j()]);
-    }
-
-    #[test]
-    fn prefix_conflicts_find_sequences_sharing_a_start() {
-        let defaults = defaults();
-        let overrides = KeymapOverrides::new();
-        let tree_slot = slot(
-            ContextId::DocumentTree,
-            Command::PreviewDocument,
-            chord("e", Modifiers::none()),
-        );
-
-        let prefixes = overrides.prefix_conflicts_for(
-            &defaults,
-            &tree_slot,
-            &keys(chord("d", Modifiers::none())),
-            "DocumentTree",
-            &ContextTreeOverlap,
-        );
-        assert_eq!(prefixes.len(), 1);
-        assert_eq!(prefixes[0].command, Command::Delete);
-
-        assert!(
-            overrides
-                .prefix_conflicts_for(
-                    &defaults,
-                    &tree_slot,
-                    &keys(chord("d", Modifiers::none())),
-                    ContextId::Editor.default_predicate(),
-                    &ContextTreeOverlap,
-                )
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn conflicts_use_effective_keys() {
-        let defaults = defaults();
-        let mut overrides = KeymapOverrides::new();
-        overrides.set(save_query(), Some(keys(chord("r", Modifiers::ctrl()))));
-
-        assert!(
-            overrides
-                .conflicts_for(
-                    &defaults,
-                    &new_query_tab(),
-                    &keys(chord("s", Modifiers::ctrl())),
-                    ContextId::Global.default_predicate(),
-                    &ContextTreeOverlap,
-                )
-                .is_empty()
-        );
-        assert_eq!(
-            overrides.conflicts_for(
-                &defaults,
-                &new_query_tab(),
-                &keys(chord("r", Modifiers::ctrl())),
-                ContextId::Global.default_predicate(),
-                &ContextTreeOverlap,
-            ),
-            vec![save_query()]
-        );
-    }
-
-    #[test]
-    fn rebind_replaces_the_other_binding_and_its_reset_restores_it() {
-        let defaults = defaults();
-        let mut overrides = KeymapOverrides::new();
-        let taken = keys(chord("s", Modifiers::ctrl()));
-
-        let conflicts = overrides.conflicts_for(
-            &defaults,
-            &new_query_tab(),
-            &taken,
-            ContextId::Global.default_predicate(),
-            &ContextTreeOverlap,
-        );
-        overrides.rebind(new_query_tab(), taken.clone(), &conflicts);
-
-        assert_eq!(overrides.effective_keys(&save_query()), None);
-        assert_eq!(
-            overrides.effective_keys(&new_query_tab()),
-            Some(taken.clone())
-        );
-        assert!(
-            overrides
-                .existing_conflicts(&defaults, &ContextTreeOverlap)
-                .is_empty()
-        );
-
-        overrides.reset(&save_query());
-
-        let conflicts = overrides.existing_conflicts(&defaults, &ContextTreeOverlap);
-        assert_eq!(conflicts.len(), 2, "both sides of the collision are listed");
-
-        overrides.reset_all();
-        assert!(overrides.is_empty());
-        assert!(
-            overrides
-                .existing_conflicts(&defaults, &ContextTreeOverlap)
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn overrides_round_trip_through_storage_rows() {
-        let defaults = defaults();
-        let mut overrides = KeymapOverrides::new();
-        overrides.set(new_query_tab(), Some(keys(chord("+", Modifiers::ctrl()))));
-        overrides.set(save_query(), None);
-        overrides.set(
-            select_next_j(),
-            Some(KeySequence::parse("g j").expect("valid sequence")),
-        );
-        overrides.set_predicate(select_next_j(), Some("Sidebar && !Input".to_string()));
-
-        let dtos = overrides.to_dtos();
-        assert_eq!(dtos.len(), 3);
-        assert_eq!(dtos[0].context, "editor");
-        assert_eq!(dtos[0].default_keys, "ctrl+s");
-        assert_eq!(dtos[0].keys, None);
-        assert_eq!(dtos[1].keys.as_deref(), Some("ctrl++"));
-        assert_eq!(dtos[2].keys.as_deref(), Some("g j"));
-        assert_eq!(dtos[2].predicate.as_deref(), Some("Sidebar && !Input"));
-
-        assert_eq!(KeymapOverrides::from_dtos(&defaults, &dtos), overrides);
+        assert_eq!(BindingSlot::from_engine(&engine_slot), Some(slot));
     }
 
     #[test]
     fn overrides_round_trip_through_storage() {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage");
-        let defaults = defaults();
+        let mut defaults = KeymapStack::new();
+
+        let mut global = KeymapLayer::new(ContextId::Global);
+        global.bind(chord("n", Modifiers::ctrl()), Command::NewQueryTab);
+        let mut editor = KeymapLayer::new(ContextId::Editor);
+        editor.bind(chord("s", Modifiers::ctrl()), Command::SaveQuery);
+        defaults.add_layer(global);
+        defaults.add_layer(editor);
 
         assert!(load_keymap_overrides(&runtime, &defaults).is_empty());
 
@@ -941,24 +456,20 @@ mod tests {
     }
 
     #[test]
-    fn stale_or_invalid_rows_are_skipped() {
-        let defaults = defaults();
-        let row = |default_keys: &str, keys: &str| KeybindingOverrideDto {
-            context: "global".to_string(),
-            command_id: "new_query_tab".to_string(),
-            default_keys: default_keys.to_string(),
-            keys: Some(keys.to_string()),
-            predicate: None,
-        };
-        let dtos = vec![row("ctrl+q", "ctrl+t"), row("ctrl+n", "")];
+    fn stored_rows_keep_the_persisted_identifier_texts() {
+        let mut overrides = KeymapOverrides::new();
+        overrides.set(new_query_tab(), Some(keys(chord("+", Modifiers::ctrl()))));
+        overrides.set(save_query(), None);
 
-        assert!(KeymapOverrides::from_dtos(&defaults, &dtos).is_empty());
-
-        let sequence = KeymapOverrides::from_dtos(&defaults, &[row("ctrl+n", "ctrl+k ctrl+t")]);
-        assert_eq!(
-            sequence.effective_keys(&new_query_tab()),
-            Some(KeySequence::parse("ctrl+k ctrl+t").expect("valid sequence")),
-            "key sequences are kept"
-        );
+        let dtos = overrides.to_dtos();
+        assert_eq!(dtos.len(), 2);
+        assert_eq!(dtos[0].context, "editor");
+        assert_eq!(dtos[0].command_id, "save_query");
+        assert_eq!(dtos[0].default_keys, "ctrl+s");
+        assert_eq!(dtos[0].keys, None);
+        assert_eq!(dtos[1].context, "global");
+        assert_eq!(dtos[1].command_id, "new_query_tab");
+        assert_eq!(dtos[1].default_keys, "ctrl+n");
+        assert_eq!(dtos[1].keys.as_deref(), Some("ctrl++"));
     }
 }

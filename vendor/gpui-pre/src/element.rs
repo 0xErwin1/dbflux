@@ -126,7 +126,12 @@ pub trait Element: 'static + IntoElement {
     /// and [`Element::write_a11y_info`]. This hook only supplies interaction
     /// provenance that AccessKit does not model.
     fn frame_node(&self) -> Option<FrameNodeData> {
-        None
+        // Third-party elements and transparent wrappers already implement the
+        // standard accessibility hooks, even when they predate frame observers.
+        self.a11y_role().map(|role| FrameNodeData {
+            fallback_role: role,
+            ..FrameNodeData::default()
+        })
     }
 
     /// Return text that contributes to the nearest observed rendered element.

@@ -9,6 +9,9 @@ DBFlux ahora persiste una base de RPC services de primera clase a través de
 - `Driver` — se adapta a drivers de base de datos en runtime
 - `AuthProvider` — se adapta a registros de auth provider en runtime, tanto en
   la app como en el MCP server
+- `SecretProvider` — se adapta a secret providers en runtime registrados en el
+  value resolver de cada conexión; ver
+  [Secret Provider RPC Protocol](../SECRET_PROVIDER_RPC_PROTOCOL.md)
 
 ## Storage
 
@@ -68,7 +71,7 @@ Services**, no editando archivos directamente.
 Para agregar o editar un service:
 1. Abre Settings → RPC Services
 2. Agrega un nuevo service o selecciona uno existente
-3. Elige el service kind (`Driver` o `Auth Provider`)
+3. Elige el service kind (`Driver`, `Auth provider` o `Secret provider`)
 4. Configura el socket ID, la ruta del command, arguments, environment
    variables, y el timeout
 5. Guarda los cambios
@@ -85,8 +88,13 @@ Notas:
   por defecto según el contrato `driver_rpc` actual en la versión `1.1`.
 - Si falta la metadata de API en una fila de auth-provider, DBFlux la define por
   defecto según el contrato `auth_provider_rpc` actual en la versión `1.2`.
+- Si falta la metadata de API en una fila de secret-provider, DBFlux la define
+  por defecto según el contrato `secret_provider_rpc` en la versión `1.0`.
+- Los services `Secret provider` (valor almacenado `secret_provider`) están
+  activos solo como fuentes de valores para campos de conexión, proxy, túnel
+  SSH y auth profile; nunca aparecen como drivers ni como auth providers.
 - `api_family` / `api_major` se usan como preflight de arranque para los auth
-  providers antes de que DBFlux sondee el socket.
+  providers y los secret providers antes de que DBFlux sondee el socket.
 
 ## Semántica
 
@@ -107,6 +115,10 @@ Notas:
 - La negociación de auth-provider sigue el mismo esquema family/major/minor bajo
   `auth_provider_rpc`; las family o major versions incompatibles se omiten antes
   del registro
+- Los services con `service_kind='secret_provider'` negocian bajo
+  `secret_provider_rpc`, deben anunciar un manifest válido en `Hello`, y se
+  omiten cuando su `provider_id` está reservado (`aws-secrets-manager`,
+  `aws-ssm`) o ya está registrado
 
 ## Campos
 
@@ -121,8 +133,8 @@ Notas:
     corriendo y no lanza nada.
   - Para `driver`, si se omite y `args` no está vacío, DBFlux lanza
     `dbflux-driver-host`.
-  - Para `auth_provider`, si DBFlux debe lanzar el service, `command` debe
-    fijarse explícitamente.
+  - Para `auth_provider` y `secret_provider`, si DBFlux debe lanzar el
+    service, `command` debe fijarse explícitamente.
 - `args` (opcional): argumentos del proceso.
 - `env` (opcional): variables de entorno para el proceso lanzado.
 - `startup_timeout_ms` (opcional): tiempo máximo de espera para que el socket

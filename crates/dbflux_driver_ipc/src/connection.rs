@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use dbflux_core::{
     CodeGenCapabilities, CodeGeneratorInfo, CollectionBrowseRequest, CollectionCountRequest,
@@ -8,14 +8,16 @@ use dbflux_core::{
     KeyDeleteRequest, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult,
     KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest,
     KeyType, KeyTypeRequest, KeyValueApi, LanguageService, ListPushRequest, ListRemoveRequest,
-    ListSetRequest, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
-    SchemaColumnInfo, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SemanticPlan, SemanticRequest, SetAddRequest, SetRemoveRequest, SqlDialect,
-    StreamAddRequest, StreamDeleteRequest, TableBrowseRequest, TableCountRequest, TableInfo,
-    ViewInfo, ZSetAddRequest, ZSetRemoveRequest,
+    ListSetRequest, QueryHandle, QueryRequest, QueryResult, RootSectionDef, RootSectionPage,
+    RootSectionSource, RowDelete, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticRequest, SetAddRequest, SetRemoveRequest, SqlDialect, StreamAddRequest,
+    StreamDeleteRequest, TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
+    ZSetAddRequest, ZSetRemoveRequest,
 };
 use dbflux_ipc::driver_protocol::{
     DriverRequestBody, DriverResponseBody, protocol_carries_request_row_limit,
+    protocol_carries_root_sections,
 };
 use dbflux_ipc::{DRIVER_RPC_VERSION, ProtocolVersion};
 
@@ -34,6 +36,13 @@ pub struct IpcConnection {
     code_gen_capabilities: CodeGenCapabilities,
     /// Whether `QueryRequest::limit` is sent to the host instead of refused.
     forwards_row_limit: bool,
+    /// Whether the remote driver declares root sections on a session that
+    /// carries the v1.9 root section requests.
+    exposes_root_sections: bool,
+    /// The remote declaration, fetched on first use. A driver declares its
+    /// sections once per connection, and the sidebar reads them on every
+    /// rebuild, so a round trip per read would block it on the socket.
+    root_sections: OnceLock<Vec<RootSectionDef>>,
 }
 
 impl IpcConnection {
@@ -51,8 +60,17 @@ impl IpcConnection {
         let forwards_row_limit = protocol_carries_request_row_limit(client.selected_version())
             && metadata.supports(DriverCapabilities::REQUEST_ROW_LIMIT);
 
+        let exposes_root_sections = protocol_carries_root_sections(client.selected_version())
+            && metadata.supports(DriverCapabilities::ROOT_SECTIONS);
+
         let mut metadata = without_uncertifiable_enforcement(metadata);
         let mut capabilities = without_request_row_limit(capabilities);
+        if !exposes_root_sections {
+            metadata
+                .capabilities
+                .remove(DriverCapabilities::ROOT_SECTIONS);
+            capabilities.remove(DriverCapabilities::ROOT_SECTIONS);
+        }
         if forwards_row_limit {
             metadata
                 .capabilities
@@ -70,6 +88,8 @@ impl IpcConnection {
             schema_features,
             code_gen_capabilities,
             forwards_row_limit,
+            exposes_root_sections,
+            root_sections: OnceLock::new(),
         }
     }
 
@@ -361,6 +381,14 @@ impl Connection for IpcConnection {
             .map_err(DbError::from)
     }
 
+    fn root_section_source(&self) -> Option<&dyn RootSectionSource> {
+        if self.exposes_root_sections {
+            Some(self as &dyn RootSectionSource)
+        } else {
+            None
+        }
+    }
+
     fn key_value_api(&self) -> Option<&dyn KeyValueApi> {
         if self.capabilities.contains(DriverCapabilities::KV_SCAN) {
             Some(self as &dyn KeyValueApi)
@@ -396,6 +424,43 @@ impl Connection for IpcConnection {
     fn generate_code(&self, generator_id: &str, table: &TableInfo) -> Result<String, DbError> {
         self.client
             .generate_code(self.session_id, generator_id, table)
+            .map_err(DbError::from)
+    }
+}
+
+impl RootSectionSource for IpcConnection {
+    /// A failed fetch is returned and not cached, so the next read asks the
+    /// host again.
+    fn sections(&self) -> Result<Vec<RootSectionDef>, DbError> {
+        if let Some(sections) = self.root_sections.get() {
+            return Ok(sections.clone());
+        }
+
+        let sections = self
+            .client
+            .root_sections(self.session_id)
+            .map_err(DbError::from)?;
+        Ok(self.root_sections.get_or_init(|| sections).clone())
+    }
+
+    fn list_items(
+        &self,
+        section_id: &str,
+        page_token: Option<&str>,
+    ) -> Result<RootSectionPage, DbError> {
+        self.client
+            .root_section_items(self.session_id, section_id, page_token)
+            .map_err(DbError::from)
+    }
+
+    fn execute_action(
+        &self,
+        section_id: &str,
+        item_id: &str,
+        action_id: &str,
+    ) -> Result<(), DbError> {
+        self.client
+            .execute_root_section_action(self.session_id, section_id, item_id, action_id)
             .map_err(DbError::from)
     }
 }
@@ -673,9 +738,14 @@ mod tests {
         Connection, DatabaseCategory, DbError, DbKind, DriverCapabilities, DriverMetadataBuilder,
         KeyValueApi, QueryLanguage, QueryRequest, Value,
     };
+    use dbflux_core::{
+        ExecutionClassification, LocalizedText, RootItemPresentation, RootSectionAction,
+        RootSectionDef, RootSectionItem, RootSectionPage, RootSectionPresentation,
+    };
     use dbflux_ipc::ProtocolVersion;
     use dbflux_ipc::driver_protocol::{
-        DriverRequestBody, DriverResponseBody, QueryResultDto, QueryResultShapeDto,
+        DriverRequestBody, DriverResponseBody, DriverRpcError, DriverRpcErrorCode, QueryResultDto,
+        QueryResultShapeDto,
     };
     use dbflux_ipc::driver_socket_name;
     use dbflux_test_support::{FakeDriverAction, FakeDriverRpcConfig, FakeDriverRpcServer};
@@ -1177,5 +1247,208 @@ mod tests {
     fn key_count_allowed_from_v1_5() {
         assert!(ensure_key_count_supported(ProtocolVersion::new(1, 5)).is_ok());
         assert!(ensure_key_count_supported(ProtocolVersion::new(1, 6)).is_ok());
+    }
+
+    fn buckets_section() -> RootSectionDef {
+        RootSectionDef {
+            id: "buckets".into(),
+            label: LocalizedText::keyed("sidebar.buckets", "Buckets"),
+            counted_label_key: None,
+            empty_label: LocalizedText::plain("No buckets"),
+            presentation: Some(RootSectionPresentation::ObjectContainerTable),
+            item_presentation: RootItemPresentation::ObjectBrowser,
+            opens_on_profile_activation: true,
+            item_actions: vec![RootSectionAction {
+                id: "delete".into(),
+                label: LocalizedText::plain("Delete bucket"),
+                description: None,
+                classification: ExecutionClassification::AdminDestructive,
+            }],
+        }
+    }
+
+    fn driver_error(message: &str) -> DriverResponseBody {
+        DriverResponseBody::Error(DriverRpcError {
+            code: DriverRpcErrorCode::Driver,
+            message: message.into(),
+            retriable: false,
+        })
+    }
+
+    fn root_section_server(
+        name: &str,
+        version: ProtocolVersion,
+        actions: Vec<FakeDriverAction>,
+    ) -> (FakeDriverRpcServer, IpcConnection) {
+        let socket_id = format!("{name}-{}", Uuid::new_v4());
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id)
+                .with_protocol_version(version)
+                .with_driver_capabilities(DriverCapabilities::ROOT_SECTIONS)
+                .with_actions(actions),
+        )
+        .expect("start server");
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let connection = connection_declaring(
+            client,
+            DriverCapabilities::ROOT_SECTIONS,
+            DriverCapabilities::ROOT_SECTIONS,
+        );
+        (server, connection)
+    }
+
+    #[test]
+    fn v1_9_session_reaches_the_remote_root_sections_page_and_action() {
+        let page = RootSectionPage {
+            items: vec![RootSectionItem {
+                id: "logs".into(),
+                label: "logs".into(),
+            }],
+            next_page_token: Some("page-3".into()),
+        };
+        let (server, connection) = root_section_server(
+            "root-sections-v19",
+            ProtocolVersion::new(1, 9),
+            vec![
+                FakeDriverAction::respond(DriverResponseBody::RootSections {
+                    sections: vec![buckets_section()],
+                }),
+                FakeDriverAction::respond(DriverResponseBody::RootSectionPage {
+                    page: page.clone(),
+                }),
+                FakeDriverAction::respond(DriverResponseBody::RootSectionActionDone),
+            ],
+        );
+
+        let source = connection
+            .root_section_source()
+            .expect("a declaring v1.9 driver exposes root sections");
+        assert_eq!(
+            source.sections().expect("sections"),
+            vec![buckets_section()]
+        );
+        // The declaration is cached: the second read sends no frame.
+        assert_eq!(
+            source.sections().expect("cached sections"),
+            vec![buckets_section()]
+        );
+        assert_eq!(
+            source
+                .list_items("buckets", Some("page-2"))
+                .expect("list items"),
+            page
+        );
+        source
+            .execute_action("buckets", "logs", "delete")
+            .expect("execute action");
+
+        let requests = server.received_requests();
+        assert_eq!(requests.len(), 3, "{requests:?}");
+        assert!(matches!(requests[0], DriverRequestBody::RootSections));
+        assert!(matches!(
+            &requests[1],
+            DriverRequestBody::RootSectionItems { section_id, page_token }
+                if section_id == "buckets" && page_token.as_deref() == Some("page-2")
+        ));
+        assert!(matches!(
+            &requests[2],
+            DriverRequestBody::ExecuteRootSectionAction { section_id, item_id, action_id }
+                if section_id == "buckets" && item_id == "logs" && action_id == "delete"
+        ));
+        server.wait().expect("server completed");
+    }
+
+    #[test]
+    fn remote_root_section_errors_reach_the_host() {
+        let (server, connection) = root_section_server(
+            "root-sections-errors",
+            ProtocolVersion::new(1, 9),
+            vec![
+                FakeDriverAction::respond(driver_error("listing exploded")),
+                FakeDriverAction::respond(driver_error("delete refused")),
+            ],
+        );
+        let source = connection.root_section_source().expect("root sections");
+
+        match source.list_items("buckets", None) {
+            Err(error) => assert!(error.to_string().contains("listing exploded"), "{error}"),
+            Ok(page) => panic!("expected an error, got {page:?}"),
+        }
+        match source.execute_action("buckets", "logs", "delete") {
+            Err(error) => assert!(error.to_string().contains("delete refused"), "{error}"),
+            Ok(()) => panic!("expected an error"),
+        }
+        server.wait().expect("server completed");
+    }
+
+    #[test]
+    fn a_failed_section_fetch_is_not_cached() {
+        let (server, connection) = root_section_server(
+            "root-sections-retry",
+            ProtocolVersion::new(1, 9),
+            vec![
+                FakeDriverAction::respond(driver_error("not ready")),
+                FakeDriverAction::respond(DriverResponseBody::RootSections {
+                    sections: vec![buckets_section()],
+                }),
+            ],
+        );
+        let source = connection.root_section_source().expect("root sections");
+
+        match source.sections() {
+            Err(error) => assert!(error.to_string().contains("not ready"), "{error}"),
+            Ok(sections) => panic!("expected the host error, got {sections:?}"),
+        }
+        assert_eq!(
+            source.sections().expect("sections after the retry"),
+            vec![buckets_section()]
+        );
+        server.wait().expect("server completed");
+    }
+
+    #[test]
+    fn pre_v1_9_session_hides_root_sections_without_a_frame() {
+        let (server, connection) = root_section_server(
+            "root-sections-v18",
+            ProtocolVersion::new(1, 8),
+            vec![FakeDriverAction::Pong],
+        );
+
+        assert!(connection.root_section_source().is_none());
+        assert!(!connection.supports(DriverCapabilities::ROOT_SECTIONS));
+        assert!(
+            !connection
+                .capabilities()
+                .contains(DriverCapabilities::ROOT_SECTIONS)
+        );
+        assert!(connection.ping().is_ok());
+        assert!(matches!(
+            server.received_requests().as_slice(),
+            [DriverRequestBody::Ping]
+        ));
+        server.wait().expect("server completed");
+    }
+
+    #[test]
+    fn v1_9_driver_without_the_capability_has_no_root_sections() {
+        let socket_id = format!("root-sections-undeclared-{}", Uuid::new_v4());
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id)
+                .with_protocol_version(ProtocolVersion::new(1, 9))
+                .with_actions(vec![FakeDriverAction::Pong]),
+        )
+        .expect("start server");
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let connection = connection_declaring(
+            client,
+            DriverCapabilities::empty(),
+            DriverCapabilities::empty(),
+        );
+
+        assert!(connection.root_section_source().is_none());
+        assert!(connection.ping().is_ok());
+        server.wait().expect("server completed");
     }
 }

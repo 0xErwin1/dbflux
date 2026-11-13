@@ -21,22 +21,21 @@
 crates/dbflux_components/src/components/data_table/record.rs:render_fields: propagation guard
 crates/dbflux_components/src/components/data_table/record.rs:render_record: edit commit
 crates/dbflux_components/src/components/data_table/table.rs:render: focus on press
-crates/dbflux_components/src/components/data_table/table.rs:render_document_header: resize grip
-crates/dbflux_components/src/components/data_table/table.rs:render_header: resize grip
-crates/dbflux_components/src/components/document_tree/tree.rs:render_chevron: propagation guard
-crates/dbflux_components/src/components/document_tree/tree.rs:render_value_preview_with_expand: propagation guard
-crates/dbflux_components/src/composites/menu_item.rs:menu_frame: propagation guard
-crates/dbflux_components/src/composites/menu_popup.rs:render_menu_overlay: outside-press dismiss
+crates/bolt/src/components/grid/resize.rs:column_resize_handle: resize grip
+crates/bolt/src/components/document_tree/row.rs:render_chevron: propagation guard
+crates/bolt/src/components/document_tree/row.rs:render_row: propagation guard
+crates/bolt/src/composites/menu_item.rs:menu_frame: propagation guard
+crates/bolt/src/composites/menu_popup.rs:render_menu_overlay: outside-press dismiss
 crates/dbflux_components/src/composites/notification_center.rs:render: propagation guard
-crates/dbflux_components/src/composites/shell_bar.rs:render: focus guard
-crates/dbflux_components/src/controls/button.rs:render: focus guard
-crates/dbflux_components/src/controls/checkbox.rs:render: focus guard
-crates/dbflux_components/src/modals/modal.rs:render: propagation guard
-crates/dbflux_components/src/modals/modal.rs:render: outside-press dismiss
+crates/bolt/src/composites/shell_bar/mod.rs:render: focus guard
+crates/bolt/src/controls/button.rs:render: focus guard
+crates/bolt/src/controls/checkbox.rs:render: focus guard
+crates/bolt/src/modals/modal.rs:render: propagation guard
+crates/bolt/src/modals/modal.rs:render: outside-press dismiss
 crates/dbflux_ui/src/ui/dock/sidebar_dock.rs:render_grip: resize grip
-crates/dbflux_ui/src/ui/overlays/command_palette.rs:render: propagation guard
-crates/dbflux_ui/src/ui/overlays/command_palette.rs:render: outside-press dismiss
-crates/dbflux_ui/src/ui/overlays/command_palette.rs:render: propagation guard
+crates/bolt/src/command_palette/render.rs:render: propagation guard
+crates/bolt/src/command_palette/render.rs:render: outside-press dismiss
+crates/bolt/src/command_palette/render.rs:render: propagation guard
 crates/dbflux_ui/src/ui/views/workspace/inspector.rs:render: resize grip
 crates/dbflux_ui/src/ui/views/workspace/notifications.rs:render_notifications_popover: outside-press dismiss
 crates/dbflux_ui/src/ui/views/workspace/render.rs:document_side_island: focus on press
@@ -147,4 +146,6 @@ crates/dbflux_ui_document/src/object_browser/render.rs:render_tree_chevron: prop
 crates/dbflux_ui_document/src/object_editor/render.rs:render: focus on press
 crates/dbflux_ui_document/src/schema_viz/mod.rs:render_diagram: drag start
 crates/dbflux_ui_document/src/schema_viz/mod.rs:render_node: drag start
+crates/dbflux_ui_document/src/secret_store/context_menu.rs:render_context_menu: outside-press dismiss
+crates/dbflux_ui_document/src/secret_store/context_menu.rs:render_context_menu: propagation guard
 crates/dbflux_ui_document/src/tab_bar.rs:render_tab_action: propagation guard

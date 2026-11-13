@@ -80,9 +80,16 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
     ],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
-        // The table menu of the column carries Order ascending / descending.
+        // The table menu of the column carries Copy column name, Order
+        // ascending / descending and the Filter entries.
         (
             "header-col-*",
+            KeyboardPath::Command(Command::OpenContextMenu),
+        ),
+        // The header menu's entries are the table menu's, for the active
+        // cell's column (`m`).
+        (
+            "column-menu-action-*",
             KeyboardPath::Command(Command::OpenContextMenu),
         ),
         // Every row of the table menu and its submenus.
@@ -648,12 +655,48 @@ pub(crate) const BUCKETS: SurfaceRegistry = SurfaceRegistry {
     ],
 };
 
+/// A secret tab: the ids only the tab draws. The sections of the secret are
+/// the ones of the listing's details pane, so a test composes this registry
+/// with [`SECRET_STORE`].
+pub(crate) const SECRET_DOCUMENT: SurfaceRegistry = SurfaceRegistry {
+    name: "secret document",
+    contexts: &[ContextId::Results, ContextId::Modal],
+    entries: &[
+        (
+            "secret-document-copy-arn",
+            KeyboardPath::Command(Command::ResultsCopyCell),
+        ),
+        (
+            "secret-document-details-copy-arn",
+            KeyboardPath::Command(Command::ResultsCopyCell),
+        ),
+        (
+            "secret-document-refresh",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "secret-document-retry",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "secret-document-delete",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-document-close",
+            KeyboardPath::Menu("secret-document-close"),
+        ),
+    ],
+};
+
 /// A secret store tab: its listing and details pane. The pane actions (`m`)
-/// list Retrieve value, the copy actions, Hide all, the error actions, Load
-/// next page, Refresh and, on a hierarchical store, the path mode and Up.
+/// list Retrieve value, the copy actions, Close details, Hide all, the error actions, Load
+/// next page, Refresh and, on a hierarchical store, the path mode and Up; on
+/// a region-capable driver also the region picker and the retry of a failed
+/// region listing.
 pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
     name: "secret store",
-    contexts: &[ContextId::Results, ContextId::ContextMenu],
+    contexts: &[ContextId::Results, ContextId::ContextMenu, ContextId::Modal],
     entries: &[
         ("secret-row-*", KeyboardPath::Command(Command::SelectNext)),
         (
@@ -668,6 +711,11 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
             "secret-refresh",
             KeyboardPath::Command(Command::RefreshSchema),
         ),
+        // The region picker of a driver that can switch regions. The
+        // clickable element is the dropdown's trigger, named by the path
+        // suffix (`secret-region.dropdown-trigger`); the pane actions list an
+        // entry that opens it.
+        ("secret-region.*", KeyboardPath::Menu("secret-region")),
         (
             "secret-path-crumb-*",
             KeyboardPath::Command(Command::ColumnLeft),
@@ -704,11 +752,235 @@ pub(crate) const SECRET_STORE: SurfaceRegistry = SurfaceRegistry {
             "secret-value-reveal-*",
             KeyboardPath::Command(Command::ExpandCollapse),
         ),
+        // The editor of a plaintext value: Edit value opens it from the
+        // pane actions, Save and Discard are its own entries while it is
+        // open (Save also answers the SaveQuery command in the dispatch).
+        ("secret-value-edit", KeyboardPath::Menu("secret-edit-value")),
+        // The details pane's header: Copy name and Close are pane actions.
+        (
+            "secret-details-copy-name",
+            KeyboardPath::Menu("secret-copy-name"),
+        ),
+        (
+            "secret-details-close",
+            KeyboardPath::Menu("secret-details-close"),
+        ),
+        // The pane's resize gutter takes focus and steps with the arrow keys.
+        ("secret-details-grip", KeyboardPath::TabStop),
+        // Open in tab, from the pane header and the row menu: the pane
+        // action of the same id is the keyboard path of both.
+        (
+            "secret-details-expand",
+            KeyboardPath::Menu("secret-open-in-tab"),
+        ),
+        (
+            "secret-menu-open-in-tab-*",
+            KeyboardPath::Menu("secret-open-in-tab"),
+        ),
+        (
+            "secret-value-editor-save",
+            KeyboardPath::Menu("secret-editor-save"),
+        ),
+        // The Formatted / Raw switch of a JSON value. The editor holds the
+        // keyboard like a text buffer, so no bare key is bound there; the
+        // pane action of the same name is its keyboard path.
+        (
+            "segmented-secret-editor-mode-*",
+            KeyboardPath::Menu("secret-editor-mode"),
+        ),
+        // Find opens the editor component's find panel; Ctrl+F does the same
+        // while the text has focus.
+        (
+            "secret-value-editor-find",
+            KeyboardPath::Menu("secret-editor-find"),
+        ),
+        (
+            "secret-value-editor-discard",
+            KeyboardPath::Menu("secret-editor-discard"),
+        ),
+        // The version history: each row retrieves its version, and Back to
+        // current replaces a historical value; both are pane actions.
+        (
+            "secret-version-row-*",
+            KeyboardPath::Menu("secret-version-retrieve-*"),
+        ),
+        (
+            "secret-version-back-to-current",
+            KeyboardPath::Menu("secret-version-current"),
+        ),
+        // Roll back is a button on every earlier version, and the `b` key
+        // opens the same confirmation for the most recent one; each button
+        // also has a pane action.
+        (
+            "secret-version-rollback-*",
+            KeyboardPath::Menu("secret-version-rollback-*"),
+        ),
+        // The dialogs the write actions open: Enter confirms and Escape
+        // cancels, from wherever the keyboard is inside the dialog.
+        (
+            "secret-rollback-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-rollback-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        (
+            "secret-delete-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-delete-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        // The recovery window of a scheduled deletion: each choice is a
+        // button of the dialog, which keeps Tab inside it.
+        ("secret-delete-window-*", KeyboardPath::TabStop),
+        ("modal-close", KeyboardPath::Command(Command::Cancel)),
+        // Delete is the `x` key on the selected secret, from the pane header
+        // and the bottom bar alike; the row menu's entry runs the same
+        // command. Edit value in the bar and Restore are pane actions.
+        (
+            "secret-details-delete",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-action-delete",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-action-edit-value",
+            KeyboardPath::Menu("secret-edit-value"),
+        ),
+        ("secret-restore", KeyboardPath::Menu("secret-restore")),
+        // Rotate now (the bar, the Rotation section, the row menu) and Edit
+        // rotation are pane actions; the dialog's controls answer Enter and
+        // Escape, and the checkbox is a stop of the dialog.
+        (
+            "secret-action-rotate-now",
+            KeyboardPath::Menu("secret-rotate-now"),
+        ),
+        (
+            "secret-rotation-rotate-now",
+            KeyboardPath::Menu("secret-rotate-now"),
+        ),
+        (
+            "secret-rotation-edit",
+            KeyboardPath::Menu("secret-edit-rotation"),
+        ),
+        (
+            "secret-rotation-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-rotation-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("secret-rotation-enabled", KeyboardPath::TabStop),
+        (
+            "secret-rotate-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-rotate-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        // Edit tags (the Tags section and the row menu) and Edit description
+        // (the Details section, or the bottom bar) are pane actions; each
+        // dialog's buttons answer Enter and Escape, and its row controls are
+        // stops of the dialog.
+        // New secret / New parameter is a pane action; its dialog's buttons
+        // answer Enter and Escape, and the choices and tag rows are stops of
+        // the dialog.
+        ("secret-new", KeyboardPath::Menu("secret-new")),
+        (
+            "secret-create-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-create-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("secret-create-type-*", KeyboardPath::TabStop),
+        ("secret-create-tier-*", KeyboardPath::TabStop),
+        ("secret-create-tag-add", KeyboardPath::TabStop),
+        ("secret-create-tag-remove-*", KeyboardPath::TabStop),
+        ("secret-tags-edit", KeyboardPath::Menu("secret-edit-tags")),
+        (
+            "secret-details-edit",
+            KeyboardPath::Menu("secret-edit-description"),
+        ),
+        (
+            "secret-action-edit-description",
+            KeyboardPath::Menu("secret-edit-description"),
+        ),
+        (
+            "secret-tags-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        ("secret-tags-cancel", KeyboardPath::Command(Command::Cancel)),
+        ("secret-tags-add", KeyboardPath::TabStop),
+        ("secret-tags-remove-*", KeyboardPath::TabStop),
+        (
+            "secret-description-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "secret-description-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
         (
             "secret-value-copy-*",
             KeyboardPath::MouseOnly(
                 "copies one field of the value; the copy key copies the whole value",
             ),
+        ),
+        // The entries of a row's right-click menu, each under its per-action
+        // id: the copies the pane actions `m` reaches (Copy name has no
+        // chord of its own; Copy ARN does, Ctrl+C on the selection), and the
+        // entries the toolbar keys retrieve and refresh.
+        (
+            "secret-menu-retrieve-value-*",
+            KeyboardPath::Command(Command::ToggleValuePanel),
+        ),
+        // The row menu's Edit value entry, dispatched to the editor the
+        // details pane opens; the pane action of the same id is its second
+        // keyboard path.
+        (
+            "secret-menu-edit-value-*",
+            KeyboardPath::Menu("secret-edit-value"),
+        ),
+        (
+            "secret-menu-delete-*",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        (
+            "secret-menu-edit-tags-*",
+            KeyboardPath::Menu("secret-edit-tags"),
+        ),
+        (
+            "secret-menu-rotate-now-*",
+            KeyboardPath::Menu("secret-rotate-now"),
+        ),
+        (
+            "secret-menu-restore-*",
+            KeyboardPath::Menu("secret-restore"),
+        ),
+        (
+            "secret-menu-copy-name-*",
+            KeyboardPath::Menu("secret-copy-name"),
+        ),
+        (
+            "secret-menu-copy-arn-*",
+            KeyboardPath::Command(Command::ResultsCopyCell),
+        ),
+        (
+            "secret-menu-copy-path-*",
+            KeyboardPath::Menu("secret-copy-path"),
+        ),
+        (
+            "secret-menu-refresh-*",
+            KeyboardPath::Command(Command::RefreshSchema),
         ),
     ],
 };

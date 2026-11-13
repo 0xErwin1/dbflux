@@ -1,0 +1,41 @@
+{
+  "title": "DBFlux redesign: More settings · dark",
+  "brief": "Imported from Claude.ai artifact RrT5VLW14vaPQzV1ab71hT: Islands · Overlays, windows and settings, row \"More settings · dark\".",
+  "artboards": [
+    {
+      "file": "01-isl-settings-keys.html",
+      "title": "Settings: keybindings",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1320,
+      "height": 900
+    },
+    {
+      "file": "02-isl-settings-hooks.html",
+      "title": "Settings: hooks",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1320,
+      "height": 900
+    },
+    {
+      "file": "03-isl-settings-drivers.html",
+      "title": "Settings: drivers",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1320,
+      "height": 900
+    },
+    {
+      "file": "04-isl-settings-mcp.html",
+      "title": "Settings: MCP policies",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1320,
+      "height": 900
+    },
+    {
+      "file": "05-isl-settings-auth.html",
+      "title": "Settings: auth profiles",
+      "tradeoff": "Islands, dark: floating panes on a dark desk; low glare for long sessions, weaker in bright rooms.",
+      "width": 1320,
+      "height": 900
+    }
+  ]
+}

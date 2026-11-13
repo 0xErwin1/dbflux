@@ -19,7 +19,7 @@
 - `/` 聚焦侧边栏搜索 / 筛选框。
 - `Enter` 打开选中项（例如打开表会打开一个数据网格）。
 - `r` 刷新 Schema；`d` 断开当前连接。
-- `m` 打开选中项的项目菜单。
+- `m` 打开选中项的项目菜单。在列或集合字段上，可通过菜单复制其名称。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/schema-browser/tree-dark.webp">

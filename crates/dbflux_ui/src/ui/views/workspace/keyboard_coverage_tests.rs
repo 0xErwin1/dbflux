@@ -186,6 +186,23 @@ const TOASTS: SurfaceRegistry = SurfaceRegistry {
     ],
 };
 
+/// The sidebar's inline confirmation of a driver-declared root section
+/// action: Enter confirms and Escape cancels in the Modal key context.
+const ROOT_SECTION_ACTION_CONFIRM: SurfaceRegistry = SurfaceRegistry {
+    name: "root section action confirmation",
+    contexts: &[ContextId::Modal],
+    entries: &[
+        (
+            "root-section-action-confirm",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "root-section-action-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+    ],
+};
+
 const PANE_ACTIONS_MENU: SurfaceRegistry = SurfaceRegistry {
     name: "pane actions menu",
     contexts: &[ContextId::ContextMenu],
@@ -334,6 +351,75 @@ fn the_empty_workspace_shell_is_covered(cx: &mut TestAppContext) {
     let mut harness = open_workspace(cx);
 
     harness.assert_covered(&[]);
+}
+
+#[gpui::test]
+fn the_root_section_action_confirmation_is_covered(cx: &mut TestAppContext) {
+    let mut harness = open_workspace(cx);
+    let sidebar = harness
+        .window
+        .update(|_, cx| harness.workspace.read(cx).sidebar.clone());
+
+    let open_confirmation = |harness: &mut Harness<'_>| {
+        harness.window.update(|_, cx| {
+            sidebar.update(cx, |sidebar, cx| {
+                sidebar.dispatch_root_section_action(
+                    dbflux_ui_sidebar::RootSectionActionRequest {
+                        profile_id: uuid::Uuid::new_v4(),
+                        section_id: "buckets".to_string(),
+                        section_presentation: None,
+                        item_id: "old-bucket".to_string(),
+                        item_label: "old-bucket".to_string(),
+                        action: dbflux_core::RootSectionAction {
+                            id: "delete_bucket".to_string(),
+                            label: dbflux_core::LocalizedText::plain("Delete bucket"),
+                            description: None,
+                            classification: dbflux_core::ExecutionClassification::AdminDestructive,
+                        },
+                    },
+                    cx,
+                );
+            });
+        });
+        harness.window.run_until_parked();
+    };
+    open_confirmation(&mut harness);
+    harness.window.update(|window, _| window.refresh());
+    harness.window.run_until_parked();
+
+    let frame = harness.capture.frame(harness.window);
+    let covered = shell_coverage()
+        .with_surface(dbflux_ui_base::keyboard_coverage::MODAL_CHROME)
+        .with_surface(ROOT_SECTION_ACTION_CONFIRM)
+        .assert_covered(&frame);
+    assert!(
+        covered.iter().any(|id| id == "root-section-action-confirm"),
+        "{covered:?}"
+    );
+
+    harness.keys("escape");
+    assert!(
+        !harness
+            .window
+            .update(|_, cx| sidebar.read(cx).has_delete_modal()),
+        "Escape cancels the confirmation"
+    );
+
+    // The harness has no connection, so Enter confirms into the
+    // no-connection refusal; what it proves is that Execute is routed.
+    open_confirmation(&mut harness);
+    assert!(
+        harness
+            .window
+            .update(|_, cx| sidebar.read(cx).has_delete_modal())
+    );
+    harness.keys("enter");
+    assert!(
+        !harness
+            .window
+            .update(|_, cx| sidebar.read(cx).has_delete_modal()),
+        "Enter confirms and closes the confirmation"
+    );
 }
 
 #[gpui::test]

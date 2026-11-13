@@ -9,7 +9,9 @@ use lsp_types::{
 use ropey::Rope;
 use std::{cell::RefCell, ops::Range, rc::Rc, time::Duration};
 
-use crate::input::{InputBaseState, ShowCompletions};
+use crate::input::{
+    IndentInline, InputBaseState, MoveDown, MoveUp, OutdentInline, ShowCompletions,
+};
 
 /// Default debounce duration for inline completions.
 const DEFAULT_INLINE_COMPLETION_DEBOUNCE: Duration = Duration::from_millis(300);
@@ -315,6 +317,10 @@ impl InputBaseState<EditorMode> {
     }
 
     pub(crate) fn hide_context_menu(&mut self, cx: &mut Context<Self>) {
+        // Any edit, move or blur outside the cycle keeps the previewed item.
+        if !self.completion_inserting {
+            self.commit_completion_preview();
+        }
         self.extras.context_menu_content.completion.open = false;
         self.extras.context_menu_content.code_action.open = false;
         self.extras.context_menu_task = Task::ready(Ok(()));
@@ -344,11 +350,60 @@ impl InputBaseState<EditorMode> {
         let Some((kind, handler)) = kind.zip(self.overlay_action_handler.clone()) else {
             return false;
         };
+        if kind == super::InputOverlayKind::Completion {
+            if let Some(handled) = self.cycle_completion(&*action, &handler, window, cx) {
+                return handled;
+            }
+        }
         let handled = handler(kind, action, window, cx);
         if handled && closes_overlay {
             self.hide_context_menu(cx);
         }
         handled
+    }
+
+    /// Tab and Shift+Tab move the completion highlight and write the item
+    /// into the document. While such a preview is active, the arrows keep the
+    /// text in sync, Enter keeps it and Escape restores the typed word.
+    ///
+    /// Returns `None` for the actions the menu handles as usual.
+    fn cycle_completion(
+        &mut self,
+        action: &dyn gpui::Action,
+        handler: &super::OverlayActionHandler,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<bool> {
+        let previewing = self.has_completion_preview();
+        let kind = super::InputOverlayKind::Completion;
+        let movement: Box<dyn gpui::Action> = if action.partial_eq(&IndentInline) {
+            if !previewing {
+                return Some(self.preview_highlighted_completion(window, cx));
+            }
+            Box::new(MoveDown)
+        } else if action.partial_eq(&OutdentInline) {
+            Box::new(MoveUp)
+        } else if !previewing {
+            return None;
+        } else if action.partial_eq(&MoveDown) || action.partial_eq(&MoveUp) {
+            action.boxed_clone()
+        } else if crate::input::Enter::is_primary(action) {
+            self.commit_completion_preview();
+            self.hide_context_menu(cx);
+            return Some(true);
+        } else if action.partial_eq(&crate::input::Escape) {
+            self.revert_completion_preview(window, cx);
+            self.hide_context_menu(cx);
+            return Some(true);
+        } else {
+            return None;
+        };
+
+        if !handler(kind, movement, window, cx) {
+            return Some(false);
+        }
+        self.preview_highlighted_completion(window, cx);
+        Some(true)
     }
 
     /// Schedule an inline completion request after debouncing.
