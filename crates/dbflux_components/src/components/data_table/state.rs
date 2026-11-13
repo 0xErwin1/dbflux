@@ -394,14 +394,18 @@ impl DataTableState {
         self.reload_header_annotations(&previous_titles);
         self.edit_buffer.reset_for_base(self.model.row_count());
         self.enum_options.clear();
-        // A new row set has its own end, even at the same row count.
-        self.end_in_view = false;
 
         match swap {
             ModelSwap::KeepCursor => self.clamp_selection(),
             ModelSwap::ResetCursor => {
                 self.selection.clear();
                 self.scroll_to_first_row();
+                // A new row set addressed from the top has its own end, which
+                // is reported when it comes into view. A swap that keeps the
+                // cursor leaves this alone: the end it was already at has been
+                // answered for, and re-arming it would have a host fetch page
+                // after page with no user action.
+                self.end_in_view = false;
             }
         }
 
@@ -1539,10 +1543,16 @@ impl DataTableState {
 
     /// Emits `DataTableEvent::ReachedEnd` when the last row comes into view.
     /// Called by `DataTable::render`, after a scroll or cursor move has
-    /// re-rendered the table. A host whose response failed hears about the
-    /// end again only once the user moves away from it and back. A new model
-    /// from `set_model` resets this, so after a successful fetch the next
-    /// render emits again if the new end is already in view.
+    /// re-rendered the table. The event fires on the move into the end, not
+    /// while it stays in view: a host whose response failed hears about it
+    /// again only once the user leaves the end and comes back.
+    ///
+    /// A model swap that installs a different row set and drops the cursor
+    /// (`ModelSwap::ResetCursor`) clears the marker, so the new end is
+    /// reported when it comes into view. A swap that keeps the cursor
+    /// (`ModelSwap::KeepCursor`) leaves it set, because that swap carries the
+    /// end the host has just answered for; a page a host appends or replaces
+    /// must not fetch the next one on its own.
     pub fn report_reached_end(&mut self, cx: &mut Context<Self>) {
         let row_count = self.row_count();
         let scroll_laid_out = self.reached_end_checked_rows == row_count;
@@ -1919,8 +1929,34 @@ mod tests {
         report(window);
         assert_eq!(
             reports.get(),
+            2,
+            "a swap that keeps the cursor does not report the end it already answered for"
+        );
+
+        select_row(window, 0);
+        report(window);
+        select_row(window, 1);
+        report(window);
+        assert_eq!(
+            reports.get(),
             3,
-            "a new model of the same size has its own end"
+            "leaving the end and coming back reports it again, so a failed page is retried"
+        );
+
+        window.update(|_, app| {
+            state.update(app, |table_state, cx| {
+                table_state.set_model(two_row_model(), super::ModelSwap::ResetCursor, cx)
+            })
+        });
+        report(window);
+        assert_eq!(reports.get(), 3, "a reset cursor does not sit at the end");
+
+        select_row(window, 1);
+        report(window);
+        assert_eq!(
+            reports.get(),
+            4,
+            "the end of a freshly installed row set is reported once"
         );
     }
 

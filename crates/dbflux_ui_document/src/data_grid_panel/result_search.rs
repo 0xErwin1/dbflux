@@ -348,6 +348,62 @@ mod tests {
         });
     }
 
+    /// A `NaN` cell is not equal to itself, so the prefix comparison fails on
+    /// every page and the rerun replaces the rows instead of appending past
+    /// them. Replacing keeps the grid where the user is reading, which is what
+    /// the cursor-preserving reload of `append_next_rows` is for.
+    #[gpui::test]
+    fn next_rows_replace_the_result_when_a_nan_breaks_the_prefix(cx: &mut TestAppContext) {
+        fn nan_result(rows: usize) -> QueryResult {
+            let columns = ["id", "amount"]
+                .into_iter()
+                .map(|name| ColumnMeta {
+                    name: name.to_string(),
+                    type_name: "float8".to_string(),
+                    kind: ColumnKind::Float,
+                    nullable: true,
+                    is_primary_key: false,
+                })
+                .collect();
+            let rows = (0..rows)
+                .map(|id| vec![Value::Int(id as i64), Value::Float(f64::NAN)])
+                .collect();
+
+            QueryResult::table(columns, rows, None, Duration::ZERO)
+        }
+
+        let (panel, window) = rendered_result(cx);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.set_query_result(
+                    Arc::new(nan_result(4)),
+                    "SELECT id, amount FROM measurements".to_string(),
+                    None,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        // Fewer rows than the ones loaded, so appending could never produce
+        // this count: the rerun replaced the rows whole.
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.append_next_rows(nan_result(2), cx));
+        });
+        window.run_until_parked();
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert_eq!(panel.loaded_row_count(), 2);
+            assert!(
+                matches!(panel.result.rows[0].get(1), Some(Value::Float(value)) if value.is_nan()),
+                "the rerun's rows are shown as fetched"
+            );
+            assert!(!panel.limited_rows.loading_next);
+        });
+    }
+
     /// A rerun whose columns were renamed replaces the result, even when its
     /// first rows match the loaded ones.
     #[gpui::test]
