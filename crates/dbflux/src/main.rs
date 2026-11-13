@@ -1,12 +1,11 @@
 #![windows_subsystem = "windows"]
 #![recursion_limit = "256"]
 
-mod cli;
 #[cfg(unix)]
 mod shell_path;
 
-use dbflux_app::mcp_command::run_mcp_command;
 use dbflux_audit::AuditService;
+use dbflux_cli::{Cli, Dispatch, Parser};
 use dbflux_core::ShutdownPhase;
 use dbflux_core::observability::actions::{SYSTEM_SHUTDOWN, SYSTEM_STARTUP};
 use dbflux_core::observability::tracing_bridge::{
@@ -15,9 +14,7 @@ use dbflux_core::observability::tracing_bridge::{
 use dbflux_core::observability::{EventCategory, EventOutcome, EventRecord, EventSeverity};
 use dbflux_driver_ipc::shutdown_managed_hosts;
 use dbflux_ipc::{
-    APP_CONTROL_VERSION, framing, init_process_auth_tokens,
-    protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},
-    read_app_control_token, shutdown_managed_auth_provider_hosts,
+    init_process_auth_tokens, send_focus_request, shutdown_managed_auth_provider_hosts,
     shutdown_managed_secret_provider_hosts, socket_name,
 };
 use dbflux_ui::AppStateEntity;
@@ -34,11 +31,10 @@ use dbflux_ui_base::window_state::{self, WindowGeometry};
 use gpui::*;
 use gpui_component::Root;
 use interprocess::local_socket::{
-    Listener as IpcListener, ListenerNonblockingMode, ListenerOptions, Stream as IpcStream,
-    prelude::*,
+    Listener as IpcListener, ListenerNonblockingMode, ListenerOptions
 };
 use log::info;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::PathBuf;
 #[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -264,45 +260,14 @@ fn main() {
     install_panic_hook();
     install_default_crypto_provider();
 
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.get(1).map(|s| s.as_str()) == Some("mcp") {
-        #[expect(
-            clippy::indexing_slicing,
-            reason = "the guard above requires `args[1]` to exist, so \
-                      `args.len() >= 2` and the `[2..]` slice is in range"
-        )]
-        let exit_code = run_mcp_command(&args[2..]);
-        std::process::exit(exit_code);
+    match Cli::parse().run() {
+        Dispatch::Exit(code) => std::process::exit(code),
+        Dispatch::RunGui => run_gui(),
     }
-
-    if args.get(1).map(|s| s.as_str()) == Some("--gui") {
-        run_gui();
-        return;
-    }
-
-    if args.len() == 1 {
-        if let Ok(name) = socket_name()
-            && let Ok(mut stream) = IpcStream::connect(name)
-            && send_focus_request(&mut stream, 1).is_ok()
-        {
-            return;
-        }
-
-        run_gui();
-        return;
-    }
-
-    std::process::exit(cli::run(&args));
 }
 
 fn bind_ipc_socket() -> Result<IpcListener, ()> {
-    let connect_name = socket_name().map_err(|e| {
-        eprintln!("Failed to create socket name: {}", e);
-    })?;
-
-    if let Ok(mut stream) = IpcStream::connect(connect_name)
-        && send_focus_request(&mut stream, 1).is_ok()
+    if send_focus_request().is_ok()
     {
         std::process::exit(0);
     }
@@ -319,32 +284,6 @@ fn bind_ipc_socket() -> Result<IpcListener, ()> {
         .map_err(|e| {
             eprintln!("Failed to bind IPC socket: {}", e);
         })
-}
-
-fn send_focus_request<S: Read + Write>(stream: &mut S, request_id: u64) -> io::Result<()> {
-    let auth_token = read_app_control_token()?;
-    let request = AppControlRequest::new(request_id, Some(auth_token), IpcMessage::Focus);
-    framing::send_msg(&mut *stream, &request)?;
-
-    let response: AppControlResponse = framing::recv_msg(&mut *stream)?;
-
-    if !response
-        .protocol_version
-        .is_compatible_with(APP_CONTROL_VERSION)
-    {
-        return Err(io::Error::other(
-            "incompatible app-control protocol version",
-        ));
-    }
-
-    if response.request_id != request_id {
-        return Err(io::Error::other("mismatched app-control response id"));
-    }
-
-    match response.body {
-        IpcResponse::Error { message } => Err(io::Error::other(message)),
-        _ => Ok(()),
-    }
 }
 
 /// Runs the GPUI application: tracing, IPC listener, main window, shutdown
