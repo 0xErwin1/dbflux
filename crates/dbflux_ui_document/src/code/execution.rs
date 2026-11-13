@@ -836,6 +836,13 @@ impl CodeDocument {
             || self
                 .current_execution_context(cx)
                 .is_some_and(|current| current.same_as(&session_context));
+        // A rerun keeps the language its result ran in: the editor's language
+        // may have changed since, and the rows must come from the same
+        // dialect. The new origin carries it on, so later pages inherit it.
+        let language = rerun_origin
+            .as_ref()
+            .map(|origin| origin.language.clone())
+            .unwrap_or_else(|| self.effective_language().clone());
         let exec_ctx = rerun_origin
             .map(|origin| origin.exec_ctx)
             .unwrap_or_else(|| self.source.exec_ctx.clone());
@@ -843,7 +850,7 @@ impl CodeDocument {
             connection_id: conn_id,
             context: session_context.clone(),
             exec_ctx: exec_ctx.clone(),
-            language: self.effective_language().clone(),
+            language: language.clone(),
         };
 
         if on_session {
@@ -901,7 +908,7 @@ impl CodeDocument {
             query.clone(),
             active_database,
             &exec_ctx,
-            self.effective_language().clone(),
+            language,
             row_limit,
         );
 
