@@ -116,7 +116,8 @@ fn find_cached_entry<'a>(
 ///    so the cached entry is the authoritative pointer to where the table
 ///    actually lives.
 /// 3. The caller-supplied `default_schema` (toolbar selection).
-/// 4. `"public"` as a last-resort driver-friendly fallback.
+/// 4. No schema at all, so the driver applies its own default (`public`,
+///    `dbo`, `main`) or ignores schemas when it has none.
 ///
 /// **Trigger rules:**
 /// - If the driver's `referenced_tables` returns `None`, return `Skip`.
@@ -173,10 +174,9 @@ pub fn check_schema_drift(
             .schema
             .as_deref()
             .or_else(|| cached.and_then(|c| c.schema.as_deref()))
-            .or(default_schema)
-            .unwrap_or("public");
+            .or(default_schema);
 
-        let fresh = match connection.table_details(effective_db, Some(schema), table_name) {
+        let fresh = match connection.table_details(effective_db, schema, table_name) {
             Ok(info) => info,
             Err(_) => continue,
         };
@@ -189,8 +189,9 @@ pub fn check_schema_drift(
             // a dropped table. Either way, do not surface a phantom diff and
             // do not write the empty TableInfo into the cache.
             log::warn!(
-                "[DRIFT] fresh fetch for {effective_db}.{schema}.{table_name} returned no \
+                "[DRIFT] fresh fetch for {effective_db}.{}.{table_name} returned no \
                  columns; skipping (cached had {} cols)",
+                schema.unwrap_or("<driver default>"),
                 cached
                     .and_then(|c| c.columns.as_deref())
                     .map(|c| c.len())
@@ -206,7 +207,7 @@ pub fn check_schema_drift(
             Some((key, _)) => key.clone(),
             None => (
                 effective_db.to_string(),
-                fresh.schema.clone().or_else(|| Some(schema.to_string())),
+                fresh.schema.clone().or_else(|| schema.map(String::from)),
                 table_name.clone(),
             ),
         };
@@ -634,6 +635,44 @@ mod tests {
         let lookups = mock_driver.last_lookups.lock().unwrap();
         assert_eq!(lookups.len(), 1);
         assert_eq!(lookups[0].1.as_deref(), Some("analytics"));
+    }
+
+    /// With no qualifier, cached schema or default schema, the fresh fetch
+    /// passes no schema so the driver applies its own default (`public`,
+    /// `dbo`, `main`) or none at all, instead of a hardcoded `public`.
+    #[test]
+    fn no_schema_hint_passes_none_to_the_driver() {
+        let cache: std::collections::HashMap<TableKey, TableInfo> =
+            std::collections::HashMap::new();
+
+        let mut table = make_table_in("unused", "users", vec![col("id", "integer", false, true)]);
+        table.schema = None;
+
+        let mock_driver = Arc::new(
+            MockDriver::new(vec![QueryTableRef {
+                database: None,
+                schema: None,
+                table: "users".to_string(),
+            }])
+            .with_table("main", "", "users", table),
+        );
+        let driver: Arc<dyn Connection> = mock_driver.clone();
+
+        let outcome = check_schema_drift(&driver, &cache, "select * from users", "main", None);
+
+        match outcome {
+            DriftOutcome::Refresh(entries) => {
+                assert_eq!(entries.len(), 1);
+                let (_, info) = &entries[0];
+                assert_eq!(info.schema, None);
+            }
+            DriftOutcome::Skip => panic!("expected Refresh, got Skip"),
+            DriftOutcome::Drift(_) => panic!("a first encounter cannot drift"),
+        }
+
+        let lookups = mock_driver.last_lookups.lock().unwrap();
+        assert_eq!(lookups.len(), 1);
+        assert_eq!(lookups[0].1, None);
     }
 
     /// Defensive skip: if the fresh fetch resolves to a schema where the
