@@ -496,14 +496,16 @@ fn mssql_identity_columns_sql(schema: Option<&str>, table: &str) -> String {
 }
 
 /// The columns SQL Server computes and rejects explicit values for: computed
-/// columns and `rowversion` (`timestamp`) columns, in column order. The type
-/// is matched by its base system type, so an alias type over `rowversion` is
-/// found too.
+/// columns and `rowversion` (`timestamp`) columns, in column order.
+/// `rowversion` is matched by its system type id (189), which an alias type
+/// over it shares. There is no join on `sys.types`: a CLR type such as
+/// `geography` has no row whose `user_type_id` equals its system type id, so
+/// a join would drop a computed column of that type.
 fn mssql_generated_columns_sql(schema: Option<&str>, table: &str) -> String {
     mssql_column_lookup_sql(
         schema,
         table,
-        "(c.is_computed = 1 OR ty.name IN (N'timestamp', N'rowversion'))",
+        "(c.is_computed = 1 OR c.system_type_id = 189)",
     )
 }
 
@@ -517,7 +519,6 @@ fn mssql_column_lookup_sql(schema: Option<&str>, table: &str, predicate: &str) -
         "SELECT c.name FROM sys.columns c \
          JOIN sys.tables t ON t.object_id = c.object_id \
          JOIN sys.schemas s ON s.schema_id = t.schema_id \
-         JOIN sys.types ty ON ty.user_type_id = c.system_type_id \
          WHERE {predicate} AND s.name = {schema} AND t.name = N'{}' \
          ORDER BY c.column_id",
         MSSQL_DIALECT.escape_string(table)
@@ -6627,9 +6628,10 @@ mod tests {
             "{sql}"
         );
         assert!(sql.contains("c.is_computed = 1"), "{sql}");
+        assert!(sql.contains("c.system_type_id = 189"), "{sql}");
         assert!(
-            sql.contains("ty.name IN (N'timestamp', N'rowversion')"),
-            "{sql}"
+            !sql.contains("JOIN sys.types"),
+            "a computed column of a CLR type has no matching sys.types row: {sql}"
         );
         assert!(!sql.contains("is_identity"), "{sql}");
         assert!(sql.ends_with("ORDER BY c.column_id"), "{sql}");
