@@ -615,13 +615,16 @@ impl TelemetryScheduler {
         }
         self.usage.invalidate().map_err(|_| TelemetryError::Storage)
     }
-    fn ensure_current_epoch(&mut self, now: DateTime<Utc>) -> Result<(), TelemetryError> {
+    /// Nothing can change the epoch on its own any more: the identity is
+    /// stable and an explicit reset goes through `reset`. So this is a check,
+    /// not a write — capturing a usage ticket runs on the foreground for every
+    /// counted action, and a storage write there put a SQLite transaction on
+    /// the UI thread for no reason.
+    fn ensure_current_epoch(&mut self, _now: DateTime<Utc>) -> Result<(), TelemetryError> {
         if self.runtime_failure {
             return Err(TelemetryError::Storage);
         }
-        // The identity is stable, so no epoch change happens on its own; an
-        // explicit reset goes through `reset` directly.
-        self.update(now, |_| Ok(()))
+        Ok(())
     }
     fn flush_usage(&mut self, now: DateTime<Utc>) -> Result<(), TelemetryError> {
         let expected_id = self.state.install_id();
@@ -1457,6 +1460,25 @@ mod tests {
                 .expect("clear the other delivery");
         }
         assert!(saw_new_build, "the new build must be prepared");
+    }
+
+    /// Capturing a usage ticket happens on the foreground for every counted
+    /// action. With a stable identity there is no epoch to persist, so the
+    /// capture must be a read: a write there put a SQLite `BEGIN IMMEDIATE` on
+    /// the UI thread per action.
+    #[test]
+    fn capturing_a_usage_ticket_does_not_write_to_storage() {
+        let (mut scheduler, _, storage) = configured();
+        scheduler.disclosure_dismissed(now()).expect("dismiss");
+        scheduler.set_basic(true, now()).expect("basic");
+        fail_writes(&storage);
+        assert!(
+            scheduler
+                .usage_source(now())
+                .expect("capture must not need a writable store")
+                .is_some()
+        );
+        restore_writes(&storage);
     }
 
     #[test]
