@@ -1794,6 +1794,7 @@ document:
           html: HTML
           markdown: Markdown
           xml: XML
+          sql: SQL
           text: 文本
           binary: 二进制
           hex: Hex
@@ -2191,6 +2192,10 @@ document:
       null_text_label: "NULL 文本"
       null_text_placeholder: "空"
       null_text_hint: "写入 NULL 值的位置。留空时，只有改用其他文本（如 \\N）才能区分 NULL 和空字符串。"
+      sql_batch_size_label: "每条 INSERT 的行数"
+      sql_batch_size_placeholder: "500"
+      sql_batch_size_hint: "每条 INSERT 语句写入的行数。若驱动程序的上限更低，则以该上限为准。"
+      sql_batch_size_invalid: "必须是不小于 1 的整数。"
       date_format_label: "日期"
       date_format:
         rfc3339: "RFC 3339"

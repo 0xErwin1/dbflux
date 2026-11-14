@@ -1794,6 +1794,7 @@ document:
           html: HTML
           markdown: Markdown
           xml: XML
+          sql: SQL
           text: 텍스트
           binary: 바이너리
           hex: 16진수
@@ -2191,6 +2192,10 @@ document:
       null_text_label: "NULL 텍스트"
       null_text_placeholder: "비어 있음"
       null_text_hint: "NULL 값에 기록됩니다. 비워 두면 \\N 같은 다른 텍스트를 고를 때만 NULL과 빈 문자열이 구분됩니다."
+      sql_batch_size_label: "INSERT당 행 수"
+      sql_batch_size_placeholder: "500"
+      sql_batch_size_hint: "각 INSERT 문에 기록되는 행 수입니다. 드라이버의 한도가 더 낮으면 그 한도가 적용됩니다."
+      sql_batch_size_invalid: "1 이상의 정수여야 합니다."
       date_format_label: "날짜"
       date_format:
         rfc3339: "RFC 3339"

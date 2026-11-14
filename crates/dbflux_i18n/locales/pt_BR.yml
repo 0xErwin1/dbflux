@@ -1794,6 +1794,7 @@ document:
           html: HTML
           markdown: Markdown
           xml: XML
+          sql: SQL
           text: Texto
           binary: Binário
           hex: Hex
@@ -2191,6 +2192,10 @@ document:
       null_text_label: "Texto para NULL"
       null_text_placeholder: "Vazio"
       null_text_hint: "Escrito nos valores NULL. Com o texto vazio, NULL e string vazia só se distinguem se você escolher outro texto, como \\N."
+      sql_batch_size_label: "Linhas por INSERT"
+      sql_batch_size_placeholder: "500"
+      sql_batch_size_hint: "Linhas escritas em cada instrução INSERT. Se o driver tiver um limite menor, esse limite prevalece."
+      sql_batch_size_invalid: "Deve ser um número inteiro de 1 ou mais."
       date_format_label: "Datas"
       date_format:
         rfc3339: "RFC 3339"

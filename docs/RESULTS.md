@@ -264,6 +264,19 @@ offers the options a format uses and hides the others:
   written as `YYYY-MM-DD` under the first two and as its midnight (UTC) under
   epoch, and a time as `HH:MM:SS` under `YYYY-MM-DD HH:MM:SS` and as seconds
   since midnight under epoch.
+- **Rows per INSERT** (SQL only): how many rows go into each `INSERT`
+  statement, 500 by default and at least 1. A driver that limits rows per
+  statement, such as SQL Server with 1000, caps the value.
+
+SQL is offered in the export wizard only when the source connection's driver
+can generate bulk `INSERT` statements. It writes one `<schema>.<table>.sql` file
+per table of re-runnable statements in that connection's own dialect: each
+statement holds one batch of rows, names the table the way the dialect writes
+it and ends with `;`. A table with no rows writes an empty file. The dialect
+decides how NULL and dates are written, so the NULL text, delimiter, encoding
+and date options do not apply and are hidden. SQL files are not importable yet:
+importing a folder that holds one fails that table with the message that the
+format cannot be imported. **Export all rows to file** does not offer SQL.
 
 The defaults write exactly what earlier versions wrote. The manifest records
 the options that shaped a file, so importing the folder reads it back the same

@@ -42,7 +42,7 @@ use gpui_component::ActiveTheme;
 use uuid::Uuid;
 
 use format_options::{
-    date_format_from_segment_id, date_format_label, date_format_segment_id,
+    available_formats, date_format_from_segment_id, date_format_label, date_format_segment_id,
     delimiter_from_segment_id, delimiter_label, delimiter_segment_id, encoding_from_segment_id,
     encoding_label, encoding_segment_id, visible_options,
 };
@@ -74,6 +74,7 @@ fn format_icon(format: FileFormat) -> AppIcon {
         FileFormat::Html => AppIcon::Code,
         FileFormat::Markdown => AppIcon::ScrollText,
         FileFormat::Xml => AppIcon::FileCode,
+        FileFormat::Sql => AppIcon::Database,
     }
 }
 
@@ -105,6 +106,12 @@ pub struct ExportWizard {
     format_options: FormatOptions,
     null_text_input: Entity<InputState>,
     _null_text_sub: Subscription,
+    sql_batch_size_input: Entity<InputState>,
+    _sql_batch_size_sub: Subscription,
+    sql_batch_size_invalid: bool,
+    /// Whether the source connection can write SQL exports; decides if the
+    /// picker offers SQL.
+    sql_export_available: bool,
 
     output_dir: Option<PathBuf>,
     choosing_folder: bool,
@@ -145,6 +152,23 @@ impl ExportWizard {
             },
         );
 
+        let sql_batch_size_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(dbflux_export::DEFAULT_SQL_BATCH_SIZE.to_string())
+                .placeholder(dbflux_i18n::t!(
+                    "document.export_wizard.format_options.sql_batch_size_placeholder"
+                ))
+        });
+        let sql_batch_size_sub = cx.subscribe_in(
+            &sql_batch_size_input,
+            window,
+            |this, _entity, event: &InputEvent, _window, cx| {
+                if let InputEvent::Change = event {
+                    this.on_sql_batch_size_changed(cx);
+                }
+            },
+        );
+
         let null_text_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(dbflux_i18n::t!(
                 "document.export_wizard.format_options.null_text_placeholder"
@@ -172,6 +196,10 @@ impl ExportWizard {
             format_options: FormatOptions::default(),
             null_text_input,
             _null_text_sub: null_text_sub,
+            sql_batch_size_input,
+            _sql_batch_size_sub: sql_batch_size_sub,
+            sql_batch_size_invalid: false,
+            sql_export_available: false,
             output_dir: None,
             choosing_folder: false,
             folder_error: None,
@@ -225,6 +253,17 @@ impl ExportWizard {
         self.format_options = FormatOptions::default();
         self.null_text_input
             .update(cx, |input, cx| input.set_value("", window, cx));
+        self.sql_batch_size_invalid = false;
+        self.sql_batch_size_input.update(cx, |input, cx| {
+            input.set_value(
+                dbflux_export::DEFAULT_SQL_BATCH_SIZE.to_string(),
+                window,
+                cx,
+            );
+        });
+        self.sql_export_available = self
+            .resolve_connection(cx)
+            .is_some_and(|connection| dbflux_transfer::supports_sql_export(connection.as_ref()));
 
         self.output_dir = None;
         self.choosing_folder = false;
@@ -278,7 +317,7 @@ impl ExportWizard {
     }
 
     fn select_format(&mut self, segment_id: &str, cx: &mut Context<Self>) {
-        if let Some(format) = FileFormat::ALL
+        if let Some(format) = available_formats(self.sql_export_available)
             .into_iter()
             .find(|format| format_segment_id(*format) == segment_id)
         {
@@ -306,6 +345,19 @@ impl ExportWizard {
             self.format_options.date_format = date_format;
             cx.notify();
         }
+    }
+
+    fn on_sql_batch_size_changed(&mut self, cx: &mut Context<Self>) {
+        let typed = self.sql_batch_size_input.read(cx).value().to_string();
+
+        match phases::parse_segment_size(&typed) {
+            Some(value) => {
+                self.format_options.sql_batch_size = value;
+                self.sql_batch_size_invalid = false;
+            }
+            None => self.sql_batch_size_invalid = true,
+        }
+        cx.notify();
     }
 
     fn on_null_text_changed(&mut self, cx: &mut Context<Self>) {
@@ -402,7 +454,11 @@ impl ExportWizard {
     fn continue_enabled(&self) -> bool {
         match self.phase {
             ExportPhase::Tables => !self.tables.is_empty(),
-            ExportPhase::FormatOptions => self.output_dir.is_some() && !self.segment_size_invalid,
+            ExportPhase::FormatOptions => {
+                let batch_size_invalid =
+                    self.selected_format.uses_sql_batch_size() && self.sql_batch_size_invalid;
+                self.output_dir.is_some() && !self.segment_size_invalid && !batch_size_invalid
+            }
             ExportPhase::Confirm | ExportPhase::Run => false,
         }
     }
@@ -601,6 +657,40 @@ impl ExportWizard {
             );
         }
 
+        if visible.sql_batch_size {
+            let hint = if self.sql_batch_size_invalid {
+                Text::caption(dbflux_i18n::t!(
+                    "document.export_wizard.format_options.sql_batch_size_invalid"
+                ))
+                .danger()
+                .into_any_element()
+            } else {
+                modal_hint(
+                    dbflux_i18n::t!("document.export_wizard.format_options.sql_batch_size_hint"),
+                    cx,
+                )
+            };
+            rows.push(
+                modal_form_row(
+                    dbflux_i18n::t!("document.export_wizard.format_options.sql_batch_size_label"),
+                    div()
+                        .w(SEGMENT_SIZE_INPUT_WIDTH)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
+                        .child(
+                            Input::new(&self.sql_batch_size_input)
+                                .id("export-wizard-sql-batch-size")
+                                .w_full()
+                                .aria_label(dbflux_i18n::t!(
+                                    "document.export_wizard.format_options.sql_batch_size_label"
+                                )),
+                        ),
+                    Some(hint),
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
+
         if visible.date_format {
             let entity = cx.entity().downgrade();
             let items: Vec<SegmentedItem> = dbflux_export::DateFormat::ALL
@@ -637,7 +727,7 @@ impl ExportWizard {
     }
 
     fn render_format_options(&self, cx: &mut Context<Self>) -> AnyElement {
-        let format_items: Vec<SegmentedItem> = FileFormat::ALL
+        let format_items: Vec<SegmentedItem> = available_formats(self.sql_export_available)
             .into_iter()
             .map(|format| {
                 SegmentedItem::new(format_segment_id(format), format.label())

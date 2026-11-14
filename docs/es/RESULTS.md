@@ -288,6 +288,20 @@ las demás:
   se escribe como `YYYY-MM-DD` con los dos primeros y como su medianoche (UTC)
   con epoch, y una hora como `HH:MM:SS` con `YYYY-MM-DD HH:MM:SS` y como
   segundos desde medianoche con epoch.
+- **Filas por INSERT** (solo SQL): cuántas filas entran en cada sentencia
+  `INSERT`, 500 por defecto y como mínimo 1. Un driver que limita las filas por
+  sentencia, como SQL Server con 1000, acota el valor.
+
+SQL se ofrece en el asistente de exportación solo cuando el driver de la
+conexión de origen puede generar sentencias `INSERT` masivas. Escribe un archivo
+`<esquema>.<tabla>.sql` por tabla con sentencias re-ejecutables en el dialecto
+de esa conexión: cada sentencia contiene un lote de filas, nombra la tabla como
+lo hace el dialecto y termina con `;`. Una tabla sin filas escribe un archivo
+vacío. El dialecto decide cómo se escriben NULL y las fechas, así que el texto
+para NULL, el delimitador, la codificación y las opciones de fecha no se aplican
+y se ocultan. Los archivos SQL aún no se pueden importar: al importar una
+carpeta que contiene uno, esa tabla falla con el mensaje de que el formato no se
+puede importar. **Exportar todas las filas a un archivo** no ofrece SQL.
 
 Los valores por defecto escriben exactamente lo que escribían las versiones
 anteriores. El manifiesto registra las opciones que dieron forma a un archivo,

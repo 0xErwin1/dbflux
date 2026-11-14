@@ -197,9 +197,11 @@ impl DataGridPanel {
                 DocumentPageShape::new(self.collection.expanded.clone(), self.identity_columns());
             match format {
                 FileFormat::Json | FileFormat::JsonLines => Box::new(shape.whole_documents()),
-                FileFormat::Csv | FileFormat::Html | FileFormat::Markdown | FileFormat::Xml => {
-                    Box::new(shape)
-                }
+                FileFormat::Csv
+                | FileFormat::Html
+                | FileFormat::Markdown
+                | FileFormat::Xml
+                | FileFormat::Sql => Box::new(shape),
             }
         } else {
             Box::new(AlignByName::default())

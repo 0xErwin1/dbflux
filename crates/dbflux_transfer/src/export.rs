@@ -126,7 +126,8 @@ pub fn run_export(
             table.name.clone(),
             options.format,
         )
-        .with_options(format_options.clone());
+        .with_options(format_options.clone())
+        .with_connection(Arc::clone(connection));
 
         let result = run_transfer(
             &mut source,
@@ -836,6 +837,7 @@ mod tests {
             encoding: TextEncoding::Windows1252,
             null_text: "\\N".to_string(),
             date_format: DateFormat::Epoch,
+            ..FormatOptions::default()
         };
 
         let (manifest, _) =

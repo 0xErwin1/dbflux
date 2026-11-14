@@ -215,7 +215,7 @@ impl FileSource {
             }
             FileFormat::Json => open_json(file)?,
             FileFormat::JsonLines => open_json_lines(BufReader::new(file)),
-            FileFormat::Html | FileFormat::Markdown | FileFormat::Xml => {
+            FileFormat::Html | FileFormat::Markdown | FileFormat::Xml | FileFormat::Sql => {
                 return Err(TransferError::Source(format!(
                     "{}: {} files cannot be imported",
                     path.display(),
@@ -385,7 +385,12 @@ mod tests {
         let path = dir.join("t.html");
         std::fs::write(&path, "<table></table>").unwrap();
 
-        for format in [FileFormat::Html, FileFormat::Markdown, FileFormat::Xml] {
+        for format in [
+            FileFormat::Html,
+            FileFormat::Markdown,
+            FileFormat::Xml,
+            FileFormat::Sql,
+        ] {
             assert!(!format.is_importable());
             let Err(TransferError::Source(message)) =
                 FileSource::open(&path, format, vec![column("id", "int4")], 10, None)
