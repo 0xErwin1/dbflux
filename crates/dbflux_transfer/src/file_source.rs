@@ -116,8 +116,8 @@ fn invalid_json(reason: &str) -> TransferError {
     TransferError::Source(format!("invalid JSON: {reason}"))
 }
 
-/// Skips whitespace and a UTF-8 byte order mark, returning the next byte
-/// without consuming it.
+/// Skips JSON whitespace (space, tab, line feed, carriage return), returning
+/// the next byte without consuming it.
 fn next_non_whitespace(reader: &mut BufReader<File>) -> Result<Option<u8>, TransferError> {
     loop {
         let buffer = reader
@@ -126,18 +126,29 @@ fn next_non_whitespace(reader: &mut BufReader<File>) -> Result<Option<u8>, Trans
         let Some(&byte) = buffer.first() else {
             return Ok(None);
         };
-        if byte.is_ascii_whitespace() {
+        if matches!(byte, b' ' | b'\t' | b'\n' | b'\r') {
             reader.consume(1);
-        } else if buffer.starts_with(b"\xEF\xBB\xBF") {
-            reader.consume(3);
         } else {
             return Ok(Some(byte));
         }
     }
 }
 
+/// Consumes a UTF-8 byte order mark at the start of the file, the only place
+/// one may appear.
+fn skip_byte_order_mark(reader: &mut BufReader<File>) -> Result<(), TransferError> {
+    let buffer = reader
+        .fill_buf()
+        .map_err(|e| TransferError::Source(e.to_string()))?;
+    if buffer.starts_with(b"\xEF\xBB\xBF") {
+        reader.consume(3);
+    }
+    Ok(())
+}
+
 fn open_json(file: File) -> Result<SourceReader, TransferError> {
     let mut reader = BufReader::new(file);
+    skip_byte_order_mark(&mut reader)?;
     if next_non_whitespace(&mut reader)? == Some(b'[') {
         reader.consume(1);
         return Ok(SourceReader::JsonArray(Box::new(JsonArrayStream::new(
@@ -471,6 +482,21 @@ mod tests {
     }
 
     #[test]
+    fn json_source_skips_a_byte_order_mark_at_the_start() {
+        let dir = temp_dir("json_array_bom");
+        let path = dir.join("t.json");
+        std::fs::write(&path, "\u{feff}[{\"id\":1}]").unwrap();
+
+        let mut source =
+            FileSource::open(&path, FileFormat::Json, vec![column("id", "int4")], 5, None)
+                .expect("open json");
+
+        let chunk = source.next_chunk(&CancelToken::new()).unwrap().unwrap();
+        assert_eq!(chunk.0, vec![vec![Value::Int(1)]]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn json_source_reads_an_empty_json_array_as_no_rows() {
         let dir = temp_dir("json_array_empty");
         let path = dir.join("t.json");
@@ -526,6 +552,16 @@ mod tests {
                 "unexpected content after the array",
             ),
             ("[1]", "each array element must be an object"),
+            (
+                "[{\"id\":1},\u{c}{\"id\":2}]",
+                "each array element must be an object",
+            ),
+            (
+                "[{\"id\":1},\u{feff}{\"id\":2}]",
+                "each array element must be an object",
+            ),
+            ("[]\u{feff}", "unexpected content after the array"),
+            ("[]\u{c}", "unexpected content after the array"),
         ];
 
         for (contents, reason) in cases {
