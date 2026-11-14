@@ -148,21 +148,11 @@ impl<W: Write> XmlStreamWriter<W> {
     }
 }
 
-/// Escapes text for HTML and XML content and attribute values. A character
-/// XML 1.0 cannot carry at all, such as most ASCII control characters, is
-/// replaced with U+FFFD, because no escape makes it legal.
+/// Escapes text for HTML content and attribute values.
 pub(crate) fn escape_markup(text: &str) -> String {
     let mut escaped = String::with_capacity(text.len());
     for character in text.chars() {
-        match character {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&#39;"),
-            character if is_xml_char(character) => escaped.push(character),
-            _ => escaped.push(char::REPLACEMENT_CHARACTER),
-        }
+        push_markup_char(&mut escaped, character);
     }
     escaped
 }
@@ -178,10 +168,25 @@ fn escape_xml(text: &str) -> String {
             '\t' => escaped.push_str("&#9;"),
             '\n' => escaped.push_str("&#10;"),
             '\r' => escaped.push_str("&#13;"),
-            character => escaped.push_str(&escape_markup(character.encode_utf8(&mut [0; 4]))),
+            character => push_markup_char(&mut escaped, character),
         }
     }
     escaped
+}
+
+/// Appends one character escaped for HTML or XML. A character XML 1.0 cannot
+/// carry at all, such as most ASCII control characters, becomes U+FFFD,
+/// because no escape makes it legal.
+fn push_markup_char(escaped: &mut String, character: char) {
+    match character {
+        '&' => escaped.push_str("&amp;"),
+        '<' => escaped.push_str("&lt;"),
+        '>' => escaped.push_str("&gt;"),
+        '"' => escaped.push_str("&quot;"),
+        '\'' => escaped.push_str("&#39;"),
+        character if is_xml_char(character) => escaped.push(character),
+        _ => escaped.push(char::REPLACEMENT_CHARACTER),
+    }
 }
 
 fn is_xml_char(character: char) -> bool {
