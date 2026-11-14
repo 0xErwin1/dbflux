@@ -2,6 +2,14 @@ use super::*;
 use dbflux_app::updates::{self, StartupDialog};
 use dbflux_ui_base::updates::{UpdateDialogRequest, run_update_check};
 
+/// Welcome shows only when a scheduler exists and its disclosure was never
+/// dismissed. `None` means telemetry never initialized, and reading that as
+/// "never disclosed" reopened Welcome on every launch, forever.
+#[cfg(feature = "telemetry")]
+fn telemetry_undisclosed(disclosure_dismissed: Option<bool>) -> bool {
+    disclosure_dismissed == Some(false)
+}
+
 #[cfg(feature = "telemetry")]
 fn telemetry_startup_dialog(dialog: StartupDialog, undisclosed: bool) -> StartupDialog {
     if undisclosed {
@@ -13,8 +21,21 @@ fn telemetry_startup_dialog(dialog: StartupDialog, undisclosed: bool) -> Startup
 
 #[cfg(all(test, feature = "telemetry"))]
 mod welcome_tests {
-    use super::{StartupDialog, telemetry_startup_dialog, updates};
+    use super::{StartupDialog, telemetry_startup_dialog, telemetry_undisclosed, updates};
     use dbflux_app::updates::UpdateSettings;
+
+    /// A scheduler that failed to initialize is `None`, and that must not be
+    /// read as "never disclosed": showing Welcome on every launch forever is
+    /// the bug this pins.
+    #[test]
+    fn failed_telemetry_init_does_not_reopen_welcome() {
+        assert!(!telemetry_undisclosed(None));
+        assert!(telemetry_undisclosed(Some(false)), "never disclosed");
+        assert!(
+            !telemetry_undisclosed(Some(true)),
+            "already disclosed stays quiet"
+        );
+    }
 
     #[test]
     fn welcome_undisclosed_install_overrides_disabled_whats_new() {
@@ -240,11 +261,12 @@ impl Workspace {
         #[cfg(feature = "telemetry")]
         let dialog = {
             self.start_telemetry(cx);
-            let undisclosed = self
-                .app_state
-                .read(cx)
-                .telemetry()
-                .is_none_or(|scheduler| !scheduler.is_disclosure_dismissed());
+            let undisclosed = telemetry_undisclosed(
+                self.app_state
+                    .read(cx)
+                    .telemetry()
+                    .map(|scheduler| scheduler.is_disclosure_dismissed()),
+            );
             telemetry_startup_dialog(dialog, undisclosed)
         };
 

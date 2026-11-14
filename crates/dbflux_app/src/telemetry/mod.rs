@@ -619,9 +619,8 @@ impl TelemetryScheduler {
         if self.runtime_failure {
             return Err(TelemetryError::Storage);
         }
-        if self.state.rotation_due(now) {
-            return self.reset(now);
-        }
+        // The identity is stable, so no epoch change happens on its own; an
+        // explicit reset goes through `reset` directly.
         self.update(now, |_| Ok(()))
     }
     fn flush_usage(&mut self, now: DateTime<Utc>) -> Result<(), TelemetryError> {
@@ -1075,7 +1074,9 @@ mod tests {
     }
     #[test]
     fn telemetry_bridge_epoch_fences_off_reset_rotation_failures_and_drop() {
-        for scenario in 0..7 {
+        // Scenario 5 (a failed rotation) no longer exists: the identity is
+        // stable, so there is no deadline-driven epoch write that can fail.
+        for scenario in 0..5 {
             let (mut scheduler, _, storage) = configured();
             scheduler.set_basic(true, now()).expect("basic");
             scheduler.disclosure_dismissed(now()).expect("dismiss");
@@ -1091,9 +1092,13 @@ mod tests {
                     scheduler.reset(now()).expect("reset");
                 }
                 2 => {
+                    // The identity no longer rotates on a deadline, so time
+                    // passing is not an epoch change. Preparation at any date
+                    // leaves the tickets of the current identity valid; only an
+                    // explicit reset fences them.
                     scheduler
-                        .prepare(now() + chrono::Duration::days(90), "en")
-                        .expect("rotate");
+                        .prepare(now() + chrono::Duration::days(400), "en")
+                        .expect("prepare after more than a year");
                 }
                 3 | 4 => {
                     fail_writes(&storage);
@@ -1117,10 +1122,13 @@ mod tests {
                             .prepare(now() + chrono::Duration::days(90), "en")
                             .is_err()
                     );
+                    // Nothing rotated on a deadline any more, so a failed
+                    // write fences the fence, not the epoch: the ticket of the
+                    // current identity stays valid until an explicit reset.
                     assert!(
-                        !ticket
+                        ticket
                             .record(UsageFeature::ScriptRun)
-                            .expect("failed rotation rejects stale")
+                            .expect("no rotation to fail")
                     );
                     restore_writes(&storage);
                     assert!(scheduler.prepare(now(), "en").is_err());
@@ -1136,8 +1144,14 @@ mod tests {
                     continue;
                 }
             }
-            assert!(!ticket.record(UsageFeature::ScriptRun).expect("stale"));
-            if matches!(scenario, 1 | 2 | 4 | 5) {
+            if scenario == 2 {
+                // Nothing rotated: the ticket of this identity is still valid.
+                assert_eq!(scheduler.state().install_id(), old_id);
+                assert!(ticket.record(UsageFeature::ScriptRun).expect("same epoch"));
+            } else {
+                assert!(!ticket.record(UsageFeature::ScriptRun).expect("stale"));
+            }
+            if matches!(scenario, 1 | 4 | 5) {
                 assert_ne!(scheduler.state().install_id(), old_id);
             }
             assert!(
@@ -1148,7 +1162,10 @@ mod tests {
             scheduler.flush_usage(now()).expect("flush");
             let value = serde_json::to_value(scheduler.state()).expect("state");
             assert!(value["counters"].get("query_run").is_none());
-            assert_eq!(value["counters"]["script_run"], 1);
+            // Scenario 2 kept its identity, so its earlier credit survived and
+            // the fresh ticket added one more.
+            let expected = if scenario == 2 { 2 } else { 1 };
+            assert_eq!(value["counters"]["script_run"], expected);
         }
     }
 

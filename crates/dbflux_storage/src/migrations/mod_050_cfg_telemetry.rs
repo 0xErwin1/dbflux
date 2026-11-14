@@ -40,7 +40,7 @@ mod tests {
         assert_eq!(count, 0);
         let applied: i64 = connection
             .query_row(
-                "SELECT COUNT(*) FROM sys_migrations WHERE name = '039_cfg_telemetry'",
+                "SELECT COUNT(*) FROM sys_migrations WHERE name = '050_cfg_telemetry'",
                 [],
                 |row| row.get(0),
             )

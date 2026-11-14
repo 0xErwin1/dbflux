@@ -382,6 +382,34 @@ impl WelcomeDialog {
                 dbflux_i18n::t!("updates.welcome.telemetry_heading"),
             );
             let cards = self.render_telemetry_cards(cx);
+            Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(UPDATES_COLUMN_GAP)
+                    .child(heading)
+                    .child(
+                        Text::caption(dbflux_i18n::t!("updates.welcome.telemetry_helper"))
+                            .font_size(px(11.0))
+                            .text_color(muted),
+                    )
+                    .child(cards)
+                    .into_any_element(),
+            )
+        }
+        #[cfg(not(feature = "telemetry"))]
+        None
+    }
+
+
+    /// The privacy disclosure. It belongs above the footer rather than at the
+    /// end of a column: as a column child it overflowed into the footer as
+    /// soon as the welcome grew a telemetry section.
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    fn render_telemetry_summary(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        #[cfg(feature = "telemetry")]
+        {
+            let muted = cx.theme().muted_foreground;
             let summary = div()
                 .debug_selector(|| "welcome-privacy-box".to_string())
                 .min_h(px(56.0))
@@ -412,21 +440,7 @@ impl WelcomeDialog {
                                 .text_color(muted),
                         ),
                 );
-            Some(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(UPDATES_COLUMN_GAP)
-                    .child(heading)
-                    .child(
-                        Text::caption(dbflux_i18n::t!("updates.welcome.telemetry_helper"))
-                            .font_size(px(11.0))
-                            .text_color(muted),
-                    )
-                    .child(cards)
-                    .child(summary)
-                    .into_any_element(),
-            )
+            Some(summary.into_any_element())
         }
         #[cfg(not(feature = "telemetry"))]
         None
@@ -647,6 +661,7 @@ impl Render for WelcomeDialog {
         let columns = div()
             .debug_selector(|| "welcome-columns".to_string())
             .flex()
+            .flex_1()
             .min_h_0()
             .bg(theme.popover)
             .child(self.render_whats_new_column(cx))
@@ -663,6 +678,7 @@ impl Render for WelcomeDialog {
             .min_h_0()
             .child(self.render_header(cx))
             .child(columns)
+            .children(self.render_telemetry_summary(cx))
             .child(self.render_footer(cx));
 
         let card_fill = cx.theme().background;
