@@ -1084,6 +1084,7 @@ mod tests {
             }],
             row_count: 0,
             fk_order_index: 0,
+            options: Default::default(),
         };
         let mut config = TableImportConfig::new(&manifest_table, true, Vec::new());
         config.mapping_mode = TableMappingMode::Existing;
@@ -1107,6 +1108,7 @@ mod tests {
             }],
             row_count: 0,
             fk_order_index: 0,
+            options: Default::default(),
         };
         let mut config = TableImportConfig::new(&manifest_table, true, Vec::new());
         config.mapping_mode = TableMappingMode::Recreate;

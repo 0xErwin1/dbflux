@@ -1,4 +1,5 @@
 use crate::ExportError;
+use crate::options::DateFormat;
 use dbflux_core::{ColumnMeta, QueryResult, QueryResultShape, Row, Value};
 use std::io::Write;
 
@@ -41,19 +42,53 @@ impl JsonExporter {
 fn rows_to_json_array(columns: &[ColumnMeta], rows: &[Row]) -> serde_json::Value {
     serde_json::Value::Array(
         rows.iter()
-            .map(|row| row_to_json_object(columns, row))
+            .map(|row| row_to_json_object(columns, row, DateFormat::default()))
             .collect(),
     )
 }
 
-pub(crate) fn row_to_json_object(columns: &[ColumnMeta], row: &[Value]) -> serde_json::Value {
+pub(crate) fn row_to_json_object(
+    columns: &[ColumnMeta],
+    row: &[Value],
+    date_format: DateFormat,
+) -> serde_json::Value {
     let mut map = serde_json::Map::new();
 
     for (col, value) in columns.iter().zip(row.iter()) {
-        map.insert(col.name.clone(), Value::to_serde_json(value));
+        map.insert(col.name.clone(), value_to_json(value, date_format));
     }
 
     serde_json::Value::Object(map)
+}
+
+/// `Value::to_serde_json`, except that dates and times follow `date_format`:
+/// epoch seconds are a JSON number and the other presets a plain string. The
+/// default keeps the tagged `{"$date": ...}` form.
+fn value_to_json(value: &Value, date_format: DateFormat) -> serde_json::Value {
+    if let Some(seconds) = date_format.epoch_seconds(value) {
+        return serde_json::Value::from(seconds);
+    }
+    if date_format != DateFormat::Rfc3339
+        && let Some(text) = date_format.render(value)
+    {
+        return serde_json::Value::String(text);
+    }
+
+    match value {
+        Value::Array(items) => serde_json::Value::Array(
+            items
+                .iter()
+                .map(|item| value_to_json(item, date_format))
+                .collect(),
+        ),
+        Value::Document(fields) => serde_json::Value::Object(
+            fields
+                .iter()
+                .map(|(name, field)| (name.clone(), value_to_json(field, date_format)))
+                .collect(),
+        ),
+        other => Value::to_serde_json(other),
+    }
 }
 
 #[cfg(test)]

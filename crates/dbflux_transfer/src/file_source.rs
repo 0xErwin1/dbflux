@@ -10,10 +10,11 @@
 //! ever holds the whole file's rows resident in memory at once.
 
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use dbflux_core::{CancelToken, TransferColumn, Value};
+use dbflux_export::{DateFormat, FormatOptions, decode_to_utf8};
 
 use crate::file_sink::FileFormat;
 use crate::pipeline::{RowChunk, RowSource, TransferError};
@@ -26,7 +27,7 @@ type JsonValueStream = serde_json::StreamDeserializer<
 >;
 
 enum SourceReader {
-    Csv(Box<csv::Reader<BufReader<File>>>),
+    Csv(Box<csv::Reader<Box<dyn Read + Send>>>),
     Json(Box<JsonValueStream>),
     JsonArray(Box<JsonArrayStream>),
 }
@@ -168,9 +169,11 @@ pub struct FileSource {
     columns: Vec<TransferColumn>,
     segment_size: usize,
     estimated_total: Option<u64>,
+    options: FormatOptions,
 }
 
 impl FileSource {
+    /// Opens a file written with the default format options.
     pub fn open(
         path: &Path,
         format: FileFormat,
@@ -178,14 +181,36 @@ impl FileSource {
         segment_size: u32,
         estimated_total: Option<u64>,
     ) -> Result<Self, TransferError> {
+        Self::open_with(
+            path,
+            format,
+            columns,
+            segment_size,
+            estimated_total,
+            FormatOptions::default(),
+        )
+    }
+
+    /// Opens a file written with `options`, as the export manifest records
+    /// them: the CSV delimiter and encoding, NULL text and date format.
+    pub fn open_with(
+        path: &Path,
+        format: FileFormat,
+        columns: Vec<TransferColumn>,
+        segment_size: u32,
+        estimated_total: Option<u64>,
+        options: FormatOptions,
+    ) -> Result<Self, TransferError> {
         let file = File::open(path)
             .map_err(|e| TransferError::Source(format!("{}: {e}", path.display())))?;
 
         let reader = match format {
             FileFormat::Csv => {
+                let bytes = decode_to_utf8(BufReader::new(file), options.encoding);
                 let csv_reader = csv::ReaderBuilder::new()
                     .has_headers(true)
-                    .from_reader(BufReader::new(file));
+                    .delimiter(options.delimiter.byte())
+                    .from_reader(bytes);
                 SourceReader::Csv(Box::new(csv_reader))
             }
             FileFormat::Json => open_json(file)?,
@@ -204,14 +229,16 @@ impl FileSource {
             columns,
             segment_size: segment_size.max(1) as usize,
             estimated_total,
+            options,
         })
     }
 }
 
 fn read_csv_chunk(
-    reader: &mut csv::Reader<BufReader<File>>,
+    reader: &mut csv::Reader<Box<dyn Read + Send>>,
     columns: &[TransferColumn],
     segment_size: usize,
+    options: &FormatOptions,
 ) -> Result<Vec<Vec<Value>>, TransferError> {
     let mut rows = Vec::new();
 
@@ -221,7 +248,7 @@ fn read_csv_chunk(
         let row = columns
             .iter()
             .zip(record.iter())
-            .map(|(col, field)| value_from_csv_field(field, col.type_name.as_deref()))
+            .map(|(col, field)| value_from_csv_field(field, col.type_name.as_deref(), options))
             .collect();
 
         rows.push(row);
@@ -238,12 +265,13 @@ fn read_json_chunk(
     values: &mut JsonValueStream,
     columns: &[TransferColumn],
     segment_size: usize,
+    date_format: DateFormat,
 ) -> Result<Vec<Vec<Value>>, TransferError> {
     let mut rows = Vec::with_capacity(segment_size);
 
     for _ in 0..segment_size {
         match values.next() {
-            Some(Ok(value)) => rows.push(json_row_to_values(&value, columns)),
+            Some(Ok(value)) => rows.push(json_row_to_values(&value, columns, date_format)),
             Some(Err(e)) => return Err(TransferError::Source(format!("invalid NDJSON: {e}"))),
             None => break,
         }
@@ -256,12 +284,13 @@ fn read_json_array_chunk(
     array: &mut JsonArrayStream,
     columns: &[TransferColumn],
     segment_size: usize,
+    date_format: DateFormat,
 ) -> Result<Vec<Vec<Value>>, TransferError> {
     let mut rows = Vec::with_capacity(segment_size);
 
     while rows.len() < segment_size {
         match array.next_value()? {
-            Some(value) => rows.push(json_row_to_values(&value, columns)),
+            Some(value) => rows.push(json_row_to_values(&value, columns, date_format)),
             None => break,
         }
     }
@@ -269,7 +298,11 @@ fn read_json_array_chunk(
     Ok(rows)
 }
 
-fn json_row_to_values(value: &serde_json::Value, columns: &[TransferColumn]) -> Vec<Value> {
+fn json_row_to_values(
+    value: &serde_json::Value,
+    columns: &[TransferColumn],
+    date_format: DateFormat,
+) -> Vec<Value> {
     let serde_json::Value::Object(map) = value else {
         return columns.iter().map(|_| Value::Null).collect();
     };
@@ -278,7 +311,7 @@ fn json_row_to_values(value: &serde_json::Value, columns: &[TransferColumn]) -> 
         .iter()
         .map(|col| {
             map.get(&col.name)
-                .map(|v| value_from_json(v, col.type_name.as_deref()))
+                .map(|v| value_from_json(v, col.type_name.as_deref(), date_format))
                 .unwrap_or(Value::Null)
         })
         .collect()
@@ -295,13 +328,21 @@ impl RowSource for FileSource {
         }
 
         let rows = match &mut self.reader {
-            SourceReader::Csv(reader) => read_csv_chunk(reader, &self.columns, self.segment_size)?,
-            SourceReader::Json(values) => {
-                read_json_chunk(values, &self.columns, self.segment_size)?
+            SourceReader::Csv(reader) => {
+                read_csv_chunk(reader, &self.columns, self.segment_size, &self.options)?
             }
-            SourceReader::JsonArray(array) => {
-                read_json_array_chunk(array, &self.columns, self.segment_size)?
-            }
+            SourceReader::Json(values) => read_json_chunk(
+                values,
+                &self.columns,
+                self.segment_size,
+                self.options.date_format,
+            )?,
+            SourceReader::JsonArray(array) => read_json_array_chunk(
+                array,
+                &self.columns,
+                self.segment_size,
+                self.options.date_format,
+            )?,
         };
 
         if rows.is_empty() {
@@ -780,6 +821,104 @@ mod tests {
             ]
         );
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn read_all(source: &mut FileSource) -> Vec<Vec<Value>> {
+        let cancel = CancelToken::new();
+        let mut all_rows = Vec::new();
+        while let Some(chunk) = source.next_chunk(&cancel).unwrap() {
+            all_rows.extend(chunk.0);
+        }
+        all_rows
+    }
+
+    #[test]
+    fn open_reads_csv_with_the_recorded_delimiter_encoding_and_null_text() {
+        use dbflux_export::{CsvDelimiter, TextEncoding};
+
+        let dir = temp_dir("csv_options");
+        let path = dir.join("t.csv");
+        std::fs::write(&path, b"id;name\n1;caf\xE9\n2;\\N\n3;\n").unwrap();
+        let options = FormatOptions {
+            delimiter: CsvDelimiter::Semicolon,
+            encoding: TextEncoding::Windows1252,
+            null_text: "\\N".to_string(),
+            ..FormatOptions::default()
+        };
+        let columns = vec![column("id", "int4"), column("name", "text")];
+
+        let mut source =
+            FileSource::open_with(&path, FileFormat::Csv, columns, 10, None, options).unwrap();
+
+        assert_eq!(
+            read_all(&mut source),
+            vec![
+                vec![Value::Int(1), Value::Text("café".to_string())],
+                vec![Value::Int(2), Value::Null],
+                vec![Value::Int(3), Value::Text(String::new())],
+            ]
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn open_reads_utf16le_and_utf8_bom_csv() {
+        use dbflux_export::TextEncoding;
+
+        let dir = temp_dir("csv_encodings");
+        let columns = vec![column("id", "int4"), column("name", "text")];
+        let utf16: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain("id,name\n1,é\n".encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        let utf8_bom: Vec<u8> = b"\xEF\xBB\xBFid,name\n1,\xC3\xA9\n".to_vec();
+
+        for (label, bytes, encoding) in [
+            ("utf16", utf16, TextEncoding::Utf16Le),
+            ("bom", utf8_bom, TextEncoding::Utf8Bom),
+        ] {
+            let path = dir.join(format!("{label}.csv"));
+            std::fs::write(&path, bytes).unwrap();
+            let options = FormatOptions {
+                encoding,
+                ..FormatOptions::default()
+            };
+            let mut source =
+                FileSource::open_with(&path, FileFormat::Csv, columns.clone(), 10, None, options)
+                    .unwrap();
+            assert_eq!(
+                read_all(&mut source),
+                vec![vec![Value::Int(1), Value::Text("é".to_string())]],
+                "{label}"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn open_reads_json_epoch_dates_back_as_timestamps() {
+        use dbflux_core::chrono::{TimeZone, Utc};
+
+        let dir = temp_dir("json_epoch");
+        let path = dir.join("t.json");
+        std::fs::write(&path, "[\n{\"id\":1,\"at\":1783420215}\n]\n").unwrap();
+        let options = FormatOptions {
+            date_format: DateFormat::Epoch,
+            ..FormatOptions::default()
+        };
+        let columns = vec![column("id", "int4"), column("at", "timestamptz")];
+
+        let mut source =
+            FileSource::open_with(&path, FileFormat::Json, columns, 10, None, options).unwrap();
+
+        assert_eq!(
+            read_all(&mut source),
+            vec![vec![
+                Value::Int(1),
+                Value::DateTime(Utc.with_ymd_and_hms(2026, 7, 7, 10, 30, 15).unwrap())
+            ]]
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

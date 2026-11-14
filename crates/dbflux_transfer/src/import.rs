@@ -205,12 +205,13 @@ fn import_one_table(
         ))
     })?;
 
-    let mut source = FileSource::open(
+    let mut source = FileSource::open_with(
         &manifest_dir.join(&manifest_table.file),
         format,
         manifest_table.columns.clone(),
         options.segment_size,
         Some(manifest_table.row_count),
+        manifest_table.options.clone(),
     )?;
 
     let target_columns = resolve_target_columns(
@@ -516,6 +517,7 @@ mod tests {
                 columns: vec![pk_column()],
                 row_count: 2,
                 fk_order_index: 0,
+                options: Default::default(),
             }],
         };
         std::fs::write(
@@ -803,6 +805,7 @@ mod tests {
                     columns: vec![pk_column()],
                     row_count: 2,
                     fk_order_index: 0,
+                    options: Default::default(),
                 },
                 ManifestTable {
                     schema: None,
@@ -812,6 +815,7 @@ mod tests {
                     columns: vec![pk_column()],
                     row_count: 1,
                     fk_order_index: 1,
+                    options: Default::default(),
                 },
                 ManifestTable {
                     schema: None,
@@ -821,6 +825,7 @@ mod tests {
                     columns: vec![pk_column()],
                     row_count: 1,
                     fk_order_index: 2,
+                    options: Default::default(),
                 },
             ],
         };
@@ -924,6 +929,7 @@ mod tests {
                 ],
                 row_count: 2,
                 fk_order_index: 0,
+                options: Default::default(),
             }],
         };
         std::fs::write(
@@ -1006,6 +1012,7 @@ mod tests {
                 columns: vec![pk_column()],
                 row_count: *rows,
                 fk_order_index: index,
+                options: Default::default(),
             });
         }
 

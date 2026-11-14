@@ -173,3 +173,69 @@ fn xml_with_no_rows_is_an_empty_rows_element() {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rows>\n</rows>\n"
     );
 }
+
+fn null_options(null_text: &str) -> FormatOptions {
+    FormatOptions {
+        null_text: null_text.to_string(),
+        ..FormatOptions::default()
+    }
+}
+
+#[test]
+fn html_and_markdown_write_the_configured_null_text() {
+    let options = null_options("<NULL>");
+
+    let mut output = Vec::new();
+    let mut writer = HtmlStreamWriter::new(&mut output, "t").with_options(options.clone());
+    writer.write_header(&columns()).unwrap();
+    writer.write_row(&rows()[1]).unwrap();
+    writer.finish().unwrap();
+    let html = String::from_utf8(output).unwrap();
+    assert!(html.contains("<td>&lt;NULL&gt;</td>"), "{html}");
+
+    let mut output = Vec::new();
+    let mut writer = MarkdownStreamWriter::new(&mut output).with_options(options);
+    writer.write_header(&columns()).unwrap();
+    writer.write_row(&rows()[1]).unwrap();
+    writer.finish().unwrap();
+    let markdown = String::from_utf8(output).unwrap();
+    assert!(markdown.ends_with("| 2 | &lt;NULL&gt; |\n"), "{markdown}");
+}
+
+#[test]
+fn xml_keeps_marking_null_structurally_whatever_the_null_text() {
+    let mut output = Vec::new();
+    let mut writer = XmlStreamWriter::new(&mut output).with_options(null_options("\\N"));
+    writer.write_header(&columns()).unwrap();
+    writer.write_row(&rows()[1]).unwrap();
+    writer.finish().unwrap();
+    let xml = String::from_utf8(output).unwrap();
+    assert!(
+        xml.contains("<field name=\"note\" null=\"true\"/>"),
+        "{xml}"
+    );
+    assert!(!xml.contains("\\N"), "{xml}");
+}
+
+#[test]
+fn markup_formats_apply_the_date_format() {
+    use dbflux_core::chrono::{TimeZone, Utc};
+    let options = FormatOptions {
+        date_format: crate::DateFormat::Epoch,
+        ..FormatOptions::default()
+    };
+    let row = vec![Value::DateTime(
+        Utc.with_ymd_and_hms(2026, 7, 7, 10, 30, 15).unwrap(),
+    )];
+
+    let mut output = Vec::new();
+    let mut writer = XmlStreamWriter::new(&mut output).with_options(options);
+    writer.write_header(&[column("at")]).unwrap();
+    writer.write_row(&row).unwrap();
+    writer.finish().unwrap();
+    assert!(
+        String::from_utf8(output)
+            .unwrap()
+            .contains(">1783420215</field>")
+    );
+}

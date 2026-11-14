@@ -266,6 +266,30 @@ tablas siguientes no se intentan. XML escribe un `<row>` por fila y un
 `<field name="...">` por columna, con `null="true"` para un NULL, de modo que se
 distingue de un valor vacío.
 
+El asistente de exportación (**Export Table…** en la barra lateral) escribe cada
+tabla seleccionada en su propio archivo dentro de una carpeta nueva, junto a un
+`manifest.json`. Su paso Format ofrece las opciones que usa el formato y oculta
+las demás:
+
+- **Delimitador** (solo CSV): coma, punto y coma, tabulador o barra vertical.
+- **Codificación** (solo CSV): UTF-8, UTF-8 con BOM, UTF-16LE (con BOM) o
+  Windows-1252. Un carácter que Windows-1252 no puede representar detiene la
+  exportación con un error que lo nombra, en lugar de sustituirlo.
+- **Texto para NULL** (CSV, HTML y Markdown): el texto que se escribe para NULL,
+  vacío por defecto. JSON y JSON Lines siempre escriben `null`, y XML marca un
+  NULL con `null="true"`.
+- **Fechas** (todos los formatos): RFC 3339 (por defecto), `YYYY-MM-DD HH:MM:SS`
+  en UTC o segundos epoch, que JSON y JSON Lines escriben como número. Una fecha
+  se escribe como `YYYY-MM-DD` con los dos primeros y como su medianoche (UTC)
+  con epoch, y una hora como `HH:MM:SS` con `YYYY-MM-DD HH:MM:SS` y como
+  segundos desde medianoche con epoch.
+
+Los valores por defecto escriben exactamente lo que escribían las versiones
+anteriores. El manifiesto registra las opciones que dieron forma a un archivo,
+de modo que importar la carpeta lo lee igual; un manifiesto sin ellas significa
+los valores por defecto. **Exportar todas las filas a un archivo** usa siempre
+los valores por defecto.
+
 Una colección de documentos exportada como JSON o JSON Lines escribe cada
 documento completo, un objeto por línea, con todos sus campos. Como CSV, HTML,
 Markdown o XML se escribe con las columnas que la cuadrícula muestra para la

@@ -13,6 +13,7 @@
 //! reuses `dbflux_transfer::export::{run_export, ExportOptions}` unchanged —
 //! see [`run`].
 
+mod format_options;
 pub mod phases;
 mod run;
 
@@ -32,6 +33,7 @@ use dbflux_components::primitives::{Icon, SegmentedControl, SegmentedItem, Text}
 use dbflux_components::tokens::{ChromeColors, ModalMetrics, ui};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{Connection, TableRef};
+use dbflux_export::FormatOptions;
 use dbflux_transfer::FileFormat;
 use dbflux_ui_base::app_state_entity::AppStateEntity;
 use gpui::prelude::FluentBuilder;
@@ -39,6 +41,11 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use uuid::Uuid;
 
+use format_options::{
+    date_format_from_segment_id, date_format_label, date_format_segment_id,
+    delimiter_from_segment_id, delimiter_label, delimiter_segment_id, encoding_from_segment_id,
+    encoding_label, encoding_segment_id, visible_options,
+};
 use phases::{ExportPhase, RailEntry, RunState, next_phase, prev_phase, rail_entries};
 use run::RunProgress;
 
@@ -95,6 +102,9 @@ pub struct ExportWizard {
     phase: ExportPhase,
 
     selected_format: FileFormat,
+    format_options: FormatOptions,
+    null_text_input: Entity<InputState>,
+    _null_text_sub: Subscription,
 
     output_dir: Option<PathBuf>,
     choosing_folder: bool,
@@ -135,6 +145,21 @@ impl ExportWizard {
             },
         );
 
+        let null_text_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "document.export_wizard.format_options.null_text_placeholder"
+            ))
+        });
+        let null_text_sub = cx.subscribe_in(
+            &null_text_input,
+            window,
+            |this, _entity, event: &InputEvent, _window, cx| {
+                if let InputEvent::Change = event {
+                    this.on_null_text_changed(cx);
+                }
+            },
+        );
+
         Self {
             app_state,
             focus_handle: cx.focus_handle(),
@@ -144,6 +169,9 @@ impl ExportWizard {
             tables: Vec::new(),
             phase: ExportPhase::Tables,
             selected_format: FileFormat::ALL[0],
+            format_options: FormatOptions::default(),
+            null_text_input,
+            _null_text_sub: null_text_sub,
             output_dir: None,
             choosing_folder: false,
             folder_error: None,
@@ -194,6 +222,9 @@ impl ExportWizard {
         self.phase = ExportPhase::Tables;
 
         self.selected_format = FileFormat::ALL[0];
+        self.format_options = FormatOptions::default();
+        self.null_text_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
 
         self.output_dir = None;
         self.choosing_folder = false;
@@ -254,6 +285,32 @@ impl ExportWizard {
             self.selected_format = format;
             cx.notify();
         }
+    }
+
+    fn select_delimiter(&mut self, segment_id: &str, cx: &mut Context<Self>) {
+        if let Some(delimiter) = delimiter_from_segment_id(segment_id) {
+            self.format_options.delimiter = delimiter;
+            cx.notify();
+        }
+    }
+
+    fn select_encoding(&mut self, segment_id: &str, cx: &mut Context<Self>) {
+        if let Some(encoding) = encoding_from_segment_id(segment_id) {
+            self.format_options.encoding = encoding;
+            cx.notify();
+        }
+    }
+
+    fn select_date_format(&mut self, segment_id: &str, cx: &mut Context<Self>) {
+        if let Some(date_format) = date_format_from_segment_id(segment_id) {
+            self.format_options.date_format = date_format;
+            cx.notify();
+        }
+    }
+
+    fn on_null_text_changed(&mut self, cx: &mut Context<Self>) {
+        self.format_options.null_text = self.null_text_input.read(cx).value().to_string();
+        cx.notify();
     }
 
     fn on_segment_size_changed(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -454,6 +511,128 @@ impl ExportWizard {
             .into_any_element()
     }
 
+    /// The per-format option rows, only those the selected format uses.
+    fn render_format_option_rows(
+        &self,
+        visible: format_options::VisibleOptions,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut rows = Vec::new();
+
+        if visible.delimiter_and_encoding {
+            let entity = cx.entity().downgrade();
+            let items: Vec<SegmentedItem> = dbflux_export::CsvDelimiter::ALL
+                .into_iter()
+                .map(|delimiter| {
+                    SegmentedItem::new(delimiter_segment_id(delimiter), delimiter_label(delimiter))
+                })
+                .collect();
+            let picker = SegmentedControl::new(
+                items,
+                delimiter_segment_id(self.format_options.delimiter),
+                move |segment_id, _window, cx| {
+                    entity
+                        .update(cx, |this, cx| this.select_delimiter(segment_id, cx))
+                        .ok();
+                },
+            )
+            .group("export-format-delimiter");
+            rows.push(
+                modal_form_row(
+                    dbflux_i18n::t!("document.export_wizard.format_options.delimiter_label"),
+                    div().flex().child(picker),
+                    None,
+                    cx,
+                )
+                .into_any_element(),
+            );
+
+            let entity = cx.entity().downgrade();
+            let items: Vec<SegmentedItem> = dbflux_export::TextEncoding::ALL
+                .into_iter()
+                .map(|encoding| {
+                    SegmentedItem::new(encoding_segment_id(encoding), encoding_label(encoding))
+                })
+                .collect();
+            let picker = SegmentedControl::new(
+                items,
+                encoding_segment_id(self.format_options.encoding),
+                move |segment_id, _window, cx| {
+                    entity
+                        .update(cx, |this, cx| this.select_encoding(segment_id, cx))
+                        .ok();
+                },
+            )
+            .group("export-format-encoding");
+            rows.push(
+                modal_form_row(
+                    dbflux_i18n::t!("document.export_wizard.format_options.encoding_label"),
+                    div().flex().child(picker),
+                    None,
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
+
+        if visible.null_text {
+            let hint = modal_hint(
+                dbflux_i18n::t!("document.export_wizard.format_options.null_text_hint"),
+                cx,
+            );
+            rows.push(
+                modal_form_row(
+                    dbflux_i18n::t!("document.export_wizard.format_options.null_text_label"),
+                    div()
+                        .w(SEGMENT_SIZE_INPUT_WIDTH)
+                        .font_family(dbflux_components::fonts::editor_family(cx))
+                        .child(Input::new(&self.null_text_input).w_full().aria_label(
+                            dbflux_i18n::t!(
+                                "document.export_wizard.format_options.null_text_label"
+                            ),
+                        )),
+                    Some(hint),
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
+
+        if visible.date_format {
+            let entity = cx.entity().downgrade();
+            let items: Vec<SegmentedItem> = dbflux_export::DateFormat::ALL
+                .into_iter()
+                .map(|date_format| {
+                    SegmentedItem::new(
+                        date_format_segment_id(date_format),
+                        date_format_label(date_format),
+                    )
+                })
+                .collect();
+            let picker = SegmentedControl::new(
+                items,
+                date_format_segment_id(self.format_options.date_format),
+                move |segment_id, _window, cx| {
+                    entity
+                        .update(cx, |this, cx| this.select_date_format(segment_id, cx))
+                        .ok();
+                },
+            )
+            .group("export-format-date");
+            rows.push(
+                modal_form_row(
+                    dbflux_i18n::t!("document.export_wizard.format_options.date_format_label"),
+                    div().flex().child(picker),
+                    None,
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
+
+        rows
+    }
+
     fn render_format_options(&self, cx: &mut Context<Self>) -> AnyElement {
         let format_items: Vec<SegmentedItem> = FileFormat::ALL
             .into_iter()
@@ -520,6 +699,9 @@ impl ExportWizard {
             )
         };
 
+        let visible = visible_options(self.selected_format);
+        let option_rows = self.render_format_option_rows(visible, cx);
+
         div()
             .flex()
             .flex_col()
@@ -529,6 +711,7 @@ impl ExportWizard {
                 None,
                 cx,
             ))
+            .children(option_rows)
             .child(modal_form_row(
                 dbflux_i18n::t!("document.export_wizard.format_options.output_folder_label"),
                 folder_control,

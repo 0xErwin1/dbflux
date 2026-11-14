@@ -2176,6 +2176,26 @@ document:
       segment_size_hint: "rows per file segment"
       segment_size_placeholder: Segment / chunk size
       segment_size_invalid: "Must be a whole number of 1 or more; kept the previous value."
+      delimiter_label: "Delimiter"
+      delimiter:
+        comma: "Comma ( , )"
+        semicolon: "Semicolon ( ; )"
+        tab: "Tab"
+        pipe: "Pipe ( | )"
+      encoding_label: "Encoding"
+      encoding:
+        utf8: "UTF-8"
+        utf8_bom: "UTF-8 with BOM"
+        utf16le: "UTF-16LE"
+        windows1252: "Windows-1252"
+      null_text_label: "NULL text"
+      null_text_placeholder: "Empty"
+      null_text_hint: "Written for NULL values. With empty text, NULL and an empty string only differ if you choose another text, such as \\N."
+      date_format_label: "Dates"
+      date_format:
+        rfc3339: "RFC 3339"
+        date_time: "YYYY-MM-DD HH:MM:SS"
+        epoch: "Epoch (seconds)"
       error:
         no_dialog_fallback_failed: "No folder picker available and the fallback export directory could not be created: %{error}"
     confirm:

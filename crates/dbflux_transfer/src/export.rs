@@ -18,6 +18,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use dbflux_core::{CancelToken, Connection, TransferColumn};
+use dbflux_export::FormatOptions;
 
 use crate::column_map::AutoColumnMap;
 use crate::file_sink::{FileFormat, FileSink};
@@ -45,6 +46,10 @@ pub struct ExportOptions<'a> {
     pub format: FileFormat,
     /// Maximum rows per chunk read from the source / written to the sink.
     pub segment_size: u32,
+    /// CSV delimiter and encoding, NULL text and date format. A format
+    /// ignores the options it does not use; the manifest records the rest so
+    /// Import reads the files back the same way.
+    pub format_options: FormatOptions,
 }
 
 /// Result of exporting one planned table.
@@ -96,6 +101,8 @@ pub fn run_export(
         })
         .collect();
 
+    let format_options = options.format.applicable_options(&options.format_options);
+
     for (index, table) in tables.iter().enumerate() {
         if cancel.is_cancelled() {
             break;
@@ -118,7 +125,8 @@ pub fn run_export(
             table.schema.clone(),
             table.name.clone(),
             options.format,
-        );
+        )
+        .with_options(format_options.clone());
 
         let result = run_transfer(
             &mut source,
@@ -171,6 +179,7 @@ pub fn run_export(
             columns: table.columns.clone(),
             row_count: report.rows_transferred,
             fk_order_index: index,
+            options: format_options.clone(),
         });
 
         if was_cancelled {
@@ -396,6 +405,7 @@ mod tests {
             database: "app",
             format: FileFormat::Csv,
             segment_size: 10,
+            format_options: Default::default(),
         };
         let outcome =
             run_export(&connection, &tables, &dir, &options, &cancel, |_, _, _| {}).unwrap();
@@ -462,6 +472,7 @@ mod tests {
             database: "app",
             format: FileFormat::Csv,
             segment_size: 1,
+            format_options: Default::default(),
         };
         let outcome = run_export(
             &connection,
@@ -534,6 +545,7 @@ mod tests {
             database: "app",
             format: FileFormat::Csv,
             segment_size: 10,
+            format_options: Default::default(),
         };
         let outcome = run_export(&connection, &tables, &dir, &options, &cancel, |_, _, _| {})
             .expect("a per-table failure must not abort the whole run with Err");
@@ -573,6 +585,7 @@ mod tests {
             database: "app",
             format: FileFormat::Csv,
             segment_size: 10,
+            format_options: Default::default(),
         };
         let outcome = run_export(&connection, &[], &dir, &options, &cancel, |_, _, _| {}).unwrap();
 
@@ -581,5 +594,139 @@ mod tests {
         assert!(outcome.manifest.is_some());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn typed_column(name: &str, type_name: &str) -> TransferColumn {
+        TransferColumn {
+            name: name.to_string(),
+            type_name: Some(type_name.to_string()),
+            nullable: true,
+            is_primary_key: false,
+        }
+    }
+
+    fn export_and_read_back(
+        label: &str,
+        format: FileFormat,
+        format_options: FormatOptions,
+    ) -> (TransferManifest, Vec<Vec<Value>>) {
+        use dbflux_core::chrono::{TimeZone, Utc};
+
+        let rows = vec![
+            vec![
+                Value::Int(1),
+                Value::Text("café; \"quoted\"".to_string()),
+                Value::DateTime(Utc.with_ymd_and_hms(2026, 7, 7, 10, 30, 15).unwrap()),
+            ],
+            vec![Value::Int(2), Value::Null, Value::Null],
+        ];
+        let mut pages = std::collections::HashMap::new();
+        pages.insert("notes".to_string(), vec![rows.clone()]);
+        let connection: Arc<dyn Connection> = Arc::new(FakeConnection::new(pages));
+        let columns = vec![
+            typed_column("id", "integer"),
+            typed_column("note", "text"),
+            typed_column("at", "timestamptz"),
+        ];
+        let tables = vec![ExportTable {
+            schema: None,
+            name: "notes".to_string(),
+            columns: columns.clone(),
+            estimated_total: None,
+        }];
+        let dir = temp_dir(label);
+        let options = ExportOptions {
+            driver_id: "postgres",
+            database: "app",
+            format,
+            segment_size: 10,
+            format_options,
+        };
+
+        let outcome = run_export(
+            &connection,
+            &tables,
+            &dir,
+            &options,
+            &CancelToken::new(),
+            |_, _, _| {},
+        )
+        .unwrap();
+        assert!(matches!(
+            outcome.tables[0].status,
+            TableTransferStatus::Completed { rows: 2 }
+        ));
+
+        let manifest = crate::manifest::read_manifest(&dir.join("manifest.json")).unwrap();
+        let table = &manifest.tables[0];
+        let mut source = crate::file_source::FileSource::open_with(
+            &dir.join(&table.file),
+            format,
+            table.columns.clone(),
+            10,
+            None,
+            table.options.clone(),
+        )
+        .unwrap();
+        let cancel = CancelToken::new();
+        let mut read = Vec::new();
+        while let Some(chunk) =
+            crate::pipeline::RowSource::next_chunk(&mut source, &cancel).unwrap()
+        {
+            read.extend(chunk.0);
+        }
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(read, rows);
+        (manifest, read)
+    }
+
+    #[test]
+    fn export_with_non_default_options_records_them_and_imports_the_same_values() {
+        use dbflux_export::{CsvDelimiter, DateFormat, TextEncoding};
+
+        let options = FormatOptions {
+            delimiter: CsvDelimiter::Semicolon,
+            encoding: TextEncoding::Windows1252,
+            null_text: "\\N".to_string(),
+            date_format: DateFormat::Epoch,
+        };
+
+        let (manifest, _) =
+            export_and_read_back("round_trip_csv", FileFormat::Csv, options.clone());
+
+        assert_eq!(manifest.tables[0].options, options);
+    }
+
+    #[test]
+    fn json_export_records_only_the_options_it_uses() {
+        use dbflux_export::{CsvDelimiter, DateFormat};
+
+        let options = FormatOptions {
+            delimiter: CsvDelimiter::Pipe,
+            null_text: "NULL".to_string(),
+            date_format: DateFormat::Epoch,
+            ..FormatOptions::default()
+        };
+
+        let (manifest, _) = export_and_read_back("round_trip_json", FileFormat::JsonLines, options);
+
+        assert_eq!(
+            manifest.tables[0].options,
+            FormatOptions {
+                date_format: DateFormat::Epoch,
+                ..FormatOptions::default()
+            }
+        );
+    }
+
+    #[test]
+    fn default_export_writes_a_manifest_without_options_and_imports_with_defaults() {
+        let (manifest, _) = export_and_read_back(
+            "round_trip_defaults",
+            FileFormat::Csv,
+            FormatOptions::default(),
+        );
+
+        assert!(manifest.tables[0].options.is_default());
     }
 }

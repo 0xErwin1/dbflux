@@ -6,7 +6,8 @@
 //! the same rendering CSV uses, escaped for the target format.
 
 use crate::ExportError;
-use crate::csv::value_to_csv_field;
+use crate::csv::value_to_field;
+use crate::options::FormatOptions;
 use dbflux_core::{ColumnMeta, Value};
 use std::io::Write;
 
@@ -16,6 +17,7 @@ use std::io::Write;
 pub struct HtmlStreamWriter<W: Write> {
     writer: W,
     title: String,
+    options: FormatOptions,
 }
 
 impl<W: Write> HtmlStreamWriter<W> {
@@ -23,7 +25,14 @@ impl<W: Write> HtmlStreamWriter<W> {
         Self {
             writer,
             title: title.into(),
+            options: FormatOptions::default(),
         }
+    }
+
+    /// Uses the options' NULL text and date format.
+    pub fn with_options(mut self, options: FormatOptions) -> Self {
+        self.options = options;
+        self
     }
 
     pub fn write_header(&mut self, columns: &[ColumnMeta]) -> Result<(), ExportError> {
@@ -45,7 +54,7 @@ impl<W: Write> HtmlStreamWriter<W> {
             write!(
                 self.writer,
                 "<td>{}</td>",
-                escape_markup(&value_to_csv_field(value))
+                escape_markup(&value_to_field(value, &self.options))
             )?;
         }
         self.writer.write_all(b"</tr>\n")?;
@@ -63,11 +72,21 @@ impl<W: Write> HtmlStreamWriter<W> {
 /// Writes one GitHub Flavored Markdown table.
 pub struct MarkdownStreamWriter<W: Write> {
     writer: W,
+    options: FormatOptions,
 }
 
 impl<W: Write> MarkdownStreamWriter<W> {
     pub fn new(writer: W) -> Self {
-        Self { writer }
+        Self {
+            writer,
+            options: FormatOptions::default(),
+        }
+    }
+
+    /// Uses the options' NULL text and date format.
+    pub fn with_options(mut self, options: FormatOptions) -> Self {
+        self.options = options;
+        self
     }
 
     pub fn write_header(&mut self, columns: &[ColumnMeta]) -> Result<(), ExportError> {
@@ -83,7 +102,7 @@ impl<W: Write> MarkdownStreamWriter<W> {
     pub fn write_row(&mut self, row: &[Value]) -> Result<(), ExportError> {
         let cells: Vec<String> = row
             .iter()
-            .map(|value| escape_markdown_cell(&value_to_csv_field(value)))
+            .map(|value| escape_markdown_cell(&value_to_field(value, &self.options)))
             .collect();
         self.write_line(&cells)
     }
@@ -106,6 +125,7 @@ impl<W: Write> MarkdownStreamWriter<W> {
 pub struct XmlStreamWriter<W: Write> {
     writer: W,
     column_names: Vec<String>,
+    options: FormatOptions,
 }
 
 impl<W: Write> XmlStreamWriter<W> {
@@ -113,7 +133,14 @@ impl<W: Write> XmlStreamWriter<W> {
         Self {
             writer,
             column_names: Vec::new(),
+            options: FormatOptions::default(),
         }
+    }
+
+    /// Uses the options' date format. NULL stays `null="true"`.
+    pub fn with_options(mut self, options: FormatOptions) -> Self {
+        self.options = options;
+        self
     }
 
     pub fn write_header(&mut self, columns: &[ColumnMeta]) -> Result<(), ExportError> {
@@ -135,7 +162,7 @@ impl<W: Write> XmlStreamWriter<W> {
                 write!(
                     self.writer,
                     "<field name=\"{name}\">{}</field>",
-                    escape_xml(&value_to_csv_field(value))
+                    escape_xml(&value_to_field(value, &self.options))
                 )?;
             }
         }

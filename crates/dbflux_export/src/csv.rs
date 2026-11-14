@@ -1,4 +1,5 @@
 use crate::ExportError;
+use crate::options::FormatOptions;
 use csv::Writer;
 use dbflux_core::{QueryResult, QueryResultShape, Value};
 use std::io::Write;
@@ -38,6 +39,18 @@ impl CsvExporter {
 
         csv_writer.flush()?;
         Ok(())
+    }
+}
+
+/// A cell as text: the NULL text and the date format come from `options`,
+/// everything else is rendered as CSV always has.
+pub(crate) fn value_to_field(value: &Value, options: &FormatOptions) -> String {
+    match value {
+        Value::Null => options.null_text.clone(),
+        other => options
+            .date_format
+            .render(other)
+            .unwrap_or_else(|| value_to_csv_field(other)),
     }
 }
 
